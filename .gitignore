@@ -1,0 +1,21 @@
+# Rust
+/target/
+Cargo.lock
+
+# WASM build artifacts
+/dist/
+/pkg/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

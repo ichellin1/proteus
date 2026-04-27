@@ -1,0 +1,16 @@
+[package]
+name = "proteus-render"
+description = "Layer 1: scene graph, materials, SDF renderer, compute-driven transitions"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proteus-gpu = { path = "../proteus-gpu" }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

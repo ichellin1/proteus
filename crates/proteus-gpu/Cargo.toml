@@ -1,0 +1,21 @@
+[package]
+name = "proteus-gpu"
+description = "GPU device abstraction over wgpu (WebGPU, Vulkan, Metal, DX12)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+pollster = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Document", "HtmlCanvasElement"] }
+wasm-bindgen-futures = { workspace = true }

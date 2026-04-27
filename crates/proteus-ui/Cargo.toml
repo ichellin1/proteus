@@ -1,0 +1,14 @@
+[package]
+name = "proteus-ui"
+description = "Layer 2: semantic component model and multi-form transition graph"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proteus-render = { path = "../proteus-render" }
+serde = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
