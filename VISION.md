@@ -67,6 +67,24 @@ These are future directions. The interpolation model described above is designed
 
 ---
 
+## Geometry Model
+
+### V1: Textured Rectangles
+
+Every component in the first version of Proteus is a **rectangle composed of two triangles**, with a texture mapped onto it. This is the simplest possible GPU primitive and is intentional.
+
+A button is a textured quad. A list item is a textured quad. A video frame is a textured quad. The visual content — text, imagery, UI chrome — is rendered into the texture. The geometry itself is always the same underlying shape: two triangles forming a rectangle, defined by four vertices with position, UV coordinates, and color.
+
+This constraint has real advantages:
+
+- **Transition simplicity.** Morphing between any two components is always a matter of interpolating between two sets of quad vertices, a UV mapping, and a color. No special cases for different geometry types.
+- **GPU efficiency.** Textured quads are the most heavily optimized primitive in any GPU pipeline. Every hardware and driver combination handles them well.
+- **Predictable performance.** Because all components share the same geometry type, rendering cost is uniform and easy to reason about. The first version will run smoothly.
+
+More complex geometry (arbitrary meshes, SDF shapes, curves) is a future extension. The textured quad model is the foundation everything else builds on.
+
+---
+
 ## Why GPU
 
 Smooth, visually impressive transitions at 60fps (or higher) require work happening in parallel. The CPU is the wrong place for this — it serializes layout, logic, and rendering.
@@ -129,9 +147,9 @@ proteus-shell-native Layer 3 — winit native shell (macOS, Linux, Windows)
 - [ ] `proteus-gpu`: wgpu device init, surface setup, basic command encoder
 
 ### Phase 1 — Render Core
-- [ ] Quad renderer with per-instance transform and color
-- [ ] SDF text rendering (resolution-independent)
-- [ ] WebGPU/WASM browser demo: static layout
+- [ ] Textured quad renderer (two-triangle rectangle, per-instance transform, UV, color)
+- [ ] Texture upload and binding pipeline
+- [ ] WebGPU/WASM browser demo: static layout of textured quads
 - [ ] Native demo: windowed application with same layout
 
 ### Phase 2 — Transition System
