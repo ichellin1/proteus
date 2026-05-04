@@ -5,234 +5,193 @@
 
 ---
 
-## The Idea
+## What Is Proteus?
 
-Proteus is a new UX paradigm and the rendering framework that makes it possible.
+Proteus is a new UX paradigm and the GPU-native rendering framework that makes it possible.
 
-The central idea: **UI components are metamorphic.** They do not navigate to new screens or swap out for different components — they *transform* into them. A button can become a list. A list can collapse back into a button. A list item can become a video player. The component does not disappear; it *shapeshifts*, and the transition between one form and another is a first-class, visually continuous experience.
+The central thesis: **user interfaces should not have a fixed shape.** They should be capable of continuously adapting — their layout, density, visual language, and interactive surface — in response to who is using them, what the user is trying to accomplish, and the context they are operating in.
 
-This is the thing current frameworks cannot do — not cleanly, and not at a component level. Shared-element transitions exist, but they are cosmetic overlays on top of discrete navigation. Proteus makes metamorphism the core model, not a special effect layered on top.
-
----
-
-## Metamorphic Components
-
-Every UI element in a Proteus application is a **metamorphic component** — it has a current visual form, a set of possible target forms, and the ability to transition between them smoothly.
-
-### Transition Topologies
-
-Proteus supports three fundamental transition shapes:
-
-**1 → 1**
-One component transforms into one other component. The source geometry — its position, size, shape, color, and content — interpolates continuously into the target geometry. The user perceives a single object changing.
-
-**1 → N**
-One component splits into many. The source component is the shared origin point for all N targets: each target component begins at the source's geometry and animates outward to its own final position and size. A button becoming a list of five items is a 1→5 transition.
-
-**N → 1**
-Many components converge into one. All N source components animate toward the single target's geometry, collapsing into it. A list of five items becoming a button is a 5→1 transition. This is the exact inverse of the above and should feel like it.
+This is not theming. This is not responsive design. It is something more fundamental: an interface that **shapeshifts** as a first-class design primitive, powered by the same GPU hardware that drives games, simulations, and scientific visualization.
 
 ---
 
-## The Transition Model
+## The Problem With Static UIs
 
-### Interpolation First
+Modern UI frameworks — whether on the web, mobile, or desktop — treat an interface as a document or a scene graph with fixed component roles. A button is always a button. A sidebar is always a sidebar. The visual grammar is decided at design time and applied uniformly to everyone who uses the product.
 
-All transitions are driven by **interpolation between two geometric states**: the "from" state (the current component or set of components) and the "to" state (the target component or set of components).
+This rigidity creates real costs:
 
-Every interpolatable property — position (x, y), size (width, height), shape (corner radii, path control points), color, opacity, content — is a value that can be lerped.
+- **Cognitive friction** for users whose context doesn't match the designer's assumptions
+- **Inaccessibility** that requires manual configuration rather than being emergent and automatic
+- **Wasted GPU capability** — the most powerful rendering hardware ever put in consumer devices, used almost entirely for 2D rectangles and drop shadows
+- **Brittle adaptation** — "responsive design" changes layout at breakpoints, but doesn't reason about intent or role
 
-The initial implementation uses **linear interpolation (lerp)** as the foundation. This is intentional. A well-timed linear transition is already smooth and visually clear. It also establishes the contract: every transition is a parameterized walk from 0.0 to 1.0 between two states.
-
-### Extensible Interpolation
-
-Because transitions are parameterized at the framework level, the interpolation function is **pluggable**. Linear is the default, but any function that maps `t ∈ [0, 1] → [0, 1]` can be substituted:
-
-- Standard easing curves (ease-in, ease-out, ease-in-out)
-- Spring physics (overshoot, settle)
-- Bounce
-- Custom bezier curves
-- Procedural / GPU-computed curves
-
-This extensibility is built into the architecture from the start, even though the first implementation only uses lerp.
-
-### More Complex Effects (Future)
-
-Down the road, transitions can go beyond geometric interpolation:
-- Particle dissolution (a component "dissolves" into particles that reform as the target)
-- Fluid deformation (geometry flows like a physical material)
-- GPU compute-driven morphing along arbitrary paths
-
-These are future directions. The interpolation model described above is designed to accommodate them without structural changes.
+The Proteus framework rejects these constraints at a foundational level.
 
 ---
 
-## Geometry Model
+## The Proteus Paradigm
 
-### V1: Textured Rectangles
+### 1. Adaptive Structure
 
-Every component in the first version of Proteus is a **rectangle composed of two triangles**, with a texture mapped onto it. This is the simplest possible GPU primitive and is intentional.
+Every layout in a Proteus application is a **living structure** — a graph of composable regions whose topology can change. Components declare their *semantic role* rather than their fixed visual form. The framework resolves the visual expression at runtime based on context, inferred intent, and user-declared preferences.
 
-A button is a textured quad. A list item is a textured quad. A video frame is a textured quad. The visual content — text, imagery, UI chrome — is rendered into the texture. The geometry itself is always the same underlying shape: two triangles forming a rectangle, defined by four vertices with position, UV coordinates, and color.
+A "navigation" component might manifest as a sidebar, a command palette, a bottom nav bar, a voice-accessible menu, or a spatial ring in XR — not based on a hard breakpoint, but based on a continuous evaluation of who is using the interface and what they are doing right now.
 
-This constraint has real advantages:
+### 2. Fluid GPU Rendering
 
-- **Transition simplicity.** Morphing between any two components is always a matter of interpolating between two sets of quad vertices, a UV mapping, and a color. No special cases for different geometry types.
-- **GPU efficiency.** Textured quads are the most heavily optimized primitive in any GPU pipeline. Every hardware and driver combination handles them well.
-- **Predictable performance.** Because all components share the same geometry type, rendering cost is uniform and easy to reason about. The first version will run smoothly.
+State transitions in Proteus are not CSS animations or pre-baked keyframe sequences. They are **physical simulations on the GPU** — mesh morphs, particle dissolves, field-driven deformation — computed in real time using WebGPU compute shaders on the web, and Vulkan/Metal/DirectX compute on native platforms.
 
-More complex geometry (arbitrary meshes, SDF shapes, curves) is a future extension. The textured quad model is the foundation everything else builds on.
+This means:
+- Transitions are continuous and interruptible, not discrete
+- The "feel" of an interface can encode meaning — a component that sheds its form to become something else communicates the nature of that change through the motion itself
+- Visual richness has no CPU cost penalty — it lives entirely in parallel compute
 
----
+### 3. Role and Context Awareness
 
-## Why GPU
+A Proteus application is aware of a **user context model**: who the user is (role, permissions, expertise level), what they are trying to accomplish (current task, inferred goal state), and what environment they are in (device, screen, ambient light, interaction modality). This model drives the adaptive structure and influences rendering decisions without the user needing to configure anything manually.
 
-Smooth, visually impressive transitions at 60fps (or higher) require work happening in parallel. The CPU is the wrong place for this — it serializes layout, logic, and rendering.
-
-Every modern device capable of running a browser has a GPU. Proteus uses it:
-- Transition state is computed and animated on the GPU
-- Rendering is GPU-native (not DOM/CSS compositing)
-- The interpolation parameter `t` is updated per-frame and fed to GPU pipelines that handle the visual output
-
-This is what allows transitions to be genuinely smooth — not because of clever CSS tricks, but because the work is happening where it belongs.
+The context model is designed to be AI-augmented — a lightweight inference layer can continuously update the context from implicit signals, driving more precise adaptation over time.
 
 ---
 
-## What This Enables
+## The Framework Architecture
 
-The metamorphic component model opens UX patterns that don't exist today:
+### Layer 0 — GPU Abstraction (`proteus-gpu`)
 
-- A search bar expands into a full results list, then a selected result expands into a detail view — all as one continuous visual thread
-- A dashboard widget collapses into an icon in a toolbar, then re-expands somewhere else
-- A media thumbnail in a list becomes a full video player, with the list items scattering to make room
-- A form collapses into a submission confirmation, then into a success state — the same "object" the whole way through
+A thin, safe abstraction over:
+- **WebGPU** (web target, via WASM)
+- **wgpu** (native Rust, targeting Vulkan, Metal, DX12, and OpenGL ES)
 
-The user's mental model is never broken. There is no hard cut, no page load, no component swap. The interface *transforms*.
+Responsibilities: device initialization, swap chains, command encoding, buffer management, texture handling, compute pipeline management.
 
----
+This layer has no opinion about UI. It is a general-purpose GPU runtime.
 
-## Technology
+### Layer 1 — Render Pipeline (`proteus-render`)
 
-**Core language: Rust**
-The framework is written in Rust. It compiles to WASM for web targets and runs natively on macOS, Linux, and Windows (via Vulkan, Metal, and DX12 through `wgpu`). XR (AR/VR) is a future target.
+A retained-mode scene graph and draw call batcher built on top of `proteus-gpu`. Manages:
+- A **mesh registry** for UI geometry (quads, paths, glyphs, arbitrary meshes)
+- A **material system** with hot-reloadable WGSL shaders
+- A **compute pipeline** for physics-driven transitions (spring systems, fluid fields, morphing)
+- A signed distance field (SDF) renderer for resolution-independent vector shapes and typography
 
-**GPU abstraction: wgpu**
-A single Rust API over WebGL2, WebGPU, Vulkan, Metal, and DX12. Handles device initialization, swap chains, command encoding, and pipeline management. On the web, wgpu selects the best available backend automatically — WebGL2 first for maximum compatibility, WebGPU where available for maximum capability.
+### Layer 2 — Component Model (`proteus-ui`)
 
-**Web GPU targets: WebGL2 (primary) and WebGPU (secondary)**
-WebGL2 is the primary web rendering target. It has near-universal browser support and ensures Proteus runs for essentially all web users from day one. WebGPU is a secondary target — a progressive enhancement that is used automatically when available, unlocking additional GPU compute capabilities and higher performance headroom. This is not a fork in the codebase; wgpu handles the backend selection transparently. The application code and API are identical regardless of which backend is active.
+The semantic component system. Components in this layer:
+- Declare their **semantic role** (navigation, action, content, data, status, etc.)
+- Define multiple **visual forms** — the set of renderings the component can take
+- Participate in a **context bus** that informs which form is active
+- Expose a **declarative transition graph** — rules for how the component moves between forms
 
-**Shader language: WGSL**
-WebGPU Shading Language, native to WebGPU and supported by wgpu across all backends including WebGL2.
+This layer is framework-agnostic. It can be driven from Rust, bound to JavaScript/TypeScript via WASM, or consumed from any language with C FFI.
 
-**Web bindings: wasm-bindgen + TypeScript SDK**
-The web shell exposes a fully idiomatic TypeScript API. Developers targeting the web write TypeScript — they do not need to know Rust. The TypeScript SDK is the first planned language binding and is treated as a first-class consumer of the framework, not a thin wrapper. The WASM boundary is kept clean and well-defined so that additional language bindings (Python, Swift, Kotlin, and others) can be added without changes to the core.
+### Layer 3 — Context Engine (`proteus-context`)
 
----
+The runtime that maintains the user context model and drives adaptation:
+- **Role registry** — user-declared or inferred roles
+- **Intent inference** — heuristic and optionally AI-augmented task modeling
+- **Environment probe** — device capabilities, input modalities, viewport, ambient context
+- **Adaptation rules** — a declarative rule language for mapping context → visual form choices
 
-## Crate Structure
+The context engine is designed with a clean separation between the deterministic rule layer (always present, no external dependencies) and an optional AI inference adapter that can plug in a local or remote model.
 
-```
-proteus-gpu          Layer 0 — wgpu device abstraction (no UI opinion)
-proteus-render       Layer 1 — scene graph, mesh, materials, transition pipeline
-proteus-ui           Layer 2 — metamorphic component model, transition topologies
-proteus-shell-web    Layer 3 — WebGL2/WebGPU WASM shell, TypeScript bridge
-proteus-shell-native Layer 3 — winit native shell (macOS, Linux, Windows)
-```
+### Layer 4 — Application Shell (`proteus-shell`)
 
-| Platform | Primary Backend | Secondary Backend | Shell |
-|---|---|---|---|
-| Web | WebGL2 | WebGPU (auto-upgrade) | `proteus-shell-web` |
-| macOS | Metal | — | `proteus-shell-native` |
-| Linux | Vulkan | OpenGL ES | `proteus-shell-native` |
-| Windows | DX12 | Vulkan | `proteus-shell-native` |
-| XR | WebXR / OpenXR | — | *(future)* |
+The host environment for a Proteus application:
+- **Web shell**: a WASM module + WebGPU canvas, with a thin JS bridge
+- **Native shell**: a windowing layer (via `winit`) with a native GPU context
+- **XR shell**: (future) a WebXR or OpenXR session host
 
 ---
 
-## Roadmap
+## Target Platforms
+
+| Platform | Rendering Backend | Shell |
+|---|---|---|
+| Web (primary) | WebGPU via WASM | `proteus-shell-web` |
+| macOS / Linux / Windows | wgpu → Metal / Vulkan / DX12 | `proteus-shell-native` |
+| AR/VR headsets | WebXR / OpenXR | `proteus-shell-xr` *(future)* |
+
+---
+
+## Technology Stack
+
+| Concern | Choice | Rationale |
+|---|---|---|
+| Framework core | **Rust** | Memory safety, zero-cost abstractions, WASM compilation, growing GPU ecosystem |
+| GPU abstraction | **wgpu** | Single Rust API over WebGPU, Vulkan, Metal, DX12, OpenGL ES |
+| Shader language | **WGSL** | First-class in WebGPU; wgpu also accepts SPIR-V for native paths |
+| Web bindings | **wasm-bindgen + web-sys** | Idiomatic Rust → WASM → JS interop |
+| JS/TS API layer | **TypeScript** | Developer-facing API for web consumers of the framework |
+| Build system | **Cargo + trunk** (web) | Cargo for Rust workspace; trunk for WASM bundling |
+| AI inference (optional) | **ONNX Runtime / Candle** | Local model inference for context engine; no cloud dependency required |
+
+---
+
+## What Proteus Is Not
+
+- It is **not a game engine** — though it shares infrastructure with one
+- It is **not a design tool** — though it enables a new kind of design workflow
+- It is **not an AI chatbot interface** — though AI is one of several context sources
+- It is **not another React/Vue competitor** — it operates at a lower level and is designed to be bound to existing component systems, not replace them
+
+---
+
+## Design Principles
+
+**1. Shape is not identity.** A component's role persists across transformations. Users orient to semantic purpose, not visual form.
+
+**2. Transitions are communication.** How an interface changes is as meaningful as what it changes to. Motion should convey, not decorate.
+
+**3. The GPU is not a luxury.** Every modern device capable of running a browser has a GPU. Using it for UI is not extravagant — it is responsible use of available hardware.
+
+**4. Context over configuration.** The interface should require no manual customization to serve a user well. Adaptation should emerge from observation, not settings panels.
+
+**5. Open by default.** The framework is open source. The context engine is locally runnable. No adaptation behavior should require a cloud service.
+
+---
+
+## Project Roadmap
 
 ### Phase 0 — Foundation *(current)*
-- [x] Repository structure, Cargo workspace, crate scaffolding
-- [x] Vision document
-- [ ] `proteus-gpu`: wgpu device init, surface setup, basic command encoder
+- [ ] Repository structure and toolchain setup
+- [ ] `proteus-gpu`: wgpu device init, swap chain, basic command encoder
+- [ ] `proteus-render`: static quad renderer, SDF text
+- [ ] Vision document and architectural spec
 
 ### Phase 1 — Render Core
-- [ ] Textured quad renderer (two-triangle rectangle, per-instance transform, UV, color)
-- [ ] Texture upload and binding pipeline
-- [ ] WebGPU/WASM browser demo: static layout of textured quads
-- [ ] Native demo: windowed application with same layout
+- [ ] Full mesh renderer with material system
+- [ ] WGSL shader hot-reload pipeline
+- [ ] Compute-driven spring physics for transitions
+- [ ] WebGPU/WASM build and browser demo
 
-### Phase 2 — Transition System
-- [ ] Geometric state capture (position, size, shape, color, opacity)
-- [ ] Linear interpolation (lerp) transition driver
-- [ ] 1→1 transition: one component morphs into another
-- [ ] 1→N transition: one component splits into N
-- [ ] N→1 transition: N components converge into one
-- [ ] Pluggable interpolation function interface
-- [ ] Browser demo: button → list → video player
+### Phase 2 — Component Model
+- [ ] Semantic component declarations
+- [ ] Multi-form component with explicit transition graph
+- [ ] Context bus implementation
+- [ ] First real UI widget: adaptive navigation component
 
-### Phase 3 — Component Model
-- [ ] Metamorphic component declaration API
-- [ ] Transition graph: define valid transitions between component forms
-- [ ] Content interpolation (text, images, media)
-- [ ] Event handling across transition states
+### Phase 3 — Context Engine
+- [ ] Environment probe
+- [ ] Deterministic adaptation rule engine
+- [ ] AI inference adapter (optional, pluggable)
 
-### Phase 4 — Developer Experience
-- [ ] TypeScript bindings for web
-- [ ] DevTools: visualize transition state and interpolation
-- [ ] Documentation and examples
+### Phase 4 — Shell + Integration
+- [ ] Web shell with TypeScript bindings
+- [ ] Native shell (macOS first)
+- [ ] Developer tooling: Proteus DevTools for inspecting context and forms
 
-### Phase 5 — Advanced Transitions *(exploratory)*
-- [ ] Non-linear easing library
-- [ ] Particle dissolution effects
-- [ ] Fluid deformation
-- [ ] XR shell (WebXR / OpenXR)
-
----
-
-## Core Principles
-
-These principles guide every design and API decision in Proteus. When there is tension between them, they are roughly ordered by priority — but none should be casually discarded.
-
-**1. Transition-First**
-Morphing is not a feature added on top of the component model — it *is* the component model. Every design decision treats transformation as the default, not the exception. A component that cannot transition is incomplete.
-
-**2. Composable Transitions**
-Transitions are first-class objects. They can be reused across components, sequenced, chained into narrative arcs, and composed from smaller transitions. A 1→N transition may be nothing more than N simultaneous 1→1 transitions with staggered timing. The whole system should fall out of composition rather than require special cases.
-
-**3. Responsive**
-Transitions never impede the user. No matter what morph is in progress, the system continues processing input and events. A running transition is a visual concern, not a blocking one. This is enforced architecturally — the GPU pipeline runs independently of the input/event loop.
-
-**4. Performant**
-Proteus is GPU-native by design. Rendering and transition computation happen on the GPU, not the CPU. The target is smooth 60fps+ on any modern device capable of running a browser. Performance is not an optimization pass — it is a foundational constraint.
-
-**5. Developer Friendly**
-Low ceremony. A developer should be able to define a component, declare a transition, and see something working with minimal boilerplate. The API should feel natural to write by hand and easy to understand when reading someone else's code.
-
-**6. Agentic**
-The API is designed for AI agents to consume. A developer building a Proteus application may be an AI agent, not a human. This means: declarative over imperative, strongly typed, semantically named, no hidden state, no side effects that aren't explicit. An agent should be able to inspect, generate, and modify a Proteus UI reliably.
-
-**7. Extensible**
-Every layer of the framework is pluggable. Interpolation functions, geometry types, render pipelines, transition effects, shell implementations — all are replaceable without forking the framework. The defaults are opinionated; the architecture is not.
-
-**8. Portable**
-Proteus is platform-agnostic. The same component and transition declarations run on the web (WebGPU), native desktop (Vulkan, Metal, DX12), and future targets (XR). Platform-specific concerns are isolated to the shell layer.
-
-**9. Rich 2D and 3D**
-The rendering canvas is not artificially constrained to flat 2D layouts. Components can exist and transition in 3D space. The GPU pipeline supports both 2D and 3D UX from the start, enabling spatial interfaces, depth, perspective, and volumetric transitions as naturally as flat ones.
-
-**10. Predictable**
-Transitions are deterministic. Given a known from-state, a to-state, and an interpolation function, the output is always the same. There is no magic, no hidden behavior, no framework-level surprises. Developers can reason about what Proteus will do.
-
-**11. Minimal by Default**
-Proteus does not impose a design system, a layout engine, or a component library. It provides the paradigm and the primitives. What gets built on top is the developer's choice.
-
-**12. Language Agnostic Consumption**
-Proteus is written in Rust, but developers should not need to know Rust to use it. The framework core compiles to WASM, and the API is designed so that idiomatic bindings can be written for any language. TypeScript is the first planned binding and a first-class target — a frontend developer should be able to build a full Proteus application in TypeScript without touching Rust. Other binding layers (Python, Swift, Kotlin, and others) are natural future extensions. This is only possible if the WASM boundary is kept clean, thin, and well-defined from the start — that is an explicit architectural requirement, not a future consideration.
+### Phase 5 — XR + Ecosystem
+- [ ] WebXR shell prototype
+- [ ] Plugin/extension API for custom forms and context sources
+- [ ] Reference application
 
 ---
 
 ## Name
 
-Proteus was the ancient Greek sea god known for shapeshifting — he could take any form while remaining himself. The name is the concept: **identity that persists through continuous transformation**.
+Proteus was the ancient Greek sea god known for shapeshifting — he could take any form, but only revealed truth to those who could hold him through every transformation. The name captures the essential quality of the project: **identity that persists through continuous change**.
+
+---
+
+*This document is the living foundation of the Proteus project. It will evolve as the work does.*

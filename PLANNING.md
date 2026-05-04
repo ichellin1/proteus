@@ -161,10 +161,16 @@ Questions that have surfaced but don't yet have answers. Pull them into the rele
 
 Grounded concerns that need to be resolved through design decisions, prototyping, or measurement. Not reasons not to build — but things that should be answered with data rather than assumptions.
 
-### 1. WASM Performance Ceiling
-WebGPU from WASM carries overhead that native WebGPU (from JavaScript) does not. Every call across the WASM boundary has a cost, and for a per-frame transition pipeline that cost compounds. This is a known, documented issue with wgpu's web target today. It may improve as the ecosystem matures, but it needs to be prototyped and measured early — before the architecture is locked in — rather than assumed to be fast enough.
+### 1. WASM↔Browser API Boundary Cost
+The concern is not WASM compute performance — Rust compiled to WASM runs math and transform calculations at near-native speed, often faster than JS. The real cost is the WASM→JS boundary crossings required every time a browser GPU API (WebGL2 or WebGPU) is called from WASM. Pure JS calling those same APIs does not pay this cost.
 
-*Resolution path: build a minimal benchmark during Phase 1 that measures WASM↔GPU round-trip cost at 60fps. Use the result to inform architecture decisions.*
+For a naive implementation — one draw call per component, individual uniform updates — N components means roughly O(N) boundary crossings per frame. That compounds and could hurt performance vs. an equivalent JS implementation.
+
+**Mitigation: instanced rendering.** Since all Proteus V1 components are the same primitive (textured quads), all N instance transforms, colors, and UVs can be packed into a single GPU buffer, updated with one boundary crossing per frame, and rendered with a single instanced draw call. This collapses O(N) crossings to roughly O(1) regardless of component count. WebGPU's command buffer model makes this even more efficient than WebGL2.
+
+Instanced rendering must be a first-class architectural decision, not a later optimisation. If it is designed in from the start, the WASM boundary cost becomes largely irrelevant for Proteus's use case.
+
+*Resolution path: design the render pipeline around instanced rendering from Phase 1. Build a benchmark during Phase 1 comparing WASM+instanced vs. equivalent JS to confirm the gap is acceptable.*
 
 ### 2. WebGPU Browser Coverage ✅ Resolved
 WebGPU is not universally available. Firefox support is behind a flag, and Safari's implementation has historically lagged. The web is Proteus's primary target, but a meaningful portion of users cannot run WebGPU today.
