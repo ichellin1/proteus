@@ -99,11 +99,75 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 
 ### To Do
 
-- [ ] Break the build into milestones with clear, testable definitions of done
+- [ ] Finalize milestones based on architecture and dependency decisions
 - [ ] Identify the critical path — what must be built before anything else can be built
-- [ ] Define the V1 prototype milestone — the specific demo that proves the paradigm in the new framework
-- [ ] Sequence phases with realistic scope
-- [ ] Move the roadmap from VISION.md into a dedicated ROADMAP.md once it is stable enough to stand alone
+- [ ] Add definition of done to each milestone
+- [ ] Sequence milestones with realistic scope
+- [ ] Move the roadmap from VISION.md into a dedicated ROADMAP.md once stable
+
+---
+
+## Milestones
+
+A working draft of project milestones. To be finalized during Phase D once architecture and dependencies are settled. M0 is not complete until Phases A–D are done.
+
+### M0 — Foundation *(in progress)*
+The project foundation. Nothing in M1 or beyond starts until this is complete.
+
+- [x] Repository, Cargo workspace, crate scaffolding
+- [x] Vision document
+- [x] Planning document
+- [ ] Architecture design (Phase B)
+- [ ] Dependencies & tooling decisions (Phase C)
+- [ ] Project plan and milestones finalized (Phase D)
+
+### M1 — First Pixel
+A static textured quad renders in the browser (WebGL2) and natively. The instanced draw call is proven end to end. Unit and integration tests are introduced here and maintained through every subsequent milestone.
+
+### M2 — First Transition
+A single 1→1 lerp transition. One quad morphs into another — position, size, color all interpolating smoothly. The transition model is proven.
+
+### M3 — All Three Topologies
+All three transition topologies working: 1→1, 1→N, and N→1. Reference interaction: a button splits into a list, and the list collapses back into a button.
+
+### M4 — Text Phase 1
+Single line SDF text rendering. Uniform style, left-to-right. Components can carry readable labels. Required before the reference demo.
+
+### M5 — Reference Demo
+The full paradigm demo: button → list → detail view. Labeled components, scripted (not yet interactive), runs in the browser. The thing you show someone to explain what Proteus is.
+
+### M6 — Visual Regression Testing
+Headless render target, reference image capture, per-frame diffing, CI integration. Locks in rendering correctness before the more complex work of interactivity, video, and native begins.
+
+### M7 — Interactivity
+User input drives transitions. Hit testing on quads, input events triggering transitions, mid-transition input behavior defined and implemented. The reference demo becomes interactive rather than scripted. Resolves Risk #4.
+
+### M8 — Shader Effects Library
+A built-in library of WGSL shader effects — blur, glow, color grading, distortion, and similar — applicable to component textures. Designed to serve as a reference implementation for developers who want to write their own effects post-V1.
+
+### M9 — Video
+Per-frame video texture streaming to the GPU. A list item can morph into a playing video. The reference demo is extended to demonstrate this.
+
+### M10 — TypeScript SDK
+A developer can build the full interactive reference demo in TypeScript without touching Rust. The TypeScript API is idiomatic and the WASM boundary is clean and well-documented.
+
+### M11 — Native Parity
+The full reference demo runs identically on macOS, Linux, and Windows via the native shell.
+
+### M12 — Developer Release
+Documentation, examples, pluggable interpolation interface exposed, and enough polish that an outside developer can pick up Proteus and build something. The project is ready for external contributors.
+
+---
+
+### Post-Release
+Planned future work, not part of the V1 scope:
+
+- Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
+- Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
+- Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
+- Custom shader authoring experience (formal support for developer-written WGSL)
+- Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
+- XR shell (WebXR / OpenXR)
 
 ---
 
