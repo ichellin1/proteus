@@ -29,7 +29,7 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 - [x] Interpolation model: lerp as foundation, pluggable interpolation functions for future variation
 - [x] V1 geometry: textured rectangles (two-triangle quads) — same primitive for all components
 - [x] Technology: Rust core, wgpu for GPU abstraction, WASM for web, winit for native
-- [x] Target platforms: Web (WebGPU), desktop native (macOS/Linux/Windows), XR future
+- [x] Target platforms: Web (WebGL2 primary, WebGPU secondary), desktop native (macOS/Linux/Windows), XR future
 - [x] Concept is validated — an original POC was built ~11 years ago using JavaScript and WebGL
 
 ### In Progress
@@ -166,10 +166,10 @@ WebGPU from WASM carries overhead that native WebGPU (from JavaScript) does not.
 
 *Resolution path: build a minimal benchmark during Phase 1 that measures WASM↔GPU round-trip cost at 60fps. Use the result to inform architecture decisions.*
 
-### 2. WebGPU Browser Coverage
-WebGPU is not universally available. Firefox support is behind a flag, and Safari's implementation has historically lagged. The web is Proteus's primary target, but a meaningful portion of users cannot run WebGPU today. A fallback strategy needs a decision: WebGL2 degraded mode, minimum browser requirements, or something else. This is not a blocking issue but it is one that gets harder to address the later it is left.
+### 2. WebGPU Browser Coverage ✅ Resolved
+WebGPU is not universally available. Firefox support is behind a flag, and Safari's implementation has historically lagged. The web is Proteus's primary target, but a meaningful portion of users cannot run WebGPU today.
 
-*Resolution path: define minimum browser requirements and a fallback position during Phase C (Dependencies & Tooling).*
+*Resolution: WebGL2 is now the primary web target. WebGPU is a secondary target — a progressive enhancement used automatically by wgpu when available. No application code changes are required to benefit from WebGPU where it exists. Proteus works for essentially all web users from day one.*
 
 ### 3. 1→N and N→1 Are Harder Than They Look
 The 1→1 transition is clean. The split and converge topologies have real design problems inside them: the N target components must exist in some form before the transition begins (they need a "to" state to lerp toward), but they should not be visible. Layout positions for N components may not be known until runtime. N may vary dynamically. Describing these as "N simultaneous 1→1 transitions" is a useful simplification but glosses over the hard parts.
