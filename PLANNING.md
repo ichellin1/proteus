@@ -67,8 +67,8 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 - [ ] Input handling during transitions — clicks, taps, and gestures while a component is mid-morph
 - [ ] Scene graph — how components are organized and rendered relative to each other
 - [ ] Layout model — how component positions and sizes are determined before transitions begin
-- [ ] Render pipeline architecture — how the GPU pipeline is structured to support per-frame lerp updates
-- [ ] WGSL shader design — vertex and fragment shaders for the textured quad renderer
+- [ ] Render pipeline architecture — single instanced draw call with homogeneous quad buffer; per-frame lerp updates written to instance buffer
+- [ ] WGSL shader design — vertex and fragment shaders for instanced textured quad renderer
 - [ ] Web ↔ Rust boundary — what crosses the WASM boundary and how
 - [ ] Native shell architecture — event loop, windowing, GPU surface lifecycle
 
@@ -170,7 +170,9 @@ For a naive implementation — one draw call per component, individual uniform u
 
 Instanced rendering must be a first-class architectural decision, not a later optimisation. If it is designed in from the start, the WASM boundary cost becomes largely irrelevant for Proteus's use case.
 
-*Resolution path: design the render pipeline around instanced rendering from Phase 1. Build a benchmark during Phase 1 comparing WASM+instanced vs. equivalent JS to confirm the gap is acceptable.*
+*Resolution: V1 uses a single instanced draw call with one homogeneous GPU buffer for all components. The entire scene is submitted with one buffer update and one draw call per frame — O(1) boundary crossings regardless of component count. This is the recommended rendering strategy for web targets and is a first-class architectural requirement from Phase 1.*
+
+*Future geometry types (beyond quads) will break the single-buffer model. Two options are deferred to a future native-focused iteration: multiple instance buffers per type (Option 1) or geometry atlasing (Option 2). The choice between them will be informed by benchmarks on native targets.*
 
 ### 2. WebGPU Browser Coverage ✅ Resolved
 WebGPU is not universally available. Firefox support is behind a flag, and Safari's implementation has historically lagged. The web is Proteus's primary target, but a meaningful portion of users cannot run WebGPU today.
