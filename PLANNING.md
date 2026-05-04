@@ -32,13 +32,24 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 - [x] Target platforms: Web (WebGL2 primary, WebGPU secondary), desktop native (macOS/Linux/Windows), XR future
 - [x] Concept is validated — an original POC was built ~11 years ago using JavaScript and WebGL
 
+### Decided
+
+- [x] A component is an **identity** — a stable reference that exists independently of its current visual form. The framework does not maintain a closed enum of known forms per component. Any component can take any form; transitions are declarations of a new target geometric state, not selections from a predefined list. This scales without limit.
+- [x] A component has two fundamental, inseparable halves:
+  - **Geometric state** — the set of quads that make up the component, their positions, sizes, colors, textures, and arrangement relative to each other. This is what the GPU renders and what transitions operate on.
+  - **Interaction definition** — how the component receives and responds to user input, what events it emits, and what it does when tapped, clicked, hovered, or dragged.
+- [x] A component has three interaction modes:
+  - **Complete** — fully resolved into a form, full interaction available
+  - **Transitioning** — mid-morph, limited interaction enforced by the framework, customizable by the application designer
+  - **Transitioning default** — if no custom transitioning behavior is declared, the framework safe default applies (no interaction)
+- [x] Components are **composite** — a component can contain child components, each of which is a full component in its own right with its own geometric state, interaction definition, and transition capability. A list is a component whose children are list item components.
+- [x] A child component has exactly one parent. Component ownership is a strict tree at the data level.
+- [x] A child's geometric state is expressed relative to its parent. When the parent moves, children move with it.
+- [x] Transitions cascade in both directions — a child can initiate a transition independently of its parent (list item → detail view), and a parent can drive a transition that absorbs its children (list → button is an N→1 where N includes children).
+
 ### In Progress
 
-- [ ] **Component definition** — what exactly is a component in Proteus?
-  - What does a developer provide to define one?
-  - What does the framework provide vs. what does the consumer define?
-  - What are the atomic properties of a component (geometry, texture, state, transitions)?
-  - How are components composed — can components contain other components?
+- [ ] **Scene graph / internal architecture model** — how components and their relationships are represented and updated internally. This is the most important architectural decision in the project. Three models under investigation (see Research Questions below).
 
 - [ ] **Developer experience** — what does it feel like to use Proteus?
   - What does a developer write to declare a component and its possible forms?
@@ -51,6 +62,31 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 
 - [ ] Reference the original POC — document what it demonstrated, what it proved, and what it did not address. Use it as a concrete reference point for the target experience.
 - [ ] Define what a "prototype" milestone looks like for V1 — the specific interaction that demonstrates the paradigm
+- [ ] Resolve scene graph model (see Research Questions) before Phase B begins
+
+---
+
+### Research Questions — Scene Graph Model
+
+The choice of internal scene graph model is the most consequential architectural decision in Proteus. It affects performance, developer experience, transition behavior, layout, and the agentic API. The following models are under investigation. Research these before Phase B begins.
+
+**Option A — DOM-style tree**
+A hierarchical tree of component nodes with event bubbling and cascading updates, similar to the browser DOM. Well understood by front-end developers. Significant drawbacks: layout changes cascade through the tree, and since geometry is changing every frame during transitions, cascading recalculation becomes the default operating mode rather than an edge case. Likely too costly for a transition-heavy framework.
+
+**Option B — ECS (Entity Component System)**
+Entities are stable IDs (component identities). Data is stored in flat, cache-efficient arrays grouped by type (geometric state, interaction definition, transition state). Systems process data in bulk linear loops — the render system, transition system, input system each operate on their relevant data independently. No tree traversal, no cascades. Maximum CPU cache efficiency. The performance model Proteus's transition system needs. Drawback: the ECS mental model is unfamiliar to most front-end developers. A pure ECS public API would be a steep learning curve.
+
+*Key question: is Bevy's ECS crate (`bevy_ecs`) worth adopting rather than writing our own? Investigate.*
+
+**Option C — Reactive signal system with ECS-like data layout**
+Components declare reactive dependencies — geometry recalculates only when the signals it depends on change. Updates are surgical rather than cascading. The developer-facing API resembles SolidJS or Vue signals — familiar to front-end developers. Internal data layout can still be cache-efficient and linear without exposing that to the developer. Potentially the sweet spot: developer-friendly surface, ECS-level performance underneath.
+
+*Key question: how do signals interact with per-frame lerp updates during transitions? Signals are typically event-driven; transitions are continuous. These may need to coexist rather than unify.*
+
+**Likely direction — Hybrid: declarative public API over ECS internals**
+The public API (TypeScript and Rust-facing) presents a declarative, developer-friendly interface — potentially tree-like or signal-based in feel. Internally, the framework resolves declarations into an ECS data layout for efficient processing. The complexity of ECS is hidden. The performance of ECS is retained.
+
+*This is the leading hypothesis but needs validation through the research above before Phase B commits to it.*
 
 ---
 
@@ -211,13 +247,15 @@ Proteus represents a novel UX paradigm and technical system that may be patentab
 
 Questions that have surfaced but don't yet have answers. Pull them into the relevant phase above as they get resolved.
 
-- What is the exact definition of a "component" in Proteus? Where are its boundaries?
-- How does a developer declare the valid transitions a component can make?
+- ~~What is the exact definition of a "component" in Proteus?~~ ✅ Resolved — see Phase A decided items
+- ~~Can components be nested?~~ ✅ Resolved — yes, strict single-parent tree ownership
+- ~~What happens if a user interacts with a component that is currently transitioning?~~ ✅ Resolved — limited interaction enforced by framework, customizable by designer
+- What internal model should represent the scene graph — DOM tree, ECS, reactive signals, or hybrid? *(see Research Questions in Phase A)*
+- How does a developer declare a transition — what is the minimum they need to provide?
 - What triggers a transition — is it always user-initiated, or can application logic drive it?
-- What is the state of a component mid-transition from the application's perspective?
-- What happens if a user interacts with a component that is currently transitioning?
-- Can components be nested? If so, how do parent/child transitions relate?
-- What does the TypeScript API look like for a web developer consuming Proteus?
+- What is the developer-facing API for defining a component's interaction definition?
+- What does the TypeScript API look like end to end for a simple component with one transition?
+- How do parent and child transitions coordinate — who has priority when both are triggered simultaneously?
 
 ---
 
