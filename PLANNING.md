@@ -58,6 +58,40 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
   - What is the API surface for a web consumer (TypeScript)? For a native consumer (Rust)?
   - Sketch the simplest possible real example end to end
 
+  **Where we left off:**
+  Three API shape options were discussed:
+  - **A** — two separate components with a declared relationship. Fits signals well — neither component knows about the other, both react to a shared signal. The signal owns the relationship, not the components.
+  - **B** — one component with multiple named states. Reintroduces the closed-form enum problem — doesn't scale.
+  - **C** — fully imperative, no upfront declarations. Flexible but loses declarative structure, agent-friendliness, and framework validation. Ruled out.
+
+  Option A with signals as the decoupling mechanism was the leading candidate. Example sketch discussed:
+  ```typescript
+  const contentSignal = signal('button');
+
+  const button = component({
+    geometry: { width: 120, height: 40, color: '#3B82F6' },
+    label: 'View Items',
+    visibleWhen: contentSignal.is('button'),
+    interactions: {
+      onClick: () => contentSignal.set('list')
+    }
+  });
+
+  const list = component({
+    geometry: [
+      { width: 240, height: 48, y: 0 },
+      { width: 240, height: 48, y: 52 },
+      { width: 240, height: 48, y: 104 },
+    ],
+    visibleWhen: contentSignal.is('list'),
+    transitionFrom: button
+  });
+  ```
+
+  Concern raised: `transitionFrom` reintroduces coupling between components. Still feels complex. Needs more thought.
+
+  **Next step:** Start from the simplest possible case — one component, one transition, no signals, no composition. What is the minimum a developer writes to see something morph? Let the API emerge from that rather than designing top-down. Also revisit how the original POC handled the interaction model — that may point toward a simpler primitive.
+
 ### To Do
 
 - [ ] Reference the original POC — document what it demonstrated, what it proved, and what it did not address. Use it as a concrete reference point for the target experience.
