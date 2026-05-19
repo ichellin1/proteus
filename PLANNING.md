@@ -73,20 +73,20 @@ The choice of internal scene graph model is the most consequential architectural
 **Option A — DOM-style tree**
 A hierarchical tree of component nodes with event bubbling and cascading updates, similar to the browser DOM. Well understood by front-end developers. Significant drawbacks: layout changes cascade through the tree, and since geometry is changing every frame during transitions, cascading recalculation becomes the default operating mode rather than an edge case. Likely too costly for a transition-heavy framework.
 
-**Option B — ECS (Entity Component System)**
-Entities are stable IDs (component identities). Data is stored in flat, cache-efficient arrays grouped by type (geometric state, interaction definition, transition state). Systems process data in bulk linear loops — the render system, transition system, input system each operate on their relevant data independently. No tree traversal, no cascades. Maximum CPU cache efficiency. The performance model Proteus's transition system needs. Drawback: the ECS mental model is unfamiliar to most front-end developers. A pure ECS public API would be a steep learning curve.
+**Option B — ECS (Entity Component System)** ✅ Selected for internals
+Entities are stable IDs (component identities). Data is stored in flat, cache-efficient arrays grouped by type (geometric state, interaction definition, transition state). Systems process data in bulk linear loops — the render system, transition system, input system each operate on their relevant data independently. No tree traversal, no cascades. Maximum CPU cache efficiency. The performance model Proteus's transition system needs.
 
-*Key question: is Bevy's ECS crate (`bevy_ecs`) worth adopting rather than writing our own? Investigate.*
+*Research outcome: Bevy ECS (`bevy_ecs`) is a viable candidate and should be adopted rather than writing a custom ECS. To be confirmed during Phase C (Dependencies & Tooling).*
 
-**Option C — Reactive signal system with ECS-like data layout**
-Components declare reactive dependencies — geometry recalculates only when the signals it depends on change. Updates are surgical rather than cascading. The developer-facing API resembles SolidJS or Vue signals — familiar to front-end developers. Internal data layout can still be cache-efficient and linear without exposing that to the developer. Potentially the sweet spot: developer-friendly surface, ECS-level performance underneath.
+**Option C — Reactive signals** ✅ Selected for transition triggering layer only
+Signals are not a good fit for driving per-frame animation — they are event-driven, not continuous. However they are a strong fit for *triggering* transitions in response to application state changes and user events. The two layers coexist sequentially: a signal fires and hands off to the ECS transition system, which drives the animation frame by frame. When the transition completes, a signal fires on completion. Clean handoff at each boundary.
 
-*Key question: how do signals interact with per-frame lerp updates during transitions? Signals are typically event-driven; transitions are continuous. These may need to coexist rather than unify.*
+**Resolution — Hybrid: signals trigger, ECS runs**
+- **Public API layer**: reactive signals — declarative, event-driven, developer-friendly, AI-agent friendly. This is what developers write.
+- **Transition execution layer**: Bevy ECS — entities, components, systems. Signals hand off to the ECS when a transition is triggered. ECS drives the lerp frame by frame.
+- **Render layer**: instanced draw call fed by the ECS render system each frame.
 
-**Likely direction — Hybrid: declarative public API over ECS internals**
-The public API (TypeScript and Rust-facing) presents a declarative, developer-friendly interface — potentially tree-like or signal-based in feel. Internally, the framework resolves declarations into an ECS data layout for efficient processing. The complexity of ECS is hidden. The performance of ECS is retained.
-
-*This is the leading hypothesis but needs validation through the research above before Phase B commits to it.*
+The complexity of ECS is never exposed to the developer. The signal API is what they see.
 
 ---
 
@@ -158,7 +158,7 @@ The project foundation. Nothing in M1 or beyond starts until this is complete.
 - [ ] Project plan and milestones finalized (Phase D)
 
 ### M1 — First Pixel
-A static textured quad renders in the browser (WebGL2) and natively. The instanced draw call is proven end to end. Unit and integration tests are introduced here and maintained through every subsequent milestone.
+A static textured quad renders in the browser (WebGL2) and natively. The instanced draw call is proven end to end. Unit and integration tests are introduced here and maintained through every subsequent milestone. Includes a benchmark comparing WASM+instanced rendering against an equivalent pure TypeScript/WebGL2 implementation to validate that the O(1) boundary crossing mitigation is sufficient in practice.
 
 ### M2 — First Transition
 A single 1→1 lerp transition. One quad morphs into another — position, size, color all interpolating smoothly. The transition model is proven.
@@ -250,7 +250,7 @@ Questions that have surfaced but don't yet have answers. Pull them into the rele
 - ~~What is the exact definition of a "component" in Proteus?~~ ✅ Resolved — see Phase A decided items
 - ~~Can components be nested?~~ ✅ Resolved — yes, strict single-parent tree ownership
 - ~~What happens if a user interacts with a component that is currently transitioning?~~ ✅ Resolved — limited interaction enforced by framework, customizable by designer
-- What internal model should represent the scene graph — DOM tree, ECS, reactive signals, or hybrid? *(see Research Questions in Phase A)*
+- ~~What internal model should represent the scene graph?~~ ✅ Resolved — signals trigger transitions, Bevy ECS runs them, instanced rendering submits to GPU
 - How does a developer declare a transition — what is the minimum they need to provide?
 - What triggers a transition — is it always user-initiated, or can application logic drive it?
 - What is the developer-facing API for defining a component's interaction definition?
@@ -272,7 +272,7 @@ For a naive implementation — one draw call per component, individual uniform u
 
 Instanced rendering must be a first-class architectural decision, not a later optimisation. If it is designed in from the start, the WASM boundary cost becomes largely irrelevant for Proteus's use case.
 
-*Resolution: V1 uses a single instanced draw call with one homogeneous GPU buffer for all components. The entire scene is submitted with one buffer update and one draw call per frame — O(1) boundary crossings regardless of component count. This is the recommended rendering strategy for web targets and is a first-class architectural requirement from Phase 1.*
+*Resolution: V1 uses a single instanced draw call with one homogeneous GPU buffer for all components. The entire scene is submitted with one buffer update and one draw call per frame — O(1) boundary crossings regardless of component count. This is the recommended rendering strategy for web targets and is a first-class architectural requirement from Phase 1. WASM remains the web target — the boundary cost concern was valid but is addressed by instanced rendering. A benchmark in M1 will validate this with real data.*
 
 *Future geometry types (beyond quads) will break the single-buffer model. Two options are deferred to a future native-focused iteration: multiple instance buffers per type (Option 1) or geometry atlasing (Option 2). The choice between them will be informed by benchmarks on native targets.*
 
