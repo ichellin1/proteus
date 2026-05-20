@@ -123,9 +123,41 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
   - `direction` — for 1→N transitions, how the split fans out (center, left-to-right, etc.)
   - `stagger` — for 1→N transitions, whether child components animate simultaneously or with offset delays
 
+  **Component states — resolved:**
+
+  A component has two axes of state:
+
+  **Lifecycle states** — how a component moves through existence:
+  - `entering` — first appearance, animating in from an initial geometric state
+  - `idle` — fully resolved, fully interactive (previously called "complete")
+  - `transitioning` — mid-morph to another form, limited interaction
+  - `exiting` — animating out before removal from the scene
+
+  **Interaction states** — visual and behavioral states within `idle`:
+  - `default` — base appearance
+  - `hover` — pointer over the component
+  - `pressed` — actively being interacted with
+  - `focused` — keyboard focus
+  - `disabled` — present but not interactive
+
+  Interaction states are declared sparsely — only the properties that change for a given state need to be declared. Undeclared properties inherit from `default`. Every state change is a potential mini-transition, not just a CSS swap — geometry, color, opacity, size can all change per state.
+
+  ```typescript
+  const button = component({
+    geometry: { width: 120, height: 40, color: '#3B82F6' }, // default state
+    states: {
+      hover:    { color: '#2563EB' },                        // only color changes
+      pressed:  { width: 118, height: 38, color: '#1D4ED8' },// size and color change
+      disabled: { color: '#93C5FD' }                         // only color changes
+    }
+  });
+  ```
+
+  The full set of declarable display characteristics per state is still to be defined — that is the next open item.
+
   **Still to resolve:**
+  - What is the full set of display characteristics that can be declared per state (color, opacity, size, border radius, texture, etc.)?
   - What is the full set of methods on a component handle?
-  - What is the full shape of the `component({ ... })` declaration — what properties are required vs optional?
   - How does the framework resolve which components are visible at any given time — is visibility derived from the signal, or declared separately?
   - How does a composite component (e.g. list with list item children) get declared?
   - What does the interaction definition look like beyond `onClick` — hover, drag, swipe, keyboard?
