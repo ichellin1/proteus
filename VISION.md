@@ -101,9 +101,9 @@ The decision between these two approaches will be made during a future iteration
 Smooth, visually impressive transitions at 60fps (or higher) require work happening in parallel. The CPU is the wrong place for this — it serializes layout, logic, and rendering.
 
 Every modern device capable of running a browser has a GPU. Proteus uses it:
-- Transition state is computed and animated on the GPU
-- Rendering is GPU-native (not DOM/CSS compositing)
-- The interpolation parameter `t` is updated per-frame and fed to GPU pipelines that handle the visual output
+- The ECS drives the interpolation parameter `t` each frame on the CPU; the GPU renders the result from an instanced buffer — no DOM/CSS compositing
+- The interpolation parameter `t` is updated per-frame by the transition system and fed into the GPU instance buffer, which the GPU renders in a single draw call
+- All rendering work — vertex transformation, texture sampling, fragment shading — executes on the GPU
 
 This is what allows transitions to be genuinely smooth — not because of clever CSS tricks, but because the work is happening where it belongs.
 
