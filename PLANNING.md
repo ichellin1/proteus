@@ -252,9 +252,71 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
   button.onDrag((delta) => { ... });
   ```
 
+  **Composite components — resolved:**
+
+  **Declaration — Option D (hybrid declarative + imperative):**
+  Children are declared separately (so they have handles for signal and transition use), then passed to the parent in the declaration. Dynamic child management is available via handle methods for runtime use cases like API-loaded lists.
+
+  ```typescript
+  // Static declaration
+  const item1 = component({ geometry: { width: 240, height: 48, y: 0 } });
+  const item2 = component({ geometry: { width: 240, height: 48, y: 52 } });
+
+  const list = component({
+    geometry: { width: 240, height: 200 },
+    children: [item1, item2]
+  });
+
+  // Dynamic management
+  list.addChild(item3);
+  list.removeChild(item1);                    // detaches, item1 persists in ECS
+  list.removeChild(item2, { destroy: true }); // detaches and destroys
+  ```
+
+  **Coordinate space:**
+  Children declare `x`, `y` relative to the parent's origin. The ECS transform system computes world space positions automatically. When the parent moves, children move with it. Standard scene graph behavior.
+
+  **Visibility and opacity cascading:**
+  - Parent `visible: false` makes the entire subtree inert — no system touches any child
+  - Parent `opacity` multiplies down through children — parent `0.5` × child `0.8` = effective `0.4`
+
+  **Transition cascading — `childBehavior`:**
+  When a parent transitions, the default behavior is `'bake'` — the framework renders the parent and all children into an offscreen texture before the transition begins. That texture maps onto the parent quad for the duration of the morph. The parent transitions as a single unit, children appear embedded in it. On completion, children are restored to individual rendering. This means parent transitions cost the same regardless of child count.
+
+  `childBehavior` is declared on the transition call, not the component, so different transitions of the same parent can have different child behaviors:
+
+  ```typescript
+  // Default — children baked into parent texture
+  contentSignal.set([button.id(), list.id()], {
+    duration: 300,
+    childBehavior: 'bake'
+  });
+
+  // Iterator — called per child, returns a per-child transition config
+  contentSignal.set([button.id(), list.id()], {
+    duration: 300,
+    childBehavior: (child, index, total) => ({
+      duration: 300,
+      easing: 'ease-out',
+      delay: index * 40,           // stagger — 40ms offset per child
+    })
+  });
+
+  // Scatter with custom targets
+  contentSignal.set([button.id(), list.id()], {
+    duration: 300,
+    childBehavior: (child, index, total) => ({
+      duration: 300,
+      delay: index * 30,
+      target: { x: Math.random() * 800, opacity: 0 }
+    })
+  });
+  ```
+
+  The iterator pattern makes framework-level `stagger` and `direction` primitives unnecessary — they are iterator implementations, not framework features. Both have been removed from the post-V1 scope.
+
   **Still to resolve:**
-  - Relative positioning and coordinate spaces — deferred to Phase B (Architecture)
-  - How does a composite component (e.g. list with list item children) get declared?
+  - Relative positioning and coordinate spaces — specifically how the parent's anchor point defines the child origin, and whether any layout helpers exist for common patterns (vertical stack, grid). Deferred to Phase B (Architecture).
   - What is the full set of methods on a component handle beyond interaction and lifecycle?
 
 ### To Do
@@ -402,8 +464,7 @@ Planned future work, not part of the V1 scope:
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
 - Custom shader authoring experience (formal support for developer-written WGSL)
 - Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
-- Transition `direction` — for 1→N transitions, how the split fans out (center, left-to-right, radial, etc.)
-- Transition `stagger` — for 1→N transitions, offset delays between child component animations
+- Transition `direction` and `stagger` — superseded by the `childBehavior` iterator pattern. Developers implement these as iterator functions rather than framework primitives. No separate post-V1 work needed.
 - XR shell (WebXR / OpenXR)
 
 ---
