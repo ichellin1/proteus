@@ -153,10 +153,39 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
   });
   ```
 
-  The full set of declarable display characteristics per state is still to be defined — that is the next open item.
+  **V1 display characteristics — resolved:**
+
+  Every property below is declarable per interaction state (sparse — only declare what changes) and is fully interpolatable by the transition system.
+
+  ```typescript
+  {
+    // Geometry
+    x: number,                        // world space position
+    y: number,                        // world space position
+    z: number,                        // layering order (higher = on top)
+    width: number,                    // dimensions
+    height: number,
+    rotation: number,                 // 2D angle in degrees
+    scale: number,                    // uniform scale multiplier
+    anchor: { x: number, y: number }, // transform origin, default { 0.5, 0.5 }
+
+    // Visual
+    color: [r, g, b, a],             // RGBA, 0.0–1.0. alpha affects color tint independently
+    opacity: number,                  // 0.0–1.0, whole-component multiplier applied separately
+    texture: TextureId,               // reference to a registered texture
+    corner_radius: number             // rounded corners, shader-based, in pixels
+  }
+  ```
+
+  **Color and opacity model:**
+  `color` is RGBA — the alpha channel within color affects the color tint itself. `opacity` is a separate whole-component multiplier applied to everything (texture and color combined). In the shader: `final_alpha = color.a * opacity`. Standard compositing model, maximum flexibility.
+
+  **corner_radius** is handled in the fragment shader via SDF calculation — not a geometry change. Rounded corners come at no vertex cost.
+
+  **All properties are interpolatable** — during a state change or a full transition, the framework lerps between any two values cleanly. State changes (hover, pressed, etc.) are mini-transitions driven by the same interpolation system as full morphs.
 
   **Still to resolve:**
-  - What is the full set of display characteristics that can be declared per state (color, opacity, size, border radius, texture, etc.)?
+  - Relative positioning and coordinate spaces — how child components position relative to parents, and how components position relative to each other in the scene. Needs to support common patterns like stacked lists without requiring absolute pixel positions for every component. Deferred to Phase B (Architecture).
   - What is the full set of methods on a component handle?
   - How does the framework resolve which components are visible at any given time — is visibility derived from the signal, or declared separately?
   - How does a composite component (e.g. list with list item children) get declared?
