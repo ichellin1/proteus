@@ -58,23 +58,18 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
   - What is the API surface for a web consumer (TypeScript)? For a native consumer (Rust)?
   - Sketch the simplest possible real example end to end
 
-  **Where we left off:**
-  Three API shape options were discussed:
-  - **A** — two separate components with a declared relationship. Fits signals well — neither component knows about the other, both react to a shared signal. The signal owns the relationship, not the components.
-  - **B** — one component with multiple named states. Reintroduces the closed-form enum problem — doesn't scale.
-  - **C** — fully imperative, no upfront declarations. Flexible but loses declarative structure, agent-friendliness, and framework validation. Ruled out.
+  **Current model — resolved:**
 
-  Option A with signals as the decoupling mechanism was the leading candidate. Example sketch discussed:
+  The signal carries the full transition declaration: `[to, from]` as component IDs. Neither component references the other. The signal owns the relationship.
+
+  When a component is declared, the framework registers it into the ECS and assigns a UID. The declaration returns a lightweight **handle** — a thin object that wraps the UID and exposes a small set of methods (`.id()`, `.onClick()`, etc.). The handle holds no component state — all state lives in the ECS. Handles are cheap to hold in scope.
+
+  The coupling lives in the interaction declaration, not on the component itself:
+
   ```typescript
-  const contentSignal = signal('button');
-
   const button = component({
     geometry: { width: 120, height: 40, color: '#3B82F6' },
-    label: 'View Items',
-    visibleWhen: contentSignal.is('button'),
-    interactions: {
-      onClick: () => contentSignal.set('list')
-    }
+    label: 'View Items'
   });
 
   const list = component({
@@ -82,15 +77,37 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
       { width: 240, height: 48, y: 0 },
       { width: 240, height: 48, y: 52 },
       { width: 240, height: 48, y: 104 },
-    ],
-    visibleWhen: contentSignal.is('list'),
-    transitionFrom: button
+    ]
   });
+
+  const image = component({
+    geometry: { width: 480, height: 320 }
+  });
+
+  const contentSignal = signal(button.id());
+
+  // Coupling lives here — in the interaction, not on the component
+  button.onClick(() => contentSignal.set([list.id(), button.id()]));
+  listItem.onClick(() => contentSignal.set([image.id(), listItem.id()]));
+  backButton.onClick(() => contentSignal.set([list.id(), image.id()]));
+  backButton.onClick(() => contentSignal.set([button.id(), list.id()]));
   ```
 
-  Concern raised: `transitionFrom` reintroduces coupling between components. Still feels complex. Needs more thought.
+  **Key properties of this model:**
+  - Components are fully decoupled from each other — no component references another
+  - The signal owns the transition relationship: `[to, from]`
+  - The `from` ID tells the framework the geometric origin of the transition
+  - The same component can receive transitions from any number of origins (e.g. list receives from button going forward and from image going back)
+  - Any component can trigger a transition between any two other components — cross-component triggering is a first-class feature
+  - UIDs are just values — easy for AI agents to generate, store, and reference
+  - Handles are lightweight and serializable — opens the door to persistent UI declarations in future
 
-  **Next step:** Start from the simplest possible case — one component, one transition, no signals, no composition. What is the minimum a developer writes to see something morph? Let the API emerge from that rather than designing top-down. Also revisit how the original POC handled the interaction model — that may point toward a simpler primitive.
+  **Still to resolve:**
+  - What is the full set of methods on a component handle?
+  - What is the full shape of the `component({ ... })` declaration — what properties are required vs optional?
+  - How does the framework resolve which components are visible at any given time — is visibility derived from the signal, or declared separately?
+  - How does a composite component (e.g. list with list item children) get declared?
+  - What does the interaction definition look like beyond `onClick` — hover, drag, swipe, keyboard?
 
 ### To Do
 
