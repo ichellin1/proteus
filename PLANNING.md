@@ -315,6 +315,28 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 
   The iterator pattern makes framework-level `stagger` and `direction` primitives unnecessary — they are iterator implementations, not framework features. Both have been removed from the post-V1 scope.
 
+  **Static baking — resolved:**
+
+  A composite component declared with `bake: true` is a performance optimization. When the ECS encounters a baked component it:
+  1. Renders the parent and all children into an offscreen texture once
+  2. Maps that texture onto the parent quad
+  3. Destroys the child entities from the ECS entirely
+  4. The composite becomes a single leaf quad — indistinguishable from any other component
+
+  The ECS shrinks, the render buffer shrinks, and transitions work identically — a baked component is just a textured quad like everything else. The optimization is transparent to the rest of the system.
+
+  ```typescript
+  const badge = component({
+    bake: true,
+    geometry: { width: 80, height: 24 },
+    children: [icon, label]
+  });
+  ```
+
+  `bake: true` is always explicit — the framework never infers developer intention or automatically bakes components. The DevTools can analyse the component tree and surface candidates where `bake: true` could be applied (no child interaction handlers, no signal bindings on children), but acts only as a suggestion. The developer reviews and opts in.
+
+  The name `bake` is intentionally consistent with `childBehavior: 'bake'` on transitions — same concept, same word, shared vocabulary throughout the framework.
+
   **Still to resolve:**
   - Relative positioning and coordinate spaces — specifically how the parent's anchor point defines the child origin, and whether any layout helpers exist for common patterns (vertical stack, grid). Deferred to Phase B (Architecture).
   - What is the full set of methods on a component handle beyond interaction and lifecycle?
