@@ -337,9 +337,70 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 
   The name `bake` is intentionally consistent with `childBehavior: 'bake'` on transitions — same concept, same word, shared vocabulary throughout the framework.
 
+  **Registry API and data reads — resolved:**
+
+  The handle is intentionally thin — an identity token with a small set of methods for attaching behavior. It holds no state. All component data lives in the ECS registry and is read via `proteus.get(id)`.
+
+  ```typescript
+  const data = proteus.get(button.id());
+
+  // Always available — current resolved state
+  // When idle: the component's declared geometry
+  // When transitioning: same as data.transition.current
+  data.geometry;
+
+  // State
+  data.state;       // current interaction state: 'default' | 'hover' | 'pressed' | 'focused' | 'disabled'
+  data.visible;     // current visibility
+  data.children;    // array of child IDs
+
+  // Transition data — null when idle, populated during a transition
+  data.transition;
+  data.transition.base;     // geometric state where the transition started
+  data.transition.target;   // geometric state where the transition is going
+  data.transition.current;  // current interpolated state — what is being rendered right now
+  data.transition.progress; // 0.0–1.0 — how far along the transition is
+  ```
+
+  `data.geometry` is always the answer to "what is this component right now" — consistent whether idle or transitioning. `data.transition` is `null` when idle, making it easy to check:
+
+  ```typescript
+  if (data.transition) {
+    const pct = data.transition.progress; // 0.0–1.0
+  }
+  ```
+
+  `progress` is the raw `t` value from the interpolation function — useful for dependent animations, progress indicators, or cancellation logic.
+
+  **Full handle method set — resolved:**
+
+  ```typescript
+  // Identity
+  handle.id()                          // returns the component's UID
+
+  // Interactions
+  handle.onClick(fn)
+  handle.onHoverEnter(fn)
+  handle.onHoverExit(fn)
+  handle.onPress(fn)
+  handle.onRelease(fn)
+  handle.onFocus(fn)
+  handle.onBlur(fn)
+  handle.onDrag(fn)                    // fn receives delta: { x, y }
+
+  // Child management
+  handle.addChild(childHandle)
+  handle.removeChild(childHandle, { destroy?: boolean })
+
+  // Lifecycle
+  handle.destroy()                     // removes from ECS, handle becomes invalid
+  handle.freeResources()               // releases GPU resources, entity remains in ECS
+  ```
+
+  Data reads are not on the handle — they go through `proteus.get(id)`. The handle is behavioral only.
+
   **Still to resolve:**
   - Relative positioning and coordinate spaces — specifically how the parent's anchor point defines the child origin, and whether any layout helpers exist for common patterns (vertical stack, grid). Deferred to Phase B (Architecture).
-  - What is the full set of methods on a component handle beyond interaction and lifecycle?
 
 ### To Do
 
