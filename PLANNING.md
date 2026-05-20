@@ -102,6 +102,27 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
   - UIDs are just values — easy for AI agents to generate, store, and reference
   - Handles are lightweight and serializable — opens the door to persistent UI declarations in future
 
+  **Transition declaration — resolved:**
+
+  The transition is declared at the call site — always explicit, always intentional, no signal-level defaults. Every transition in the codebase is self-contained and readable in isolation.
+
+  ```typescript
+  button.onClick(() => contentSignal.set([list.id(), button.id()], {
+    duration: 300,   // ms
+    easing: 'linear', // pluggable — 'linear' is the V1 default
+    delay: 0          // ms before transition begins
+  }));
+  ```
+
+  **V1 transition options:**
+  - `duration` — how long the morph takes in milliseconds
+  - `easing` — interpolation function. `'linear'` in V1, pluggable for future easing curves
+  - `delay` — pause before the transition begins
+
+  **Post-V1 transition options (deferred — needs more thought):**
+  - `direction` — for 1→N transitions, how the split fans out (center, left-to-right, etc.)
+  - `stagger` — for 1→N transitions, whether child components animate simultaneously or with offset delays
+
   **Still to resolve:**
   - What is the full set of methods on a component handle?
   - What is the full shape of the `component({ ... })` declaration — what properties are required vs optional?
@@ -254,6 +275,8 @@ Planned future work, not part of the V1 scope:
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
 - Custom shader authoring experience (formal support for developer-written WGSL)
 - Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
+- Transition `direction` — for 1→N transitions, how the split fans out (center, left-to-right, radial, etc.)
+- Transition `stagger` — for 1→N transitions, offset delays between child component animations
 - XR shell (WebXR / OpenXR)
 
 ---
