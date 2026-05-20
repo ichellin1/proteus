@@ -184,12 +184,78 @@ The vision document ([VISION.md](./VISION.md)) is a living artifact that will co
 
   **All properties are interpolatable** — during a state change or a full transition, the framework lerps between any two values cleanly. State changes (hover, pressed, etc.) are mini-transitions driven by the same interpolation system as full morphs.
 
+  **Visibility model — resolved:**
+
+  `visible` is a declared property on the component, defaulting to `true` if not specified. It is not a rendering flag — it is an **ECS activation flag**. When `visible: false`, the entity exists in the ECS registry but no system acts on it — not the render system, not the transition system, not the input system. It is completely inert. When `visible: true`, all systems can act on it normally.
+
+  ```typescript
+  const button = component({ visible: true, geometry: { ... } });   // active on load
+  const detail = component({ visible: false, geometry: { ... } });  // inert until signal activates it
+  ```
+
+  This means transitioning a component out sets `visible: false` on completion — the entity remains in the ECS, ready to reactivate without re-creation cost. Always-visible components (headers, nav bars) simply declare `visible: true` and are never touched by a signal.
+
+  **Component lifecycle and destruction — resolved:**
+
+  Two categories of component lifetime:
+
+  - **Persistent** — declared once, lives for the app lifetime. Activated/deactivated via `visible`. Default behavior.
+  - **Ephemeral** — created dynamically, destroyed when no longer needed (list items, tooltips, notifications).
+
+  Components persist unless explicitly destroyed. Automatic destruction is supported as an option (e.g. after an exit transition completes) but is opt-in, not the default.
+
+  Handle lifecycle methods:
+  ```typescript
+  component.destroy()         // removes entity from ECS entirely, handle becomes invalid
+  component.freeResources()   // releases all GPU resources the component references, entity remains in ECS
+  ```
+
+  **Resource management — resolved:**
+
+  Resources (textures, video streams) have lifecycles independent of the components that reference them. They are declared and registered separately, referenced by ID. The framework tracks reference counts — GPU memory is only released when the last referencing component frees it.
+
+  ```typescript
+  // Declare resources independently
+  const heroImage = proteus.texture({ src: '/images/hero.png' });
+  const bgImage = proteus.texture({ src: '/images/background.png' });
+
+  // Components reference by ID
+  const hero = component({
+    visible: true,
+    geometry: { width: 480, height: 320 },
+    texture: heroImage.id()
+  });
+
+  // Independent lifecycle
+  heroImage.free();         // releases GPU memory when reference count reaches 0
+  hero.freeResources();     // releases all resources this component references
+  hero.destroy();           // removes from ECS entirely
+  ```
+
+  Resource concerns deferred to later milestones:
+  - Loading state — textures take time to upload to GPU, components need to handle this gracefully
+  - Lazy loading — don't load until component becomes visible
+  - Video resource management — continuous frame streaming, separate handling from static textures
+
+  **Interaction definition — resolved:**
+
+  All interaction handlers use the `on` prefix consistently. Framework-managed state reactions and explicit transition triggers use the same mechanism — convention distinguishes them, not enforcement. DevTools can surface rule violations based on team-configured preferences.
+
+  ```typescript
+  button.onClick(() => contentSignal.set([list.id(), button.id()], { duration: 300 }));
+  button.onHoverEnter(() => { ... });
+  button.onHoverExit(() => { ... });
+  button.onPress(() => { ... });
+  button.onRelease(() => { ... });
+  button.onFocus(() => { ... });
+  button.onBlur(() => { ... });
+  button.onDrag((delta) => { ... });
+  ```
+
   **Still to resolve:**
-  - Relative positioning and coordinate spaces — how child components position relative to parents, and how components position relative to each other in the scene. Needs to support common patterns like stacked lists without requiring absolute pixel positions for every component. Deferred to Phase B (Architecture).
-  - What is the full set of methods on a component handle?
-  - How does the framework resolve which components are visible at any given time — is visibility derived from the signal, or declared separately?
+  - Relative positioning and coordinate spaces — deferred to Phase B (Architecture)
   - How does a composite component (e.g. list with list item children) get declared?
-  - What does the interaction definition look like beyond `onClick` — hover, drag, swipe, keyboard?
+  - What is the full set of methods on a component handle beyond interaction and lifecycle?
 
 ### To Do
 
