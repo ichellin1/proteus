@@ -7,8 +7,8 @@
 ## Planning Phases
 
 ```
-Phase A  Vision             ← in progress
-Phase B  Architecture
+Phase A  Vision             ✅ complete
+Phase B  Architecture       ← ready to begin
 Phase C  Dependencies & Tooling
 Phase D  Project Plan & Roadmap
 Phase E  Build
@@ -18,19 +18,35 @@ Phase E  Build
 
 ## Phase A — Vision
 
-**Status: In Progress**
+**Status: Complete ✅**
 
-The vision document ([VISION.md](./VISION.md)) is a living artifact that will continue to be refined through this phase.
+The vision document ([VISION.md](./VISION.md)) is stable. Phase B can begin.
 
 ### Decided
 
 - [x] Core paradigm: metamorphic components — UI elements that transform into other UI elements with fluid, continuous transitions
 - [x] Transition topologies: 1→1, 1→N, N→1
 - [x] Interpolation model: lerp as foundation, pluggable interpolation functions for future variation
-- [x] V1 geometry: textured rectangles (two-triangle quads) — same primitive for all components
+- [x] V1 geometry: textured rectangles (two-triangle quads) with instanced rendering — single buffer, single draw call
 - [x] Technology: Rust core, wgpu for GPU abstraction, WASM for web, winit for native
 - [x] Target platforms: Web (WebGL2 primary, WebGPU secondary), desktop native (macOS/Linux/Windows), XR future
-- [x] Concept is validated — an original POC was built ~11 years ago using JavaScript and WebGL
+- [x] Concept is validated — original POC built in JavaScript and WebGL. Well understood, no formal documentation needed.
+- [x] V1 prototype interaction confirmed: button → list → detail view (M5 reference demo)
+- [x] Component model: identity-based, geometric state + interaction definition, three lifecycle states, composite with single-parent ownership
+- [x] Interaction states: default, hover, pressed, focused, disabled — declared sparsely, all interpolatable
+- [x] V1 display characteristics: x, y, z, width, height, rotation, scale, anchor, color (RGBA), opacity, texture, corner_radius
+- [x] Signal model: signals carry [to, from] UIDs, transition declared at call site with duration, easing, delay
+- [x] Component handle: thin identity token, behavioral methods only, data reads via proteus.get(id)
+- [x] Registry API: geometry, state, visible, children, transition (base/target/current/progress)
+- [x] Composite components: Option D — declarative children array + addChild/removeChild
+- [x] Child transitions: childBehavior on transition call — 'bake' default, iterator for custom per-child effects
+- [x] Static baking: bake: true collapses composite into single textured quad, explicit declaration only
+- [x] Visibility: ECS activation flag, default true, cascades to children
+- [x] Opacity: cascades and multiplies down subtree
+- [x] Component lifecycle: persistent vs ephemeral, destroy()/freeResources()
+- [x] Resource management: independent lifecycle, reference counting, explicit free()
+- [x] Scene graph model: signals trigger, Bevy ECS runs, instanced GPU pipeline renders
+- [x] Core principles: 12 principles documented in VISION.md
 
 ### Decided
 
@@ -436,20 +452,23 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase B — Architecture
 
-**Status: Not Started**
+**Status: Ready to Begin**
 
-*Prereqs: Phase A complete*
+*Phase A complete. Architecture design can start.*
 
 ### To Do
 
-- [ ] Component model — internal representation of a metamorphic component
-- [ ] Transition state machine — what states does a component pass through (idle, transitioning, arrived)? What happens to application logic and input during a transition?
-- [ ] Input handling during transitions — clicks, taps, and gestures while a component is mid-morph
-- [ ] Scene graph — how components are organized and rendered relative to each other
-- [ ] Layout model — how component positions and sizes are determined before transitions begin
-- [ ] Render pipeline architecture — single instanced draw call with homogeneous quad buffer; per-frame lerp updates written to instance buffer
-- [ ] WGSL shader design — vertex and fragment shaders for instanced textured quad renderer
-- [ ] Web ↔ Rust boundary — what crosses the WASM boundary and how
+- [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
+- [ ] Component model — internal ECS representation: entities, component arrays, system definitions
+- [ ] Transition state machine — lifecycle states (entering, idle, transitioning, exiting) and system behavior in each
+- [ ] Input handling during transitions — hit testing, event routing, mid-transition limited interaction enforcement
+- [ ] Bevy ECS integration — confirm bevy_ecs as dependency, define entity/component/system structure
+- [ ] Signal system design — how signals are implemented, how they interface with the ECS transition system
+- [ ] Render pipeline architecture — single instanced draw call, homogeneous quad buffer, per-frame lerp updates
+- [ ] Offscreen texture pipeline — bake: true static composites, childBehavior: 'bake' transition composites
+- [ ] WGSL shader design — vertex and fragment shaders for instanced textured quad renderer, corner radius SDF
+- [ ] Resource registry — texture lifecycle, reference counting, GPU memory management
+- [ ] Web ↔ Rust boundary — what crosses the WASM boundary and how, TypeScript handle/signal API shape
 - [ ] Native shell architecture — event loop, windowing, GPU surface lifecycle
 
 ---
@@ -497,6 +516,7 @@ The project foundation. Nothing in M1 or beyond starts until this is complete.
 - [x] Repository, Cargo workspace, crate scaffolding
 - [x] Vision document
 - [x] Planning document
+- [x] Vision complete (Phase A)
 - [ ] Architecture design (Phase B)
 - [ ] Dependencies & tooling decisions (Phase C)
 - [ ] Project plan and milestones finalized (Phase D)
