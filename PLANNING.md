@@ -675,6 +675,56 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **Frame timing:** transitions advance using Bevy's `Time` resource — delta time between frames. `t += delta_seconds / duration_seconds` each tick. Transitions specified in milliseconds run for exactly that duration regardless of frame rate. Frame-rate independent by default.
 
+- [x] **Signal system design** — signals are thin registered objects. The work happens at `set()` time, not at creation time.
+
+  **Internal representation:**
+  ```rust
+  struct Signal {
+      id: SignalId,
+      owner: Option<Entity>,  // entity passed to signal(id) — None for unowned signals
+  }
+  ```
+
+  **Ownership:**
+  - `signal()` — no owner. Lives until explicitly destroyed. Developer is responsible for cleanup.
+  - `signal(button.id())` — owned by the button entity. Automatically destroyed when the owner entity is destroyed. Useful for component-scoped signals that should not outlive their component.
+
+  **How `signal.set()` bridges to ECS:**
+  ```
+  signal.set([list.id(), button.id()], { duration: 300 })
+      │
+      ▼
+  look up signal in SignalRegistry
+      │
+      ▼
+  write TransitionRequest { to: list, from: button, config } into Bevy event queue
+      │
+      ▼  (next frame)
+  transition_setup_system reads event, validates entities, begins transition
+  ```
+  `set()` returns immediately — the write is synchronous, transition begins on the next frame tick. The ECS owns the frame loop; signals are the entry point into it.
+
+  **Multiple signals targeting the same entity in one frame:** processed in order by `transition_setup_system`. If the target is already transitioning and `interruptible: false`, subsequent requests are dropped.
+
+  **`TransitionDropped` event — two-tier opt-in:**
+
+  *Tier 1 — debug builds, automatic:* `#[cfg(debug_assertions)]` — all dropped requests fire `TransitionDropped` events automatically. DevTools listens to them. Zero cost in release builds.
+
+  *Tier 2 — release builds, explicit:* developer registers a handler on the signal:
+  ```typescript
+  contentSignal.onDropped((request) => {
+    // request.to, request.from, request.config
+    // request.reason: 'already_transitioning' | 'entity_not_found' | 'entity_not_visible'
+  });
+  ```
+  In release with no handler registered, the event is skipped entirely — no allocation, no cost. `request.reason` lets the developer distinguish between the common "already transitioning" case and error cases like missing or invisible entities.
+
+  **Signal cleanup:**
+  ```typescript
+  contentSignal.destroy()  // removes from SignalRegistry — further set() calls have no effect
+  ```
+  Owned signals are destroyed automatically with their owner. Unowned signals must be explicitly destroyed by the developer.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
