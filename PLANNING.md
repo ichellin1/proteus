@@ -530,6 +530,58 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 - [x] **Focus and directional navigation** — `navigation_system` is a peer to `input_system`, not a subsystem of it. The input system handles pointer-based focus changes; the navigation system owns all directional focus movement (arrow keys, D-pad, remote control). Both read and write `FocusState`. Hybrid model: explicit `FocusMap` takes priority, spatial algorithm fallback when no map entry exists for a direction. `tab_index` is handled by the navigation system as linear directional nav, not a separate mechanism.
 
+- [x] **Transition state machine** — four lifecycle states, managed by the `Lifecycle` component:
+
+  ```
+                      signal.set() fires
+                      (this entity is [to])
+           ┌─────────────────────────────────┐
+           │                                 ▼
+        [entering] ──── t = 1.0 ────► [idle] ──── signal.set() fires ────► [transitioning]
+                                        │   ◄──── t = 1.0 ─────────────────────────┘
+                                        │
+                                   exitTo declared
+                                   + destroy()/hide
+                                        │
+                                        ▼
+                                    [exiting] ──── t = 1.0 ────► visible:false (persistent)
+                                                                  or destroy()  (ephemeral)
+  ```
+
+  **System behavior per state:**
+
+  ```
+                entering       idle            transitioning   exiting
+  ─────────────────────────────────────────────────────────────────────────
+  render        interpolated   declared        interpolated    interpolated
+                geometry       geometry        geometry        geometry
+
+  transition    advancing t    nothing         advancing t     advancing t
+
+  input         none           full            limited         none
+                (configurable) interaction     (configurable)
+
+  navigation    none           full focus      limited         none
+                (configurable) traversal       (configurable)
+  ```
+
+  `ActiveTransition` is present in `entering`, `transitioning`, and `exiting`. Absent in `idle`.
+
+  **`from` entity handling:** when `signal.set([to, from])` fires, the `from` entity goes `visible: false` immediately. The morph is the exit — the `to` entity carries the entire visual from the `from` entity's geometry to its own. There is no separate exit animation on the `from` entity. `exiting` is reserved for components being removed from the scene, not for morph sources.
+
+  **Interruption — mid-transition new signal:** default behavior is the new signal is **ignored** if the target entity is already `transitioning`. Opt-in via `interruptible: true` in the transition config — the transition system snapshots the current interpolated geometry as the new `base` and starts the new transition from there. The component changes direction mid-flight.
+
+  ```typescript
+  contentSignal.set([detail.id(), list.id()], {
+    duration: 300,
+    interruptible: true  // new signal mid-flight snapshots current state and redirects
+  });
+  ```
+
+  **`entering` — opt-in, default is snap:** when `visible` flips from `false` to `true`, the component snaps directly to `idle` with no animation. Animated entry is opt-in via `enterFrom` geometry declared on the component — triggers the `entering` lifecycle state and lerps from that geometry to the declared geometry.
+
+  **`exiting` — opt-in, default is snap:** when `destroy()` or `visible: false` is called, the component snaps out by default. Animated exit is opt-in via `exitTo` geometry declared on the component — triggers the `exiting` lifecycle state, lerps to that geometry, then hides or destroys on completion. Mirrors the `entering` pattern.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
