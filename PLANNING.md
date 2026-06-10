@@ -725,6 +725,67 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   ```
   Owned signals are destroyed automatically with their owner. Unowned signals must be explicitly destroyed by the developer.
 
+- [x] **Render pipeline architecture** — single instanced draw call, one buffer upload per frame.
+
+  **Base geometry — static, uploaded once at startup:**
+  Unit quad centered at origin, four vertices, six indices (two triangles). Never changes.
+  ```
+  vertices: [(-0.5,-0.5), (0.5,-0.5), (0.5,0.5), (-0.5,0.5)]
+  indices:  [0, 1, 2,  0, 2, 3]
+  ```
+
+  **Instance buffer — one entry per visible component:**
+  ```rust
+  #[repr(C)]
+  #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+  struct QuadInstance {
+      position:      [f32; 3],  // x, y, z — world space (radians internally)
+      size:          [f32; 2],  // width, height
+      rotation:      f32,       // radians (converted from degrees at WASM boundary)
+      scale:         f32,       // uniform scale multiplier
+      anchor:        [f32; 2],  // transform origin, 0.0–1.0
+      color:         [f32; 4],  // RGBA
+      opacity:       f32,       // whole-component multiplier
+      corner_radius: f32,       // pixels, for SDF in fragment shader
+      uv_offset:     [f32; 2],  // texture sub-region origin
+      uv_scale:      [f32; 2],  // texture sub-region size
+      texture_index: u32,       // which texture in bound array (V1: always 0)
+  }
+  ```
+  ~88 bytes per instance. 1000 components ≈ 88KB — well within GPU limits.
+
+  **Camera and projection — 3D forward-compatible from day one:**
+  The vertex shader computes `clip_position = projection * view * model * vertex_position`.
+  View and projection are frame-level uniforms (one upload per frame, same for all instances).
+
+  *V1:* camera fixed at world origin looking down -Z. Orthographic projection. Z on instances controls depth ordering.
+  *Future 3D:* swap orthographic for perspective, move camera freely — no pipeline rewrite needed.
+
+  **Coordinate system:**
+  - Origin at viewport center, Y-up. Consistent with 3D math conventions.
+  - Units: 1 unit = 1 pixel in V1. DPI scale factor applied in the projection matrix — isolated to one place.
+  - TypeScript API may offer a top-left convenience mode for front-end developers. The GPU pipeline is always center-origin.
+
+  **Rotation units:**
+  - TypeScript API: degrees — human-readable, front-end convention (`rotation: 90`)
+  - WASM boundary: degrees → radians via `f32.to_radians()` — conversion happens once on entry
+  - ECS `Transform` component, `QuadInstance` buffer, WGSL shaders: radians throughout
+  - Rule: degrees are a TypeScript-layer concern and never appear in Rust or WGSL
+
+  **Textures — V1:**
+  One texture per component, no atlas. `texture_index` in the instance data is always 0 in V1. UV offset/scale support texture sub-regions (needed for virtual slice UV mapping). Texture array and atlas are deferred to a future milestone when the performance case is made.
+
+  **`render_system` frame loop:**
+  ```
+  1. query all Visibility(true), no Virtual marker, with Transform + Visual
+  2. sort by z ascending (lower z = further back)
+  3. for each entity: pack Transform + Visual → QuadInstance, write to staging buffer
+  4. upload staging buffer to GPU (one transfer)
+  5. upload view/projection uniform (one transfer)
+  6. draw_indexed_instanced(6 indices, instance_count)
+  ```
+  One buffer upload, one draw call per frame regardless of component count.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
