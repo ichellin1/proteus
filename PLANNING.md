@@ -483,6 +483,53 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **Post-V1:** custom slicing function — `slicing: (n, sourceGeom, targetGeoms) => SliceConfig[]`.
 
+- [x] **ECS component types** — each Proteus component maps to one Bevy entity with the following component types attached:
+
+  ```
+  Transform        x, y, z, width, height, rotation, scale, anchor
+  Visual           color (RGBA), opacity, texture_id, corner_radius
+  InteractionDef   declared states map (default, hover, pressed, focused, disabled)
+  InteractionState current active interaction state
+  Visibility       visible: bool — ECS activation flag
+  Hierarchy        parent: Option<EntityId>, children: Vec<EntityId>
+  Lifecycle        entering | idle | transitioning | exiting
+  ActiveTransition base geometry, target geometry, t (0.0–1.0), duration, easing, delay
+                   absent when idle — inserted by transition system on morph start
+  FocusMap         (optional) up/down/left/right neighbor EntityIds for directional navigation
+  ```
+
+- [x] **ECS systems:**
+
+  ```
+  transition_system    three internal phases:
+                         setup    — analyze topology, create virtual slices if needed,
+                                    snapshot geometries, insert ActiveTransition components
+                         tick     — advance t each frame, lerp Transform+Visual on all
+                                    active transitions
+                         complete — detect t >= 1.0, clean up virtual entities, restore
+                                    live entities, update Lifecycle, fire completion events
+  render_system        reads all visible entities, builds instance buffer, submits draw call
+  input_system         pointer hit testing, event dispatch, click-to-focus
+  navigation_system    directional focus movement — focus map lookup with spatial algorithm
+                       fallback; tab order as linear directional nav; focus trapping
+  visibility_system    cascades parent visible:false down the subtree
+  opacity_system       computes effective opacity (multiplied down parent chain)
+  bake_system          renders bake:true composites to offscreen texture, collapses children
+  ```
+
+- [x] **ECS resources (global singletons):**
+
+  ```
+  GpuContext       wgpu device, queue, surface
+  InstanceBuffer   the GPU buffer used for the instanced draw call
+  TextureRegistry  registered textures with reference counts
+  SignalRegistry   registered signals and their subscribers
+  FocusState       currently focused entity ID (Option<EntityId>) — shared between
+                   input_system (pointer focus) and navigation_system (directional focus)
+  ```
+
+- [x] **Focus and directional navigation** — `navigation_system` is a peer to `input_system`, not a subsystem of it. The input system handles pointer-based focus changes; the navigation system owns all directional focus movement (arrow keys, D-pad, remote control). Both read and write `FocusState`. Hybrid model: explicit `FocusMap` takes priority, spatial algorithm fallback when no map entry exists for a direction. `tab_index` is handled by the navigation system as linear directional nav, not a separate mechanism.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
