@@ -621,6 +621,60 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   A list item with both `allowNavigation: true` and `focus.inputDelay: 150` lets the user scroll through items mid-transition, but prevents accidental triggers before they've settled on a target.
 
+- [x] **Bevy ECS integration** — `bevy_ecs` standalone crate (not full Bevy engine). Full Bevy brings its own renderer, windowing, and asset pipeline — all owned by Proteus. `bevy_ecs` is a well-supported standalone use case. Added to workspace dependencies, used by `proteus-render` and `proteus-ui`.
+
+  **Component types (Rust):**
+  ```rust
+  #[derive(Component)] struct Transform { x, y, z, width, height, rotation, scale, anchor }
+  #[derive(Component)] struct Visual { color: [f32; 4], opacity, texture_id, corner_radius }
+  #[derive(Component)] struct InteractionDef { states: HashMap<InteractionState, StateOverride> }
+  #[derive(Component)] struct InteractionState { current: StateKind }
+  #[derive(Component)] struct Visibility { visible: bool }
+  #[derive(Component)] struct Hierarchy { parent: Option<Entity>, children: Vec<Entity> }
+  #[derive(Component)] struct Lifecycle { state: LifecycleState }
+  #[derive(Component)] struct ActiveTransition { base, target, t, duration, easing, delay }
+  #[derive(Component)] struct FocusMap { up, down, left, right: Option<Entity> }
+  #[derive(Component)] struct TransitioningConfig { allow_input: bool, allow_navigation: bool }
+  #[derive(Component)] struct FocusConfig { input_delay_ms: u32 }
+  #[derive(Component)] struct Virtual;   // marker — no fields, skipped by input/nav systems
+  ```
+
+  Optional components (`ActiveTransition`, `FocusMap`, `TransitioningConfig`, `FocusConfig`, `Virtual`) are only attached when declared or needed. Bevy queries naturally exclude entities missing a queried component — no extra filtering required.
+
+  **Resources (Rust):**
+  ```rust
+  #[derive(Resource)] struct GpuContext { device, queue, surface }
+  #[derive(Resource)] struct InstanceBuffer { ... }
+  #[derive(Resource)] struct TextureRegistry { textures: HashMap<TextureId, TextureEntry> }
+  #[derive(Resource)] struct SignalRegistry { signals: HashMap<SignalId, Signal> }
+  #[derive(Resource)] struct FocusState { focused: Option<Entity>, focus_accepted_at: Instant }
+  ```
+
+  **Events:**
+  ```rust
+  #[derive(Event)] struct TransitionRequest { to: Entity, from: Entity, config: TransitionConfig }
+  #[derive(Event)] struct TransitionComplete { entity: Entity }
+  ```
+  Signals fire `TransitionRequest` events. `transition_setup_system` reads them. `TransitionComplete` is fired on morph completion — used for transition chaining and restoring live entities after baked transitions.
+
+  **System scheduling order (one frame):**
+  ```
+  input_system               process pointer/keyboard events, update InteractionState
+  navigation_system          process directional/tab events, update FocusState
+  transition_setup_system    read TransitionRequest events, create virtual slices,
+                             snapshot geometries, insert ActiveTransition components
+  transition_tick_system     advance t, lerp Transform + Visual on active transitions
+  transition_complete_system detect t >= 1.0, remove ActiveTransition, clean up virtual
+                             entities, update Lifecycle, fire TransitionComplete events
+  visibility_system          cascade Visibility changes down Hierarchy
+  opacity_system             compute effective opacity down Hierarchy
+  bake_system                handle bake:true composites, offscreen texture rendering
+  render_system              read all visible non-Virtual entities, build instance
+                             buffer, submit draw call
+  ```
+
+  **Frame timing:** transitions advance using Bevy's `Time` resource — delta time between frames. `t += delta_seconds / duration_seconds` each tick. Transitions specified in milliseconds run for exactly that duration regardless of frame rate. Frame-rate independent by default.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
