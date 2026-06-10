@@ -5,6 +5,7 @@ members = [
     "crates/proteus-gpu",
     "crates/proteus-render",
     "crates/proteus-ui",
+    "crates/proteus-context",
     "crates/proteus-shell-web",
     "crates/proteus-shell-native",
 ]

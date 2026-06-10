@@ -452,9 +452,36 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase B — Architecture
 
-**Status: Ready to Begin**
+**Status: In Progress**
 
-*Phase A complete. Architecture design can start.*
+*Phase A complete. Architecture design in progress.*
+
+### Decided
+
+- [x] **Transition topology normalization** — 1→N and N→1 transitions are normalized to primitives the transition system already handles. Two strategies, both available via `childBehavior`:
+
+  **Strategy 1 — Bake (via `childBehavior: 'bake'`):**
+  Normalize to **1→1**. Before the transition begins, bake the N side into a single composite texture. The transition runs as a standard 1→1 morph between two quads. At `t = 1.0`, discard the composite and restore live entities at their final positions. Simpler visually — clean morph between two forms.
+
+  **Strategy 2 — Slice (via `childBehavior` iterator):**
+  Normalize to **N→N**. The 1 side is baked and split into N virtual slice entities, each carrying a UV sub-region of the baked texture, positioned to tile and reconstruct the original. Paired 1:1 with the N entities on the other side. Each pair runs an independent 1→1 transition. At `t = 1.0`, virtual slices are discarded and live entities are revealed. More visually rich — shattering/assembling effect.
+
+  For `1→N`: virtual slices start at the single entity's geometry and fan out to the N targets.
+  For `N→1`: the N source entities animate toward their paired virtual slice of the target. Visually the N pieces converge and assemble the target shape.
+
+- [x] **Slicing strategy (V1):** Equal strips along the dominant axis — horizontal if target entities are arranged vertically, vertical if arranged horizontally. Framework infers dominant axis from target positions. Pairing by index. Exposed as a `slicing` param in the transition config:
+
+  ```typescript
+  contentSignal.set([button.id(), list.id()], {
+    duration: 300,
+    slicing: 'horizontal',  // 'horizontal' | 'vertical' | 'proportional' | 'uniform'
+    childBehavior: (child, index, total) => ({ duration: 300, delay: index * 40 })
+  });
+  ```
+
+  `'uniform'` is a special case — all N virtual entities receive the full source texture mapped to the full source geometry. Visually: N identical copies of the source that peel apart and each morph to a target. Reads as "cloning then diverging" rather than shattering.
+
+  **Post-V1:** custom slicing function — `slicing: (n, sourceGeom, targetGeoms) => SliceConfig[]`.
 
 ### To Do
 

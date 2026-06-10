@@ -13,10 +13,11 @@ Proteus is a cross-platform UI framework written in Rust. It targets **WebGPU** 
 ```
 crates/
   proteus-gpu/          # Layer 0: wgpu device abstraction
-  proteus-render/       # Layer 1: scene graph, materials, transition pipeline
-  proteus-ui/           # Layer 2: metamorphic component model, transition topologies
-  proteus-shell-web/    # Layer 3: WebGL2/WebGPU WASM shell, TypeScript bridge
-  proteus-shell-native/ # Layer 3: native windowing shell (winit)
+  proteus-render/       # Layer 1: scene graph, materials, compute transitions
+  proteus-ui/           # Layer 2: semantic component model
+  proteus-context/      # Layer 3: context engine + adaptation rules
+  proteus-shell-web/    # Layer 4: WebGPU/WASM web shell
+  proteus-shell-native/ # Layer 4: native windowing shell (winit)
 ```
 
 ## Status
