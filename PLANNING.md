@@ -582,6 +582,45 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **`exiting` — opt-in, default is snap:** when `destroy()` or `visible: false` is called, the component snaps out by default. Animated exit is opt-in via `exitTo` geometry declared on the component — triggers the `exiting` lifecycle state, lerps to that geometry, then hides or destroys on completion. Mirrors the `entering` pattern.
 
+- [x] **Input handling during transitions** — three distinct concerns:
+
+  **Hit testing:** when an entity is `transitioning`, the input system hit tests against its interpolated geometry — what the user actually sees. The `render_system` and `input_system` both read from `ActiveTransition.current`.
+
+  **Virtual entity filtering:** virtual slice entities (created for 1→N and N→1 transitions) carry a `Virtual` marker component. The input and navigation systems skip them entirely — they are render-only.
+
+  **Developer-controlled input during transitions:** both interaction events and navigation events are off by default while a component is `transitioning` or `entering`. Opt-in per event class on the component declaration:
+
+  ```typescript
+  const listItem = component({
+    geometry: { ... },
+    transitioning: {
+      allowInput: false,       // click, drag, press — default off
+      allowNavigation: false,  // directional/tab events — default off
+    }
+  });
+  ```
+
+  Both default off. A scrolling list navigated by D-pad would set `allowNavigation: true` on its items so the user can keep moving through items mid-transition. A cinematic morph leaves both off.
+
+  Navigation-triggered transitions remain snapshot-and-redirect (interruptible) when `allowNavigation: true`. When `allowNavigation: false`, directional events are dropped for the duration of the transition — same as interaction events.
+
+  The `interruptible` flag on signal-driven transition configs is a separate concern from `allowNavigation` — it governs whether a signal.set() call can interrupt a running signal-driven transition.
+
+  **Input delay after focus arrival:** a settle window that starts the moment focus lands on a component, independent of transition state. Declared on the component:
+
+  ```typescript
+  const listItem = component({
+    geometry: { ... },
+    focus: {
+      inputDelay: 150  // ms after focus arrives before any input is accepted
+    }
+  });
+  ```
+
+  `FocusState` holds a `focus_accepted_at` timestamp. The input system checks elapsed time on every event routed to the focused entity — events arriving within the delay window are dropped. No new lifecycle state needed.
+
+  A list item with both `allowNavigation: true` and `focus.inputDelay: 150` lets the user scroll through items mid-transition, but prevents accidental triggers before they've settled on a target.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
