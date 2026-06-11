@@ -919,6 +919,57 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   border_offset:      f32,        // -1.0 inner, 0.0 center, 1.0 outer — default 0.0
   ```
 
+- [x] **Resource registry** — texture lifecycle, reference counting, GPU memory management.
+
+  **Storage — `slotmap` crate (not HashMap):**
+  TextureIds are small integers in a fixed range (0 to `max_textures`). Direct slot access beats HashMap — no hashing, contiguous memory, cache-friendly, O(1) with a much smaller constant. The `slotmap` crate adds generation counters: each slot carries a generation number that increments on free/reuse. A stale `TextureId` is detectable immediately — error in debug builds rather than silently sampling the wrong texture. `SignalRegistry` uses `slotmap` for the same reasons.
+
+  ```rust
+  struct TextureRegistry {
+      slots:      SlotMap<TextureId, TextureEntry>,
+      free_slots: Vec<u32>,  // available array_index slots in texture_2d_array
+      capacity:   u32,       // from ProteusConfig.max_textures (default 256)
+  }
+  ```
+
+  **`TextureEntry` structure:**
+  ```rust
+  struct TextureEntry {
+      texture:     wgpu::Texture,      // owns GPU memory — must stay alive
+      view:        wgpu::TextureView,  // bound to shader bind groups — no memory of its own
+      ref_count:   u32,
+      size:        (u32, u32),
+      format:      wgpu::TextureFormat,  // V1: RGBA8Unorm
+      array_index: u32,   // slot index in texture_2d_array — same value as QuadInstance.texture_index
+      state:       TextureState,         // Loading | Ready | Failed
+      kind:        TextureKind,          // Static (V1) | Video (M9)
+  }
+  ```
+
+  `wgpu::Texture` owns the GPU allocation. `wgpu::TextureView` is a descriptor for how to access it — what gets bound to shader stages. Dropping `Texture` frees GPU memory; `TextureView` holds no memory of its own. `array_index` is the layer index within the `texture_2d_array` GPU resource.
+
+  **Reference counting — two tiers:**
+  Framework auto-tracks refs when components reference textures. Ref count increments when a component is created or updated with a texture reference; decrements when `free()` is called, `component.freeResources()` is called, `component.destroy()` is called, or a component's texture property changes away from this texture. When ref count reaches zero: GPU memory released, array slot returned to `free_slots`.
+
+  **Loading state:**
+  While `TextureState::Loading`: render system substitutes a 1×1 transparent fallback — component renders its `color` only. No crash, no stall.
+
+  **Baked texture lifecycle:**
+  - *Static bake:* owned by the baked component, no developer handle. Freed on `component.destroy()`.
+  - *Transition bake:* internal to transition system. Created by `transition_setup_system`, freed by `transition_complete_system`. Never surfaced to the developer.
+
+  **Forward compatibility — video (M9):**
+  `TextureKind::Video` declared now so registry needs no structural changes at M9. No V1 implementation.
+
+  **Developer-facing texture handle:**
+  ```typescript
+  const heroImage = proteus.texture({ src: '/images/hero.png' });
+  heroImage.id()        // TextureId
+  heroImage.free()      // explicit release — decrements ref count
+  heroImage.state()     // 'loading' | 'ready' | 'failed'
+  heroImage.onReady(fn) // fires when texture is uploaded and available
+  ```
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
