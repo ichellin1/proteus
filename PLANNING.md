@@ -786,6 +786,58 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   ```
   One buffer upload, one draw call per frame regardless of component count.
 
+- [x] **Offscreen texture pipeline** — two cases sharing the same wgpu render-to-texture mechanism.
+
+  **Underlying mechanism:**
+  ```
+  1. determine bounding box of composite (parent + all children)
+  2. create wgpu texture sized to that bounding box
+     (TextureUsages::RENDER_ATTACHMENT | TEXTURE_BINDING)
+  3. run render pipeline targeting that texture — composite entities only
+  4. register resulting texture in TextureRegistry
+  5. update parent Visual.texture_id to reference baked texture
+  6. handle children per bake type (destroy vs suppress)
+  ```
+
+  **Case 1 — Static `bake: true` (startup system):**
+  Runs once at initialization before the first frame — a Bevy startup system, not a per-frame system. Processes all entities with `Baked` marker component. Runs offscreen render, destroys child entities from ECS, parent becomes a permanent leaf quad. Baked texture lives for the component's lifetime, freed on `component.destroy()`.
+
+  **Case 2 — Transition `childBehavior: 'bake'` (frame-loop `bake_system`):**
+  Triggered in `transition_setup_system` before `ActiveTransition` is inserted.
+
+  *1→N (e.g. button → list):*
+  1. Bake `to` entity (list + children) into offscreen texture at its declared geometry
+  2. Temporarily suppress children (`Visibility: false` — not destroyed)
+  3. Set up `ActiveTransition` on `to` — behaves as single quad for the transition
+  4. `from` goes `visible: false` as normal
+  5. On `TransitionComplete`: release baked texture, restore children `Visibility: true`
+
+  *N→1 (e.g. list → button):*
+  1. Bake `from` entity (list + children) into offscreen texture *before* hiding it
+  2. Transition runs: baked list geometry → button geometry, textures crossfade
+  3. On `TransitionComplete`: release baked texture, `from` remains `visible: false`
+
+  **Texture transition — crossfade (default for baked transitions):**
+  Fragment shader blends base and target textures over the transition duration:
+  `final_color = mix(base_texture, target_texture, t)`
+
+  Both texture IDs are stored on `ActiveTransition`:
+  ```rust
+  struct ActiveTransition {
+      base_geometry:  GeometrySnapshot,
+      target_geometry: GeometrySnapshot,
+      base_texture:   Option<TextureId>,  // texture at t=0
+      target_texture: Option<TextureId>,  // texture at t=1
+      t:              f32,
+      duration:       f32,
+      easing:         EasingFn,
+      delay:          f32,
+  }
+  ```
+  `base_texture` and `target_texture` are `None` for non-baked transitions — the fragment shader falls back to the entity's declared texture. For baked transitions, the crossfade blends the two textures as geometry morphs. Baked transition textures are freed in `transition_complete_system` once `t = 1.0`.
+
+  **`bake_system` in the frame loop** handles suppression/restoration of children around transition bakes — distinct from the startup bake system. Same offscreen render mechanism, different lifecycle.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
