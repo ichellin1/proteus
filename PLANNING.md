@@ -452,9 +452,9 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase B — Architecture
 
-**Status: In Progress**
+**Status: Almost Complete — native shell remaining**
 
-*Phase A complete. Architecture design in progress.*
+*All core architecture decided. Native shell architecture is the final item.*
 
 ### Decided
 
@@ -1071,14 +1071,57 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **`proteus.get(id)` returns a typed object:** the SDK wraps the raw `JsValue` registry read into a properly typed `ComponentData` interface. Developers get typed access to geometry, state, visibility, children, and transition data — not a raw JS object.
 
+- [x] **Relative positioning and coordinate spaces**
+
+  **Two coordinate spaces:**
+  ```
+  World space:  center-origin, Y-up   — what the GPU sees, used for root components
+  Local space:  top-left,      Y-down — what developers declare for children
+  ```
+  Child `(0, 0)` is the parent's top-left corner. Y increases downward. Natural for web developers and consistent with the Phase A code examples. The TypeScript SDK can expose a `coordinateMode: 'center' | 'top-left'` option for root-level component declarations as well.
+
+  **Parent anchor does not affect child origin.** The parent's `anchor` property controls its own rotation/scale pivot only. Child `(0, 0)` is always the parent's top-left bounding box corner regardless of anchor. Separation of concerns — anchor is a transform property, not a layout property.
+
+  **Two-component transform model:**
+  ```rust
+  #[derive(Component)]
+  struct LocalTransform {
+      x, y, z,           // parent-relative, top-left origin, Y-down
+      width, height,
+      rotation, scale, anchor
+  }
+
+  #[derive(Component)]
+  struct WorldTransform {
+      x, y, z,           // world-space, center-origin, Y-up — computed each frame
+      width, height,
+      rotation, scale
+  }
+  ```
+  A `transform_system` runs each frame and computes `WorldTransform` from `LocalTransform` + parent's `WorldTransform`. The render system reads `WorldTransform` only. Bevy `Changed<LocalTransform>` change detection means only dirty entities are recomputed. Root components (no parent) map `LocalTransform` directly to `WorldTransform`.
+
+  **Z depth — relative to parent:**
+  `world_z = parent_world_z + local_z`. Children are always rendered within their parent's depth layer. Developers manage scene layering at the root level; composites manage internal ordering via child z offsets.
+
+  **Layout — V1 default is `Free` (manual positioning):**
+  Developers declare `x, y` on each child directly. No layout system in V1. SDK utilities (`VStack`, `HStack`, `Grid`) may be provided as pure TypeScript position calculators for convenience, but they are static — they compute positions once and return values.
+
+  **Layout in ECS — planned post-V1 milestone:**
+  `VStack`, `HStack`, and `Grid` as ECS layout components with a `layout_system`. When children are added/removed or sizes change, the layout system recomputes `LocalTransform` for affected children. The transform system detects those changes. The transition system automatically animates position deltas — items in a list glide to new positions when the list grows or shrinks, with no manual transition calls from the developer. This requires the core transition system to be proven first; layout is a natural next layer on top.
+
 ### To Do
 
-- [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
-- [ ] Component model — internal ECS representation: entities, component arrays, system definitions
-- [ ] Transition state machine — lifecycle states (entering, idle, transitioning, exiting) and system behavior in each
-- [ ] Input handling during transitions — hit testing, event routing, mid-transition limited interaction enforcement
-- [ ] Bevy ECS integration — confirm bevy_ecs as dependency, define entity/component/system structure
-- [ ] Signal system design — how signals are implemented, how they interface with the ECS transition system
+- [x] Relative positioning and coordinate spaces ✅
+- [x] Component model / Bevy ECS integration ✅
+- [x] Transition state machine ✅
+- [x] Input handling during transitions ✅
+- [x] Signal system design ✅
+- [x] Render pipeline architecture ✅
+- [x] Offscreen texture pipeline ✅
+- [x] WGSL shader design ✅
+- [x] Resource registry ✅
+- [x] Web ↔ Rust boundary ✅
+- [ ] Native shell architecture — event loop, windowing, GPU surface lifecycle
 - [ ] Render pipeline architecture — single instanced draw call, homogeneous quad buffer, per-frame lerp updates. **3D note:** the pipeline must not foreclose future 3D support (Principle 9). The V1 quad model is intentionally 2D-first, but the coordinate system (x, y, z), the shader design, and the camera/projection model should be designed so that 3D components and spatial transitions can be introduced in a later milestone without requiring a pipeline rewrite.
 - [ ] Offscreen texture pipeline — bake: true static composites, childBehavior: 'bake' transition composites
 - [ ] WGSL shader design — vertex and fragment shaders for instanced textured quad renderer, corner radius SDF
