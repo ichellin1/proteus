@@ -966,9 +966,60 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   const heroImage = proteus.texture({ src: '/images/hero.png' });
   heroImage.id()        // TextureId
   heroImage.free()      // explicit release — decrements ref count
-  heroImage.state()     // 'loading' | 'ready' | 'failed'
-  heroImage.onReady(fn) // fires when texture is uploaded and available
+  heroImage.state()     // 'loading' | 'ready' | 'evicted' | 'failed'
+  heroImage.onReady(fn)    // fires when texture is uploaded and available
+  heroImage.onEvicted(fn)  // fires when texture is evicted from GPU
+  heroImage.onRestored(fn) // fires when texture is back on GPU after eviction
+  heroImage.restore()      // explicitly push to front of restoration queue
   ```
+
+  **Capacity strategy — fixed, no dynamic growth:**
+  The texture budget is declared at init via `ProteusConfig.max_textures`. No dynamic array resizing. Application designers own their texture budget. Assuming memory is always available is not safe — fixed capacity forces explicit resource responsibility.
+
+  **Eternal vs ephemeral:**
+  ```typescript
+  const navIcon   = proteus.texture({ src: '/icons/nav.png', eternal: true }); // never evicted
+  const heroImage = proteus.texture({ src: '/images/hero.png' });              // ephemeral (default)
+  ```
+  Eternal textures occupy their slot permanently. Navigation icons, persistent UI chrome, and any texture that must always be available should be declared eternal.
+
+  **LRU eviction — order when a slot is needed:**
+  1. Unreferenced ephemeral textures (`ref_count = 0`) — evict oldest `last_used` first
+  2. Referenced ephemeral textures (`ref_count > 0`) — evict oldest `last_used`
+  3. Eternal textures — never candidates for eviction
+
+  `last_used` is a timestamp updated by the render system each frame a texture is drawn. LRU candidate is always the oldest among eligible textures. Added to `TextureEntry`:
+  ```rust
+  eternal:   bool,     // true = never evicted — default false
+  last_used: Instant,  // updated each frame the texture is rendered
+  ```
+
+  `TextureState` gains `Evicted`:
+  ```rust
+  enum TextureState { Loading, Ready, Evicted, Failed }
+  ```
+
+  **Fallback when texture unavailable:**
+  Black geometry — component's color still renders, texture contribution replaced with solid black. Never crashes. Configurable via `ProteusConfig.missing_texture_color`, black is the default.
+
+  **Restoration queue:**
+  When an evicted texture is needed for rendering:
+  1. Render black immediately (fallback)
+  2. Queue a restoration request for that texture
+  3. When a slot opens (texture freed), process queue — re-upload from source, resume normal rendering
+  `heroImage.restore()` pushes the texture to the front of the restoration queue explicitly.
+
+  **Backgrounding — platform GPU release:**
+  When the app is backgrounded and the platform requires GPU memory to be freed:
+  1. All ephemeral textures marked `Evicted`, GPU memory released
+  2. Eternal textures freed if platform requires full GPU release — flagged for immediate restoration on foreground
+  3. On foreground: eternal textures re-uploaded immediately, ephemeral textures restored lazily as they're needed
+
+  ```typescript
+  proteus.onBackground(() => { /* app-level cleanup */ });
+  proteus.onForeground(() => { /* notified before ephemeral restoration begins */ });
+  ```
+  The framework owns the GPU lifecycle. Developer hooks are for app-level concerns on top.
 
 ### To Do
 
