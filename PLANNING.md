@@ -1021,6 +1021,56 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   ```
   The framework owns the GPU lifecycle. Developer hooks are for app-level concerns on top.
 
+- [x] **Web ↔ Rust boundary** — thin WASM surface, rich Rust interior.
+
+  **Principle:** everything stays in Rust — ECS, rendering, transitions, texture management. The WASM boundary is a clean declarative surface. TypeScript tells Rust what to do; Rust does all the work.
+
+  **Two TypeScript layers:**
+  - *Raw wasm-bindgen output* — internal layer, mechanical, not consumed directly by developers
+  - *TypeScript SDK* — the public API. Handles degrees→radians, hex color→RGBA, top-left convenience coordinates, idiomatic TypeScript types. Developers import from the SDK only.
+
+  **Exposed WASM surface — three handle classes + Proteus entry point:**
+  ```rust
+  #[wasm_bindgen] pub struct Proteus
+    async fn init(canvas_id, config: JsValue) -> Proteus
+    fn component(&self, config: JsValue) -> Component
+    fn signal(&self, owner_id: Option<String>) -> Signal
+    fn texture(&self, config: JsValue) -> Texture
+    fn get(&self, id: &str) -> JsValue          // registry read
+    fn tick(&self)                               // advance one frame
+    fn on_background(&self, cb: Function)
+    fn on_foreground(&self, cb: Function)
+
+  #[wasm_bindgen] pub struct Component
+    fn id(&self) -> String
+    fn on_click/on_hover_enter/on_hover_exit/on_press/on_release/
+       on_focus/on_blur/on_drag(&self, cb: Function)
+    fn add_child/remove_child(&self, child, destroy: bool)
+    fn destroy/free_resources(&self)
+
+  #[wasm_bindgen] pub struct Signal
+    fn id(&self) -> String
+    fn set(&self, to_id, from_id, config: JsValue)
+    fn on_dropped(&self, cb: Function)
+    fn destroy(&self)
+
+  #[wasm_bindgen] pub struct Texture
+    fn id(&self) -> String
+    fn free/restore(&self)
+    fn state(&self) -> String
+    fn on_ready/on_evicted/on_restored(&self, cb: Function)
+  ```
+
+  **Config as `JsValue` + `serde_wasm_bindgen`:** component config, transition config, and other complex objects cross as plain JS objects and are deserialized in Rust. Developers write plain object literals — no complex typed boundary structs.
+
+  **Callbacks:** JS functions stored as `js_sys::Function` in the ECS `InteractionDef`. Invoked synchronously by the input system when events fire. The only Rust→JS crossing during normal operation — all other data flows JS→Rust.
+
+  **Entity IDs as strings at the boundary:** internally Bevy `Entity` is a typed u64; at the boundary it becomes a string. Strings are safe, serializable, inspectable in DevTools, and easy for AI agents to reference.
+
+  **Frame loop — `tick()` owned by the TypeScript SDK:** the SDK drives `requestAnimationFrame` and calls `proteus.tick()` each frame. Developers can integrate into an existing render loop or control timing manually. SDK default wires `tick()` to `rAF` automatically.
+
+  **`proteus.get(id)` returns a typed object:** the SDK wraps the raw `JsValue` registry read into a properly typed `ComponentData` interface. Developers get typed access to geometry, state, visibility, children, and transition data — not a raw JS object.
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
