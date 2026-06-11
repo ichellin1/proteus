@@ -886,10 +886,20 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   `final_alpha = tinted.a * instance.opacity * edge_alpha`
 
   *Border (SDF-based, zero cost when unused):*
-  Uses the SDF distance value already computed for corner radius. When `border_width > 0.0`:
-  the distance in the range `[-border_width, 0]` is the border zone — rendered in `border_color`
-  blended over the interior. Same antialiasing as the corner edge. Two additional fields on
-  `QuadInstance`: `border_width: f32`, `border_color: [f32; 4]`. Zero cost when `border_width == 0.0`.
+  Uses the SDF distance value already computed for corner radius. Supports inner, center, and
+  outer border placement via a single `border_offset` parameter:
+  ```wgsl
+  // border_offset: -1.0 = inner, 0.0 = center, 1.0 = outer
+  let half_w = border_width * 0.5;
+  let border_center_dist = border_offset * half_w;
+  let border_dist = abs(dist - border_center_dist) - half_w;
+  let border_alpha = 1.0 - smoothstep(-1.0, 1.0, border_dist);
+  ```
+  Continuous range — values between -1.0 and 1.0 place the border anywhere relative to
+  the shape edge. Same antialiasing as corner radius. Zero cost when `border_width == 0.0`.
+  TypeScript API: `borderAlignment: 'inner' | 'center' | 'outer'` (maps to -1.0, 0.0, 1.0);
+  raw float also accepted for fine-grained control. Three fields on `QuadInstance`:
+  `border_width: f32`, `border_color: [f32; 4]`, `border_offset: f32` (default 0.0).
 
   *Note — future shader effects:* blur, glow, drop shadow, distortion, and other multi-pass effects
   belong in the M8 Shader Effects Library. The base fragment shader handles all single-pass
@@ -906,6 +916,7 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   // border
   border_width:       f32,        // 0.0 = no border
   border_color:       [f32; 4],   // RGBA
+  border_offset:      f32,        // -1.0 inner, 0.0 center, 1.0 outer — default 0.0
   ```
 
 ### To Do
