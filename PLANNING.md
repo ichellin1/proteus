@@ -8,8 +8,8 @@
 
 ```
 Phase A  Vision             ✅ complete
-Phase B  Architecture       ← ready to begin
-Phase C  Dependencies & Tooling
+Phase B  Architecture       ✅ complete
+Phase C  Dependencies & Tooling  ← ready to begin
 Phase D  Project Plan & Roadmap
 Phase E  Build
 ```
@@ -452,9 +452,9 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase B — Architecture
 
-**Status: Almost Complete — native shell remaining**
+**Status: Complete ✅**
 
-*All core architecture decided. Native shell architecture is the final item.*
+*All architecture decisions made. Phase C can begin.*
 
 ### Decided
 
@@ -1121,13 +1121,7 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 - [x] WGSL shader design ✅
 - [x] Resource registry ✅
 - [x] Web ↔ Rust boundary ✅
-- [ ] Native shell architecture — event loop, windowing, GPU surface lifecycle
-- [ ] Render pipeline architecture — single instanced draw call, homogeneous quad buffer, per-frame lerp updates. **3D note:** the pipeline must not foreclose future 3D support (Principle 9). The V1 quad model is intentionally 2D-first, but the coordinate system (x, y, z), the shader design, and the camera/projection model should be designed so that 3D components and spatial transitions can be introduced in a later milestone without requiring a pipeline rewrite.
-- [ ] Offscreen texture pipeline — bake: true static composites, childBehavior: 'bake' transition composites
-- [ ] WGSL shader design — vertex and fragment shaders for instanced textured quad renderer, corner radius SDF
-- [ ] Resource registry — texture lifecycle, reference counting, GPU memory management
-- [ ] Web ↔ Rust boundary — what crosses the WASM boundary and how, TypeScript handle/signal API shape
-- [ ] Native shell architecture — event loop, windowing, GPU surface lifecycle
+- [x] Native shell architecture ✅
 
 ---
 
