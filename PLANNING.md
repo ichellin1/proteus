@@ -838,6 +838,76 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **`bake_system` in the frame loop** handles suppression/restoration of children around transition bakes — distinct from the startup bake system. Same offscreen render mechanism, different lifecycle.
 
+- [x] **WGSL shader design** — vertex and fragment shaders for the instanced quad renderer.
+
+  **Binding layout:**
+  ```
+  Bind group 0:  uniform buffer — view_projection: mat4x4<f32>  (one upload per frame)
+  Bind group 1:  texture_2d_array + sampler
+  Vertex buf 0:  base quad vertices — static, 4 vertices, uploaded once
+  Vertex buf 1:  instance buffer — updated each frame
+  ```
+
+  **Texture array capacity:** 256 layers as the V1 default. This value is read from a `ProteusConfig` struct at initialization — not hardcoded. The array is recreated if capacity is exceeded at runtime.
+  ```rust
+  struct ProteusConfig {
+      max_textures: u32,  // default: 256
+      // ... other config
+  }
+  ```
+
+  **Vertex shader — instance transform:**
+  Model matrix computed in the vertex shader (not CPU-side). Steps per vertex:
+  1. Scale base unit quad vertex by `(width * scale, height * scale)`
+  2. Shift by anchor offset so rotation happens around anchor point
+  3. Rotate by `instance.rotation` (radians)
+  4. Translate to world position `instance.position.xyz`
+  5. Multiply by `uniforms.view_projection` → clip space
+  UV coordinates are transformed by `uv_offset` and `uv_scale` for texture sub-region support.
+
+  **Fragment shader — texture, tint, opacity, SDF corner radius, crossfade, border:**
+
+  *Corner radius SDF:*
+  ```wgsl
+  fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
+      let q = abs(p) - half_size + vec2(r, r);
+      return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+  }
+  ```
+  Negative inside, positive outside, zero at edge. `smoothstep(-1.0, 1.0, dist)` gives a 1-pixel antialiased edge — no extra geometry required. Fragments outside the rounded shape are discarded.
+
+  *Crossfade (baked transitions):*
+  When `crossfade_t > 0.0`: sample both `base_texture_index` and `texture_index`, blend:
+  `tex_color = mix(base_color, target_color, crossfade_t)`
+  When `crossfade_t == 0.0`: skip blend, sample `texture_index` only.
+
+  *Color tint + opacity:*
+  `tinted = tex_color * instance.color` — RGBA multiply
+  `final_alpha = tinted.a * instance.opacity * edge_alpha`
+
+  *Border (SDF-based, zero cost when unused):*
+  Uses the SDF distance value already computed for corner radius. When `border_width > 0.0`:
+  the distance in the range `[-border_width, 0]` is the border zone — rendered in `border_color`
+  blended over the interior. Same antialiasing as the corner edge. Two additional fields on
+  `QuadInstance`: `border_width: f32`, `border_color: [f32; 4]`. Zero cost when `border_width == 0.0`.
+
+  *Note — future shader effects:* blur, glow, drop shadow, distortion, and other multi-pass effects
+  belong in the M8 Shader Effects Library. The base fragment shader handles all single-pass
+  per-fragment effects. The SDF distance value should be considered an extension point — future
+  effects that build on shape-awareness (inner glow, emboss, etc.) can reuse it.
+
+  **Updated `QuadInstance` fields for shader support:**
+  ```rust
+  // crossfade
+  texture_index:      u32,        // target texture (or only texture when not crossfading)
+  base_texture_index: u32,        // source texture for crossfade
+  crossfade_t:        f32,        // 0.0 = no crossfade, 1.0 = fully target
+
+  // border
+  border_width:       f32,        // 0.0 = no border
+  border_color:       [f32; 4],   // RGBA
+  ```
+
 ### To Do
 
 - [ ] Relative positioning and coordinate spaces — how child components position relative to parents, how parent anchor point defines child origin, whether any layout helpers exist for common patterns (vertical stack, grid)
