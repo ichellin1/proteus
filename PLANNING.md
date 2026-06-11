@@ -799,8 +799,8 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   6. handle children per bake type (destroy vs suppress)
   ```
 
-  **Case 1 — Static `bake: true` (startup system):**
-  Runs once at initialization before the first frame — a Bevy startup system, not a per-frame system. Processes all entities with `Baked` marker component. Runs offscreen render, destroys child entities from ECS, parent becomes a permanent leaf quad. Baked texture lives for the component's lifetime, freed on `component.destroy()`.
+  **Case 1 — Static `bake: true`:**
+  Uses Bevy's `Added<Baked>` query filter — detects any entity where the `Baked` component was just attached, whether at startup or created dynamically at runtime. Runs every frame but does zero work when no new `Baked` entities have appeared. On detection: runs offscreen render, destroys child entities from ECS, parent becomes a permanent leaf quad. Handles startup and dynamic creation uniformly — no explicit flag or manual trigger needed. Baked texture lives for the component's lifetime, freed on `component.destroy()`.
 
   **Case 2 — Transition `childBehavior: 'bake'` (frame-loop `bake_system`):**
   Triggered in `transition_setup_system` before `ActiveTransition` is inserted.
