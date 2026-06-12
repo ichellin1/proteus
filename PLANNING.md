@@ -747,12 +747,12 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
       color:         [f32; 4],  // RGBA
       opacity:       f32,       // whole-component multiplier
       corner_radius: f32,       // pixels, for SDF in fragment shader
-      uv_offset:     [f32; 2],  // texture sub-region origin
+      uv_offset:     [f32; 2],  // texture sub-region origin (in main_atlas or transition_atlas)
       uv_scale:      [f32; 2],  // texture sub-region size
-      texture_index: u32,       // which texture in bound array (V1: always 0)
+      atlas_page:    u32,       // 0 = main_atlas, 1 = transition_atlas
   }
   ```
-  ~88 bytes per instance. 1000 components ≈ 88KB — well within GPU limits.
+  See below for crossfade and border fields. Full struct is ~124 bytes per instance. 1000 components ≈ 124KB — well within GPU limits.
 
   **Camera and projection — 3D forward-compatible from day one:**
   The vertex shader computes `clip_position = projection * view * model * vertex_position`.
@@ -772,8 +772,14 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   - ECS `Transform` component, `QuadInstance` buffer, WGSL shaders: radians throughout
   - Rule: degrees are a TypeScript-layer concern and never appear in Rust or WGSL
 
-  **Textures — V1:**
-  One texture per component, no atlas. `texture_index` in the instance data is always 0 in V1. UV offset/scale support texture sub-regions (needed for virtual slice UV mapping). Texture array and atlas are deferred to a future milestone when the performance case is made.
+  **Textures — two-atlas model:**
+  All component textures are packed into one of two 2D atlas textures. `uv_offset`/`uv_scale` address the sub-region within the active atlas — the same UV infrastructure used for virtual slice UV mapping. `atlas_page` on `QuadInstance` identifies which atlas: 0 = `main_atlas`, 1 = `transition_atlas`.
+
+  **`main_atlas`** — long-lived component textures: permanent bakes (`bake: true`), loaded images, video frames (M9). Managed via LRU/eternal/reference counting. Sized to the window at init.
+
+  **`transition_atlas`** — ephemeral bakes created at transition start and freed in `transition_complete_system`. No LRU needed — all entries have a known expiry. Sized at 2× window area to hold two concurrent full-screen bakes (the from-state and to-state) simultaneously.
+
+  **Static bake from-state edge case:** when a `bake: true` component is the from-state of a transition, its texture already lives in `main_atlas`. At transition start it is re-baked into `transition_atlas` (a GPU render pass, sub-millisecond one-time cost). This keeps the shader uniform — base UV always addresses `transition_atlas` during a crossfade — and avoids per-frame warp divergence that would result from branching on atlas identity in the fragment shader.
 
   **`render_system` frame loop:**
   ```
@@ -843,15 +849,17 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   **Binding layout:**
   ```
   Bind group 0:  uniform buffer — view_projection: mat4x4<f32>  (one upload per frame)
-  Bind group 1:  texture_2d_array + sampler
+  Bind group 1:  main_atlas: texture_2d + transition_atlas: texture_2d + sampler
   Vertex buf 0:  base quad vertices — static, 4 vertices, uploaded once
   Vertex buf 1:  instance buffer — updated each frame
   ```
 
-  **Texture array capacity:** 256 layers as the V1 default. This value is read from a `ProteusConfig` struct at initialization — not hardcoded. The array is recreated if capacity is exceeded at runtime.
+  **Atlas sizing:** two fixed-size 2D atlas textures are created at init. `main_atlas` defaults to window size; `transition_atlas` defaults to 2× window area to accommodate two concurrent full-screen bakes. Both are bounded by the device's `max_texture_dimension_2d` (queried via wgpu at init). Configurable via `ProteusConfig`:
   ```rust
   struct ProteusConfig {
-      max_textures: u32,  // default: 256
+      max_textures:          u32,                // default: 256
+      main_atlas_size:       Option<(u32, u32)>, // None = window size at init
+      transition_atlas_size: Option<(u32, u32)>, // None = 2× window size at init
       // ... other config
   }
   ```
@@ -877,9 +885,9 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   Negative inside, positive outside, zero at edge. `smoothstep(-1.0, 1.0, dist)` gives a 1-pixel antialiased edge — no extra geometry required. Fragments outside the rounded shape are discarded.
 
   *Crossfade (baked transitions):*
-  When `crossfade_t > 0.0`: sample both `base_texture_index` and `texture_index`, blend:
+  When `crossfade_t > 0.0`: sample `transition_atlas` at `base_uv_offset`/`base_uv_scale` (from-state), sample the active atlas (per `atlas_page`) at `uv_offset`/`uv_scale` (to-state), blend:
   `tex_color = mix(base_color, target_color, crossfade_t)`
-  When `crossfade_t == 0.0`: skip blend, sample `texture_index` only.
+  When `crossfade_t == 0.0`: skip blend, sample active atlas at `uv_offset`/`uv_scale` only.
 
   *Color tint + opacity:*
   `tinted = tex_color * instance.color` — RGBA multiply
@@ -908,15 +916,15 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **Updated `QuadInstance` fields for shader support:**
   ```rust
-  // crossfade
-  texture_index:      u32,        // target texture (or only texture when not crossfading)
-  base_texture_index: u32,        // source texture for crossfade
-  crossfade_t:        f32,        // 0.0 = no crossfade, 1.0 = fully target
+  // crossfade — base UV always addresses transition_atlas
+  base_uv_offset: [f32; 2],   // from-state sub-region origin in transition_atlas
+  base_uv_scale:  [f32; 2],   // from-state sub-region size in transition_atlas
+  crossfade_t:    f32,        // 0.0 = no crossfade, 1.0 = fully to-state
 
   // border
-  border_width:       f32,        // 0.0 = no border
-  border_color:       [f32; 4],   // RGBA
-  border_offset:      f32,        // -1.0 inner, 0.0 center, 1.0 outer — default 0.0
+  border_width:   f32,        // 0.0 = no border
+  border_color:   [f32; 4],   // RGBA
+  border_offset:  f32,        // -1.0 inner, 0.0 center, 1.0 outer — default 0.0
   ```
 
 - [x] **Resource registry** — texture lifecycle, reference counting, GPU memory management.
@@ -926,30 +934,36 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   ```rust
   struct TextureRegistry {
-      slots:      SlotMap<TextureId, TextureEntry>,
-      free_slots: Vec<u32>,  // available array_index slots in texture_2d_array
-      capacity:   u32,       // from ProteusConfig.max_textures (default 256)
+      slots:    SlotMap<TextureId, TextureEntry>,
+      capacity: u32,  // from ProteusConfig.max_textures (default 256)
+      // atlas packing state managed internally — strategy TBD at implementation
   }
   ```
 
   **`TextureEntry` structure:**
   ```rust
+  struct AtlasRegion {
+      x:      u32,
+      y:      u32,
+      width:  u32,
+      height: u32,
+      page:   u8,  // 0 = main_atlas, 1 = transition_atlas
+  }
+
   struct TextureEntry {
-      texture:     wgpu::Texture,      // owns GPU memory — must stay alive
-      view:        wgpu::TextureView,  // bound to shader bind groups — no memory of its own
-      ref_count:   u32,
-      size:        (u32, u32),
-      format:      wgpu::TextureFormat,  // V1: RGBA8Unorm
-      array_index: u32,   // slot index in texture_2d_array — same value as QuadInstance.texture_index
-      state:       TextureState,         // Loading | Ready | Failed
-      kind:        TextureKind,          // Static (V1) | Video (M9)
+      atlas_region: AtlasRegion,          // location within the atlas
+      ref_count:    u32,
+      size:         (u32, u32),
+      format:       wgpu::TextureFormat,  // V1: RGBA8Unorm
+      state:        TextureState,         // Loading | Ready | Failed
+      kind:         TextureKind,          // Static (V1) | Video (M9)
   }
   ```
 
-  `wgpu::Texture` owns the GPU allocation. `wgpu::TextureView` is a descriptor for how to access it — what gets bound to shader stages. Dropping `Texture` frees GPU memory; `TextureView` holds no memory of its own. `array_index` is the layer index within the `texture_2d_array` GPU resource.
+  `TextureEntry` no longer owns a `wgpu::Texture` — the atlas textures are owned by `GpuContext` and shared across all entries. `atlas_region` describes where the entry lives within its atlas page. Freeing an entry returns its region to the atlas packer.
 
   **Reference counting — two tiers:**
-  Framework auto-tracks refs when components reference textures. Ref count increments when a component is created or updated with a texture reference; decrements when `free()` is called, `component.freeResources()` is called, `component.destroy()` is called, or a component's texture property changes away from this texture. When ref count reaches zero: GPU memory released, array slot returned to `free_slots`.
+  Framework auto-tracks refs when components reference textures. Ref count increments when a component is created or updated with a texture reference; decrements when `free()` is called, `component.freeResources()` is called, `component.destroy()` is called, or a component's texture property changes away from this texture. When ref count reaches zero: atlas region returned to the atlas packer.
 
   **Loading state:**
   While `TextureState::Loading`: render system substitutes a 1×1 transparent fallback — component renders its `color` only. No crash, no stall.
@@ -1268,11 +1282,13 @@ Questions that have surfaced but don't yet have answers. Pull them into the rele
 - ~~Can components be nested?~~ ✅ Resolved — yes, strict single-parent tree ownership
 - ~~What happens if a user interacts with a component that is currently transitioning?~~ ✅ Resolved — limited interaction enforced by framework, customizable by designer
 - ~~What internal model should represent the scene graph?~~ ✅ Resolved — signals trigger transitions, Bevy ECS runs them, instanced rendering submits to GPU
-- How does a developer declare a transition — what is the minimum they need to provide?
-- What triggers a transition — is it always user-initiated, or can application logic drive it?
-- What is the developer-facing API for defining a component's interaction definition?
-- What does the TypeScript API look like end to end for a simple component with one transition?
+- ~~How does a developer declare a transition — what is the minimum they need to provide?~~ ✅ Resolved — declared at the `signal.set()` call site: `[to, from]` plus optional `duration`, `easing`, `delay`
+- ~~What triggers a transition — is it always user-initiated, or can application logic drive it?~~ ✅ Resolved — anything that calls `signal.set()`: user input handlers or application logic; cross-component triggering is first-class
+- ~~What is the developer-facing API for defining a component's interaction definition?~~ ✅ Resolved — `on`-prefixed handle methods (`onClick`, `onHoverEnter`, `onDrag`, …) — see Phase A
+- ~~What does the TypeScript API look like end to end for a simple component with one transition?~~ ✅ Resolved — see the Phase A developer experience example (button → list → detail)
 - How do parent and child transitions coordinate — who has priority when both are triggered simultaneously?
+- Open from review: how do JS callbacks that re-enter the framework (`signal.set()`, `destroy()` mid-dispatch) interact with ECS system execution? Likely answer: drain callbacks after system execution; handle mutations enqueue commands.
+- Open from review: differently-sized per-component textures cannot share one `texture_2d_array` (layers must be uniform size, no bindless in WebGL2) — atlas, size-classes, or padded layers? Must be resolved before M1.
 
 ---
 
