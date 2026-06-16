@@ -645,9 +645,10 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   ```rust
   #[derive(Resource)] struct GpuContext { device, queue, surface }
   #[derive(Resource)] struct InstanceBuffer { ... }
-  #[derive(Resource)] struct TextureRegistry { textures: HashMap<TextureId, TextureEntry> }
-  #[derive(Resource)] struct SignalRegistry { signals: HashMap<SignalId, Signal> }
+  #[derive(Resource)] struct TextureRegistry { slots: SlotMap<TextureId, TextureEntry>, ... }
+  #[derive(Resource)] struct SignalRegistry { signals: SlotMap<SignalId, Signal> }
   #[derive(Resource)] struct FocusState { focused: Option<Entity>, focus_accepted_at: Instant }
+  #[derive(Resource)] struct CommandQueue { pending: Vec<PendingCommand> }
   ```
 
   **Events:**
@@ -659,6 +660,8 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **System scheduling order (one frame):**
   ```
+  flush_commands_system      drain CommandQueue — apply deferred mutations from last tick
+                             (signal.set(), destroy(), addChild() calls from callbacks)
   input_system               process pointer/keyboard events, update InteractionState
   navigation_system          process directional/tab events, update FocusState
   transition_setup_system    read TransitionRequest events, create virtual slices,
@@ -1079,6 +1082,8 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **Callbacks:** JS functions stored as `js_sys::Function` in the ECS `InteractionDef`. Invoked synchronously by the input system when events fire. The only Rust→JS crossing during normal operation — all other data flows JS→Rust.
 
+  **Re-entrancy safety — command queue:** if a callback calls back into the framework (`signal.set()`, `destroy()`, `addChild()`, etc.) while systems hold a mutable borrow on the ECS world, a direct mutation would panic. All WASM handle methods that mutate the ECS therefore defer their work: they push a `PendingCommand` onto the `CommandQueue` resource rather than touching the world directly. The queue is drained by `flush_commands_system` at the start of the next `tick()`. Mutations from callbacks in tick N take effect at the start of tick N+1. This is deterministic and panic-free regardless of call origin — inside a callback, in a `setTimeout`, or in developer code between frames.
+
   **Entity IDs as strings at the boundary:** internally Bevy `Entity` is a typed u64; at the boundary it becomes a string. Strings are safe, serializable, inspectable in DevTools, and easy for AI agents to reference.
 
   **Frame loop — `tick()` owned by the TypeScript SDK:** the SDK drives `requestAnimationFrame` and calls `proteus.tick()` each frame. Developers can integrate into an existing render loop or control timing manually. SDK default wires `tick()` to `rAF` automatically.
@@ -1287,8 +1292,8 @@ Questions that have surfaced but don't yet have answers. Pull them into the rele
 - ~~What is the developer-facing API for defining a component's interaction definition?~~ ✅ Resolved — `on`-prefixed handle methods (`onClick`, `onHoverEnter`, `onDrag`, …) — see Phase A
 - ~~What does the TypeScript API look like end to end for a simple component with one transition?~~ ✅ Resolved — see the Phase A developer experience example (button → list → detail)
 - How do parent and child transitions coordinate — who has priority when both are triggered simultaneously?
-- Open from review: how do JS callbacks that re-enter the framework (`signal.set()`, `destroy()` mid-dispatch) interact with ECS system execution? Likely answer: drain callbacks after system execution; handle mutations enqueue commands.
-- Open from review: differently-sized per-component textures cannot share one `texture_2d_array` (layers must be uniform size, no bindless in WebGL2) — atlas, size-classes, or padded layers? Must be resolved before M1.
+- ~~Open from review: how do JS callbacks that re-enter the framework (`signal.set()`, `destroy()` mid-dispatch) interact with ECS system execution?~~ ✅ Resolved — command queue: all WASM handle mutations push `PendingCommand` to `CommandQueue`; `flush_commands_system` drains at the start of each `tick()`.
+- ~~Open from review: differently-sized per-component textures cannot share one `texture_2d_array` (layers must be uniform size, no bindless in WebGL2) — atlas, size-classes, or padded layers?~~ ✅ Resolved — two-atlas model: `main_atlas` (long-lived, window-sized) + `transition_atlas` (ephemeral, 2× window area), UV-addressed via `uv_offset`/`uv_scale` and `base_uv_offset`/`base_uv_scale` on `QuadInstance`.
 
 ---
 
