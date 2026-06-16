@@ -651,12 +651,12 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   #[derive(Resource)] struct CommandQueue { pending: Vec<PendingCommand> }
   ```
 
-  **Events:**
+  **Messages** (bevy_ecs 0.18 uses `Message`/`MessageWriter`/`MessageReader` for scheduled system-to-system communication; `Event`/`Observer` is the separate reactive/immediate trigger pattern):
   ```rust
-  #[derive(Event)] struct TransitionRequest { to: Entity, from: Entity, config: TransitionConfig }
-  #[derive(Event)] struct TransitionComplete { entity: Entity }
+  #[derive(Message)] struct TransitionRequest { to: Entity, from: Entity, config: TransitionConfig }
+  #[derive(Message)] struct TransitionComplete { entity: Entity }
   ```
-  Signals fire `TransitionRequest` events. `transition_setup_system` reads them. `TransitionComplete` is fired on morph completion — used for transition chaining and restoring live entities after baked transitions.
+  Signals write `TransitionRequest` messages. `transition_setup_system` reads them. `TransitionComplete` is written on morph completion — used for transition chaining and restoring live entities after baked transitions.
 
   **System scheduling order (one frame):**
   ```
@@ -664,11 +664,11 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
                              (signal.set(), destroy(), addChild() calls from callbacks)
   input_system               process pointer/keyboard events, update InteractionState
   navigation_system          process directional/tab events, update FocusState
-  transition_setup_system    read TransitionRequest events, create virtual slices,
+  transition_setup_system    read TransitionRequest messages, create virtual slices,
                              snapshot geometries, insert ActiveTransition components
   transition_tick_system     advance t, lerp Transform + Visual on active transitions
   transition_complete_system detect t >= 1.0, remove ActiveTransition, clean up virtual
-                             entities, update Lifecycle, fire TransitionComplete events
+                             entities, update Lifecycle, write TransitionComplete messages
   visibility_system          cascade Visibility changes down Hierarchy
   opacity_system             compute effective opacity down Hierarchy
   bake_system                handle bake:true composites, offscreen texture rendering
@@ -700,7 +700,7 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   look up signal in SignalRegistry
       │
       ▼
-  write TransitionRequest { to: list, from: button, config } into Bevy event queue
+  write TransitionRequest { to: list, from: button, config } into message queue
       │
       ▼  (next frame)
   transition_setup_system reads event, validates entities, begins transition
@@ -709,9 +709,9 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
   **Multiple signals targeting the same entity in one frame:** processed in order by `transition_setup_system`. If the target is already transitioning and `interruptible: false`, subsequent requests are dropped.
 
-  **`TransitionDropped` event — two-tier opt-in:**
+  **`TransitionDropped` message — two-tier opt-in:**
 
-  *Tier 1 — debug builds, automatic:* `#[cfg(debug_assertions)]` — all dropped requests fire `TransitionDropped` events automatically. DevTools listens to them. Zero cost in release builds.
+  *Tier 1 — debug builds, automatic:* `#[cfg(debug_assertions)]` — all dropped requests write `TransitionDropped` messages automatically. DevTools listens to them. Zero cost in release builds.
 
   *Tier 2 — release builds, explicit:* developer registers a handler on the signal:
   ```typescript
@@ -1146,17 +1146,36 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase C — Dependencies & Tooling
 
-**Status: Not Started**
+**Status: In Progress**
 
 *Prereqs: Phase B complete*
 
+### Decided
+
+- [x] **Dependency audit — existing crates confirmed:**
+  `wgpu` ✅, `bytemuck` ✅, `glam` ✅, `pollster` ✅ (native-only), `serde` ✅, `serde_json` ✅,
+  `log` ✅, `env_logger` ✅ (native-only), `wasm-bindgen` ✅, `web-sys` ✅, `js-sys` ✅,
+  `wasm-bindgen-futures` ✅, `winit` ✅, `thiserror` ✅, `anyhow` ✅.
+  Removed: `futures` (covered by `pollster` on native and `wasm-bindgen-futures` on wasm — no remaining use).
+
+- [x] **Dependency gaps filled:**
+  - `bevy_ecs = "0.18"` — standalone ECS runtime (does not pull in full Bevy engine). MIT/Apache 2.0.
+    Note: bevy_ecs 0.18 uses `Message`/`MessageWriter`/`MessageReader` for scheduled system-to-system
+    communication; `Event`/`Observer` is the separate reactive/immediate trigger pattern. Architecture
+    docs updated accordingly (`TransitionRequest`, `TransitionComplete`, `TransitionDropped` → `Message`).
+  - `slotmap = "1"` — O(1) stable-key storage with generation safety. Used by `TextureRegistry` and
+    `SignalRegistry`. Already a transitive dep of bevy_ecs; declared explicitly since we use it directly.
+  - `serde-wasm-bindgen = "0.6"` — `JsValue` ↔ Rust deserialization at the WASM boundary. MIT.
+  - `etagere = "0.3"` — shelf-based 2D atlas packing for `TextureRegistry`. MIT/Apache 2.0. Written by
+    the author of Firefox's WebRender; designed for dynamic atlas allocation/deallocation.
+  - `wasm-logger = "0.2"` — routes `log::` macros to `console.log` on wasm. Pairs with `env_logger` on native.
+  - `console_error_panic_hook = "0.1"` — routes Rust panics to `console.error` on wasm. Apache 2.0/MIT.
+
 ### To Do
 
-- [ ] Audit workspace dependencies already in Cargo.toml — confirm each is still the right choice after architecture is settled
-- [ ] Identify any gaps — libraries needed that aren't yet included
 - [ ] Licensing audit — confirm all dependencies are compatible with the intended Proteus license
 - [ ] Define the owned vs. borrowed boundary — what Proteus owns outright vs. what it delegates to dependencies
-- [ ] Developer tooling — build system, test harness, hot reload, WASM bundler (trunk?), CI
+- [ ] Developer tooling — build system, test harness, hot reload, WASM bundler, CI
 - [ ] Decide on the Proteus license
 
 ---
