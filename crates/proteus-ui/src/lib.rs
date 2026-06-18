@@ -14,5 +14,5 @@
 //!   to the ECS transition system, which drives the morph frame by frame
 
 pub mod component;
-pub mod transition;
 pub mod signal;
+pub mod transition;

@@ -206,8 +206,7 @@ impl QuadPipeline {
         });
 
         // --- Atlas textures ---
-        let (main_atlas, transition_atlas) =
-            Self::create_atlases(device, queue);
+        let (main_atlas, transition_atlas) = Self::create_atlases(device, queue);
 
         let main_atlas_view = main_atlas.create_view(&Default::default());
         let transition_atlas_view = transition_atlas.create_view(&Default::default());
@@ -316,14 +315,14 @@ impl QuadPipeline {
         // wgpu NDC: X [-1,1] left→right, Y [-1,1] bottom→top, Z [0,1] near→far.
         // glam's orthographic_rh maps depth to [-1,1] (OpenGL), so we construct
         // the matrix directly for the [0,1] depth convention wgpu expects.
-        let sx =  2.0 / width;
-        let sy =  2.0 / height;
-        let sz =  1.0 / 1000.0; // depth range 0..1000
+        let sx = 2.0 / width;
+        let sy = 2.0 / height;
+        let sz = 1.0 / 1000.0; // depth range 0..1000
 
         glam::Mat4::from_cols(
-            glam::Vec4::new(sx,  0.0, 0.0, 0.0),
-            glam::Vec4::new(0.0, sy,  0.0, 0.0),
-            glam::Vec4::new(0.0, 0.0, sz,  0.0),
+            glam::Vec4::new(sx, 0.0, 0.0, 0.0),
+            glam::Vec4::new(0.0, sy, 0.0, 0.0),
+            glam::Vec4::new(0.0, 0.0, sz, 0.0),
             glam::Vec4::new(0.0, 0.0, 0.0, 1.0),
         )
     }
@@ -371,7 +370,11 @@ impl QuadPipeline {
                 bytes_per_row: Some(4),
                 rows_per_image: Some(1),
             },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
 
         let transition_atlas = device.create_texture(&wgpu::TextureDescriptor {

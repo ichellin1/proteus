@@ -6,10 +6,10 @@
 //! - The texture registry (reference counting, LRU eviction)
 //! - The offscreen render-to-texture pipeline used by static and transition bakes
 
-pub mod mesh;
 pub mod material;
-pub mod scene;
+pub mod mesh;
 pub mod pipeline;
+pub mod scene;
 
 pub use mesh::{QuadInstance, QuadVertex, QUAD_INDICES, QUAD_VERTICES};
 pub use pipeline::QuadPipeline;
