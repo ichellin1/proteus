@@ -6,7 +6,9 @@ Proteus is a cross-platform UI framework written in Rust. Its defining idea: **U
 
 ## Read First
 
-→ [VISION.md](./VISION.md) — the philosophy, architecture, and roadmap
+→ [VISION.md](./VISION.md) — the philosophy and principles
+→ [ROADMAP.md](./ROADMAP.md) — milestones and sequencing
+→ [PLANNING.md](./PLANNING.md) — full architecture decisions and definitions of done
 
 ## Crate Structure
 
@@ -21,7 +23,7 @@ crates/
 
 ## Status
 
-🚧 **M0 — Foundation** — vision (Phase A), architecture (Phase B), and dependencies & tooling (Phase C) complete; project plan & roadmap (Phase D) up next. See [PLANNING.md](./PLANNING.md).
+🚧 **M0 — Foundation** — Phases A–D complete (vision, architecture, dependencies & tooling, project plan). CI setup is the remaining M0 exit criterion. M1 (First Pixel) is next. See [ROADMAP.md](./ROADMAP.md).
 
 ## License
 

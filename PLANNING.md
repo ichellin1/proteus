@@ -10,8 +10,8 @@
 Phase A  Vision                  ✅ complete
 Phase B  Architecture            ✅ complete
 Phase C  Dependencies & Tooling  ✅ complete
-Phase D  Project Plan & Roadmap  ← ready to begin
-Phase E  Build
+Phase D  Project Plan & Roadmap  ✅ complete
+Phase E  Build                   ← ready to begin
 ```
 
 ---
@@ -1201,70 +1201,254 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase D — Project Plan & Roadmap
 
-**Status: Not Started**
+**Status: Complete ✅**
 
 *Prereqs: Phase C complete*
 
-### To Do
+### Decided
 
-- [ ] Finalize milestones based on architecture and dependency decisions
-- [ ] Identify the critical path — what must be built before anything else can be built
-- [ ] Add definition of done to each milestone
-- [ ] Sequence milestones with realistic scope
-- [ ] Move the roadmap from VISION.md into a dedicated ROADMAP.md once stable
+- [x] **Critical path:** M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M10 → M12.
+  Each step is a hard prerequisite for the next. Nothing on this path can be parallelized without
+  the prior milestone being solid — rendering before transitions, transitions before topologies,
+  topologies before demo, regression testing before interactivity, interactivity before SDK,
+  SDK before developer release.
+
+- [x] **Off-critical-path milestones (can run in parallel once their prerequisites are met):**
+  - M8 (Shader Effects) — can begin after M2 (rendering pipeline stable). Does not block M12.
+  - M9 (Video) — can begin after M7 (interactivity needed for meaningful video UX). Does not block M12.
+  - M11 (Native Parity) — can begin after M5 (shared core proven). Does not block M12 directly,
+    but must complete before M12 since native parity is a V1 requirement.
+
+- [x] **M6 before M7:** visual regression testing is locked in before interactivity is introduced.
+  This ensures any rendering regressions introduced during M7 work are caught immediately.
+  Changing this order would mean working without a safety net on the most complex milestone.
+
+- [x] **TypeScript SDK (M10) is V1 and required before developer release (M12).** The primary
+  developer-facing API is TypeScript. A developer release without a polished TS SDK would only
+  serve Rust consumers — too narrow for a public release. M10 stays on the critical path.
+
+- [x] **M0 updated to include CI as an exit criterion.** GitHub Actions (cargo test, cargo clippy,
+  cargo fmt --check, wasm-pack build) must be green before M0 is considered complete. CI configured
+  late means regressions accumulate; CI from M0 keeps the bar clean from the start.
+
+- [x] **Definition of done added to each milestone.** See the Milestones section below. Each
+  milestone now has concrete, testable exit criteria — not just a description of intent.
+
+- [x] **ROADMAP.md created** as the stable external-facing document. PLANNING.md remains the
+  working document with full context, decisions, and DoD. ROADMAP.md is what an outside developer
+  reads to understand where the project is going.
 
 ---
 
 ## Milestones
 
-A working draft of project milestones. To be finalized during Phase D once architecture and dependencies are settled. M0 is not complete until Phases A–D are done.
+Finalized during Phase D. Each milestone has a definition of done — concrete, testable exit criteria.
+M0 is not complete until Phases A–D are done. See ROADMAP.md for the external-facing summary.
+
+---
 
 ### M0 — Foundation *(in progress)*
+
 The project foundation. Nothing in M1 or beyond starts until this is complete.
 
-- [x] Repository, Cargo workspace, crate scaffolding
-- [x] Vision document
-- [x] Planning document
-- [x] Vision complete (Phase A)
-- [x] Architecture design (Phase B)
-- [x] Dependencies & tooling decisions (Phase C)
-- [ ] Project plan and milestones finalized (Phase D)
+**Definition of done:**
+- [x] Repository initialized, Cargo workspace, all 5 crates (`proteus-gpu`, `proteus-render`,
+  `proteus-ui`, `proteus-shell-web`, `proteus-shell-native`) present and compiling as stubs
+- [x] Vision document (VISION.md) — Phase A complete
+- [x] Architecture design (PLANNING.md) — Phase B complete
+- [x] Dependencies & tooling decisions (Cargo.toml, LICENSE files) — Phase C complete
+- [x] Project plan and milestones finalized (ROADMAP.md, this section) — Phase D complete
+- [ ] CI: GitHub Actions running `cargo test`, `cargo clippy`, `cargo fmt --check`,
+  and `wasm-pack build` on every push — all green
+
+---
 
 ### M1 — First Pixel
-A static textured quad renders in the browser (WebGL2) and natively. The instanced draw call is proven end to end. Unit and integration tests are introduced here and maintained through every subsequent milestone. Includes a benchmark comparing WASM+instanced rendering against an equivalent pure TypeScript/WebGL2 implementation to validate that the O(1) boundary crossing mitigation is sufficient in practice.
+
+wgpu device initializes, a textured quad renders. The instanced draw call is proven end to end.
+
+**Definition of done:**
+- [ ] wgpu device initializes on WebGL2 (browser via WASM) and native (macOS minimum)
+- [ ] A single textured quad renders correctly on both targets — correct position, size, UV mapping
+- [ ] Instance buffer works: 1000 quads render correctly in a single instanced draw call
+- [ ] Unit tests: vertex layout, transform math (position, scale, rotation, anchor)
+- [ ] Integration test: headless render produces expected pixel output (reference image)
+- [ ] Benchmark: WASM+instanced rendering vs equivalent pure TypeScript/WebGL2 — result documented
+  in a `BENCHMARKS.md` file. Must demonstrate O(1) or near-O(1) boundary crossing behavior.
+
+---
 
 ### M2 — First Transition
-A single 1→1 lerp transition. One quad morphs into another — position, size, color all interpolating smoothly. The transition model is proven.
+
+The lerp transition system works end to end. One quad morphs into another.
+
+**Definition of done:**
+- [ ] `bevy_ecs` world initializes with the full system schedule running in the correct order
+  (see system scheduling in Phase B)
+- [ ] A 1→1 lerp transition animates correctly: position, size, color all interpolate over the
+  declared duration
+- [ ] Frame-rate independent: the same transition at 30fps and 60fps takes the same wall-clock
+  duration (delta-time based `t` advancement via Bevy `Time` resource)
+- [ ] `TransitionComplete` message fires correctly at `t = 1.0`; `Lifecycle` updates to `idle`
+- [ ] Easing function is pluggable: a custom `t → t` function can be passed at the call site
+- [ ] Unit tests: lerp math, `t` advancement, easing substitution, `TransitionComplete` timing
+
+---
 
 ### M3 — All Three Topologies
-All three transition topologies working: 1→1, 1→N, and N→1. Reference interaction: a button splits into a list, and the list collapses back into a button.
+
+All transition topologies working. A button splits into a list; the list collapses back.
+
+**Definition of done:**
+- [ ] **1→N:** a single quad splits into N target quads (N=5 minimum). Both `childBehavior: 'bake'`
+  (normalize to 1→1) and the slice strategy (normalize to N→N via virtual entities) work correctly
+- [ ] **N→1:** N source quads converge into one target. Virtual slice entities are created, rendered
+  during the transition, and cleaned up by `transition_complete_system`
+- [ ] `childBehavior` iterator works — per-child duration, delay, and easing config each applied
+  independently
+- [ ] Virtual entity `Virtual` marker: input and navigation systems skip virtual entities entirely
+- [ ] Integration test: button → list → button round trip. ECS state (entity count, Lifecycle,
+  Visibility) is correct after each transition. No entity leaks.
+
+---
 
 ### M4 — Text Phase 1
-Single line SDF text rendering. Uniform style, left-to-right. Components can carry readable labels. Required before the reference demo.
+
+Single-line SDF text. Components can carry readable labels.
+
+**Definition of done:**
+- [ ] Single-line SDF text renders on a component with a declared text property
+- [ ] Font atlas is generated and managed through `TextureRegistry` (`TextureKind::Static`)
+- [ ] Text is readable without aliasing artifacts at sizes from 12px to 48px
+- [ ] Text renders correctly on WebGL2 (browser) and native
+- [ ] Text content is treated as a texture in the rendering pipeline — the transition system
+  handles text-bearing components identically to any other textured quad
+
+---
 
 ### M5 — Reference Demo
-The full paradigm demo: button → list → detail view. Labeled components, scripted (not yet interactive), runs in the browser. The thing you show someone to explain what Proteus is.
+
+The paradigm demo: button → list → detail view. Scripted, labeled, 60fps in a browser.
+
+**Definition of done:**
+- [ ] button → list → detail view transition sequence runs correctly in a browser (WebGL2)
+- [ ] All components carry SDF text labels (from M4)
+- [ ] Demo runs at a stable 60fps on a mid-range device throughout all transitions — no frame drops
+- [ ] Demo is viewable without a local build: either hosted or a pre-built WASM artifact committed
+  to the repository
+- [ ] Screen recording captured and committed to `docs/` for documentation purposes
+- [ ] No hardcoded timing hacks — all transitions use the declared `duration`/`easing` mechanism
+
+---
 
 ### M6 — Visual Regression Testing
-Headless render target, reference image capture, per-frame diffing, CI integration. Locks in rendering correctness before the more complex work of interactivity, video, and native begins.
+
+Headless render target, reference images, CI pixel diffing. Correctness locked before interactivity.
+
+**Definition of done:**
+- [ ] Headless wgpu render target produces pixel-identical output across platforms for a given scene
+- [ ] Reference images captured for representative frames from M1–M5 milestone states
+- [ ] CI runs pixel diff on every push — fails if any reference frame exceeds the diff threshold
+- [ ] Diff threshold defined and documented (e.g., 0 pixels above tolerance for deterministic
+  scenes; a small tolerance for any anti-aliased edges)
+- [ ] Failing diffs surface clearly in CI with a before/after image artifact
+
+---
 
 ### M7 — Interactivity
-User input drives transitions. Hit testing on quads, input events triggering transitions, mid-transition input behavior defined and implemented. The reference demo becomes interactive rather than scripted. Resolves Risk #4.
 
-### M8 — Shader Effects Library
-A built-in library of WGSL shader effects — blur, glow, color grading, distortion, and similar — applicable to component textures. Designed to serve as a reference implementation for developers who want to write their own effects post-V1.
+User input drives transitions. The reference demo becomes interactive.
 
-### M9 — Video
-Per-frame video texture streaming to the GPU. A list item can morph into a playing video. The reference demo is extended to demonstrate this.
+**Definition of done:**
+- [ ] Hit testing: pointer events route correctly to the topmost visible component at the pointer
+  position, accounting for `z` ordering
+- [ ] All interaction handlers fire correctly: `onClick`, `onHoverEnter`, `onHoverExit`, `onPress`,
+  `onRelease`, `onFocus`, `onBlur`, `onDrag`
+- [ ] The reference demo is fully interactive — clicking components drives transitions
+- [ ] Input during transitions respects `allowInput`/`allowNavigation` config (default: both off)
+- [ ] `CommandQueue`/`flush_commands_system`: mutations from callbacks (`signal.set()`, `destroy()`,
+  `addChild()`) are deferred and applied correctly at the start of the next tick
+- [ ] `signal.set()` called from an `onClick` handler correctly triggers a transition
+- [ ] Virtual entities are not hit-testable
+- [ ] Existing visual regression tests (M6) still pass after M7 work
 
-### M10 — TypeScript SDK
-A developer can build the full interactive reference demo in TypeScript without touching Rust. The TypeScript API is idiomatic and the WASM boundary is clean and well-documented.
+---
 
-### M11 — Native Parity
-The full reference demo runs identically on macOS, Linux, and Windows via the native shell.
+### M8 — Shader Effects Library *(off critical path — can begin after M2)*
+
+Built-in WGSL shader effects. A reference implementation for custom effect authoring.
+
+**Definition of done:**
+- [ ] Built-in effects: blur, glow, drop shadow — implemented as WGSL fragment shader passes
+- [ ] Effects are composable: multiple effects can be applied to one component
+- [ ] All built-in effects work correctly on WebGL2 and native
+- [ ] Each effect is documented with a code example
+- [ ] A minimal custom effect is implemented as a reference implementation, demonstrating the
+  extension point for developers who want to write their own WGSL effects post-V1
+
+---
+
+### M9 — Video *(off critical path — can begin after M7)*
+
+Per-frame video texture streaming to the GPU. A component can morph into a playing video.
+
+**Definition of done:**
+- [ ] Per-frame video texture uploads to the GPU at the native video frame rate
+- [ ] A list item transitions into a playing video — the reference demo is extended to show this
+- [ ] Video frames managed through `TextureRegistry` using `TextureKind::Video`
+- [ ] Correct behavior on backgrounding: GPU memory released, video paused; on foreground, video
+  state restored
+- [ ] No frame drops in the video during or after a transition to the video component
+
+---
+
+### M10 — TypeScript SDK *(critical path)*
+
+A developer builds the full interactive reference demo in TypeScript without touching Rust.
+
+**Definition of done:**
+- [ ] TypeScript SDK is publishable to npm (package.json, build output, types)
+- [ ] All public types fully declared — no `any`, complete IntelliSense in VS Code
+- [ ] The full interactive reference demo (from M7) is rebuilt end-to-end in TypeScript using only
+  the SDK — no raw wasm-bindgen output consumed directly
+- [ ] All public APIs documented with usage examples (inline JSDoc minimum)
+- [ ] Convenience conversions handled by the SDK: degrees→radians, hex/named colors→RGBA,
+  top-left coordinate mode option for root components
+- [ ] `proteus.get(id)` returns a fully typed `ComponentData` interface (no raw `JsValue`)
+- [ ] The SDK wires `requestAnimationFrame` → `proteus.tick()` automatically by default;
+  manual tick control is available for custom render loop integration
+
+---
+
+### M11 — Native Parity *(off critical path — can begin after M5)*
+
+The full interactive reference demo runs identically on macOS, Linux, and Windows.
+
+**Definition of done:**
+- [ ] The full interactive reference demo (from M7) runs correctly on macOS, Linux, and Windows
+  via the native shell (`proteus-shell-native` with `winit`)
+- [ ] CI runs the test suite on all three platforms (GitHub Actions matrix)
+- [ ] Visual regression tests (M6) pass on all three native platforms
+- [ ] Performance benchmarks on native documented in `BENCHMARKS.md`
+- [ ] No platform-specific behavioral differences in transitions, input handling, or text rendering
+
+---
 
 ### M12 — Developer Release
-Documentation, examples, pluggable interpolation interface exposed, and enough polish that an outside developer can pick up Proteus and build something. The project is ready for external contributors.
+
+Documentation, examples, and enough polish for an outside developer to pick up Proteus and build.
+
+**Definition of done:**
+- [ ] Public documentation: README covers installation, quickstart, and links to full docs;
+  a `docs/` directory with API reference and at least a getting-started guide
+- [ ] ≥3 complete examples in an `examples/` directory, beyond the reference demo — each
+  demonstrating a distinct use case or transition pattern
+- [ ] Pluggable interpolation interface is public, stable, and documented with an example
+  custom easing function
+- [ ] `CHANGELOG.md` exists; project is on semantic versioning (v0.1.0 minimum)
+- [ ] `CONTRIBUTING.md` covers: how to build, how to run tests, PR process
+- [ ] An outside developer with no prior codebase knowledge can follow the README,
+  install the SDK, and produce a working component with a transition
 
 ---
 
