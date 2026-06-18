@@ -232,3 +232,213 @@ impl QuadInstance {
 // Compile-time size guard. If QuadInstance changes, this fails immediately
 // and forces the developer to audit buffer_layout() offsets.
 const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 124);
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::offset_of;
+
+    // -----------------------------------------------------------------------
+    // Layout tests — every field offset must match buffer_layout() exactly.
+    // If a field is reordered the GPU reads garbage; these catch it immediately.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quad_instance_field_offsets() {
+        assert_eq!(offset_of!(QuadInstance, position), 0);
+        assert_eq!(offset_of!(QuadInstance, size), 12);
+        assert_eq!(offset_of!(QuadInstance, rotation), 20);
+        assert_eq!(offset_of!(QuadInstance, scale), 24);
+        assert_eq!(offset_of!(QuadInstance, anchor), 28);
+        assert_eq!(offset_of!(QuadInstance, color), 36);
+        assert_eq!(offset_of!(QuadInstance, opacity), 52);
+        assert_eq!(offset_of!(QuadInstance, corner_radius), 56);
+        assert_eq!(offset_of!(QuadInstance, uv_offset), 60);
+        assert_eq!(offset_of!(QuadInstance, uv_scale), 68);
+        assert_eq!(offset_of!(QuadInstance, atlas_page), 76);
+        assert_eq!(offset_of!(QuadInstance, base_uv_offset), 80);
+        assert_eq!(offset_of!(QuadInstance, base_uv_scale), 88);
+        assert_eq!(offset_of!(QuadInstance, crossfade_t), 96);
+        assert_eq!(offset_of!(QuadInstance, border_width), 100);
+        assert_eq!(offset_of!(QuadInstance, border_color), 104);
+        assert_eq!(offset_of!(QuadInstance, border_offset), 120);
+    }
+
+    #[test]
+    fn quad_instance_total_size() {
+        assert_eq!(std::mem::size_of::<QuadInstance>(), 124);
+    }
+
+    // -----------------------------------------------------------------------
+    // Transform math tests — mirrors the WGSL vertex shader logic in Rust so
+    // we can verify correctness without spinning up a GPU.
+    //
+    // Shader reference (quad.wgsl vs_main):
+    //   scaled_size  = inst_size * inst_scale
+    //   centered     = vertex_pos * scaled_size        ← unit quad vertex
+    //   anchor_shift = (anchor - 0.5) * scaled_size
+    //   pivoted      = centered - anchor_shift
+    //   rotated      = rotate(pivoted, rotation)
+    //   world        = rotated + inst_position.xy
+    //   clip         = view_projection * vec4(world, inst_position.z, 1)
+    // -----------------------------------------------------------------------
+
+    /// Replicates the vertex shader transform for one vertex.
+    fn transform_vertex(
+        vertex_pos: [f32; 2],    // base quad corner e.g. [-0.5, -0.5]
+        inst_position: [f32; 3], // world position (x, y, z)
+        inst_size: [f32; 2],     // component size in pixels
+        rotation: f32,           // radians
+        scale: f32,
+        anchor: [f32; 2], // 0.0–1.0
+        view_projection: glam::Mat4,
+    ) -> glam::Vec4 {
+        let vp = glam::Vec2::from(vertex_pos);
+        let sz = glam::Vec2::from(inst_size);
+        let an = glam::Vec2::from(anchor);
+
+        let scaled_size = sz * scale;
+        let centered = vp * scaled_size;
+        let anchor_shift = (an - glam::Vec2::splat(0.5)) * scaled_size;
+        let pivoted = centered - anchor_shift;
+
+        let (sin_r, cos_r) = rotation.sin_cos();
+        let rotated = glam::Vec2::new(
+            pivoted.x * cos_r - pivoted.y * sin_r,
+            pivoted.x * sin_r + pivoted.y * cos_r,
+        );
+
+        let world = glam::Vec4::new(
+            rotated.x + inst_position[0],
+            rotated.y + inst_position[1],
+            inst_position[2],
+            1.0,
+        );
+        view_projection * world
+    }
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    /// Center anchor, no rotation, scale=1 — simplest case.
+    /// vertex [-0.5,-0.5] of a 200×100 quad at origin should land at world (-100,-50).
+    #[test]
+    fn transform_center_anchor_no_rotation() {
+        let clip = transform_vertex(
+            [-0.5, -0.5],
+            [0.0, 0.0, 0.5],
+            [200.0, 100.0],
+            0.0,
+            1.0,
+            [0.5, 0.5],
+            glam::Mat4::IDENTITY,
+        );
+        assert!(approx_eq(clip.x, -100.0), "x: {}", clip.x);
+        assert!(approx_eq(clip.y, -50.0), "y: {}", clip.y);
+        assert!(approx_eq(clip.z, 0.5), "z: {}", clip.z);
+        assert!(approx_eq(clip.w, 1.0), "w: {}", clip.w);
+    }
+
+    /// Top-left anchor [0,0]: the component's top-left corner is the pivot.
+    /// vertex [-0.5,-0.5] with top-left anchor should land at world origin.
+    #[test]
+    fn transform_top_left_anchor() {
+        // anchor_shift = (0 - 0.5) * [200,100] = [-100,-50]
+        // centered for [-0.5,-0.5] = [-100,-50]
+        // pivoted = [-100,-50] - [-100,-50] = [0, 0]
+        let clip = transform_vertex(
+            [-0.5, -0.5],
+            [0.0, 0.0, 0.0],
+            [200.0, 100.0],
+            0.0,
+            1.0,
+            [0.0, 0.0],
+            glam::Mat4::IDENTITY,
+        );
+        assert!(approx_eq(clip.x, 0.0), "x: {}", clip.x);
+        assert!(approx_eq(clip.y, 0.0), "y: {}", clip.y);
+    }
+
+    /// Scale=2 doubles the effective size. A 100×50 quad at scale=2 behaves
+    /// identically to a 200×100 quad at scale=1.
+    #[test]
+    fn transform_scale() {
+        let scale1 = transform_vertex(
+            [-0.5, -0.5],
+            [0.0, 0.0, 0.0],
+            [200.0, 100.0],
+            0.0,
+            1.0,
+            [0.5, 0.5],
+            glam::Mat4::IDENTITY,
+        );
+        let scale2 = transform_vertex(
+            [-0.5, -0.5],
+            [0.0, 0.0, 0.0],
+            [100.0, 50.0],
+            0.0,
+            2.0,
+            [0.5, 0.5],
+            glam::Mat4::IDENTITY,
+        );
+        assert!(
+            approx_eq(scale1.x, scale2.x),
+            "x: {} vs {}",
+            scale1.x,
+            scale2.x
+        );
+        assert!(
+            approx_eq(scale1.y, scale2.y),
+            "y: {} vs {}",
+            scale1.y,
+            scale2.y
+        );
+    }
+
+    /// 90° CCW rotation: a point at (1, 0) should become (0, 1).
+    /// Use a 2×2 quad at center anchor so vertex (0.5, -0.5) → world (1, -1) pre-rotation,
+    /// then after 90° CCW it should be (1, 1).
+    #[test]
+    fn transform_rotation_90_deg() {
+        let clip = transform_vertex(
+            [0.5, -0.5],
+            [0.0, 0.0, 0.0],
+            [2.0, 2.0],
+            std::f32::consts::FRAC_PI_2, // 90° CCW
+            1.0,
+            [0.5, 0.5],
+            glam::Mat4::IDENTITY,
+        );
+        // centered = [0.5,-0.5]*[2,2] = [1,-1]; anchor_shift=0 (center)
+        // rotated: x = 1*cos90 - (-1)*sin90 = 0 + 1 = 1
+        //          y = 1*sin90 + (-1)*cos90 = 1 - 0 = 1
+        assert!(approx_eq(clip.x, 1.0), "x: {}", clip.x);
+        assert!(approx_eq(clip.y, 1.0), "y: {}", clip.y);
+    }
+
+    /// Orthographic projection: a world point at pixel (640, 400) on a 1280×800
+    /// viewport should map to NDC (1, 1) — the top-right corner.
+    #[test]
+    fn transform_ortho_projection() {
+        use crate::pipeline::QuadPipeline;
+        let vp = QuadPipeline::ortho(1280.0, 800.0);
+        let clip = transform_vertex(
+            [0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [1280.0, 800.0],
+            0.0,
+            1.0,
+            [0.5, 0.5],
+            vp,
+        );
+        // vertex [0.5,0.5] * [1280,800] = [640,400]; anchor_shift=0 (center)
+        // world = [640,400]; ortho maps [640,400] → NDC [1,1]
+        assert!(approx_eq(clip.x, 1.0), "x: {}", clip.x);
+        assert!(approx_eq(clip.y, 1.0), "y: {}", clip.y);
+    }
+}
