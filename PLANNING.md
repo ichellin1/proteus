@@ -7,10 +7,10 @@
 ## Planning Phases
 
 ```
-Phase A  Vision             ✅ complete
-Phase B  Architecture       ✅ complete
-Phase C  Dependencies & Tooling  ← ready to begin
-Phase D  Project Plan & Roadmap
+Phase A  Vision                  ✅ complete
+Phase B  Architecture            ✅ complete
+Phase C  Dependencies & Tooling  ✅ complete
+Phase D  Project Plan & Roadmap  ← ready to begin
 Phase E  Build
 ```
 
@@ -1146,7 +1146,7 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ## Phase C — Dependencies & Tooling
 
-**Status: In Progress**
+**Status: Complete ✅**
 
 *Prereqs: Phase B complete*
 
@@ -1171,12 +1171,31 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   - `wasm-logger = "0.2"` — routes `log::` macros to `console.log` on wasm. Pairs with `env_logger` on native.
   - `console_error_panic_hook = "0.1"` — routes Rust panics to `console.error` on wasm. Apache 2.0/MIT.
 
-### To Do
+- [x] **License — MIT OR Apache-2.0.** Standard dual-license for Rust ecosystem libraries. All runtime
+  dependencies are MIT and/or Apache 2.0 compatible. `LICENSE-MIT` and `LICENSE-APACHE` created.
+  `Cargo.toml` and `README.md` updated. No GPL, LGPL, or other copyleft in the dependency tree.
 
-- [ ] Licensing audit — confirm all dependencies are compatible with the intended Proteus license
-- [ ] Define the owned vs. borrowed boundary — what Proteus owns outright vs. what it delegates to dependencies
-- [ ] Developer tooling — build system, test harness, hot reload, WASM bundler, CI
-- [ ] Decide on the Proteus license
+- [x] **Owned vs. borrowed boundary:**
+  - *Owned outright:* rendering pipeline (WGSL shaders, instance buffer management, atlas management),
+    ECS component types and system schedule, signal model, WASM boundary surface, TypeScript SDK.
+  - *Delegated to dependencies:* GPU abstraction (`wgpu`), math (`glam`), ECS runtime (`bevy_ecs`),
+    GPU buffer casting (`bytemuck`), atlas packing (`etagere`), stable-key storage (`slotmap`),
+    WASM bindings (`wasm-bindgen`, `web-sys`, `js-sys`), native windowing (`winit`),
+    async bridging (`pollster`, `wasm-bindgen-futures`), serialization (`serde`, `serde_json`,
+    `serde-wasm-bindgen`), logging (`log`, `env_logger`, `wasm-logger`, `console_error_panic_hook`),
+    error handling (`thiserror`, `anyhow`).
+  - The rendering model, transition system, and developer API are 100% Proteus-owned. Dependencies
+    handle infrastructure. No dependency owns any part of the public-facing API surface.
+
+- [x] **Developer tooling decisions:**
+  - *Build — web:* `wasm-pack` for npm library distribution; `trunk` for the reference demo app.
+  - *Build — native:* `cargo build` / `cargo run` via standard Cargo workflow.
+  - *Testing:* `cargo test` for unit and integration tests; visual regression tests against a headless
+    wgpu render target (introduced at M6).
+  - *CI:* GitHub Actions — `cargo test`, `cargo clippy`, `wasm-pack build` on every push.
+  - *Hot reload:* deferred — not in scope until M5 (reference demo) or later. Trunk provides basic
+    browser live-reload for the demo during development.
+  - *Formatting:* `rustfmt` with default settings. `cargo fmt --check` in CI.
 
 ---
 
@@ -1207,8 +1226,8 @@ The project foundation. Nothing in M1 or beyond starts until this is complete.
 - [x] Vision document
 - [x] Planning document
 - [x] Vision complete (Phase A)
-- [ ] Architecture design (Phase B)
-- [ ] Dependencies & tooling decisions (Phase C)
+- [x] Architecture design (Phase B)
+- [x] Dependencies & tooling decisions (Phase C)
 - [ ] Project plan and milestones finalized (Phase D)
 
 ### M1 — First Pixel

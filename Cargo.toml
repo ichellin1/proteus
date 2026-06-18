@@ -13,7 +13,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 authors = ["Blue <isaac.chellin@gmail.com>"]
-license = "TBD"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/isaacchellin/proteus"
 
 [workspace.dependencies]
