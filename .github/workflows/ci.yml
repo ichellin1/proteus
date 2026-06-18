@@ -47,8 +47,12 @@ jobs:
         run: cargo test --all
 
   wasm:
-    name: WASM build (web shell)
-    runs-on: ubuntu-latest
+    name: WASM build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -65,11 +69,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-wasm-cargo-
+          key: ${{ runner.os }}-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-wasm-cargo-
 
-      - name: Install wasm-pack
+      - name: Install wasm-pack (Unix)
+        if: runner.os != 'Windows'
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install wasm-pack (Windows)
+        if: runner.os == 'Windows'
+        run: cargo install wasm-pack
 
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web
