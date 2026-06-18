@@ -18,4 +18,6 @@ web-sys = { workspace = true, features = ["Window", "Document", "HtmlCanvasEleme
 js-sys = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 log = { workspace = true }
+wasm-logger = { workspace = true }
+console_error_panic_hook = { workspace = true }
 anyhow = { workspace = true }

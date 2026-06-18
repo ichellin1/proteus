@@ -1,6 +1,6 @@
 //! [`GpuContext`] — the top-level GPU handle for a Proteus application.
 
-use wgpu::{Adapter, Device, Instance, Queue, Surface, SurfaceConfiguration};
+use wgpu::{Adapter, Device, Instance, Queue};
 
 use crate::GpuError;
 
@@ -18,7 +18,7 @@ impl GpuContext {
     /// Proteus GPU work. Async to support both native (`pollster::block_on`)
     /// and WASM (`wasm_bindgen_futures::spawn_local`) callers.
     pub async fn new() -> Result<Self, GpuError> {
-        let instance = Instance::new(&wgpu::InstanceDescriptor {
+        let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });

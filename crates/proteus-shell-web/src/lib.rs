@@ -10,17 +10,14 @@ use wasm_bindgen::prelude::*;
 /// on the given canvas element ID.
 #[wasm_bindgen]
 pub async fn proteus_init(canvas_id: String) -> Result<(), JsValue> {
-    console_error_panic_hook();
+    // Route Rust panics to console.error and log:: macros to console.log.
+    console_error_panic_hook::set_once();
+    wasm_logger::init(wasm_logger::Config::default());
 
-    web_sys::console::log_1(&format!("Proteus initializing on canvas #{canvas_id}").into());
+    log::info!("Proteus initializing on canvas #{canvas_id}");
 
-    // TODO Phase E (Build): initialize GpuContext with canvas surface, then hand off
+    // TODO M1: initialize GpuContext with canvas surface, then hand off
     // to proteus-render and proteus-ui.
 
     Ok(())
-}
-
-fn console_error_panic_hook() {
-    #[cfg(feature = "console_error_panic_hook")]
-    console_error_panic_hook::set_once();
 }

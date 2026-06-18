@@ -9,3 +9,10 @@
 pub mod mesh;
 pub mod material;
 pub mod scene;
+pub mod pipeline;
+
+pub use mesh::{QuadInstance, QuadVertex, QUAD_INDICES, QUAD_VERTICES};
+pub use pipeline::QuadPipeline;
+
+/// The WGSL source for the instanced quad shader, embedded at compile time.
+pub const QUAD_SHADER_SRC: &str = include_str!("shaders/quad.wgsl");
