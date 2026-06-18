@@ -1,4 +1,4 @@
-//! `proteus-shell-web` — Layer 4: WebGPU/WASM web shell.
+//! `proteus-shell-web` — Layer 3: WebGL2/WebGPU WASM shell.
 //!
 //! Compiles to a WASM module exposing a JavaScript-callable API.
 //! Hosts a [`proteus_gpu::GpuContext`] on a browser `<canvas>` element
@@ -14,7 +14,7 @@ pub async fn proteus_init(canvas_id: String) -> Result<(), JsValue> {
 
     web_sys::console::log_1(&format!("Proteus initializing on canvas #{canvas_id}").into());
 
-    // TODO Phase 1: initialize GpuContext with canvas surface, then hand off
+    // TODO Phase E (Build): initialize GpuContext with canvas surface, then hand off
     // to proteus-render and proteus-ui.
 
     Ok(())

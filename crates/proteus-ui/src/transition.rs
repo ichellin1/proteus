@@ -1,1 +1,1 @@
-//! transition — stub, to be implemented in Phase 2.
+//! transition — stub, to be implemented in Phase E (Build).

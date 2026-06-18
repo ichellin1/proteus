@@ -1,6 +1,6 @@
 [package]
 name = "proteus-ui"
-description = "Layer 2: semantic component model and multi-form transition graph"
+description = "Layer 2: metamorphic component model, transition topologies"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

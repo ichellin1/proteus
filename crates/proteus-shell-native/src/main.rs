@@ -8,7 +8,7 @@ fn main() {
     env_logger::init();
     log::info!("Proteus native shell starting…");
 
-    // TODO Phase 1: set up winit event loop, create GpuContext with
+    // TODO Phase E (Build): set up winit event loop, create GpuContext with
     // window surface, run render loop.
-    println!("Proteus — Phase 0 scaffold. Render loop coming in Phase 1.");
+    println!("Proteus — M0 scaffold. Render loop coming in Phase E (Build).");
 }

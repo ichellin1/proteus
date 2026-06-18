@@ -1,1 +1,1 @@
-//! scene — stub, to be implemented in Phase 1.
+//! scene — stub, to be implemented in Phase E (Build).

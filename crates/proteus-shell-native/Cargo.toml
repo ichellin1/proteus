@@ -1,6 +1,6 @@
 [package]
 name = "proteus-shell-native"
-description = "Layer 4: native windowing shell (winit + wgpu)"
+description = "Layer 3: native windowing shell (winit + wgpu)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -14,7 +14,6 @@ path = "src/main.rs"
 proteus-gpu = { path = "../proteus-gpu" }
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
-proteus-context = { path = "../proteus-context" }
 winit = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "proteus-render"
-description = "Layer 1: scene graph, materials, SDF renderer, compute-driven transitions"
+description = "Layer 1: scene graph, instanced render pipeline, transition pipeline"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

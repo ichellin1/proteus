@@ -1,10 +1,10 @@
-//! `proteus-render` — Layer 1: retained-mode scene graph and GPU render pipeline.
+//! `proteus-render` — Layer 1: scene graph and instanced GPU render pipeline.
 //!
 //! Builds on [`proteus_gpu`] to provide:
-//! - A mesh registry for UI geometry (quads, paths, glyphs, arbitrary meshes)
-//! - A material system with hot-reloadable WGSL shaders
-//! - A compute pipeline for physics-driven transitions (springs, fluid, morphing)
-//! - An SDF renderer for resolution-independent shapes and typography
+//! - The instanced quad pipeline — one buffer upload, one draw call per frame
+//! - The WGSL shader set (SDF corner radius, borders, texture crossfade)
+//! - The texture registry (reference counting, LRU eviction)
+//! - The offscreen render-to-texture pipeline used by static and transition bakes
 
 pub mod mesh;
 pub mod material;

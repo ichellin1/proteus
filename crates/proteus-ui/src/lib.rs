@@ -1,17 +1,18 @@
-//! `proteus-ui` — Layer 2: the semantic component model.
+//! `proteus-ui` — Layer 2: the metamorphic component model.
 //!
-//! Components in this layer declare a *semantic role* rather than a fixed
-//! visual form. The framework resolves the active visual expression at runtime
-//! via the context bus supplied by [`proteus_context`].
+//! A component is an *identity* — a stable reference that exists independently
+//! of its current visual form. Transitions declare a new target geometric
+//! state; the framework morphs continuously between forms across three
+//! topologies: 1→1, 1→N, and N→1.
 //!
 //! ## Key concepts
 //!
-//! - [`Component`] — a node with a semantic role and a set of possible visual forms
-//! - [`Form`] — one concrete visual rendering of a component
-//! - [`TransitionGraph`] — rules for how a component moves between forms
-//! - [`ContextBus`] — the signal channel that drives form selection
+//! - [`Component`] — an identity with geometric state and an interaction definition
+//! - [`Transition`] — an interpolated morph between two geometric states,
+//!   declared at the call site (duration, easing, delay)
+//! - [`Signal`] — the trigger layer: `signal.set([to, from], config)` hands off
+//!   to the ECS transition system, which drives the morph frame by frame
 
 pub mod component;
-pub mod form;
 pub mod transition;
-pub mod context_bus;
+pub mod signal;

@@ -1,6 +1,6 @@
 [package]
 name = "proteus-shell-web"
-description = "Layer 4: WebGPU/WASM web shell with TypeScript bridge"
+description = "Layer 3: WebGL2/WebGPU WASM shell, TypeScript bridge"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,7 +13,6 @@ crate-type = ["cdylib", "rlib"]
 proteus-gpu = { path = "../proteus-gpu" }
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
-proteus-context = { path = "../proteus-context" }
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true, features = ["Window", "Document", "HtmlCanvasElement", "Navigator"] }
 js-sys = { workspace = true }

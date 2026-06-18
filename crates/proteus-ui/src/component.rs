@@ -1,1 +1,1 @@
-//! component — stub, to be implemented in Phase 2.
+//! component — stub, to be implemented in Phase E (Build).
