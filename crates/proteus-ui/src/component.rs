@@ -38,9 +38,9 @@ impl QuadState {
     /// Linearly interpolate between `self` (from-state) and `other` (to-state).
     ///
     /// `t = 0.0` returns `self`, `t = 1.0` returns `other`.
-    /// Rotation uses a direct lerp — it takes the long way around for differences
-    /// > 180°. Sufficient for typical UI rotation ranges; use a separate slerp
-    /// wrapper for full-circle animations.
+    /// Rotation uses a direct lerp — it takes the long way around for angular
+    /// differences exceeding 180°. Sufficient for typical UI ranges; use a
+    /// dedicated slerp wrapper for full-circle animations.
     pub fn lerp(&self, other: &Self, t: f32) -> Self {
         Self {
             position: self.position.lerp(other.position, t),
