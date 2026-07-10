@@ -14,3 +14,9 @@ glam = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+# pollster: blocks on wgpu async init inside integration tests
+pollster = { workspace = true }
+# wgpu re-exported through proteus-render but needs explicit dev-dep for tests/
+wgpu = { workspace = true }
