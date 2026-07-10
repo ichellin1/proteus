@@ -54,6 +54,31 @@ pub struct QuadPipeline {
 }
 
 impl QuadPipeline {
+    // ---------------------------------------------------------------------------
+    // White-pixel sentinel UV constants
+    //
+    // The main_atlas has a 1×1 white pixel baked at its origin. Components with
+    // no image texture point at this pixel so their `color` field alone
+    // determines appearance without any shader branching.
+    //
+    // Using the texel *center* (0.5/atlas_size) and zero scale avoids the
+    // linear-sampler edge bleed that occurs when sampling at the texel boundary.
+    // ---------------------------------------------------------------------------
+
+    /// UV offset for the white-pixel sentinel — center of the 1×1 texel at atlas origin.
+    ///
+    /// Assign to `QuadInstance::uv_offset` when the component has no image texture.
+    pub const WHITE_PIXEL_UV_OFFSET: [f32; 2] = [
+        0.5 / DEFAULT_MAIN_ATLAS_SIZE as f32,
+        0.5 / DEFAULT_MAIN_ATLAS_SIZE as f32,
+    ];
+
+    /// UV scale for the white-pixel sentinel — zero means all fragments sample the
+    /// same point (the offset), preventing any bilinear bleed into adjacent texels.
+    ///
+    /// Assign to `QuadInstance::uv_scale` when the component has no image texture.
+    pub const WHITE_PIXEL_UV_SCALE: [f32; 2] = [0.0, 0.0];
+
     /// Create the render pipeline, upload static geometry, and initialize atlas textures.
     ///
     /// `surface_format` must match the swap-chain texture format of the target surface.

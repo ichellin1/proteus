@@ -254,9 +254,8 @@ impl RenderState {
 
         // --- Build instance list ---
         // M1: a single colored quad centered on screen — the first pixel.
-        // uv_scale points at the 1×1 white pixel in main_atlas so color alone
-        // determines the appearance.
-        let white_pixel_uv_scale = 1.0 / 2048.0_f32; // 1 pixel in a 2048×2048 atlas
+        // WHITE_PIXEL_UV_* points at the texel center of the 1×1 white pixel baked
+        // into main_atlas, so color alone determines the appearance with no bleed.
         let instances = [QuadInstance {
             position: [0.0, 0.0, 0.5],
             size: [200.0, 100.0],
@@ -266,8 +265,8 @@ impl RenderState {
             color: [0.224, 0.510, 1.0, 1.0], // Proteus blue
             opacity: 1.0,
             corner_radius: 12.0,
-            uv_offset: [0.0, 0.0],
-            uv_scale: [white_pixel_uv_scale, white_pixel_uv_scale],
+            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
             atlas_page: 0,
             base_uv_offset: [0.0, 0.0],
             base_uv_scale: [0.0, 0.0],
@@ -314,9 +313,6 @@ impl RenderState {
         // Submit and present.
         self.queue.submit([encoder.finish()]);
         frame.present();
-
-        // Request the next frame immediately — continuous rendering for now.
-        // M7+ will switch to event-driven redraws (only redraw on state change).
-        self.window.request_redraw();
+        // Continuous redraws are driven by `about_to_wait()` — no request needed here.
     }
 }

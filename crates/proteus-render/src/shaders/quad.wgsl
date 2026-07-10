@@ -44,7 +44,7 @@ struct VertexIn {
     @location(2)  inst_position:       vec3<f32>,
     // .xy = size, .z = rotation (radians), .w = scale
     @location(3)  inst_size_rot_scale: vec4<f32>,
-    @location(4)  inst_anchor:         vec2<f32>,  // 0.0–1.0; [0.5, 0.5] = center
+    @location(4)  inst_anchor:         vec2<f32>,  // Y-down screen: [0,0]=top-left [0.5,0.5]=center [1,1]=bottom-right
     @location(5)  inst_color:          vec4<f32>,
     // .x = opacity, .y = corner_radius (pixels)
     @location(6)  inst_opacity_radius: vec2<f32>,
@@ -109,8 +109,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     // Shift so that the declared anchor becomes the pivot for rotation and scale.
     // anchor [0.5, 0.5] = center → no shift.
-    // anchor [0.0, 0.0] = top-left → shift right and down by half the size.
-    let anchor_shift = (in.inst_anchor - vec2(0.5, 0.5)) * scaled_size;
+    // Anchor uses Y-down screen convention: [0,0] = top-left, [1,1] = bottom-right.
+    // The Y component is negated to convert from screen-Y-down to world-Y-up so
+    // [0,0] pins the top-left corner of the component as expected by callers.
+    let anchor_shift = (in.inst_anchor - vec2(0.5, 0.5)) * scaled_size * vec2(1.0, -1.0);
     let pivoted = centered - anchor_shift;
 
     // Rotate in pivot space.
@@ -177,17 +179,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Primary texture: atlas_page selects which atlas to sample.
     // Components without a texture point at a 1×1 white pixel baked into main_atlas
     // at init, so the color tint alone determines their appearance with no branching.
+    // textureSampleLevel (LOD 0) is used instead of textureSample because both
+    // branches vary per-instance (non-uniform control flow). textureSample requires
+    // implicit derivatives, which are undefined in non-uniform control flow per the
+    // WGSL spec and fail on strict backends. Level 0 is always correct here: our
+    // atlases have exactly one mip level.
     var tex_color: vec4<f32>;
     if in.atlas_page == 0u {
-        tex_color = textureSample(main_atlas,       atlas_sampler, in.atlas_uv);
+        tex_color = textureSampleLevel(main_atlas,       atlas_sampler, in.atlas_uv,      0.0);
     } else {
-        tex_color = textureSample(transition_atlas, atlas_sampler, in.atlas_uv);
+        tex_color = textureSampleLevel(transition_atlas, atlas_sampler, in.atlas_uv,      0.0);
     }
 
     // Crossfade: blend from-state (always in transition_atlas) into to-state.
     // When crossfade_t == 0.0 this branch is skipped entirely.
     if in.crossfade_t > 0.0 {
-        let base_color = textureSample(transition_atlas, atlas_sampler, in.base_atlas_uv);
+        let base_color = textureSampleLevel(transition_atlas, atlas_sampler, in.base_atlas_uv, 0.0);
         tex_color = mix(base_color, tex_color, in.crossfade_t);
     }
 
@@ -198,10 +205,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // --- Border (SDF-based) ---
     // Zero cost when border_width == 0.0 — the branch is never entered.
+    //
+    // LIMITATION (M4+): only inner borders (border_offset = -1.0) render correctly.
+    // border_offset = 0.0 (centered) shows only the inner half of the band.
+    // border_offset = 1.0 (outer) renders nothing: fragments beyond the rect edge
+    // are never rasterized, and edge_alpha goes to zero right at the boundary.
+    // Full outer-border support requires inflating the quad geometry by the border's
+    // outer extent so outer fragments are actually rasterized.
     if in.border_width > 0.0 {
         let half_w = in.border_width * 0.5;
         // border_offset shifts the border band relative to the shape edge:
-        //   -1.0 = fully inside, 0.0 = centered on edge, 1.0 = fully outside
+        //   -1.0 = fully inside, 0.0 = centered on edge, 1.0 = fully outside (broken, see above)
         let border_center = in.border_offset * half_w;
         let border_dist   = abs(dist - border_center) - half_w;
         let border_alpha  = (1.0 - smoothstep(-1.0, 1.0, border_dist)) * edge_alpha;

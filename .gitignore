@@ -1,10 +1,11 @@
 # Rust
 /target/
-Cargo.lock
+# Cargo.lock is committed: it pins dependency versions for reproducible builds
+# and CI caching. (Cargo recommends committing it for binaries.)
 
-# WASM build artifacts
-/dist/
-/pkg/
+# WASM build artifacts — unanchored so they match under crates/*/
+dist/
+pkg/
 
 # Editor
 .vscode/

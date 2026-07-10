@@ -23,15 +23,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-cargo-
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Install software GPU (headless render test)
         # lavapipe is Mesa's CPU-based Vulkan implementation — gives wgpu a
@@ -51,6 +44,9 @@ jobs:
         env:
           # Force wgpu to use the Vulkan backend so it picks up lavapipe.
           WGPU_BACKEND: vulkan
+          # Fail the headless render test if no GPU adapter is found.
+          # On CI lavapipe always provides one; this catches broken driver installs.
+          REQUIRE_GPU: 1
 
   wasm:
     # WASM output is platform-independent — one Ubuntu build is sufficient.
@@ -66,15 +62,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo registry + wasm target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-wasm-cargo-
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Cache wasm-pack binary
         uses: actions/cache@v4

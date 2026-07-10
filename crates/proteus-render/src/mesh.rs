@@ -85,7 +85,8 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct QuadInstance {
     // --- Transform ---
-    /// World-space position (x, y, z). Z controls depth ordering; higher = on top.
+    /// World-space position (x, y, z). Z is reserved for future depth sorting;
+    /// draw order currently determines stacking (last in instance buffer = on top).
     pub position: [f32; 3], // offset   0, size 12
     /// Component size in pixels (width, height).
     pub size: [f32; 2], // offset  12, size  8
@@ -93,7 +94,8 @@ pub struct QuadInstance {
     pub rotation: f32, // offset  20, size  4
     /// Uniform scale multiplier.
     pub scale: f32, // offset  24, size  4
-    /// Transform anchor point, normalized 0.0–1.0. Default: [0.5, 0.5] (center).
+    /// Transform anchor point, normalized 0.0–1.0, Y-down screen convention.
+    /// [0, 0] = top-left, [0.5, 0.5] = center (default), [1, 1] = bottom-right.
     pub anchor: [f32; 2], // offset  28, size  8
 
     // --- Visual ---
@@ -280,7 +282,7 @@ mod tests {
     // Shader reference (quad.wgsl vs_main):
     //   scaled_size  = inst_size * inst_scale
     //   centered     = vertex_pos * scaled_size        ← unit quad vertex
-    //   anchor_shift = (anchor - 0.5) * scaled_size
+    //   anchor_shift = (anchor - 0.5) * scaled_size * [1,-1]  ← Y-down→Y-up flip
     //   pivoted      = centered - anchor_shift
     //   rotated      = rotate(pivoted, rotation)
     //   world        = rotated + inst_position.xy
@@ -303,7 +305,8 @@ mod tests {
 
         let scaled_size = sz * scale;
         let centered = vp * scaled_size;
-        let anchor_shift = (an - glam::Vec2::splat(0.5)) * scaled_size;
+        // Mirror the Y-down→Y-up flip from the shader: negate Y so [0,0]=top-left.
+        let anchor_shift = (an - glam::Vec2::splat(0.5)) * scaled_size * glam::Vec2::new(1.0, -1.0);
         let pivoted = centered - anchor_shift;
 
         let (sin_r, cos_r) = rotation.sin_cos();
@@ -344,20 +347,22 @@ mod tests {
         assert!(approx_eq(clip.w, 1.0), "w: {}", clip.w);
     }
 
-    /// Top-left anchor [0,0]: the component's top-left corner is the pivot.
-    /// vertex [-0.5,-0.5] with top-left anchor should land at world origin.
+    /// Top-left anchor [0,0] (Y-down screen convention): the component's top-left
+    /// corner becomes the pivot. In Y-up world space the top-left vertex is [-0.5,+0.5].
+    ///
+    /// With the Y-flip:
+    ///   anchor_shift = ([0,0] - 0.5) * [200,100] * [1,-1] = [-100, +50]
+    ///   centered for [-0.5,+0.5] = (-100, +50)
+    ///   pivoted = (-100,+50) - (-100,+50) = (0, 0)  ✓
     #[test]
     fn transform_top_left_anchor() {
-        // anchor_shift = (0 - 0.5) * [200,100] = [-100,-50]
-        // centered for [-0.5,-0.5] = [-100,-50]
-        // pivoted = [-100,-50] - [-100,-50] = [0, 0]
         let clip = transform_vertex(
-            [-0.5, -0.5],
+            [-0.5, 0.5], // top-left vertex in Y-up world = visually top-left on screen
             [0.0, 0.0, 0.0],
             [200.0, 100.0],
             0.0,
             1.0,
-            [0.0, 0.0],
+            [0.0, 0.0], // anchor [0,0] = top-left
             glam::Mat4::IDENTITY,
         );
         assert!(approx_eq(clip.x, 0.0), "x: {}", clip.x);

@@ -7,12 +7,23 @@
 //!
 //! ## Key concepts
 //!
-//! - [`Component`] — an identity with geometric state and an interaction definition
-//! - [`Transition`] — an interpolated morph between two geometric states,
-//!   declared at the call site (duration, easing, delay)
-//! - [`Signal`] — the trigger layer: `signal.set([to, from], config)` hands off
-//!   to the ECS transition system, which drives the morph frame by frame
+//! - [`component::QuadState`] — the visual geometry of one component, lerped during transitions
+//! - [`component::Lifecycle`] — two-state machine: `Idle` / `Transitioning` (M3 adds Entering/Leaving)
+//! - [`transition::ActiveTransition`] — per-entity transition state managed by the ECS systems
+//! - [`transition::TransitionConfig`] — duration, delay, easing declared at the call site
+//! - [`transition::TransitionComplete`] — record of one completed transition
+//! - [`transition::CompletedTransitions`] — resource; drain after `world.update()` to react
+//! - [`schedule::ProteusWorld`] — the ECS world + schedule; call `update(dt)` once per frame
 
 pub mod component;
+pub mod schedule;
 pub mod signal;
 pub mod transition;
+
+// Convenience re-exports for the most commonly used types.
+pub use component::{Lifecycle, QuadState, TransitionRequest};
+pub use schedule::ProteusWorld;
+pub use transition::{
+    ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,
+    CompletedTransitions, EasingFn, FrameTime, TransitionComplete, TransitionConfig,
+};

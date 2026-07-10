@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 proteus-render = { path = "../proteus-render" }
+bevy_ecs = { workspace = true }
+glam = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
