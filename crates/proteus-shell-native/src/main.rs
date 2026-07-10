@@ -2,9 +2,22 @@
 //!
 //! Creates a winit window, attaches a wgpu surface, initializes `QuadPipeline`,
 //! and runs the render loop. Targets macOS (Metal), Linux (Vulkan), Windows (DX12).
+//!
+//! ## M2 wiring
+//!
+//! `ProteusWorld` (bevy_ecs + system schedule) now drives the scene. Each frame:
+//!
+//! 1. Compute wall-clock delta time.
+//! 2. Call `ui_world.update(dt)` — runs the full transition pipeline.
+//! 3. Query all `QuadState` components and convert to `QuadInstance`s.
+//! 4. If any transitions completed this frame, queue the reverse ping-pong
+//!    transition so the demo runs forever without user input.
+//! 5. Upload the instance buffer and submit the draw call as before.
 
 use std::sync::Arc;
+use std::time::Instant;
 
+use glam::{Vec2, Vec3, Vec4};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -13,6 +26,76 @@ use winit::{
 };
 
 use proteus_render::{QuadInstance, QuadPipeline};
+use proteus_ui::{
+    component::{Lifecycle, TransitionRequest},
+    transition::{CompletedTransitions, TransitionConfig},
+    ease_in_out_quad, Entity, ProteusWorld, QuadState,
+};
+
+// ---------------------------------------------------------------------------
+// Demo scene constants
+// ---------------------------------------------------------------------------
+
+/// Starting state — wide blue pill near the upper-left quadrant.
+fn state_a() -> QuadState {
+    QuadState {
+        position: Vec3::new(-130.0, 60.0, 0.5),
+        size: Vec2::new(240.0, 90.0),
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: Vec2::new(0.5, 0.5),
+        color: Vec4::new(0.224, 0.510, 1.0, 1.0), // Proteus blue
+        corner_radius: 14.0,
+    }
+}
+
+/// End state — narrow tall orange pill near the lower-right quadrant.
+fn state_b() -> QuadState {
+    QuadState {
+        position: Vec3::new(130.0, -60.0, 0.5),
+        size: Vec2::new(90.0, 240.0),
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: Vec2::new(0.5, 0.5),
+        color: Vec4::new(1.0, 0.44, 0.09, 1.0), // warm orange
+        corner_radius: 45.0,
+    }
+}
+
+/// Transition config used in both directions of the ping-pong.
+fn ping_pong_config() -> TransitionConfig {
+    TransitionConfig {
+        duration: 1.4,
+        delay: 0.25, // brief pause at each end before reversing
+        easing: ease_in_out_quad,
+    }
+}
+
+/// Convert a `QuadState` (ECS component) into a `QuadInstance` (GPU struct).
+///
+/// M2: `QuadState` has no `opacity` field yet — defaults to 1.0.
+/// UV fields point at the white-pixel texel baked into `main_atlas`.
+fn quad_state_to_instance(qs: &QuadState) -> QuadInstance {
+    QuadInstance {
+        position: qs.position.to_array(),
+        size: qs.size.to_array(),
+        rotation: qs.rotation,
+        scale: qs.scale,
+        anchor: qs.anchor.to_array(),
+        color: qs.color.to_array(),
+        opacity: 1.0,
+        corner_radius: qs.corner_radius,
+        uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+        uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+        atlas_page: 0,
+        base_uv_offset: [0.0, 0.0],
+        base_uv_scale: [0.0, 0.0],
+        crossfade_t: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_offset: 0.0,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -113,8 +196,9 @@ impl ApplicationHandler for ProteusApp {
 // Render state
 // ---------------------------------------------------------------------------
 
-/// All GPU resources for one window. Created once in `resumed()` and lives
-/// until the application exits.
+/// All GPU resources and ECS world for one window.
+///
+/// Created once in `resumed()` and lives until the application exits.
 struct RenderState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -122,6 +206,15 @@ struct RenderState {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: QuadPipeline,
+    /// The ECS world + Proteus system schedule. Ticked once per frame.
+    ui_world: ProteusWorld,
+    /// The single entity whose `QuadState` the demo animates.
+    demo_entity: Entity,
+    /// Ping-pong direction: `true` = currently going toward state_b,
+    /// `false` = going back toward state_a. Flipped on each completion.
+    going_forward: bool,
+    /// Wall-clock time of the previous frame, used to compute delta time.
+    last_frame: Instant,
 }
 
 impl RenderState {
@@ -207,6 +300,24 @@ impl RenderState {
             surface_format,
         );
 
+        // --- ECS world (M2) ---
+        // Spawn one entity at state_a with an immediate transition to state_b.
+        // The ping-pong loop in render() restarts the animation on each completion.
+        let mut ui_world = ProteusWorld::new();
+        let demo_entity = ui_world
+            .world
+            .spawn((
+                state_a(),
+                Lifecycle::Idle,
+                TransitionRequest {
+                    to: state_b(),
+                    config: ping_pong_config(),
+                },
+            ))
+            .id();
+
+        log::info!("Demo entity {:?} — ping-pong transition started", demo_entity);
+
         Self {
             window,
             surface,
@@ -214,6 +325,10 @@ impl RenderState {
             device,
             queue,
             pipeline,
+            ui_world,
+            demo_entity,
+            going_forward: true, // first transition is state_a → state_b
+            last_frame: Instant::now(),
         }
     }
 
@@ -233,8 +348,66 @@ impl RenderState {
     }
 
     /// Render one frame.
+    ///
+    /// Frame order:
+    /// 1. Compute delta time.
+    /// 2. Tick the ECS world (transition systems run).
+    /// 3. Handle completed transitions (ping-pong: queue the reverse).
+    /// 4. Collect `QuadState`s → `QuadInstance`s.
+    /// 5. Upload instances, encode render pass, submit.
     fn render(&mut self) {
-        // Acquire the next swap-chain texture to draw into.
+        // 1. Delta time — cap at 50 ms so a paused/background app doesn't
+        //    cause a huge lerp jump when it resumes.
+        let now = Instant::now();
+        let dt = now
+            .duration_since(self.last_frame)
+            .as_secs_f32()
+            .min(0.05);
+        self.last_frame = now;
+
+        // 2. Advance the ECS world one frame.
+        self.ui_world.update(dt);
+
+        // 3. Ping-pong: when a transition completes, immediately queue the reverse.
+        //    `CompletedTransitions` is populated by `transition_complete_system` and
+        //    holds exactly this frame's completions. Clone the entity list so the
+        //    immutable borrow on the resource is released before we mutate the world.
+        let completions: Vec<Entity> = self
+            .ui_world
+            .world
+            .resource::<CompletedTransitions>()
+            .entities
+            .clone();
+
+        for entity in completions {
+            if entity == self.demo_entity {
+                self.going_forward = !self.going_forward;
+                let target = if self.going_forward { state_b() } else { state_a() };
+                self.ui_world
+                    .world
+                    .entity_mut(entity)
+                    .insert(TransitionRequest {
+                        to: target,
+                        config: ping_pong_config(),
+                    });
+                log::debug!(
+                    "Transition complete — queued {} transition",
+                    if self.going_forward { "A→B" } else { "B→A" }
+                );
+            }
+        }
+
+        // 4. Collect instance data from every entity with a QuadState.
+        //    In M2 there is exactly one (the demo entity), but this loop is
+        //    ready for multiple entities without change.
+        let instances: Vec<QuadInstance> = {
+            let mut q = self.ui_world.world.query::<&QuadState>();
+            q.iter(&self.ui_world.world)
+                .map(quad_state_to_instance)
+                .collect()
+        };
+
+        // 5. Acquire the next swap-chain texture to draw into.
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             // Surface lost or outdated (e.g. window resized between events) —
@@ -252,33 +425,12 @@ impl RenderState {
 
         let view = frame.texture.create_view(&Default::default());
 
-        // --- Build instance list ---
-        // M1: a single colored quad centered on screen — the first pixel.
-        // WHITE_PIXEL_UV_* points at the texel center of the 1×1 white pixel baked
-        // into main_atlas, so color alone determines the appearance with no bleed.
-        let instances = [QuadInstance {
-            position: [0.0, 0.0, 0.5],
-            size: [200.0, 100.0],
-            rotation: 0.0,
-            scale: 1.0,
-            anchor: [0.5, 0.5],
-            color: [0.224, 0.510, 1.0, 1.0], // Proteus blue
-            opacity: 1.0,
-            corner_radius: 12.0,
-            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
-            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
-            atlas_page: 0,
-            base_uv_offset: [0.0, 0.0],
-            base_uv_scale: [0.0, 0.0],
-            crossfade_t: 0.0,
-            border_width: 0.0,
-            border_color: [0.0, 0.0, 0.0, 0.0],
-            border_offset: 0.0,
-        }];
+        // Upload instance buffer — skip GPU work if there's nothing to draw.
+        if !instances.is_empty() {
+            self.pipeline.upload_instances(&self.queue, &instances);
+        }
 
-        self.pipeline.upload_instances(&self.queue, &instances);
-
-        // --- Encode render pass ---
+        // Encode render pass.
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -292,7 +444,7 @@ impl RenderState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // Dark background so the quad is clearly visible
+                        // Dark background so the animated quad is clearly visible.
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.05,
                             g: 0.05,
@@ -307,7 +459,9 @@ impl RenderState {
                 occlusion_query_set: None,
             });
 
-            self.pipeline.draw(&mut pass);
+            if !instances.is_empty() {
+                self.pipeline.draw(&mut pass);
+            }
         }
 
         // Submit and present.

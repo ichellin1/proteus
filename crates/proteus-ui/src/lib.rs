@@ -21,6 +21,7 @@ pub mod signal;
 pub mod transition;
 
 // Convenience re-exports for the most commonly used types.
+pub use bevy_ecs::prelude::Entity;
 pub use component::{Lifecycle, QuadState, TransitionRequest};
 pub use schedule::ProteusWorld;
 pub use transition::{
