@@ -28,8 +28,9 @@ use winit::{
 use proteus_render::{QuadInstance, QuadPipeline};
 use proteus_ui::{
     component::{Lifecycle, TransitionRequest},
+    ease_in_out_quad,
     transition::{CompletedTransitions, TransitionConfig},
-    ease_in_out_quad, Entity, ProteusWorld, QuadState,
+    Entity, ProteusWorld, QuadState,
 };
 
 // ---------------------------------------------------------------------------
@@ -316,7 +317,10 @@ impl RenderState {
             ))
             .id();
 
-        log::info!("Demo entity {:?} — ping-pong transition started", demo_entity);
+        log::info!(
+            "Demo entity {:?} — ping-pong transition started",
+            demo_entity
+        );
 
         Self {
             window,
@@ -359,10 +363,7 @@ impl RenderState {
         // 1. Delta time — cap at 50 ms so a paused/background app doesn't
         //    cause a huge lerp jump when it resumes.
         let now = Instant::now();
-        let dt = now
-            .duration_since(self.last_frame)
-            .as_secs_f32()
-            .min(0.05);
+        let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
 
         // 2. Advance the ECS world one frame.
@@ -382,7 +383,11 @@ impl RenderState {
         for entity in completions {
             if entity == self.demo_entity {
                 self.going_forward = !self.going_forward;
-                let target = if self.going_forward { state_b() } else { state_a() };
+                let target = if self.going_forward {
+                    state_b()
+                } else {
+                    state_a()
+                };
                 self.ui_world
                     .world
                     .entity_mut(entity)

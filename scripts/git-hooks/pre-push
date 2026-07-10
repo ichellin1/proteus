@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-push hook — mirrors the CI checks so fmt/clippy failures are caught locally.
+# Install with: make install-hooks
+set -e
+
+echo "▶ cargo fmt --check"
+cargo fmt --all -- --check
+
+echo "▶ cargo clippy"
+cargo clippy --all-targets --all-features -- -D warnings
+
+echo "✓ pre-push checks passed"
