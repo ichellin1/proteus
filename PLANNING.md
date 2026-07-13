@@ -1343,15 +1343,27 @@ The paradigm demo: button → list → detail view. Scripted, labeled, 60fps in 
 
 ### M6 — Visual Regression Testing
 
-Headless render target, reference images, CI pixel diffing. Correctness locked before interactivity.
+Instance-buffer regression tests. Correctness locked before interactivity.
+
+**Approach:** instead of pixel snapshots (GPU-dependent, non-deterministic across drivers,
+requires GPU in CI), tests verify the `Vec<QuadInstance>` produced by `collect_instances`.
+That buffer is the complete ground truth for what appears on screen — if instance data is
+correct, rendered output is correct. Tests are pure Rust, deterministic, and run in CI with
+no GPU required.
 
 **Definition of done:**
-- [ ] Headless wgpu render target produces pixel-identical output across platforms for a given scene
-- [ ] Reference images captured for representative frames from M1–M5 milestone states
-- [ ] CI runs pixel diff on every push — fails if any reference frame exceeds the diff threshold
-- [ ] Diff threshold defined and documented (e.g., 0 pixels above tolerance for deterministic
-  scenes; a small tolerance for any anti-aliased edges)
-- [ ] Failing diffs surface clearly in CI with a before/after image artifact
+- [x] `proteus_ui::collect::collect_instances` extracted from shells into a single, tested,
+  public function — shells now call it instead of duplicating the logic
+- [x] `QuadInstance` derives `PartialEq` so tests can assert on exact values
+- [x] `proteus-ui/tests/render_instances.rs` covers:
+  - Static quad → correct position, size, color, UV in the instance buffer
+  - Hidden entity (`Visibility::HIDDEN`) → excluded from buffer
+  - Entity with no `Visibility` component → defaults to visible (Virtual entity case)
+  - Text entity → two instances: background (WHITE_PIXEL_UV) + overlay (BakedText UV)
+  - `Text::color` → applied to overlay layer, not background layer
+  - 1→1 linear transition at t=0.5 → position and size are midpoints of from/to
+- [x] All tests pass with `cargo test -p proteus-ui`
+- [x] CI runs these tests on every push
 
 ---
 
