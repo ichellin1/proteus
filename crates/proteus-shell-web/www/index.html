@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Proteus — M5 Reference Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d0d12;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #9090a8;
+    }
+
+    h1 {
+      font-size: 14px;
+      font-weight: 400;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+      opacity: 0.6;
+    }
+
+    canvas {
+      display: block;
+      width: 800px;
+      height: 600px;
+      /* Crisp pixels — no browser smoothing */
+      image-rendering: pixelated;
+    }
+
+    #status {
+      margin-top: 16px;
+      font-size: 12px;
+      opacity: 0.4;
+      min-height: 1em;
+    }
+  </style>
+</head>
+<body>
+  <h1>Proteus · M5 Reference Demo</h1>
+
+  <!--
+    Canvas dimensions must match what ProteusApp.init reads via canvas.width / canvas.height.
+    The CSS width/height only controls display size (pixel density handled by devicePixelRatio).
+    For simplicity this demo uses 1:1 logical pixels.
+  -->
+  <canvas id="proteus-canvas" width="800" height="600"></canvas>
+  <p id="status">Loading…</p>
+
+  <script type="module">
+    // wasm-pack emits the glue module at pkg/proteus_shell_web.js.
+    // Run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
+    import init, { ProteusApp } from './pkg/proteus_shell_web.js';
+
+    async function main() {
+      const status = document.getElementById('status');
+
+      try {
+        await init();
+        status.textContent = 'Initialising GPU…';
+
+        const app = await ProteusApp.init('proteus-canvas');
+        status.textContent = 'Running';
+
+        // Handle canvas resize (keeps logical pixels in sync with CSS layout).
+        const canvas = document.getElementById('proteus-canvas');
+        const observer = new ResizeObserver(() => {
+          const w = Math.max(1, canvas.clientWidth);
+          const h = Math.max(1, canvas.clientHeight);
+          canvas.width = w;
+          canvas.height = h;
+          app.resize(w, h);
+        });
+        observer.observe(canvas);
+
+        // Drive the render loop via requestAnimationFrame.
+        let lastTs = null;
+        function frame(ts) {
+          const dt = lastTs !== null ? ts - lastTs : 0;
+          lastTs = ts;
+          app.tick(dt);          // dt in milliseconds
+          requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+
+      } catch (err) {
+        console.error('Proteus init error:', err);
+        status.textContent = `Error: ${err}`;
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>

@@ -69,6 +69,37 @@ The paradigm demo: button → list → detail view. Scripted (not yet interactiv
 labeled, running at 60fps in a browser. This is the thing you show someone to explain what
 Proteus is.
 
+**M5 known shortcut — Text-on-entity:** In M5, a labeled component is a single entity carrying
+both a `QuadState` (background geometry) and a `Text` component (label). This is a pragmatic
+shortcut: the entity transitions as one unit, and text is rendered as an overlay on the same
+quad. This collapses "container + label" into a single ECS entity because M5 has no
+parent/child hierarchy or relative layout.
+
+The intended model — and the one developers will actually use — is composition: `Text` is a
+leaf entity, a `Quad` is a container, and you build a button by parenting a `Text` entity
+inside a `Quad` entity. The child's position is declared relative to the parent; the parent
+and child can each have their own transition behavior. This requires the hierarchy
+infrastructure that doesn't exist until a future milestone.
+
+**The `Text` component as it exists in M5 is temporary API.** It will be superseded by proper
+entity composition. The `with_text()` style API goes away entirely at that point.
+
+## M5.5 — Component Composition & Hierarchy
+
+*Prerequisite for TypeScript SDK (M10) and Interactivity (M7).*
+
+Parent/child entity relationships, relative-coordinate `QuadState`, and cascading
+visibility/opacity. This is the milestone where:
+
+- `Text` becomes a true leaf entity with its own identity and `QuadState`
+- A labeled button is composed as a `Quad` parent containing a `Text` child
+- The child's position is declared relative to the parent, not in screen coordinates
+- Parent transitions carry children with them by default; children can also transition
+  independently (e.g., cross-fade the label while the container morphs)
+- `stub_visibility_system` and `stub_opacity_system` in `schedule.rs` are replaced with real
+  cascade implementations
+- The M5 `Text`-on-entity shortcut is removed
+
 ## M6 — Visual Regression Testing
 
 Headless render target, reference image capture, per-frame pixel diffing, CI integration.

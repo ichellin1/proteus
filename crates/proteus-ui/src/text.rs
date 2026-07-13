@@ -32,6 +32,7 @@
 //! grow, move, and fade exactly like any other component — no special-casing.
 
 use bevy_ecs::prelude::*;
+use glam::Vec4;
 
 // ---------------------------------------------------------------------------
 // Text component
@@ -53,15 +54,35 @@ pub struct Text {
     /// Font size in pixels. Valid range: 1.0 – 512.0.
     /// Sizes outside 12–48 px may render with reduced quality on some hardware.
     pub size_px: f32,
+    /// RGBA color of the rendered glyphs.
+    ///
+    /// Defaults to opaque white (`Vec4::ONE`), which reads well on any colored
+    /// background. Set to a dark value for light backgrounds, or to any accent
+    /// color to match your design.
+    ///
+    /// The alpha channel is multiplied by the entity's whole-component opacity
+    /// in the shader, so partially-transparent text is supported.
+    pub color: Vec4,
 }
 
 impl Text {
-    /// Convenience constructor.
+    /// Convenience constructor. Glyph color defaults to opaque white.
     pub fn new(content: impl Into<String>, size_px: f32) -> Self {
         Self {
             content: content.into(),
             size_px,
+            color: Vec4::ONE,
         }
+    }
+
+    /// Override the glyph color. Builder-style so it chains with `Text::new`.
+    ///
+    /// ```rust,ignore
+    /// Text::new("Hello", 22.0).with_color(Vec4::new(0.1, 0.1, 0.1, 1.0))
+    /// ```
+    pub fn with_color(mut self, color: Vec4) -> Self {
+        self.color = color;
+        self
     }
 }
 
@@ -100,6 +121,19 @@ mod tests {
         let t = Text::new("Hello", 24.0);
         assert_eq!(t.content, "Hello");
         assert!((t.size_px - 24.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn text_color_defaults_to_white() {
+        let t = Text::new("Hi", 16.0);
+        assert_eq!(t.color, Vec4::ONE);
+    }
+
+    #[test]
+    fn text_with_color_overrides_default() {
+        let dark = Vec4::new(0.1, 0.1, 0.1, 1.0);
+        let t = Text::new("Hi", 16.0).with_color(dark);
+        assert_eq!(t.color, dark);
     }
 
     #[test]
