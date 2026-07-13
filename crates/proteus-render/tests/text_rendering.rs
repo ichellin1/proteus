@@ -264,14 +264,18 @@ fn y_offset_skips_reserved_rows() {
 
 #[test]
 fn main_atlas_size_is_positive() {
-    assert!(MAIN_ATLAS_SIZE > 0, "MAIN_ATLAS_SIZE must be positive");
+    // Constant assertion — evaluated at compile time.
+    const { assert!(MAIN_ATLAS_SIZE > 0, "MAIN_ATLAS_SIZE must be positive") };
 }
 
 #[test]
 fn main_atlas_size_is_power_of_two() {
-    assert!(
-        MAIN_ATLAS_SIZE.is_power_of_two(),
-        "MAIN_ATLAS_SIZE={} should be a power of two for GPU compatibility",
-        MAIN_ATLAS_SIZE
-    );
+    // Constant assertion — evaluated at compile time.
+    // (Format args are not allowed in const context; message is a static literal.)
+    const {
+        assert!(
+            MAIN_ATLAS_SIZE.is_power_of_two(),
+            "MAIN_ATLAS_SIZE must be a power of two for GPU compatibility",
+        )
+    };
 }
