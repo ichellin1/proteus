@@ -799,7 +799,7 @@ fn round_trip_button_list_button() {
     let sources: Vec<GroupSource> = list_entities
         .iter()
         .zip(list_states.iter())
-        .map(|(&e, s)| GroupSource {
+        .map(|(&e, _s)| GroupSource {
             entity: e,
             state: world.get::<QuadState>(e).unwrap().clone(), // snapshot current state
         })
