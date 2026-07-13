@@ -18,6 +18,7 @@
 pub mod component;
 pub mod schedule;
 pub mod signal;
+pub mod text;
 pub mod topology;
 pub mod transition;
 
@@ -25,6 +26,7 @@ pub mod transition;
 pub use bevy_ecs::prelude::Entity;
 pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 pub use schedule::ProteusWorld;
+pub use text::{BakedText, Text};
 pub use topology::{
     ActiveGroupTransition, ChildBehaviorFn, GroupSource, GroupTarget, NToOneRequest, OneToNRequest,
     PartOfGroup, SplitStrategy,

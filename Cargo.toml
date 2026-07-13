@@ -23,6 +23,7 @@ wgpu = { version = "22", features = ["wgsl", "webgl"] }
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 etagere = "0.3"  # shelf-based 2D atlas packing (used by TextureRegistry)
+fontdue = "0.8"  # pure-Rust font rasterization — no system font dependencies
 
 # ECS
 bevy_ecs = "0.18"  # standalone ECS runtime — does not pull in the full Bevy engine

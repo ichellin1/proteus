@@ -26,6 +26,13 @@ const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 /// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
 const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
 
+/// Public alias for the main atlas size.
+///
+/// Use this when creating a [`crate::font_atlas::FontAtlas`] and when
+/// converting a [`crate::font_atlas::BakedRegion`] pixel origin into the
+/// normalised UV coordinates stored in a [`QuadInstance`].
+pub const MAIN_ATLAS_SIZE: u32 = DEFAULT_MAIN_ATLAS_SIZE;
+
 // ---------------------------------------------------------------------------
 // QuadPipeline
 // ---------------------------------------------------------------------------
@@ -325,6 +332,65 @@ impl QuadPipeline {
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..6, 0, 0..self.instance_count);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Atlas write API (M4 text pipeline)
+    // ---------------------------------------------------------------------------
+
+    /// Write a rectangular region of RGBA pixels into `main_atlas`.
+    ///
+    /// Use this to upload a pre-baked text bitmap produced by
+    /// [`FontAtlas::bake_text`] into the GPU texture so it can be sampled by
+    /// the shader.
+    ///
+    /// `x` / `y`    — top-left pixel of the destination region (atlas coords).
+    /// `width` / `height` — dimensions of the region in pixels.
+    /// `rgba_data`  — raw RGBA bytes; must have exactly `width * height * 4` bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `rgba_data.len() != width * height * 4`.
+    ///
+    /// [`FontAtlas::bake_text`]: crate::font_atlas::FontAtlas::bake_text
+    pub fn write_to_main_atlas(
+        &self,
+        queue: &wgpu::Queue,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+    ) {
+        debug_assert_eq!(
+            rgba_data.len(),
+            (width * height * 4) as usize,
+            "write_to_main_atlas: rgba_data length {} does not match {}×{}×4={}",
+            rgba_data.len(),
+            width,
+            height,
+            width * height * 4,
+        );
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self._main_atlas,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba_data,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     // ---------------------------------------------------------------------------
