@@ -313,6 +313,7 @@ impl RenderState {
                 TransitionRequest {
                     to: state_b(),
                     config: ping_pong_config(),
+                    from_state: None,
                 },
             ))
             .id();
@@ -394,6 +395,7 @@ impl RenderState {
                     .insert(TransitionRequest {
                         to: target,
                         config: ping_pong_config(),
+                        from_state: None,
                     });
                 log::debug!(
                     "Transition complete — queued {} transition",

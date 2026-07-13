@@ -1864,6 +1864,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
+ "glam 0.29.3",
  "log",
  "pollster",
  "proteus-gpu",

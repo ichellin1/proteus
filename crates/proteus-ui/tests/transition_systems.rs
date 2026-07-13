@@ -83,6 +83,7 @@ fn setup_converts_request_to_active_transition() {
             TransitionRequest {
                 to: blue(),
                 config: config(1.0),
+                from_state: None,
             },
         ))
         .id();
@@ -112,6 +113,7 @@ fn setup_snapshots_from_state_correctly() {
             TransitionRequest {
                 to: to.clone(),
                 config: config(0.5),
+                from_state: None,
             },
         ))
         .id();
@@ -357,6 +359,7 @@ fn full_transition_fires_complete_after_sufficient_ticks() {
             TransitionRequest {
                 to: blue(),
                 config: config(0.2),
+                from_state: None,
             },
         ))
         .id();

@@ -8,7 +8,7 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::component::{Lifecycle, QuadState, TransitionRequest};
+use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual};
 
 // ---------------------------------------------------------------------------
 // Easing
@@ -192,8 +192,12 @@ pub fn transition_setup_system(
     query: Query<(Entity, &TransitionRequest, &QuadState)>,
 ) {
     for (entity, request, current_state) in query.iter() {
+        // `from_state` may override the entity's current position — this is how
+        // signal-driven transitions make a destination appear to originate from
+        // the source entity's geometry (used in 1→N bake strategy and 1→1 signals).
+        let from = request.from_state.as_ref().unwrap_or(current_state).clone();
         let active = ActiveTransition::new(
-            current_state.clone(),
+            from,
             request.to.clone(),
             request.config, // Copy — no .clone() needed
         );
@@ -257,7 +261,9 @@ pub fn transition_tick_system(
 /// holds exactly this frame's completions.
 pub fn transition_complete_system(
     mut commands: Commands,
-    mut query: Query<(Entity, &ActiveTransition, &mut Lifecycle)>,
+    // Exclude Virtual entities — their completions are handled by
+    // `group_transition_complete_system` in `topology.rs`.
+    mut query: Query<(Entity, &ActiveTransition, &mut Lifecycle), Without<Virtual>>,
     mut completed: ResMut<CompletedTransitions>,
 ) {
     completed.entities.clear();

@@ -18,12 +18,17 @@
 pub mod component;
 pub mod schedule;
 pub mod signal;
+pub mod topology;
 pub mod transition;
 
 // Convenience re-exports for the most commonly used types.
 pub use bevy_ecs::prelude::Entity;
-pub use component::{Lifecycle, QuadState, TransitionRequest};
+pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 pub use schedule::ProteusWorld;
+pub use topology::{
+    ActiveGroupTransition, ChildBehaviorFn, GroupSource, GroupTarget, NToOneRequest, OneToNRequest,
+    PartOfGroup, SplitStrategy,
+};
 pub use transition::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,
     CompletedTransitions, EasingFn, FrameTime, TransitionComplete, TransitionConfig,

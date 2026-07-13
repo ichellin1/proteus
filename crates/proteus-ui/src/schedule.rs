@@ -22,6 +22,9 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ApplyDeferred;
 
+use crate::topology::{
+    group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
+};
 use crate::transition::{
     transition_complete_system, transition_setup_system, transition_tick_system,
     CompletedTransitions, FrameTime,
@@ -49,6 +52,8 @@ pub enum ProteusSet {
     TransitionTick,
     /// Detect `t = 1.0`, fire `TransitionComplete`, clean up.
     TransitionComplete,
+    /// Finalize group transitions when all virtual entities complete.
+    GroupTransitionComplete,
     /// Cascade `Visibility` changes down the hierarchy.
     Visibility,
     /// Compute effective opacity down the hierarchy.
@@ -138,6 +143,7 @@ pub fn build_schedule() -> Schedule {
             ProteusSet::TransitionSetup,
             ProteusSet::TransitionTick,
             ProteusSet::TransitionComplete,
+            ProteusSet::GroupTransitionComplete,
             ProteusSet::Visibility,
             ProteusSet::Opacity,
             ProteusSet::Bake,
@@ -161,6 +167,14 @@ pub fn build_schedule() -> Schedule {
     schedule.add_systems(transition_setup_system.in_set(ProteusSet::TransitionSetup));
     schedule.add_systems(transition_tick_system.in_set(ProteusSet::TransitionTick));
     schedule.add_systems(transition_complete_system.in_set(ProteusSet::TransitionComplete));
+
+    // Group topology systems — M3.
+    // Setup systems run in the same TransitionSetup slot; ordering within the
+    // set is undefined but both are independent of each other.
+    schedule.add_systems(one_to_n_setup_system.in_set(ProteusSet::TransitionSetup));
+    schedule.add_systems(n_to_one_setup_system.in_set(ProteusSet::TransitionSetup));
+    schedule
+        .add_systems(group_transition_complete_system.in_set(ProteusSet::GroupTransitionComplete));
 
     schedule
 }

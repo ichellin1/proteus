@@ -94,8 +94,61 @@ pub enum Lifecycle {
 ///
 /// `transition_setup_system` reads this, creates an `ActiveTransition`,
 /// sets `Lifecycle::Transitioning`, and removes the request.
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Default)]
 pub struct TransitionRequest {
     pub to: QuadState,
     pub config: crate::transition::TransitionConfig,
+    /// Explicit from-state override.
+    ///
+    /// When `Some`, the transition starts from this geometry rather than the
+    /// entity's current `QuadState`. Used in signal-driven transitions where
+    /// the destination entity should appear to originate from the source
+    /// entity's position — e.g., a 1→1 morph where the "to" entity starts
+    /// animating from the "from" entity's geometry.
+    ///
+    /// When `None` (default), the entity's current `QuadState` is used.
+    pub from_state: Option<QuadState>,
 }
+
+// ---------------------------------------------------------------------------
+// Visibility — ECS activation flag
+// ---------------------------------------------------------------------------
+
+/// ECS activation flag.
+///
+/// When `visible = false`, the entity is present in the ECS but the render,
+/// input, and navigation systems should skip it. Invisible entities are the
+/// mechanism for hiding sources and targets during group transitions without
+/// destroying them.
+///
+/// Defaults to `true` (visible) when constructed with `Visibility::default()`.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct Visibility {
+    pub visible: bool,
+}
+
+impl Visibility {
+    /// Convenience constant — fully visible.
+    pub const VISIBLE: Self = Self { visible: true };
+    /// Convenience constant — hidden from all behavioral systems.
+    pub const HIDDEN: Self = Self { visible: false };
+}
+
+impl Default for Visibility {
+    fn default() -> Self {
+        Self::VISIBLE
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Virtual — render-only marker
+// ---------------------------------------------------------------------------
+
+/// Marker for virtual entities created by group transitions (1→N, N→1).
+///
+/// Virtual entities are ephemeral stand-ins that animate geometry during a
+/// group transition and are despawned on completion. They are purely visual.
+/// Every behavioral system — input, navigation, regular transition completion —
+/// must query `Without<Virtual>` to exclude them.
+#[derive(Component, Debug, Clone)]
+pub struct Virtual;
