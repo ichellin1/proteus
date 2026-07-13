@@ -13,6 +13,8 @@ crate-type = ["cdylib", "rlib"]
 proteus-gpu = { path = "../proteus-gpu" }
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
+wgpu = { workspace = true }
+glam = { workspace = true }
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true, features = ["Window", "Document", "HtmlCanvasElement", "Navigator"] }
 js-sys = { workspace = true }
