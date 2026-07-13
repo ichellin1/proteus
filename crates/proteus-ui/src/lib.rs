@@ -15,6 +15,7 @@
 //! - [`transition::CompletedTransitions`] — resource; drain after `world.update()` to react
 //! - [`schedule::ProteusWorld`] — the ECS world + schedule; call `update(dt)` once per frame
 
+pub mod collect;
 pub mod component;
 pub mod schedule;
 pub mod signal;
@@ -24,6 +25,7 @@ pub mod transition;
 
 // Convenience re-exports for the most commonly used types.
 pub use bevy_ecs::prelude::Entity;
+pub use collect::{collect_instances, quad_state_to_instance};
 pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 pub use schedule::ProteusWorld;
 pub use text::{BakedText, Text};

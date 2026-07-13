@@ -14,3 +14,10 @@ serde = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+# Integration tests construct World and glam types directly, and reference
+# QuadPipeline constants for UV sentinel assertions.
+bevy_ecs = { workspace = true }
+glam = { workspace = true }
+proteus-render = { path = "../proteus-render" }

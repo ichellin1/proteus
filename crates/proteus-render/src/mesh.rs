@@ -82,7 +82,7 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 ///
 /// Field byte offsets must match `buffer_layout()` and `@location` attributes in `quad.wgsl`.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct QuadInstance {
     // --- Transform ---
     /// World-space position (x, y, z). Z is reserved for future depth sorting;

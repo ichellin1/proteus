@@ -34,9 +34,9 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use proteus_render::{FontAtlas, QuadInstance, QuadPipeline, MAIN_ATLAS_SIZE};
+use proteus_render::{FontAtlas, QuadPipeline, MAIN_ATLAS_SIZE};
 use proteus_ui::{
-    ease_in_out_quad,
+    collect_instances, ease_in_out_quad,
     transition::{CompletedTransitions, TransitionConfig},
     BakedText, Entity, GroupSource, GroupTarget, Lifecycle, NToOneRequest, OneToNRequest,
     ProteusWorld, QuadState, SplitStrategy, Text, TransitionRequest, Visibility,
@@ -143,44 +143,6 @@ enum DemoPhase {
     /// Hold here so the viewer can appreciate the final state before the
     /// loop restarts.
     LoopEndIdle { timer: f32 },
-}
-
-// ---------------------------------------------------------------------------
-// Quad → GPU instance
-// ---------------------------------------------------------------------------
-
-/// Convert a `QuadState` (+ optional `BakedText`) into a `QuadInstance`.
-///
-/// If the entity has a baked text region, UV fields address the text area in
-/// `main_atlas`. Otherwise UV fields point at the white-pixel sentinel so the
-/// quad renders as a solid colour.
-fn quad_state_to_instance(qs: &QuadState, baked: Option<&BakedText>) -> QuadInstance {
-    let (uv_offset, uv_scale) = match baked {
-        Some(b) => (b.uv_offset, b.uv_scale),
-        None => (
-            QuadPipeline::WHITE_PIXEL_UV_OFFSET,
-            QuadPipeline::WHITE_PIXEL_UV_SCALE,
-        ),
-    };
-    QuadInstance {
-        position: qs.position.to_array(),
-        size: qs.size.to_array(),
-        rotation: qs.rotation,
-        scale: qs.scale,
-        anchor: qs.anchor.to_array(),
-        color: qs.color.to_array(),
-        opacity: 1.0,
-        corner_radius: qs.corner_radius,
-        uv_offset,
-        uv_scale,
-        atlas_page: 0,
-        base_uv_offset: [0.0, 0.0],
-        base_uv_scale: [0.0, 0.0],
-        crossfade_t: 0.0,
-        border_width: 0.0,
-        border_color: [0.0, 0.0, 0.0, 0.0],
-        border_offset: 0.0,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -862,49 +824,8 @@ impl RenderState {
         self.advance_demo(dt);
 
         // 5. Collect visible instance data.
-        //
-        //    Use `Option<&Visibility>` so Virtual entities (no Visibility
-        //    component) are included — they must render during group transitions.
-        //    Normal entities with Visibility::HIDDEN are excluded.
-        //
-        //    Text entities emit TWO instances:
-        //      (a) solid colored background  — WHITE_PIXEL_UV + entity color
-        //      (b) white text overlay        — BakedText UV   + Vec4::ONE
-        //    Virtual entities (no BakedText) emit one solid-color instance.
-        let instances: Vec<QuadInstance> = {
-            let states: Vec<(Entity, QuadState, Option<bool>)> = {
-                let mut q = self
-                    .ui_world
-                    .world
-                    .query::<(Entity, &QuadState, Option<&Visibility>)>();
-                q.iter(&self.ui_world.world)
-                    .map(|(e, qs, vis)| (e, qs.clone(), vis.map(|v| v.visible)))
-                    .collect()
-            };
-            // Query borrow dropped — safe to call world.get() now.
-            let mut out = Vec::new();
-            for (e, qs, vis) in states {
-                if !vis.is_none_or(|v| v) {
-                    continue; // hidden
-                }
-                // Always draw the solid-color background quad.
-                out.push(quad_state_to_instance(&qs, None));
-                // If the entity has baked text, overlay the glyphs on top.
-                // Color comes from Text::color (defaults to white).
-                if let Some(b) = self.ui_world.world.get::<BakedText>(e) {
-                    let text_color = self
-                        .ui_world
-                        .world
-                        .get::<Text>(e)
-                        .map(|t| t.color)
-                        .unwrap_or(Vec4::ONE);
-                    let mut text_qs = qs.clone();
-                    text_qs.color = text_color;
-                    out.push(quad_state_to_instance(&text_qs, Some(b)));
-                }
-            }
-            out
-        };
+        //    See `proteus_ui::collect` for the two-instance-per-text-entity model.
+        let instances = collect_instances(&mut self.ui_world.world);
 
         // 6. Acquire swap-chain texture.
         let frame = match self.surface.get_current_texture() {
