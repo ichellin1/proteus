@@ -3,16 +3,30 @@
 //! Creates a winit window, attaches a wgpu surface, initializes `QuadPipeline`,
 //! and runs the render loop. Targets macOS (Metal), Linux (Vulkan), Windows (DX12).
 //!
-//! ## M2 wiring
+//! ## M4 wiring (text)
 //!
-//! `ProteusWorld` (bevy_ecs + system schedule) now drives the scene. Each frame:
+//! Each frame, after `ui_world.update(dt)`:
+//!
+//! 1. Query all entities that have a `Text` component but no `BakedText`.
+//! 2. For each such entity, call `font_atlas.bake_text()` to rasterize the string.
+//! 3. Upload the RGBA pixels to `main_atlas` via `pipeline.write_to_main_atlas()`.
+//! 4. Insert `BakedText { uv_offset, uv_scale }` on the entity.
+//!
+//! Subsequent frames skip the bake step (entity now has `BakedText`).
+//! The `quad_state_to_instance` helper checks for `BakedText` and uses its UV
+//! coordinates instead of the white-pixel sentinel, so text renders as a
+//! textured quad through the standard pipeline.
+//!
+//! ## M2 wiring (retained)
+//!
+//! `ProteusWorld` (bevy_ecs + system schedule) drives the scene. Each frame:
 //!
 //! 1. Compute wall-clock delta time.
 //! 2. Call `ui_world.update(dt)` — runs the full transition pipeline.
-//! 3. Query all `QuadState` components and convert to `QuadInstance`s.
-//! 4. If any transitions completed this frame, queue the reverse ping-pong
-//!    transition so the demo runs forever without user input.
-//! 5. Upload the instance buffer and submit the draw call as before.
+//! 3. Bake any pending `Text` entities (see M4 above).
+//! 4. Query all `QuadState` components and convert to `QuadInstance`s.
+//! 5. If any transitions completed this frame, queue the reverse ping-pong.
+//! 6. Upload the instance buffer and submit the draw call.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -25,12 +39,12 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use proteus_render::{QuadInstance, QuadPipeline};
+use proteus_render::{FontAtlas, QuadInstance, QuadPipeline, MAIN_ATLAS_SIZE};
 use proteus_ui::{
     component::{Lifecycle, TransitionRequest},
     ease_in_out_quad,
     transition::{CompletedTransitions, TransitionConfig},
-    Entity, ProteusWorld, QuadState,
+    BakedText, Entity, ProteusWorld, QuadState, Text,
 };
 
 // ---------------------------------------------------------------------------
@@ -72,11 +86,20 @@ fn ping_pong_config() -> TransitionConfig {
     }
 }
 
-/// Convert a `QuadState` (ECS component) into a `QuadInstance` (GPU struct).
+/// Convert a `QuadState` + optional `BakedText` into a `QuadInstance` (GPU struct).
 ///
-/// M2: `QuadState` has no `opacity` field yet — defaults to 1.0.
-/// UV fields point at the white-pixel texel baked into `main_atlas`.
-fn quad_state_to_instance(qs: &QuadState) -> QuadInstance {
+/// If `baked` is `Some`, UV fields address the text sub-region in `main_atlas`.
+/// Otherwise, UV fields point at the white-pixel sentinel so the entity renders
+/// as a solid-color quad.
+fn quad_state_to_instance(qs: &QuadState, baked: Option<&BakedText>) -> QuadInstance {
+    let (uv_offset, uv_scale) = match baked {
+        Some(b) => (b.uv_offset, b.uv_scale),
+        None => (
+            QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+            QuadPipeline::WHITE_PIXEL_UV_SCALE,
+        ),
+    };
+
     QuadInstance {
         position: qs.position.to_array(),
         size: qs.size.to_array(),
@@ -86,8 +109,8 @@ fn quad_state_to_instance(qs: &QuadState) -> QuadInstance {
         color: qs.color.to_array(),
         opacity: 1.0,
         corner_radius: qs.corner_radius,
-        uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
-        uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+        uv_offset,
+        uv_scale,
         atlas_page: 0,
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
@@ -209,8 +232,14 @@ struct RenderState {
     pipeline: QuadPipeline,
     /// The ECS world + Proteus system schedule. Ticked once per frame.
     ui_world: ProteusWorld,
-    /// The single entity whose `QuadState` the demo animates.
+    /// The single entity whose `QuadState` the demo animates (M2 ping-pong).
     demo_entity: Entity,
+    /// A second entity with a `Text` label, demonstrating M4 text rendering.
+    /// Prefixed `_` because the entity is managed through the ECS world by ID
+    /// after spawn; direct field access is reserved for future milestones (M5+).
+    _label_entity: Entity,
+    /// CPU-side font atlas for rasterizing text strings (M4).
+    font_atlas: FontAtlas,
     /// Ping-pong direction: `true` = currently going toward state_b,
     /// `false` = going back toward state_a. Flipped on each completion.
     going_forward: bool,
@@ -301,10 +330,13 @@ impl RenderState {
             surface_format,
         );
 
-        // --- ECS world (M2) ---
-        // Spawn one entity at state_a with an immediate transition to state_b.
-        // The ping-pong loop in render() restarts the animation on each completion.
+        // --- Font atlas (M4) ---
+        let font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
+
+        // --- ECS world ---
         let mut ui_world = ProteusWorld::new();
+
+        // Demo entity (M2 ping-pong).
         let demo_entity = ui_world
             .world
             .spawn((
@@ -318,10 +350,34 @@ impl RenderState {
             ))
             .id();
 
+        // Label entity (M4 text) — a static label above the animated quad.
+        // It has no transition; it stays fixed and displays text.
+        let label_entity = ui_world
+            .world
+            .spawn((
+                QuadState {
+                    // Positioned above center. The quad is sized to the text label.
+                    // The shell will resize the quad after baking to match the baked
+                    // pixel dimensions (future enhancement); for M4 we declare a
+                    // fixed size that comfortably fits a short label.
+                    position: Vec3::new(0.0, 220.0, 0.6),
+                    size: Vec2::new(220.0, 36.0),
+                    rotation: 0.0,
+                    scale: 1.0,
+                    anchor: Vec2::new(0.5, 0.5),
+                    color: Vec4::new(1.0, 1.0, 1.0, 1.0), // white — text tinted white
+                    corner_radius: 0.0,
+                },
+                Lifecycle::Idle,
+                Text::new("Proteus — M4 Text", 24.0),
+            ))
+            .id();
+
         log::info!(
             "Demo entity {:?} — ping-pong transition started",
             demo_entity
         );
+        log::info!("Label entity {:?} — pending text bake", label_entity);
 
         Self {
             window,
@@ -332,6 +388,8 @@ impl RenderState {
             pipeline,
             ui_world,
             demo_entity,
+            _label_entity: label_entity,
+            font_atlas,
             going_forward: true, // first transition is state_a → state_b
             last_frame: Instant::now(),
         }
@@ -352,14 +410,87 @@ impl RenderState {
         );
     }
 
+    // ---------------------------------------------------------------------------
+    // Text bake pass (M4)
+    // ---------------------------------------------------------------------------
+
+    /// Bake all entities that have a `Text` component but not yet a `BakedText`.
+    ///
+    /// For each such entity:
+    /// 1. Rasterize the string via `font_atlas.bake_text()`.
+    /// 2. Upload the pixel data to `main_atlas` via `pipeline.write_to_main_atlas()`.
+    /// 3. Insert `BakedText` with the resulting UV coords on the entity.
+    ///
+    /// This runs once per entity (bake is skipped on subsequent frames because
+    /// `BakedText` is now present).
+    fn bake_pending_text(&mut self) {
+        // Step 1: Collect (entity, content, size_px) for every Text entity.
+        // The inner block ends the query borrow before we touch the world again.
+        let all_text: Vec<(Entity, String, f32)> = {
+            let mut q = self.ui_world.world.query::<(Entity, &Text)>();
+            q.iter(&self.ui_world.world)
+                .map(|(e, t)| (e, t.content.clone(), t.size_px))
+                .collect()
+        };
+
+        // Step 2: Filter to those that still lack a BakedText.
+        // Now that the query borrow has ended we can call world.get() freely.
+        let pending: Vec<(Entity, String, f32)> = all_text
+            .into_iter()
+            .filter(|(e, _, _)| self.ui_world.world.get::<BakedText>(*e).is_none())
+            .collect();
+
+        for (entity, content, size_px) in pending {
+            let Some(region) = self.font_atlas.bake_text(&content, size_px) else {
+                log::warn!("FontAtlas full or empty string for entity {:?}", entity);
+                continue;
+            };
+
+            // Upload pixels to GPU.
+            self.pipeline.write_to_main_atlas(
+                &self.queue,
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+                &region.rgba_pixels,
+            );
+
+            // Compute normalised UVs.
+            let uv_offset = region.uv_offset(MAIN_ATLAS_SIZE);
+            let uv_scale = region.uv_scale(MAIN_ATLAS_SIZE);
+
+            log::info!(
+                "Text baked: {:?} '{content}' @ {size_px}px → atlas ({},{}) {}×{} \
+                 uv_offset={uv_offset:?} uv_scale={uv_scale:?}",
+                entity,
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+            );
+
+            // Write BakedText back onto the entity.
+            self.ui_world.world.entity_mut(entity).insert(BakedText {
+                uv_offset,
+                uv_scale,
+            });
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Render
+    // ---------------------------------------------------------------------------
+
     /// Render one frame.
     ///
     /// Frame order:
     /// 1. Compute delta time.
     /// 2. Tick the ECS world (transition systems run).
-    /// 3. Handle completed transitions (ping-pong: queue the reverse).
-    /// 4. Collect `QuadState`s → `QuadInstance`s.
-    /// 5. Upload instances, encode render pass, submit.
+    /// 3. Bake any pending text entities (M4).
+    /// 4. Handle completed transitions (ping-pong: queue the reverse).
+    /// 5. Collect `QuadState`s + optional `BakedText` → `QuadInstance`s.
+    /// 6. Upload instances, encode render pass, submit.
     fn render(&mut self) {
         // 1. Delta time — cap at 50 ms so a paused/background app doesn't
         //    cause a huge lerp jump when it resumes.
@@ -370,7 +501,10 @@ impl RenderState {
         // 2. Advance the ECS world one frame.
         self.ui_world.update(dt);
 
-        // 3. Ping-pong: when a transition completes, immediately queue the reverse.
+        // 3. Bake pending text entities (M4).
+        self.bake_pending_text();
+
+        // 4. Ping-pong: when a transition completes, immediately queue the reverse.
         //    `CompletedTransitions` is populated by `transition_complete_system` and
         //    holds exactly this frame's completions. Clone the entity list so the
         //    immutable borrow on the resource is released before we mutate the world.
@@ -404,17 +538,32 @@ impl RenderState {
             }
         }
 
-        // 4. Collect instance data from every entity with a QuadState.
-        //    In M2 there is exactly one (the demo entity), but this loop is
-        //    ready for multiple entities without change.
+        // 5. Collect instance data from every entity with a QuadState.
+        //    Entities with a BakedText get text UV; others get the white-pixel sentinel.
+        //
+        //    Two-step pattern: query first (collect clones), then look up BakedText.
+        //    This avoids a nested borrow of the world (the query holds &World for its
+        //    lifetime; calling world.get() inside the same iterator would conflict
+        //    with borrow checker in some Bevy ECS versions).
         let instances: Vec<QuadInstance> = {
-            let mut q = self.ui_world.world.query::<&QuadState>();
-            q.iter(&self.ui_world.world)
-                .map(quad_state_to_instance)
+            // Step 1: collect (entity, cloned QuadState) — ends the query borrow.
+            let states: Vec<(Entity, QuadState)> = {
+                let mut q = self.ui_world.world.query::<(Entity, &QuadState)>();
+                q.iter(&self.ui_world.world)
+                    .map(|(e, qs)| (e, qs.clone()))
+                    .collect()
+            };
+            // Step 2: BakedText lookup is safe now; the query borrow has dropped.
+            states
+                .iter()
+                .map(|(e, qs)| {
+                    let baked = self.ui_world.world.get::<BakedText>(*e);
+                    quad_state_to_instance(qs, baked)
+                })
                 .collect()
         };
 
-        // 5. Acquire the next swap-chain texture to draw into.
+        // 6. Acquire the next swap-chain texture to draw into.
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             // Surface lost or outdated (e.g. window resized between events) —

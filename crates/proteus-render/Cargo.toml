@@ -14,6 +14,7 @@ glam = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+fontdue = { workspace = true }
 
 [dev-dependencies]
 # pollster: blocks on wgpu async init inside integration tests
