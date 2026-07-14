@@ -60,8 +60,9 @@ mod inner {
     use proteus_ui::{
         collect_instances, ease_in_out_quad,
         transition::{CompletedTransitions, TransitionConfig},
-        BakedText, Entity, GroupSource, GroupTarget, Lifecycle, NToOneRequest, OneToNRequest,
-        ProteusWorld, QuadState, SplitStrategy, Text, TransitionRequest, Visibility,
+        BakedText, Entity, GroupSource, GroupTarget, Interactable, InteractionEvents, Lifecycle,
+        NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
+        TransitionRequest, Visibility,
     };
 
     // -------------------------------------------------------------------------
@@ -122,36 +123,49 @@ mod inner {
     // Demo phase state machine (identical to native)
     // -------------------------------------------------------------------------
 
+    /// Click-driven demo phases (M7). Idle phases wait for user input; transition
+    /// phases are in-flight and block input until they complete.
     enum DemoPhase {
-        ButtonIdle {
-            timer: f32,
-        },
-        ButtonToList {
-            items_done: usize,
-        },
-        ListIdle {
-            timer: f32,
-        },
+        /// Button visible — click it to expand.
+        ButtonIdle,
+
+        /// 1→N Bake in progress: button → three list items.
+        ButtonToList { items_done: usize },
+
+        /// Three items visible — click item[0] (Elephant) to zoom in.
+        ListIdle,
+
+        /// 1→1 transition: item[0] → detail view.
         ListToDetail,
-        DetailIdle {
-            timer: f32,
-        },
+
+        /// Detail view — click anywhere on it to return to list.
+        DetailIdle,
+
+        /// 1→1 transition: item[0] → list position.
         DetailToList,
-        /// item[0] has returned to list size; items[1] and [2] are still hidden.
-        /// Gives the viewer a beat to notice Elephant alone before the rest reform.
-        ListSoloIdle {
-            timer: f32,
-        },
-        /// All three items are visible again; brief pause before converging to button.
-        ListReformIdle {
-            timer: f32,
-        },
-        ListToButton {
-            request_inserted: bool,
-        },
-        LoopEndIdle {
-            timer: f32,
-        },
+
+        /// item[0] alone; 1.5 s auto-pause before flanking items appear.
+        ListSoloIdle { timer: f32 },
+
+        /// All three items visible — click any item to converge back to button.
+        ListReformIdle,
+
+        /// N→1 Slice in progress: items → button.
+        ListToButton { request_inserted: bool },
+    }
+
+    // -------------------------------------------------------------------------
+    // Staged pointer — accumulates JS events between frames
+    // -------------------------------------------------------------------------
+
+    /// Pointer state accumulated from JS events. Flushed to the ECS
+    /// `PointerInput` resource at the start of each `tick()` call.
+    #[derive(Default)]
+    struct StagedPointer {
+        position: Option<Vec2>,
+        just_pressed: bool,
+        just_released: bool,
+        is_pressed: bool,
     }
 
     // (Instance collection is handled by proteus_ui::collect_instances.)
@@ -173,6 +187,7 @@ mod inner {
         button: Entity,
         items: [Entity; 3],
         phase: DemoPhase,
+        staged_pointer: StagedPointer,
     }
 
     #[wasm_bindgen]
@@ -284,6 +299,7 @@ mod inner {
                     Lifecycle::Idle,
                     Visibility::VISIBLE,
                     Text::new("View Items", 22.0),
+                    Interactable,
                 ))
                 .id();
 
@@ -296,6 +312,7 @@ mod inner {
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
                         Text::new(item_labels[0], 18.0),
+                        Interactable,
                     ))
                     .id(),
                 ui_world
@@ -305,6 +322,7 @@ mod inner {
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
                         Text::new(item_labels[1], 18.0),
+                        Interactable,
                     ))
                     .id(),
                 ui_world
@@ -314,6 +332,7 @@ mod inner {
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
                         Text::new(item_labels[2], 18.0),
+                        Interactable,
                     ))
                     .id(),
             ];
@@ -330,7 +349,8 @@ mod inner {
                 font_atlas,
                 button,
                 items,
-                phase: DemoPhase::ButtonIdle { timer: 0.0 },
+                phase: DemoPhase::ButtonIdle,
+                staged_pointer: StagedPointer::default(),
             })
         }
 
@@ -339,6 +359,18 @@ mod inner {
         #[wasm_bindgen]
         pub fn tick(&mut self, dt_ms: f32) {
             let dt = (dt_ms / 1000.0).min(0.05); // cap at 50 ms
+
+            // Flush staged JS pointer events → PointerInput ECS resource.
+            {
+                let mut pi = self.ui_world.world.resource_mut::<PointerInput>();
+                pi.position = self.staged_pointer.position;
+                pi.just_pressed = self.staged_pointer.just_pressed;
+                pi.just_released = self.staged_pointer.just_released;
+                pi.is_pressed = self.staged_pointer.is_pressed;
+            }
+            // Clear one-shot flags — they're true for exactly one frame.
+            self.staged_pointer.just_pressed = false;
+            self.staged_pointer.just_released = false;
 
             self.ui_world.update(dt);
             self.bake_pending_text();
@@ -417,6 +449,41 @@ mod inner {
                 QuadPipeline::ortho(width as f32, height as f32),
             );
         }
+
+        // ── Pointer event entry points (called from JS) ────────────────────────
+
+        /// Report a pointer move.  `x` and `y` are CSS pixels (origin top-left).
+        /// Converts to world-space (origin centre, Y up) before storing.
+        /// Call from `canvas.addEventListener('mousemove', ...)`.
+        #[wasm_bindgen]
+        pub fn on_mouse_move(&mut self, x: f32, y: f32) {
+            let w = self.surface_config.width as f32;
+            let h = self.surface_config.height as f32;
+            self.staged_pointer.position = Some(Vec2::new(x - w / 2.0, h / 2.0 - y));
+        }
+
+        /// Report that the pointer has left the canvas.
+        /// Call from `canvas.addEventListener('mouseleave', ...)`.
+        #[wasm_bindgen]
+        pub fn on_mouse_leave(&mut self) {
+            self.staged_pointer.position = None;
+        }
+
+        /// Report a primary-button press.
+        /// Call from `canvas.addEventListener('mousedown', ...)`.
+        #[wasm_bindgen]
+        pub fn on_mouse_down(&mut self) {
+            self.staged_pointer.is_pressed = true;
+            self.staged_pointer.just_pressed = true;
+        }
+
+        /// Report a primary-button release.
+        /// Call from `canvas.addEventListener('mouseup', ...)`.
+        #[wasm_bindgen]
+        pub fn on_mouse_up(&mut self) {
+            self.staged_pointer.is_pressed = false;
+            self.staged_pointer.just_released = true;
+        }
     }
 
     // ── private helpers ────────────────────────────────────────────────────────
@@ -457,18 +524,28 @@ mod inner {
         }
 
         fn advance_demo(&mut self, dt: f32) {
-            let phase = std::mem::replace(&mut self.phase, DemoPhase::ButtonIdle { timer: 0.0 });
+            // Snapshot the click events produced by hit_test_system this frame.
+            let clicked: Vec<Entity> = self
+                .ui_world
+                .world
+                .resource::<InteractionEvents>()
+                .clicked
+                .clone();
+
+            let phase = std::mem::replace(&mut self.phase, DemoPhase::ButtonIdle);
 
             self.phase = match phase {
-                DemoPhase::ButtonIdle { timer } => {
-                    let t = timer + dt;
-                    if t >= 2.0 {
+                // ── Button idle: click the button to expand ───────────────────────
+                DemoPhase::ButtonIdle => {
+                    if clicked.contains(&self.button) {
                         self.start_button_to_list();
                         DemoPhase::ButtonToList { items_done: 0 }
                     } else {
-                        DemoPhase::ButtonIdle { timer: t }
+                        DemoPhase::ButtonIdle
                     }
                 }
+
+                // ── 1→N Bake: count per-item completions ─────────────────────────
                 DemoPhase::ButtonToList { mut items_done } => {
                     let completed: Vec<Entity> = self
                         .ui_world
@@ -482,20 +559,23 @@ mod inner {
                         }
                     }
                     if items_done >= self.items.len() {
-                        DemoPhase::ListIdle { timer: 0.0 }
+                        DemoPhase::ListIdle
                     } else {
                         DemoPhase::ButtonToList { items_done }
                     }
                 }
-                DemoPhase::ListIdle { timer } => {
-                    let t = timer + dt;
-                    if t >= 2.0 {
+
+                // ── List idle: click Elephant to zoom in ──────────────────────────
+                DemoPhase::ListIdle => {
+                    if clicked.contains(&self.items[0]) {
                         self.start_list_to_detail();
                         DemoPhase::ListToDetail
                     } else {
-                        DemoPhase::ListIdle { timer: t }
+                        DemoPhase::ListIdle
                     }
                 }
+
+                // ── 1→1: item[0] → detail view ───────────────────────────────────
                 DemoPhase::ListToDetail => {
                     let completed: Vec<Entity> = self
                         .ui_world
@@ -504,20 +584,23 @@ mod inner {
                         .entities
                         .clone();
                     if completed.contains(&self.items[0]) {
-                        DemoPhase::DetailIdle { timer: 0.0 }
+                        DemoPhase::DetailIdle
                     } else {
                         DemoPhase::ListToDetail
                     }
                 }
-                DemoPhase::DetailIdle { timer } => {
-                    let t = timer + dt;
-                    if t >= 2.0 {
+
+                // ── Detail idle: click anywhere on detail to go back ──────────────
+                DemoPhase::DetailIdle => {
+                    if clicked.contains(&self.items[0]) {
                         self.start_detail_to_list();
                         DemoPhase::DetailToList
                     } else {
-                        DemoPhase::DetailIdle { timer: t }
+                        DemoPhase::DetailIdle
                     }
                 }
+
+                // ── 1→1: item[0] → list position ─────────────────────────────────
                 DemoPhase::DetailToList => {
                     let completed: Vec<Entity> = self
                         .ui_world
@@ -531,6 +614,8 @@ mod inner {
                         DemoPhase::DetailToList
                     }
                 }
+
+                // ── Solo idle: 1.5 s auto-pause, Elephant alone ───────────────────
                 DemoPhase::ListSoloIdle { timer } => {
                     let t = timer + dt;
                     if t >= 1.5 {
@@ -542,29 +627,25 @@ mod inner {
                             .world
                             .entity_mut(self.items[2])
                             .insert(Visibility::VISIBLE);
-                        DemoPhase::ListReformIdle { timer: 0.0 }
+                        DemoPhase::ListReformIdle
                     } else {
                         DemoPhase::ListSoloIdle { timer: t }
                     }
                 }
-                DemoPhase::ListReformIdle { timer } => {
-                    let t = timer + dt;
-                    if t >= 1.5 {
+
+                // ── Reform idle: click any item to converge back to button ────────
+                DemoPhase::ListReformIdle => {
+                    let any_item_clicked = self.items.iter().any(|e| clicked.contains(e));
+                    if any_item_clicked {
                         DemoPhase::ListToButton {
                             request_inserted: false,
                         }
                     } else {
-                        DemoPhase::ListReformIdle { timer: t }
+                        DemoPhase::ListReformIdle
                     }
                 }
-                DemoPhase::LoopEndIdle { timer } => {
-                    let t = timer + dt;
-                    if t >= 2.0 {
-                        DemoPhase::ButtonIdle { timer: 0.0 }
-                    } else {
-                        DemoPhase::LoopEndIdle { timer: t }
-                    }
-                }
+
+                // ── N→1 Slice: items → button ─────────────────────────────────────
                 DemoPhase::ListToButton { request_inserted } => {
                     if !request_inserted {
                         self.start_list_to_button();
@@ -574,7 +655,7 @@ mod inner {
                     let done = matches!(lifecycle, Some(Lifecycle::Idle))
                         && matches!(visibility, Some(v) if v.visible);
                     if done {
-                        DemoPhase::LoopEndIdle { timer: 0.0 }
+                        DemoPhase::ButtonIdle
                     } else {
                         DemoPhase::ListToButton {
                             request_inserted: true,
