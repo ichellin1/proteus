@@ -1371,18 +1371,28 @@ no GPU required.
 
 User input drives transitions. The reference demo becomes interactive.
 
-**Definition of done:**
-- [ ] Hit testing: pointer events route correctly to the topmost visible component at the pointer
-  position, accounting for `z` ordering
-- [ ] All interaction handlers fire correctly: `onClick`, `onHoverEnter`, `onHoverExit`, `onPress`,
-  `onRelease`, `onFocus`, `onBlur`, `onDrag`
-- [ ] The reference demo is fully interactive — clicking components drives transitions
-- [ ] Input during transitions respects `allowInput`/`allowNavigation` config (default: both off)
-- [ ] `CommandQueue`/`flush_commands_system`: mutations from callbacks (`signal.set()`, `destroy()`,
-  `addChild()`) are deferred and applied correctly at the start of the next tick
-- [ ] `signal.set()` called from an `onClick` handler correctly triggers a transition
-- [ ] Virtual entities are not hit-testable
-- [ ] Existing visual regression tests (M6) still pass after M7 work
+**Definition of done (M7 minimal set — click + hover only):**
+- [x] Hit testing: pointer events route correctly to the topmost visible, non-Virtual `Interactable`
+  entity at the pointer position (AABB, accounts for `anchor`)
+- [x] `clicked`, `hover_entered`, `hover_exited` events produced by `hit_test_system` each frame
+- [x] `PointerInput` resource written by the shell before `update()`; one-shot flags cleared after
+- [x] The reference demo is fully click-driven — idle phases wait for user click; transition phases
+  block input by convention (clicks ignored during in-flight transitions)
+- [x] Virtual entities are not hit-testable
+- [x] Hidden entities (`Visibility::HIDDEN`) are not hit-testable
+- [x] Native shell: `StagedPointer` accumulates winit `CursorMoved`/`MouseInput` events between
+  frames; flushed to `PointerInput` at the start of each `render()` call
+- [x] Web shell: `on_mouse_move(x, y)`, `on_mouse_down()`, `on_mouse_up()`, `on_mouse_leave()`
+  wasm-bindgen methods accumulate JS pointer events; flushed to `PointerInput` at the start of
+  each `tick()` call
+- [x] Regression tests: `hit_test.rs` covers hidden/virtual opt-out, AABB hit, hover enter/exit
+- [x] Existing visual regression tests (M6) still pass after M7 work
+
+**Deferred to M10 (full handler API):**
+- [ ] All handlers: `onPress`, `onRelease`, `onFocus`, `onBlur`, `onDrag`
+- [ ] `allowInput`/`allowNavigation` transition config flags
+- [ ] `signal.set()` from an `onClick` handler triggering a transition
+- [ ] `CommandQueue`/`flush_commands_system` for mutation deferral from callbacks
 
 ---
 

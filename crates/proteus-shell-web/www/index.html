@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Proteus — M5 Reference Demo</title>
+  <title>Proteus — M7 Reference Demo</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -44,7 +44,7 @@
   </style>
 </head>
 <body>
-  <h1>Proteus · M5 Reference Demo</h1>
+  <h1>Proteus · M7 Reference Demo</h1>
 
   <!--
     Canvas dimensions must match what ProteusApp.init reads via canvas.width / canvas.height.
@@ -79,6 +79,14 @@
           app.resize(w, h);
         });
         observer.observe(canvas);
+
+        // Wire pointer events → wasm (M7 interactivity).
+        // offsetX/offsetY are in CSS pixels, which match the logical coordinate
+        // system used by hit_test_system (1:1 since canvas resolution = clientWidth).
+        canvas.addEventListener('mousemove',  e => app.on_mouse_move(e.offsetX, e.offsetY));
+        canvas.addEventListener('mouseleave', () => app.on_mouse_leave());
+        canvas.addEventListener('mousedown',  e => { if (e.button === 0) app.on_mouse_down(); });
+        canvas.addEventListener('mouseup',    e => { if (e.button === 0) app.on_mouse_up(); });
 
         // Drive the render loop via requestAnimationFrame.
         let lastTs = null;

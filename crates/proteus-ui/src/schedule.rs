@@ -22,6 +22,7 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ApplyDeferred;
 
+use crate::input::{hit_test_system, HoveredEntity, InteractionEvents, PointerInput};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
 };
@@ -70,7 +71,6 @@ pub enum ProteusSet {
 // These do nothing but hold the stage slot so the ordering constraints are
 // in place before the real implementations land in later milestones.
 
-fn stub_input_system() {}
 fn stub_navigation_system() {}
 fn stub_visibility_system() {}
 fn stub_opacity_system() {}
@@ -98,6 +98,9 @@ impl ProteusWorld {
         // --- Resources ---
         world.init_resource::<FrameTime>();
         world.init_resource::<CompletedTransitions>();
+        world.init_resource::<PointerInput>();
+        world.init_resource::<InteractionEvents>();
+        world.init_resource::<HoveredEntity>();
 
         // --- Schedule ---
         let schedule = build_schedule();
@@ -155,8 +158,9 @@ pub fn build_schedule() -> Schedule {
     // Drain bevy_ecs deferred commands that accumulated during the last frame.
     schedule.add_systems(ApplyDeferred.in_set(ProteusSet::FlushCommands));
 
-    // Stub systems — hold their slot in the ordered schedule.
-    schedule.add_systems(stub_input_system.in_set(ProteusSet::Input));
+    // M7: real hit-test system replaces the input stub.
+    schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
+    // Stub systems — hold their slot until real implementations land.
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
     schedule.add_systems(stub_visibility_system.in_set(ProteusSet::Visibility));
     schedule.add_systems(stub_opacity_system.in_set(ProteusSet::Opacity));
