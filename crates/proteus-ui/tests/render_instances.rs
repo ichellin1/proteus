@@ -278,7 +278,7 @@ fn no_shadow_by_default() {
 /// already casts the shadow; duplicating it on the overlay would render it twice.
 #[test]
 fn shadow_not_on_text_overlay() {
-    use glam::{Vec2, Vec4};
+    use glam::Vec2;
 
     let shadow = DropShadow::new(Vec2::new(4.0, -4.0), 8.0);
     let baked = BakedText {
