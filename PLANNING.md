@@ -1396,17 +1396,65 @@ User input drives transitions. The reference demo becomes interactive.
 
 ---
 
-### M8 — Shader Effects Library *(off critical path — can begin after M2)*
+### M8 — Drop Shadow *(off critical path — can begin after M2)*
 
-Built-in WGSL shader effects. A reference implementation for custom effect authoring.
+SDF-based drop shadow rendered entirely in the existing fragment shader pass.
+No offscreen render targets required; works on WebGL2 and native with zero
+architecture change.
+
+**Approach:** Upgrade the quad fragment shader to compute a rounded-rectangle
+Signed Distance Function (SDF). The SDF gives every fragment its exact distance
+to the shape boundary, enabling soft drop shadows (shadow quad rendered before
+the main shape in the same draw call, softness derived from the distance field)
+and sharper anti-aliasing as a free side-effect.
 
 **Definition of done:**
-- [ ] Built-in effects: blur, glow, drop shadow — implemented as WGSL fragment shader passes
-- [ ] Effects are composable: multiple effects can be applied to one component
-- [ ] All built-in effects work correctly on WebGL2 and native
-- [ ] Each effect is documented with a code example
-- [ ] A minimal custom effect is implemented as a reference implementation, demonstrating the
-  extension point for developers who want to write their own WGSL effects post-V1
+- [x] Fragment shader upgraded to SDF-based rounded-rectangle rendering
+- [x] `DropShadow` component: `offset: Vec2`, `color: Vec4`, `softness: f32`, `spread: f32`
+- [x] Shadow rendered correctly for quads with and without corner radius
+- [x] Works on both WebGL2 and native (no extensions required)
+- [x] Anti-aliasing quality visibly improved over the previous step-function approach
+- [x] Instance buffer extended to carry shadow parameters (loc 13: shadow_params, loc 14: shadow_color; +32 bytes → 156 total)
+- [x] Regression tests: shadow instance data verified via `collect_instances` (3 tests in render_instances.rs)
+
+---
+
+### M8.5 — Blur *(off critical path — can begin after M8)*
+
+Gaussian blur via an offscreen bake pass. Establishes the bake-to-atlas
+infrastructure used by both blur and glow.
+
+**Approach:** Components with a `Blur` effect render to a small offscreen texture
+first (reusing the bake concept from M4 text rendering). A two-pass separable
+Gaussian blur shader runs on that texture (horizontal then vertical), and the
+result is written into the main atlas. The main render pass then samples the
+blurred texture from the atlas.
+
+**Definition of done:**
+- [ ] `Blur` component: `radius: f32`
+- [ ] Offscreen bake pass: component renders to intermediate texture
+- [ ] Separable Gaussian blur: horizontal + vertical passes
+- [ ] Result composited into main atlas
+- [ ] Works on WebGL2 and native
+- [ ] Regression tests
+
+---
+
+### M8.6 — Glow *(off critical path — can begin after M8.5)*
+
+Bloom/glow effect built on the M8.5 bake-pass infrastructure.
+
+**Approach:** Identical pipeline to M8.5 blur, but with a different kernel:
+the shape's bright-channel version is blurred and composited additively behind
+the original shape. Shares all bake infrastructure with M8.5; only the shader
+kernel and composite mode differ.
+
+**Definition of done:**
+- [ ] `Glow` component: `radius: f32`, `color: Vec4`, `intensity: f32`
+- [ ] Reuses M8.5 bake infrastructure; only kernel + composite mode are new
+- [ ] Additive compositing behind the original shape
+- [ ] Works on WebGL2 and native
+- [ ] Regression tests
 
 ---
 

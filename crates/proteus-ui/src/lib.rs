@@ -17,6 +17,7 @@
 
 pub mod collect;
 pub mod component;
+pub mod effects;
 pub mod input;
 pub mod schedule;
 pub mod signal;
@@ -28,6 +29,7 @@ pub mod transition;
 pub use bevy_ecs::prelude::Entity;
 pub use collect::{collect_instances, quad_state_to_instance};
 pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
+pub use effects::DropShadow;
 pub use input::{quad_contains, Interactable, InteractionEvents, PointerInput};
 pub use schedule::ProteusWorld;
 pub use text::{BakedText, Text};

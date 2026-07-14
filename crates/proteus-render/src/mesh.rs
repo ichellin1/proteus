@@ -78,7 +78,7 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 /// Per-instance GPU data for one component quad. Packed into the instance buffer
 /// each frame by the render system; uploaded in a single transfer.
 ///
-/// Size: 124 bytes. 1000 components ≈ 124 KB — well within GPU limits.
+/// Size: 156 bytes. 1000 components ≈ 156 KB — well within GPU limits.
 ///
 /// Field byte offsets must match `buffer_layout()` and `@location` attributes in `quad.wgsl`.
 #[repr(C)]
@@ -129,7 +129,14 @@ pub struct QuadInstance {
     pub border_color: [f32; 4], // offset 104, size 16
     /// Border placement: -1.0 = inner, 0.0 = center, 1.0 = outer.
     pub border_offset: f32, // offset 120, size  4
-} // total       124 bytes
+
+    // --- Drop shadow (M8) ---
+    /// Shadow params: [offset_x, offset_y, softness, spread] in world-space pixels.
+    /// `shadow_color.a == 0` disables the shadow (zero-cost in shader).
+    pub shadow_params: [f32; 4], // offset 124, size 16
+    /// Shadow color RGBA.  Alpha = 0 means no shadow.
+    pub shadow_color: [f32; 4], // offset 140, size 16
+} // total       156 bytes
 
 impl QuadInstance {
     /// Returns the wgpu vertex buffer layout for the instance buffer (step per instance).
@@ -152,8 +159,10 @@ impl QuadInstance {
     /// |  10 | Float32x2  |  96 – 104  | crossfade_t, border_width                  |
     /// |  11 | Float32x4  | 104 – 120  | border_color                               |
     /// |  12 | Float32    | 120 – 124  | border_offset                              |
+    /// |  13 | Float32x4  | 124 – 140  | shadow_params (offset_x, offset_y, softness, spread) |
+    /// |  14 | Float32x4  | 140 – 156  | shadow_color                               |
     ///
-    /// Total: 11 instance attributes + 2 vertex attributes = 13. Limit is 16.
+    /// Total: 13 instance attributes + 2 vertex attributes = 15. Limit is 16.
     pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
@@ -226,6 +235,18 @@ impl QuadInstance {
                     shader_location: 12,
                     format: wgpu::VertexFormat::Float32,
                 },
+                // loc 13: shadow_params (offset_x, offset_y, softness, spread)
+                wgpu::VertexAttribute {
+                    offset: 124,
+                    shader_location: 13,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // loc 14: shadow_color (rgba)
+                wgpu::VertexAttribute {
+                    offset: 140,
+                    shader_location: 14,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         }
     }
@@ -233,7 +254,7 @@ impl QuadInstance {
 
 // Compile-time size guard. If QuadInstance changes, this fails immediately
 // and forces the developer to audit buffer_layout() offsets.
-const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 124);
+const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 156);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -268,11 +289,13 @@ mod tests {
         assert_eq!(offset_of!(QuadInstance, border_width), 100);
         assert_eq!(offset_of!(QuadInstance, border_color), 104);
         assert_eq!(offset_of!(QuadInstance, border_offset), 120);
+        assert_eq!(offset_of!(QuadInstance, shadow_params), 124);
+        assert_eq!(offset_of!(QuadInstance, shadow_color), 140);
     }
 
     #[test]
     fn quad_instance_total_size() {
-        assert_eq!(std::mem::size_of::<QuadInstance>(), 124);
+        assert_eq!(std::mem::size_of::<QuadInstance>(), 156);
     }
 
     // -----------------------------------------------------------------------

@@ -18,14 +18,17 @@
 //! | `text_entity_produces_two_instances` | Two-layer rendering model |
 //! | `text_color_applied_to_overlay` | `Text::color` routes to overlay layer |
 //! | `transition_lerps_at_t_half` | 1→1 lerp math at t = 0.5 (linear easing) |
+//! | `shadow_params_populate_instance` | M8: DropShadow fields in background instance |
+//! | `no_shadow_by_default` | M8: absence of DropShadow → all-zero shadow fields |
+//! | `shadow_not_on_text_overlay` | M8: overlay layer never carries shadow data |
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_render::QuadPipeline;
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, BakedText, ProteusWorld, QuadState,
-    Text, TransitionRequest, Visibility,
+    collect_instances, linear, transition::TransitionConfig, BakedText, DropShadow, ProteusWorld,
+    QuadState, Text, TransitionRequest, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -210,6 +213,103 @@ fn text_color_applied_to_overlay() {
     );
     // Overlay uses Text::color.
     assert_f32_slice_approx(&instances[1].color, &[0.1, 0.1, 0.1, 1.0], "overlay color");
+}
+
+// ---------------------------------------------------------------------------
+// M8 drop shadow tests
+// ---------------------------------------------------------------------------
+
+/// An entity with a `DropShadow` component has the shadow fields populated in
+/// its (background) instance.
+#[test]
+fn shadow_params_populate_instance() {
+    use glam::{Vec2, Vec4};
+
+    let shadow = DropShadow {
+        offset: Vec2::new(6.0, -6.0),
+        color: Vec4::new(0.0, 0.0, 0.0, 0.5),
+        softness: 10.0,
+        spread: 2.0,
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), shadow));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_f32_slice_approx(
+        &instances[0].shadow_params,
+        &[6.0, -6.0, 10.0, 2.0],
+        "shadow_params",
+    );
+    assert_f32_slice_approx(
+        &instances[0].shadow_color,
+        &[0.0, 0.0, 0.0, 0.5],
+        "shadow_color",
+    );
+}
+
+/// An entity without a `DropShadow` component has all-zero shadow fields,
+/// meaning the shader skips the shadow branch entirely.
+#[test]
+fn no_shadow_by_default() {
+    let mut world = World::new();
+    world.spawn(sky_blue_button()); // no DropShadow
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    // shadow_color.a == 0 → shader skips shadow
+    assert_f32_slice_approx(
+        &instances[0].shadow_color,
+        &[0.0, 0.0, 0.0, 0.0],
+        "shadow_color should be all-zero without DropShadow",
+    );
+    assert_f32_slice_approx(
+        &instances[0].shadow_params,
+        &[0.0, 0.0, 0.0, 0.0],
+        "shadow_params should be all-zero without DropShadow",
+    );
+}
+
+/// The text overlay instance (layer 1) must never carry shadow data, even when
+/// the entity has a `DropShadow` component.  The background layer (layer 0)
+/// already casts the shadow; duplicating it on the overlay would render it twice.
+#[test]
+fn shadow_not_on_text_overlay() {
+    use glam::{Vec2, Vec4};
+
+    let shadow = DropShadow::new(Vec2::new(4.0, -4.0), 8.0);
+    let baked = BakedText {
+        uv_offset: [0.1, 0.2],
+        uv_scale: [0.05, 0.01],
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked, Text::new("Hi", 22.0), shadow));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 2, "text entity must emit two instances");
+
+    // Background (layer 0): shadow present.
+    assert!(
+        instances[0].shadow_color[3] > 0.0,
+        "background layer should have shadow alpha > 0"
+    );
+
+    // Overlay (layer 1): shadow must be zeroed.
+    assert_f32_slice_approx(
+        &instances[1].shadow_color,
+        &[0.0, 0.0, 0.0, 0.0],
+        "text overlay shadow_color must be zero",
+    );
+    assert_f32_slice_approx(
+        &instances[1].shadow_params,
+        &[0.0, 0.0, 0.0, 0.0],
+        "text overlay shadow_params must be zero",
+    );
 }
 
 /// A 1→1 transition with linear easing at t = 0.5 produces an instance
