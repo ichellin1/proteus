@@ -141,8 +141,12 @@ pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Query filter for [`hit_test_system`]: all non-virtual interactable entities.
-type HitTestQuery<'w, 's> =
-    Query<'w, 's, (Entity, &'static QuadState, Option<&'static Visibility>), (With<Interactable>, Without<Virtual>)>;
+type HitTestQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static QuadState, Option<&'static Visibility>),
+    (With<Interactable>, Without<Virtual>),
+>;
 
 /// Replaces `stub_input_system`. Runs every frame in [`crate::schedule::ProteusSet::Input`].
 ///
