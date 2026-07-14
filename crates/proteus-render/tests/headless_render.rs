@@ -100,6 +100,8 @@ fn headless_quad_renders_to_expected_color() {
             border_width: 0.0,
             border_color: [0.0, 0.0, 0.0, 0.0],
             border_offset: 0.0,
+            shadow_params: [0.0, 0.0, 0.0, 0.0],
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
         }],
     );
 

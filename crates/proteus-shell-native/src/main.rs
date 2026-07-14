@@ -38,9 +38,9 @@ use proteus_render::{FontAtlas, QuadPipeline, MAIN_ATLAS_SIZE};
 use proteus_ui::{
     collect_instances, ease_in_out_quad,
     transition::{CompletedTransitions, TransitionConfig},
-    BakedText, Entity, GroupSource, GroupTarget, Interactable, InteractionEvents, Lifecycle,
-    NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
-    TransitionRequest, Visibility,
+    BakedText, DropShadow, Entity, GroupSource, GroupTarget, Interactable, InteractionEvents,
+    Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy,
+    Text, TransitionRequest, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -383,6 +383,7 @@ impl RenderState {
                 Visibility::VISIBLE,
                 Text::new("View Items", 22.0),
                 Interactable,
+                DropShadow::default(),
             ))
             .id();
 
@@ -905,9 +906,9 @@ impl RenderState {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.07,
+                            r: 0.94,
+                            g: 0.94,
+                            b: 0.96,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
