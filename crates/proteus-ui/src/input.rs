@@ -140,6 +140,10 @@ pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
 // hit_test_system
 // ---------------------------------------------------------------------------
 
+/// Query filter for [`hit_test_system`]: all non-virtual interactable entities.
+type HitTestQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static QuadState, Option<&'static Visibility>), (With<Interactable>, Without<Virtual>)>;
+
 /// Replaces `stub_input_system`. Runs every frame in [`crate::schedule::ProteusSet::Input`].
 ///
 /// Reads [`PointerInput`], finds the topmost interactable entity under the
@@ -148,7 +152,7 @@ pub fn hit_test_system(
     pointer: Res<PointerInput>,
     mut events: ResMut<InteractionEvents>,
     mut hovered: ResMut<HoveredEntity>,
-    query: Query<(Entity, &QuadState, Option<&Visibility>), (With<Interactable>, Without<Virtual>)>,
+    query: HitTestQuery,
 ) {
     // Clear last frame's events.
     events.clicked.clear();
