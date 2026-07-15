@@ -211,9 +211,16 @@ struct ProteusApp {
 
 impl ApplicationHandler for ProteusApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
+        if let Some(state) = self.state.as_mut() {
+            // App returning to foreground after suspension — re-allocate the video
+            // texture that was released in `suspended()`.
+            state
+                .pipeline
+                .resume_video(&state.device, state.video_id, VIDEO_W, VIDEO_H);
+            state.window.request_redraw();
             return;
         }
+        // First launch — create window + GPU resources.
         let window = Arc::new(
             event_loop
                 .create_window(

@@ -47,9 +47,11 @@ use glam::{Vec2, Vec4};
 ///
 /// ## Coordinate system
 ///
-/// `offset` is in **world-space** pixels (X right, Y up — same as
-/// `QuadState::position`).  A shadow that appears below-right of the component
-/// on screen has a positive X and a **negative** Y:
+/// `offset` is in **entity-local** pixels (X right, Y up in the entity's own
+/// frame — the same axes as `QuadState::size`).  The shadow rotates with the
+/// entity during morphs; it does *not* stay fixed in world space.  A shadow that
+/// appears below-right of the component on screen has a positive X and a
+/// **negative** Y:
 /// ```
 /// use glam::Vec2;
 /// use proteus_ui::DropShadow;
@@ -69,7 +71,7 @@ use glam::{Vec2, Vec4};
 ///   Positive values make the shadow larger than the component.
 #[derive(Component, Clone, Debug)]
 pub struct DropShadow {
-    /// Shadow displacement in world-space pixels (X right, Y up).
+    /// Shadow displacement in entity-local pixels (X right, Y up in entity frame).
     pub offset: Vec2,
     /// Shadow color and opacity.  `alpha == 0.0` completely disables the shadow.
     pub color: Vec4,
@@ -128,12 +130,20 @@ impl DropShadow {
 ///
 /// ## Fields
 ///
-/// - `radius`    — halo spread in pixels.  Controls the Gaussian sigma
-///   (sigma ≈ radius / 3).  Minimum useful value is ~4.0.
+/// - `radius`    — halo spread in pixels.  Controls the SDF shadow softness
+///   (`softness = radius`).  Minimum useful value is ~4.0.
 /// - `color`     — RGBA halo color.  Set this independently of the entity's
 ///   fill color.  `alpha == 0.0` disables the glow.
 /// - `intensity` — multiplier applied to `color.a` before upload.  Effective
-///   alpha = `color.a * intensity`.  Values > 1.0 are clamped in the shader.
+///   alpha = `color.a * intensity`, clamped to [0, 1] in `collect_instances`.
+///   Values above 1.0 are clamped (not saturated in the shader).
+///
+/// ## Limitation — Shadow XOR Glow
+///
+/// [`DropShadow`] and [`Glow`] share the same instance slots.  Attaching both
+/// to the same entity is an error: `DropShadow` wins and `Glow` is silently
+/// ignored.  A future milestone may introduce a dedicated second instance layer
+/// to support both simultaneously (e.g., drop shadow + focus ring on a TV card).
 #[derive(Component, Clone, Debug)]
 pub struct Glow {
     /// Halo spread in pixels.

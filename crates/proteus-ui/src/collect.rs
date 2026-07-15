@@ -102,7 +102,14 @@ pub fn quad_state_to_instance(
         None => match glow {
             Some(g) => (
                 [0.0, 0.0, g.radius, 0.0],
-                [g.color.x, g.color.y, g.color.z, g.color.w * g.intensity],
+                // Clamp effective alpha to [0, 1]: values above 1.0 would invert
+                // alpha blending in the shader (perceived negative transparency).
+                [
+                    g.color.x,
+                    g.color.y,
+                    g.color.z,
+                    (g.color.w * g.intensity).min(1.0),
+                ],
             ),
             None => ([0.0f32; 4], [0.0f32; 4]),
         },
