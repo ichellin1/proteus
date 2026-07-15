@@ -45,7 +45,6 @@ use proteus_ui::{
     Text, TransitionRequest, VideoPlayer, Visibility,
 };
 
-
 // ---------------------------------------------------------------------------
 // Video constants (M9)
 // ---------------------------------------------------------------------------
@@ -69,7 +68,7 @@ fn generate_video_frame(t: f64, width: u32, height: u32) -> Vec<u8> {
             let g = ((ny * 4.0 + ft * 0.7).sin() * 0.5 + 0.5) * 0.8 + 0.1;
             let b = (((nx + ny) * 5.0 + ft * 1.3).sin() * 0.5 + 0.5) * 0.8 + 0.1;
             let i = ((y * width + x) * 4) as usize;
-            rgba[i]     = (r * 255.0) as u8;
+            rgba[i] = (r * 255.0) as u8;
             rgba[i + 1] = (g * 255.0) as u8;
             rgba[i + 2] = (b * 255.0) as u8;
             rgba[i + 3] = 255;
@@ -508,7 +507,10 @@ impl RenderState {
                 .spawn((
                     // item[2] streams video — set color to white so the frame is
                     // displayed unfiltered.  The label "Whale" floats on top.
-                    QuadState { color: Vec4::ONE, ..item_quad(2) },
+                    QuadState {
+                        color: Vec4::ONE,
+                        ..item_quad(2)
+                    },
                     Lifecycle::Idle,
                     Visibility::HIDDEN,
                     Text::new(item_labels[2], 18.0),

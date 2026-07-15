@@ -31,7 +31,6 @@ pub use bevy_ecs::prelude::Entity;
 pub use collect::{collect_instances, quad_state_to_instance};
 pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 pub use effects::{DropShadow, Glow};
-pub use video::VideoPlayer;
 pub use input::{quad_contains, Interactable, InteractionEvents, PointerInput};
 pub use schedule::ProteusWorld;
 pub use text::{BakedText, Text};
@@ -43,3 +42,4 @@ pub use transition::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,
     CompletedTransitions, EasingFn, FrameTime, TransitionComplete, TransitionConfig,
 };
+pub use video::VideoPlayer;

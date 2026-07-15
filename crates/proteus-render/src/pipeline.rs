@@ -40,7 +40,7 @@ pub const MAIN_ATLAS_SIZE: u32 = DEFAULT_MAIN_ATLAS_SIZE;
 
 /// Default video texture dimensions (M9).  1280×720 is enough for a crisp demo;
 /// the caller can request a different resolution via [`QuadPipeline::init_video`].
-pub const DEFAULT_VIDEO_WIDTH:  u32 = 1280;
+pub const DEFAULT_VIDEO_WIDTH: u32 = 1280;
 /// Height of the default video texture (M9).
 pub const DEFAULT_VIDEO_HEIGHT: u32 = 720;
 
@@ -337,9 +337,9 @@ impl QuadPipeline {
         // allocate a real resolution before uploading frames.
         let video_atlas = Self::create_video_texture(device, 1, 1);
 
-        let main_atlas_view       = main_atlas.create_view(&Default::default());
+        let main_atlas_view = main_atlas.create_view(&Default::default());
         let transition_atlas_view = transition_atlas.create_view(&Default::default());
-        let video_atlas_view      = video_atlas.create_view(&Default::default());
+        let video_atlas_view = video_atlas.create_view(&Default::default());
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("atlas_sampler"),
@@ -501,7 +501,6 @@ impl QuadPipeline {
         );
     }
 
-
     // ---------------------------------------------------------------------------
     // Video texture API (M9)
     // ---------------------------------------------------------------------------
@@ -526,10 +525,12 @@ impl QuadPipeline {
         width: u32,
         height: u32,
     ) -> (TextureId, VideoFrameSender) {
-        self.video_atlas      = Self::create_video_texture(device, width, height);
+        self.video_atlas = Self::create_video_texture(device, width, height);
         self.video_atlas_size = (width, height);
         self.rebuild_atlas_bind_group(device);
-        let id = self.texture_registry.register(TextureKind::Video, width, height);
+        let id = self
+            .texture_registry
+            .register(TextureKind::Video, width, height);
 
         // Bounded to 2 frames: one frame of lookahead; sender blocks when the
         // render loop is behind, providing natural backpressure.
@@ -614,7 +615,7 @@ impl QuadPipeline {
     ///
     /// [`resume_video`]: QuadPipeline::resume_video
     pub fn suspend_video(&mut self, device: &wgpu::Device, id: TextureId) {
-        self.video_atlas      = Self::create_video_texture(device, 1, 1);
+        self.video_atlas = Self::create_video_texture(device, 1, 1);
         self.video_atlas_size = (1, 1);
         self.rebuild_atlas_bind_group(device);
         self.texture_registry.mark_suspended(id);
@@ -627,14 +628,8 @@ impl QuadPipeline {
     /// call.  Upload frames immediately afterward.
     ///
     /// [`suspend_video`]: QuadPipeline::suspend_video
-    pub fn resume_video(
-        &mut self,
-        device: &wgpu::Device,
-        id: TextureId,
-        width: u32,
-        height: u32,
-    ) {
-        self.video_atlas      = Self::create_video_texture(device, width, height);
+    pub fn resume_video(&mut self, device: &wgpu::Device, id: TextureId, width: u32, height: u32) {
+        self.video_atlas = Self::create_video_texture(device, width, height);
         self.video_atlas_size = (width, height);
         self.rebuild_atlas_bind_group(device);
         self.texture_registry.mark_active(id);
@@ -669,7 +664,6 @@ impl QuadPipeline {
     // Internal helpers
     // ---------------------------------------------------------------------------
 
-
     /// Create a blank RGBA video texture of the given dimensions.
     fn create_video_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -693,9 +687,9 @@ impl QuadPipeline {
     /// This is called by [`init_video`], [`suspend_video`], and [`resume_video`]
     /// whenever the video texture is swapped for a different allocation.
     fn rebuild_atlas_bind_group(&mut self, device: &wgpu::Device) {
-        let main_view       = self._main_atlas.create_view(&Default::default());
+        let main_view = self._main_atlas.create_view(&Default::default());
         let transition_view = self._transition_atlas.create_view(&Default::default());
-        let video_view      = self.video_atlas.create_view(&Default::default());
+        let video_view = self.video_atlas.create_view(&Default::default());
 
         self.atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("atlas_bg"),
