@@ -34,14 +34,49 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use proteus_render::{FontAtlas, QuadPipeline, MAIN_ATLAS_SIZE};
+use std::thread;
+
+use proteus_render::{FontAtlas, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
 use proteus_ui::{
     collect_instances, ease_in_out_quad,
     transition::{CompletedTransitions, TransitionConfig},
     BakedText, DropShadow, Entity, Glow, GroupSource, GroupTarget, Interactable, InteractionEvents,
     Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy,
-    Text, TransitionRequest, Visibility,
+    Text, TransitionRequest, VideoPlayer, Visibility,
 };
+
+
+// ---------------------------------------------------------------------------
+// Video constants (M9)
+// ---------------------------------------------------------------------------
+
+/// Width of the synthetic video texture uploaded per frame.
+const VIDEO_W: u32 = 320;
+/// Height of the synthetic video texture uploaded per frame.
+const VIDEO_H: u32 = 180;
+
+/// Generate one frame of synthetic video: animated sinusoidal colour bands.
+/// `t` is elapsed time in seconds. Returns `VIDEO_W × VIDEO_H × 4` RGBA bytes.
+fn generate_video_frame(t: f64, width: u32, height: u32) -> Vec<u8> {
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+    let ft = t as f32;
+    for y in 0..height {
+        for x in 0..width {
+            let nx = x as f32 / width as f32;
+            let ny = y as f32 / height as f32;
+            // Bands along X, Y, and diagonal — each at a different phase speed.
+            let r = ((nx * 6.0 + ft * 1.1).sin() * 0.5 + 0.5) * 0.8 + 0.1;
+            let g = ((ny * 4.0 + ft * 0.7).sin() * 0.5 + 0.5) * 0.8 + 0.1;
+            let b = (((nx + ny) * 5.0 + ft * 1.3).sin() * 0.5 + 0.5) * 0.8 + 0.1;
+            let i = ((y * width + x) * 4) as usize;
+            rgba[i]     = (r * 255.0) as u8;
+            rgba[i + 1] = (g * 255.0) as u8;
+            rgba[i + 2] = (b * 255.0) as u8;
+            rgba[i + 3] = 255;
+        }
+    }
+    rgba
+}
 
 // ---------------------------------------------------------------------------
 // Demo scene geometry
@@ -200,6 +235,13 @@ impl ApplicationHandler for ProteusApp {
         }
     }
 
+    /// Release the video texture GPU memory when the app is backgrounded (M9).
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(state) = self.state.as_mut() {
+            state.pipeline.suspend_video(&state.device, state.video_id);
+        }
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -289,6 +331,10 @@ struct RenderState {
 
     // ── timing ─────────────────────────────────────────────────────────────
     last_frame: Instant,
+
+    // ── video (M9) ────────────────────────────────────────────────────────────
+    /// TextureId returned by `pipeline.init_video` — used for suspend/resume.
+    video_id: TextureId,
 }
 
 impl RenderState {
@@ -354,7 +400,7 @@ impl RenderState {
         surface.configure(&device, &surface_config);
 
         // --- Pipeline ---
-        let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
+        let mut pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
         pipeline.set_view_projection(
             &queue,
             QuadPipeline::ortho(size.width as f32, size.height as f32),
@@ -369,6 +415,32 @@ impl RenderState {
 
         // --- Font atlas ---
         let font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
+
+        // --- Video texture (M9) ---
+        // Allocate the video texture slot at 320×180.  The sender is moved into
+        // a background thread that generates synthetic colour-band frames at 30 fps.
+        // The render loop calls consume_video_frame() to upload the latest frame.
+        let (video_id, video_sender) = pipeline.init_video(&device, VIDEO_W, VIDEO_H);
+
+        // Spawn the synthetic video producer on a background thread.
+        // Replace the body of this closure with any real decoder you like.
+        //
+        // No sleep here: sync_channel(2) provides natural backpressure.  When
+        // the render loop hasn't consumed yet, send() blocks — so the producer
+        // is gated by the display refresh automatically, with no hardcoded rate.
+        // Animation time comes from the wall clock so speed is always correct.
+        thread::spawn(move || {
+            let start = std::time::Instant::now();
+            loop {
+                let t = start.elapsed().as_secs_f64();
+                let frame = generate_video_frame(t, VIDEO_W, VIDEO_H);
+                // Blocks when the 2-frame buffer is full (backpressure).
+                // Returns false if the pipeline has been dropped — exit cleanly.
+                if !video_sender.send(frame) {
+                    break;
+                }
+            }
+        });
 
         // --- ECS world ---
         let mut ui_world = ProteusWorld::new();
@@ -434,14 +506,17 @@ impl RenderState {
             ui_world
                 .world
                 .spawn((
-                    item_quad(2),
+                    // item[2] streams video — set color to white so the frame is
+                    // displayed unfiltered.  The label "Whale" floats on top.
+                    QuadState { color: Vec4::ONE, ..item_quad(2) },
                     Lifecycle::Idle,
                     Visibility::HIDDEN,
                     Text::new(item_labels[2], 18.0),
                     Interactable,
+                    VideoPlayer,
                     Glow {
                         radius: 17.0,
-                        color: Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender — matches item[2] fill
+                        color: Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender glow
                         intensity: 0.7,
                     },
                 ))
@@ -464,6 +539,7 @@ impl RenderState {
             phase: DemoPhase::ButtonIdle,
             staged_pointer: StagedPointer::default(),
             last_frame: Instant::now(),
+            video_id,
         }
     }
 
@@ -893,11 +969,17 @@ impl RenderState {
         // 5. Advance demo state machine (reads InteractionEvents from step 3).
         self.advance_demo(dt);
 
-        // 6. Collect visible instance data.
+        // 6. Pull the latest video frame from the BYOV channel (M9).
+        //    The background producer thread sends frames at ~30 fps; we drain
+        //    the channel here and upload only the freshest one.  Entities
+        //    without VideoPlayer are unaffected (they use atlas_page 0).
+        self.pipeline.consume_video_frame(&self.queue);
+
+        // 7. Collect visible instance data.
         //    See `proteus_ui::collect` for the two-instance-per-text-entity model.
         let instances = collect_instances(&mut self.ui_world.world);
 
-        // 7. Acquire swap-chain texture.
+        // 8. Acquire swap-chain texture.
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {

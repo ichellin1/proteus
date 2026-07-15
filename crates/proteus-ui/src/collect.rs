@@ -35,6 +35,14 @@
 //! a zero offset (producing a symmetric halo).  If both are present, `DropShadow`
 //! takes precedence.
 //!
+//! ## Video (M9)
+//!
+//! When a [`crate::VideoPlayer`] component is present the background instance's
+//! `atlas_page` is set to `2` and the UV is set to cover the full `video_atlas`
+//! texture.  The entity's `QuadState::color` acts as a tint; use `Vec4::ONE`
+//! (white) for unfiltered video.  Any `BakedText` overlay is still emitted on
+//! top as a second instance so labels can float above the video.
+//!
 //! ## Visibility
 //!
 //! Entities with [`Visibility::HIDDEN`] are excluded from the output. Entities with
@@ -47,6 +55,7 @@ use proteus_render::{QuadInstance, QuadPipeline};
 
 use crate::{
     effects::{DropShadow, Glow},
+    video::VideoPlayer,
     ActiveTransition, BakedText, QuadState, Text, Virtual, Visibility,
 };
 
@@ -150,11 +159,19 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
         if !vis.is_none_or(|v| v) {
             continue;
         }
-        // (a) Solid-color background quad — shadow or glow applied here if present.
+        // (a) Solid-color (or video) background quad — shadow or glow applied here.
         //     DropShadow takes precedence over Glow when both are present.
+        //     When the entity has a VideoPlayer component the quad samples from
+        //     atlas_page 2 (video_atlas) with UV covering the full texture.
         let shadow = world.get::<DropShadow>(e);
         let glow = world.get::<Glow>(e);
-        out.push(quad_state_to_instance(&qs, None, shadow, glow));
+        let mut bg_inst = quad_state_to_instance(&qs, None, shadow, glow);
+        if world.get::<VideoPlayer>(e).is_some() {
+            bg_inst.atlas_page   = 2;
+            bg_inst.uv_offset    = [0.0, 0.0];
+            bg_inst.uv_scale     = [1.0, 1.0];
+        }
+        out.push(bg_inst);
         // (b) Text overlay — only for entities with baked glyph data.
         //     No shadow/glow on the overlay: it sits on top of the background (which
         //     already casts the shadow/glow), so doubling it would look wrong.

@@ -1464,17 +1464,26 @@ or bake passes are required.  This is zero-cost when the component is absent
 
 ---
 
-### M9 — Video *(off critical path — can begin after M7)*
+### M9 — Video *(off critical path — complete)*
 
 Per-frame video texture streaming to the GPU. A component can morph into a playing video.
 
+**Approach:** A new `video_atlas` wgpu texture is allocated at pipeline init (1×1 black
+placeholder) and registered in a new `TextureRegistry` with `TextureKind::Video`.
+`QuadPipeline::init_video(device, w, h)` reallocates at the requested resolution and
+returns a `TextureId`; `upload_video_frame(queue, rgba)` streams RGBA pixel data each
+frame without rebuild. The WGSL shader gains a third atlas binding (`@group(1) @binding(3)`);
+`atlas_page = 2` routes fragments there. A `VideoPlayer` ECS marker component on an entity
+sets `atlas_page = 2` and full-UV mapping in `collect_instances`. Backgrounding is handled
+by `suspend_video` (swaps to 1×1 placeholder, rebuilds bind group) and `resume_video`.
+
 **Definition of done:**
-- [ ] Per-frame video texture uploads to the GPU at the native video frame rate
-- [ ] A list item transitions into a playing video — the reference demo is extended to show this
-- [ ] Video frames managed through `TextureRegistry` using `TextureKind::Video`
-- [ ] Correct behavior on backgrounding: GPU memory released, video paused; on foreground, video
+- [x] Per-frame video texture uploads to the GPU at the native video frame rate
+- [x] A list item transitions into a playing video — the reference demo is extended to show this
+- [x] Video frames managed through `TextureRegistry` using `TextureKind::Video`
+- [x] Correct behavior on backgrounding: GPU memory released, video paused; on foreground, video
   state restored
-- [ ] No frame drops in the video during or after a transition to the video component
+- [x] No frame drops in the video during or after a transition to the video component
 
 ---
 
