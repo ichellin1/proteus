@@ -167,9 +167,9 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
         let glow = world.get::<Glow>(e);
         let mut bg_inst = quad_state_to_instance(&qs, None, shadow, glow);
         if world.get::<VideoPlayer>(e).is_some() {
-            bg_inst.atlas_page   = 2;
-            bg_inst.uv_offset    = [0.0, 0.0];
-            bg_inst.uv_scale     = [1.0, 1.0];
+            bg_inst.atlas_page = 2;
+            bg_inst.uv_offset = [0.0, 0.0];
+            bg_inst.uv_scale = [1.0, 1.0];
         }
         out.push(bg_inst);
         // (b) Text overlay — only for entities with baked glyph data.
