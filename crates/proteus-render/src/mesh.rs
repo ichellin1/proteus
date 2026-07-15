@@ -163,6 +163,11 @@ impl QuadInstance {
     /// |  14 | Float32x4  | 140 – 156  | shadow_color                               |
     ///
     /// Total: 13 instance attributes + 2 vertex attributes = 15. Limit is 16.
+    ///
+    /// **Vertex attribute budget:** 15 of 16 locations are in use (1 slot remaining).
+    /// Adding any new per-instance field would exceed the Metal limit and require
+    /// packing two existing fields into a single attribute location.  Consider
+    /// this before adding to `QuadInstance` or `QuadVertex`.
     pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {

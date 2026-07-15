@@ -1404,8 +1404,8 @@ architecture change.
 
 **Approach:** Upgrade the quad fragment shader to compute a rounded-rectangle
 Signed Distance Function (SDF). The SDF gives every fragment its exact distance
-to the shape boundary, enabling soft drop shadows (shadow quad rendered before
-the main shape in the same draw call, softness derived from the distance field)
+to the shape boundary, enabling soft drop shadows (computed per-fragment in the
+same draw call from the distance field, no separate shadow quad or render pass)
 and sharper anti-aliasing as a free side-effect.
 
 **Definition of done:**
@@ -1419,10 +1419,18 @@ and sharper anti-aliasing as a free side-effect.
 
 ---
 
-### M8.5 — Blur *(off critical path — can begin after M8)*
+### M8.5 — Blur *(off critical path — skeleton exists, NOT scheduled)*
 
 Gaussian blur via an offscreen bake pass. Establishes the bake-to-atlas
 infrastructure used by both blur and glow.
+
+**Status:** An early skeleton (`blur.rs`, `shaders/blur.wgsl`) was created but
+is intentionally **not compiled** (`mod blur` is absent from `lib.rs`).  The
+skeleton is incomplete and the shader uses `@group(1) @binding(3)`, which now
+collides with `video_atlas` (M9).  Before M8.5 begins, the binding collision
+must be resolved and the skeleton properly completed.  Glow (M8.6) landed
+without the bake infrastructure by reusing the shadow SDF path, so M8.5 does
+not gate any other shipped milestone.
 
 **Approach:** Components with a `Blur` effect render to a small offscreen texture
 first (reusing the bake concept from M4 text rendering). A two-pass separable
@@ -1431,6 +1439,7 @@ result is written into the main atlas. The main render pass then samples the
 blurred texture from the atlas.
 
 **Definition of done:**
+- [ ] Resolve `@group(1) @binding(3)` collision with `video_atlas`
 - [ ] `Blur` component: `radius: f32`
 - [ ] Offscreen bake pass: component renders to intermediate texture
 - [ ] Separable Gaussian blur: horizontal + vertical passes
@@ -1481,9 +1490,12 @@ by `suspend_video` (swaps to 1×1 placeholder, rebuilds bind group) and `resume_
 - [x] Per-frame video texture uploads to the GPU at the native video frame rate
 - [x] A list item transitions into a playing video — the reference demo is extended to show this
 - [x] Video frames managed through `TextureRegistry` using `TextureKind::Video`
-- [x] Correct behavior on backgrounding: GPU memory released, video paused; on foreground, video
-  state restored
-- [x] No frame drops in the video during or after a transition to the video component
+- [x] Correct behavior on backgrounding: GPU memory released via `suspend_video`; `resume_video`
+  re-allocates on foreground (`resumed()` now calls it when state already exists)
+- [x] Latest-frame-wins delivery: producer blocks on `sync_channel(2)`, consumer drains all
+  buffered frames per tick and uploads only the most recent (stale frames discarded).
+  *Note: "no frame drops" in the strict sense is not guaranteed — the producer may skip frames
+  under load; the guarantee is that the displayed frame is always the freshest available.*
 
 ---
 

@@ -8,7 +8,7 @@
 //! ## Key concepts
 //!
 //! - [`component::QuadState`] — the visual geometry of one component, lerped during transitions
-//! - [`component::Lifecycle`] — two-state machine: `Idle` / `Transitioning` (M3 adds Entering/Leaving)
+//! - [`component::Lifecycle`] — two-state machine: `Idle` / `Transitioning`
 //! - [`transition::ActiveTransition`] — per-entity transition state managed by the ECS systems
 //! - [`transition::TransitionConfig`] — duration, delay, easing declared at the call site
 //! - [`transition::TransitionComplete`] — record of one completed transition

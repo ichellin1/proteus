@@ -27,10 +27,6 @@ use crate::texture_registry::{TextureId, TextureKind, TextureRegistry};
 const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 /// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
 const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
-/// Default `blur_atlas` dimensions (M8.5). One blurred entity at a time for now;
-/// full sub-region packing will come in a later milestone.
-const DEFAULT_BLUR_ATLAS_SIZE: u32 = 512;
-
 /// Public alias for the main atlas size.
 ///
 /// Use this when creating a [`crate::font_atlas::FontAtlas`] and when
@@ -43,13 +39,6 @@ pub const MAIN_ATLAS_SIZE: u32 = DEFAULT_MAIN_ATLAS_SIZE;
 pub const DEFAULT_VIDEO_WIDTH: u32 = 1280;
 /// Height of the default video texture (M9).
 pub const DEFAULT_VIDEO_HEIGHT: u32 = 720;
-
-/// Public alias for the blur atlas size (M8.5).
-///
-/// Use this when computing [`crate::blur::BlurPipeline::uv_for_size`] and when
-/// creating a [`crate::blur::BlurPipeline`]. The blur atlas is a square texture;
-/// both width and height equal this constant.
-pub const BLUR_ATLAS_SIZE: u32 = DEFAULT_BLUR_ATLAS_SIZE;
 
 // ---------------------------------------------------------------------------
 // VideoFrameSender
@@ -551,6 +540,13 @@ impl QuadPipeline {
     /// [`init_video`]: QuadPipeline::init_video
     pub fn consume_video_frame(&self, queue: &wgpu::Queue) {
         let Some(rx) = &self.video_rx else { return };
+        // After suspend_video() the texture is a 1×1 placeholder.  Uploading a
+        // full-resolution frame into it would hit the debug_assert in
+        // upload_video_frame and corrupt GPU memory.  Skip until resume_video()
+        // restores the full-resolution allocation.
+        if self.video_atlas_size == (1, 1) {
+            return;
+        }
         let mut latest: Option<Vec<u8>> = None;
         while let Ok(frame) = rx.try_recv() {
             latest = Some(frame);
@@ -676,7 +672,9 @@ impl QuadPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // Linear (not sRGB) to match main_atlas and transition_atlas, avoiding
+            // brightness discontinuity when morphing between them at crossfade endpoints.
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
