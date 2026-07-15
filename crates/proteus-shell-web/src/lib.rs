@@ -60,9 +60,9 @@ mod inner {
     use proteus_ui::{
         collect_instances, ease_in_out_quad,
         transition::{CompletedTransitions, TransitionConfig},
-        BakedText, DropShadow, Entity, GroupSource, GroupTarget, Interactable, InteractionEvents,
-        Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState,
-        SplitStrategy, Text, TransitionRequest, Visibility,
+        BakedText, DropShadow, Entity, Glow, GroupSource, GroupTarget, Interactable,
+        InteractionEvents, Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld,
+        QuadState, SplitStrategy, Text, TransitionRequest, Visibility,
     };
 
     // -------------------------------------------------------------------------
@@ -300,7 +300,17 @@ mod inner {
                     Visibility::VISIBLE,
                     Text::new("View Items", 22.0),
                     Interactable,
-                    DropShadow::default(),
+                    DropShadow {
+                        offset: Vec2::new(4.0, -4.0),
+                        color: Vec4::new(0.0, 0.0, 0.0, 0.45),
+                        softness: 13.0,
+                        spread: 0.0,
+                    },
+                    Glow {
+                        radius: 17.0,
+                        color: Vec4::new(0.37, 0.65, 1.0, 1.0), // sky blue — matches button fill
+                        intensity: 0.7,
+                    },
                 ))
                 .id();
 
@@ -314,6 +324,11 @@ mod inner {
                         Visibility::HIDDEN,
                         Text::new(item_labels[0], 18.0),
                         Interactable,
+                        Glow {
+                            radius: 17.0,
+                            color: Vec4::new(1.00, 0.82, 0.28, 1.0), // gold — matches detail view fill
+                            intensity: 0.7,
+                        },
                     ))
                     .id(),
                 ui_world
@@ -324,6 +339,11 @@ mod inner {
                         Visibility::HIDDEN,
                         Text::new(item_labels[1], 18.0),
                         Interactable,
+                        Glow {
+                            radius: 17.0,
+                            color: Vec4::new(0.20, 0.80, 0.90, 1.0), // cyan — matches item[1] fill
+                            intensity: 0.7,
+                        },
                     ))
                     .id(),
                 ui_world
@@ -334,6 +354,11 @@ mod inner {
                         Visibility::HIDDEN,
                         Text::new(item_labels[2], 18.0),
                         Interactable,
+                        Glow {
+                            radius: 17.0,
+                            color: Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender — matches item[2] fill
+                            intensity: 0.7,
+                        },
                     ))
                     .id(),
             ];

@@ -16,10 +16,21 @@
 //! *outside* the component's normal bounds are still rasterized.  No extra render
 //! passes or atlas allocations are required.
 //!
-//! ## Future effects (M8.5 / M8.6)
+//! ## M8.6 — Glow
 //!
-//! Blur (M8.5) and Glow (M8.6) require an offscreen bake pass and will be
-//! defined in separate types here.
+//! A soft radial halo/glow that emanates outward from the component boundary.
+//! Glow reuses the same `shadow_params`/`shadow_color` instance slots as Drop
+//! Shadow by encoding a zero offset — the shader's existing SDF shadow branch
+//! produces a symmetric halo when both offset components are zero.  No new
+//! vertex attributes, pipeline changes, or shader changes are required.
+//!
+//! The halo `color` is set explicitly by the caller and is independent of the
+//! entity's `QuadState::color` — this allows the glow to be a different hue or
+//! intensity than the component's fill, and works correctly for textured or
+//! non-solid components.
+//!
+//! If both [`DropShadow`] and [`Glow`] are attached to the same entity,
+//! `DropShadow` takes precedence and `Glow` is silently ignored.
 
 use bevy_ecs::prelude::Component;
 use glam::{Vec2, Vec4};
@@ -88,6 +99,68 @@ impl DropShadow {
         Self {
             offset,
             softness,
+            ..Self::default()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Glow
+// ---------------------------------------------------------------------------
+
+/// Soft radial glow/halo emanating outward from the component boundary.
+///
+/// Attach this component to any entity that has a [`crate::QuadState`] to give
+/// it a glow effect.  Remove the component to disable the glow (zero runtime
+/// cost when absent).
+///
+/// The halo `color` is set explicitly and is independent of the entity's fill
+/// color — this allows a different hue or opacity and works correctly for
+/// textured or non-solid components.
+///
+/// Glow reuses the `shadow_params`/`shadow_color` instance slots that
+/// [`DropShadow`] uses, encoding a zero offset so the SDF shadow branch in the
+/// fragment shader produces a symmetric halo instead of a directional shadow.
+/// No new vertex attributes, pipeline changes, or shader changes are required.
+///
+/// **Mutual exclusivity:** if both [`DropShadow`] and [`Glow`] are present on
+/// the same entity, `DropShadow` takes precedence and `Glow` is ignored.
+///
+/// ## Fields
+///
+/// - `radius`    — halo spread in pixels.  Controls the Gaussian sigma
+///   (sigma ≈ radius / 3).  Minimum useful value is ~4.0.
+/// - `color`     — RGBA halo color.  Set this independently of the entity's
+///   fill color.  `alpha == 0.0` disables the glow.
+/// - `intensity` — multiplier applied to `color.a` before upload.  Effective
+///   alpha = `color.a * intensity`.  Values > 1.0 are clamped in the shader.
+#[derive(Component, Clone, Debug)]
+pub struct Glow {
+    /// Halo spread in pixels.
+    pub radius: f32,
+    /// Halo color and base opacity, independent of the entity's fill color.
+    pub color: Vec4,
+    /// Opacity multiplier (effective alpha = `color.a * intensity`).
+    pub intensity: f32,
+}
+
+impl Default for Glow {
+    /// A soft white halo with 12 px radius and 70 % intensity.
+    fn default() -> Self {
+        Self {
+            radius: 12.0,
+            color: Vec4::new(1.0, 1.0, 1.0, 0.8),
+            intensity: 0.7,
+        }
+    }
+}
+
+impl Glow {
+    /// Compact factory: specify the radius and color; intensity defaults to 0.7.
+    pub fn new(radius: f32, color: Vec4) -> Self {
+        Self {
+            radius,
+            color,
             ..Self::default()
         }
     }

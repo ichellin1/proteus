@@ -21,14 +21,17 @@
 //! | `shadow_params_populate_instance` | M8: DropShadow fields in background instance |
 //! | `no_shadow_by_default` | M8: absence of DropShadow → all-zero shadow fields |
 //! | `shadow_not_on_text_overlay` | M8: overlay layer never carries shadow data |
+//! | `glow_params_populate_instance` | M8.6: Glow encodes zero-offset halo into shadow slots |
+//! | `no_glow_by_default` | M8.6: absence of Glow → all-zero shadow fields |
+//! | `shadow_wins_over_glow` | M8.6: DropShadow takes precedence over Glow |
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_render::QuadPipeline;
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, BakedText, DropShadow, ProteusWorld,
-    QuadState, Text, TransitionRequest, Visibility,
+    collect_instances, linear, transition::TransitionConfig, BakedText, DropShadow, Glow,
+    ProteusWorld, QuadState, Text, TransitionRequest, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -349,4 +352,103 @@ fn transition_lerps_at_t_half() {
     );
     // size.x: lerp(120, 320, 0.5) = 220
     assert_f32_slice_approx(&instances[0].size, &[220.0, 120.0], "mid-transition size");
+}
+
+// ---------------------------------------------------------------------------
+// M8.6 glow tests
+// ---------------------------------------------------------------------------
+
+/// An entity with a [`Glow`] component has the glow encoded into the shadow
+/// slots of the background instance.  The offset fields are zero (producing a
+/// symmetric halo) and the effective alpha is `color.a * intensity`.
+#[test]
+fn glow_params_populate_instance() {
+    let glow = Glow {
+        radius: 12.0,
+        color: Vec4::new(0.37, 0.65, 1.0, 1.0),
+        intensity: 0.7,
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), glow));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    // Offset must be (0, 0) — symmetric halo, not a directional shadow.
+    assert_f32_slice_approx(
+        &instances[0].shadow_params,
+        &[0.0, 0.0, 12.0, 0.0],
+        "shadow_params for glow (zero offset, radius, zero spread)",
+    );
+    // Effective alpha = color.a * intensity = 1.0 * 0.7 = 0.7.
+    assert_f32_slice_approx(
+        &instances[0].shadow_color,
+        &[0.37, 0.65, 1.0, 0.7],
+        "shadow_color for glow (RGB from Glow::color, A = color.a * intensity)",
+    );
+}
+
+/// An entity without a [`Glow`] component (and without a [`DropShadow`]) has
+/// all-zero shadow fields.  The shader's `shadow_color.a == 0` branch is
+/// skipped, so there is no glow or shadow at zero runtime cost.
+#[test]
+fn no_glow_by_default() {
+    let mut world = World::new();
+    world.spawn(sky_blue_button()); // no Glow, no DropShadow
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_f32_slice_approx(
+        &instances[0].shadow_color,
+        &[0.0, 0.0, 0.0, 0.0],
+        "shadow_color must be all-zero when neither Glow nor DropShadow is present",
+    );
+    assert_f32_slice_approx(
+        &instances[0].shadow_params,
+        &[0.0, 0.0, 0.0, 0.0],
+        "shadow_params must be all-zero when neither Glow nor DropShadow is present",
+    );
+}
+
+/// When both [`DropShadow`] and [`Glow`] are present on the same entity,
+/// `DropShadow` takes precedence and `Glow` is ignored.
+#[test]
+fn shadow_wins_over_glow() {
+    use glam::Vec2;
+
+    let shadow = DropShadow {
+        offset: Vec2::new(4.0, -4.0),
+        color: Vec4::new(0.0, 0.0, 0.0, 0.45),
+        softness: 8.0,
+        spread: 0.0,
+    };
+    // Glow with a large radius and red color — if it were used, shadow_params[2]
+    // would be 20.0 (not 8.0) and shadow_color would be red (not black).
+    let glow = Glow {
+        radius: 20.0,
+        color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+        intensity: 1.0,
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), shadow, glow));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    // Shadow offset must be (4.0, -4.0) — not glow's (0, 0, 20, 0).
+    assert_f32_slice_approx(
+        &instances[0].shadow_params,
+        &[4.0, -4.0, 8.0, 0.0],
+        "shadow_params must come from DropShadow, not Glow",
+    );
+    // Shadow color must be the drop shadow color (opaque black), not
+    // the entity color that Glow would have used.
+    assert_f32_slice_approx(
+        &instances[0].shadow_color,
+        &[0.0, 0.0, 0.0, 0.45],
+        "shadow_color must come from DropShadow, not Glow",
+    );
 }
