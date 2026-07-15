@@ -25,6 +25,9 @@ use crate::mesh::{quad_vertex_layout, QuadInstance, QUAD_INDICES, QUAD_VERTICES}
 const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 /// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
 const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
+/// Default `blur_atlas` dimensions (M8.5). One blurred entity at a time for now;
+/// full sub-region packing will come in a later milestone.
+const DEFAULT_BLUR_ATLAS_SIZE: u32 = 512;
 
 /// Public alias for the main atlas size.
 ///
@@ -32,6 +35,13 @@ const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
 /// converting a [`crate::font_atlas::BakedRegion`] pixel origin into the
 /// normalised UV coordinates stored in a [`QuadInstance`].
 pub const MAIN_ATLAS_SIZE: u32 = DEFAULT_MAIN_ATLAS_SIZE;
+
+/// Public alias for the blur atlas size (M8.5).
+///
+/// Use this when computing [`crate::blur::BlurPipeline::uv_for_size`] and when
+/// creating a [`crate::blur::BlurPipeline`]. The blur atlas is a square texture;
+/// both width and height equal this constant.
+pub const BLUR_ATLAS_SIZE: u32 = DEFAULT_BLUR_ATLAS_SIZE;
 
 // ---------------------------------------------------------------------------
 // QuadPipeline

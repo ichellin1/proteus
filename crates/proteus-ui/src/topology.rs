@@ -10,7 +10,10 @@
 //!
 //! For both topologies the framework creates [`Virtual`] entities that carry
 //! `ActiveTransition` components and are ticked by the normal
-//! `transition_tick_system`. When all virtuals in a group complete,
+//! `transition_tick_system`.  Virtual entities also inherit the visual
+//! components ([`DropShadow`], [`Glow`], [`BakedText`]) from their source
+//! entity so that effects and text persist correctly through the transition
+//! rather than popping in or out at completion.  When all virtuals in a group complete,
 //! [`group_transition_complete_system`] reveals the real target entities,
 //! despawns the virtuals, and restores the coordinator's `Lifecycle` to `Idle`.
 //!
@@ -34,6 +37,8 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
+use crate::effects::{DropShadow, Glow};
+use crate::text::BakedText;
 use crate::transition::{ActiveTransition, TransitionConfig};
 
 // ---------------------------------------------------------------------------
@@ -269,6 +274,7 @@ pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
 pub fn one_to_n_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &OneToNRequest, &QuadState)>,
+    source_visuals: Query<(Option<&DropShadow>, Option<&Glow>, Option<&BakedText>)>,
 ) {
     for (source_entity, request, source_state) in query.iter() {
         let n = request.targets.len();
@@ -316,6 +322,23 @@ pub fn one_to_n_setup_system(
                 let reveal: Vec<Entity> = request.targets.iter().map(|t| t.entity).collect();
                 let total = n;
 
+                // Snapshot the source entity's visual components so each virtual
+                // slice inherits them.  This ensures effects and baked text remain
+                // visible throughout the transition rather than popping out the
+                // instant the source entity is hidden.
+                let src_shadow = source_visuals
+                    .get(source_entity)
+                    .ok()
+                    .and_then(|(s, _, _)| s.cloned());
+                let src_glow = source_visuals
+                    .get(source_entity)
+                    .ok()
+                    .and_then(|(_, g, _)| g.cloned());
+                let src_baked = source_visuals
+                    .get(source_entity)
+                    .ok()
+                    .and_then(|(_, _, b)| b.cloned());
+
                 // Spawn one virtual entity per slice.
                 for (i, (slice_state, target)) in
                     slices.iter().zip(request.targets.iter()).enumerate()
@@ -328,13 +351,22 @@ pub fn one_to_n_setup_system(
                     let active =
                         ActiveTransition::new(slice_state.clone(), target.state.clone(), cfg);
 
-                    commands.spawn((
+                    let mut entity_cmd = commands.spawn((
                         slice_state.clone(),
                         Lifecycle::Transitioning,
                         active,
                         Virtual,
                         PartOfGroup(source_entity),
                     ));
+                    if let Some(ref s) = src_shadow {
+                        entity_cmd.insert(s.clone());
+                    }
+                    if let Some(ref g) = src_glow {
+                        entity_cmd.insert(g.clone());
+                    }
+                    if let Some(ref b) = src_baked {
+                        entity_cmd.insert(b.clone());
+                    }
                 }
 
                 // Coordinator: source entity tracks group completion.
@@ -365,6 +397,7 @@ pub fn one_to_n_setup_system(
 pub fn n_to_one_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &NToOneRequest, &QuadState)>,
+    source_visuals: Query<(Option<&DropShadow>, Option<&Glow>, Option<&BakedText>)>,
 ) {
     for (dest_entity, request, dest_state) in query.iter() {
         let n = request.sources.len();
@@ -390,6 +423,8 @@ pub fn n_to_one_setup_system(
         let target_slices = horizontal_slices(dest_state, n);
 
         // Spawn one virtual entity per source, transitioning to the matching slice.
+        // Each virtual inherits the source entity's visual components so effects
+        // and baked text remain present throughout the transition.
         for (i, (source, target_slice)) in
             request.sources.iter().zip(target_slices.iter()).enumerate()
         {
@@ -400,13 +435,26 @@ pub fn n_to_one_setup_system(
 
             let active = ActiveTransition::new(source.state.clone(), target_slice.clone(), cfg);
 
-            commands.spawn((
+            let mut entity_cmd = commands.spawn((
                 source.state.clone(),
                 Lifecycle::Transitioning,
                 active,
                 Virtual,
                 PartOfGroup(dest_entity),
             ));
+
+            // Propagate visual components from the source entity.
+            if let Ok((shadow, glow, baked)) = source_visuals.get(source.entity) {
+                if let Some(s) = shadow {
+                    entity_cmd.insert(s.clone());
+                }
+                if let Some(g) = glow {
+                    entity_cmd.insert(g.clone());
+                }
+                if let Some(b) = baked {
+                    entity_cmd.insert(b.clone());
+                }
+            }
         }
 
         // Coordinator: destination entity tracks group completion.

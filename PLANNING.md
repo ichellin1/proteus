@@ -1440,21 +1440,27 @@ blurred texture from the atlas.
 
 ---
 
-### M8.6 — Glow *(off critical path — can begin after M8.5)*
+### M8.6 — Glow *(off critical path — complete)*
 
-Bloom/glow effect built on the M8.5 bake-pass infrastructure.
+Soft radial halo/glow that emanates outward from the component boundary.
 
-**Approach:** Identical pipeline to M8.5 blur, but with a different kernel:
-the shape's bright-channel version is blurred and composited additively behind
-the original shape. Shares all bake infrastructure with M8.5; only the shader
-kernel and composite mode differ.
+**Approach (revised):** Glow reuses the existing `shadow_params`/`shadow_color`
+instance slots (introduced in M8) with a zero offset, causing the SDF shadow
+branch in the fragment shader to produce a symmetric halo instead of a
+directional shadow.  No new vertex attributes, pipeline changes, shader changes,
+or bake passes are required.  This is zero-cost when the component is absent
+(`shadow_color.a == 0` → shader branch skipped).
+
+`DropShadow` and `Glow` share the same instance slots and are mutually exclusive:
+`DropShadow` takes precedence if both are attached to the same entity.
 
 **Definition of done:**
-- [ ] `Glow` component: `radius: f32`, `color: Vec4`, `intensity: f32`
-- [ ] Reuses M8.5 bake infrastructure; only kernel + composite mode are new
-- [ ] Additive compositing behind the original shape
-- [ ] Works on WebGL2 and native
-- [ ] Regression tests
+- [x] `Glow` component: `radius: f32`, `color: Vec4`, `intensity: f32`
+- [x] Reuses M8 shadow instance slots (zero-offset → symmetric halo); no GPU changes
+- [x] `DropShadow` takes precedence over `Glow` when both present (documented)
+- [x] `Glow` re-exported from `proteus_ui` crate root
+- [x] Regression tests: 3 new tests in `render_instances.rs` (`glow_params_populate_instance`, `no_glow_by_default`, `shadow_wins_over_glow`)
+- [x] Demo: `Glow` attached to the Elephant list item in `proteus-shell-native`
 
 ---
 
