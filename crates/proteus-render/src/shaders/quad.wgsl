@@ -7,6 +7,7 @@
 // Bind group 1:  main_atlas       — long-lived textures (images, static bakes)
 //                transition_atlas — ephemeral bakes for in-flight transitions
 //                atlas_sampler    — shared linear sampler
+//                video_atlas      — streaming per-frame video texture (M9)
 //
 // Vertex buffer 0:  QuadVertex   — base unit quad, 4 vertices, step per vertex
 // Vertex buffer 1:  QuadInstance — per-component data, step per instance
@@ -25,6 +26,7 @@ struct Uniforms {
 @group(1) @binding(0) var main_atlas:       texture_2d<f32>;
 @group(1) @binding(1) var transition_atlas: texture_2d<f32>;
 @group(1) @binding(2) var atlas_sampler:    sampler;
+@group(1) @binding(3) var video_atlas:      texture_2d<f32>;
 
 
 // ---------------------------------------------------------------------------
@@ -251,9 +253,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // atlases have exactly one mip level.
         var tex_color: vec4<f32>;
         if in.atlas_page == 0u {
-            tex_color = textureSampleLevel(main_atlas,       atlas_sampler, in.atlas_uv,      0.0);
+            tex_color = textureSampleLevel(main_atlas,       atlas_sampler, in.atlas_uv, 0.0);
+        } else if in.atlas_page == 1u {
+            tex_color = textureSampleLevel(transition_atlas, atlas_sampler, in.atlas_uv, 0.0);
         } else {
-            tex_color = textureSampleLevel(transition_atlas, atlas_sampler, in.atlas_uv,      0.0);
+            // atlas_page == 2: streaming video texture (M9)
+            tex_color = textureSampleLevel(video_atlas,      atlas_sampler, in.atlas_uv, 0.0);
         }
 
         // Crossfade: blend from-state (always in transition_atlas) into to-state.

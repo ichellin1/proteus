@@ -11,10 +11,14 @@ pub mod material;
 pub mod mesh;
 pub mod pipeline;
 pub mod scene;
+pub mod texture_registry;
 
 pub use font_atlas::{BakedRegion, FontAtlas, EMBEDDED_FONT_BYTES};
 pub use mesh::{QuadInstance, QuadVertex, QUAD_INDICES, QUAD_VERTICES};
-pub use pipeline::{QuadPipeline, MAIN_ATLAS_SIZE};
+pub use pipeline::{
+    QuadPipeline, VideoFrameSender, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH, MAIN_ATLAS_SIZE,
+};
+pub use texture_registry::{TextureId, TextureKind, TextureRegistry};
 
 /// The WGSL source for the instanced quad shader, embedded at compile time.
 pub const QUAD_SHADER_SRC: &str = include_str!("shaders/quad.wgsl");
