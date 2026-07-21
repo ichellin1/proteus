@@ -1538,6 +1538,46 @@ to the render thread without modification.
 
 ---
 
+### M9.6 — Live Video Crossfade During Transitions *(off critical path — begins after M9.5)*
+
+**Captured as a known gap, not yet implemented.** Currently, when a `VideoPlayer` entity (e.g.
+the Whale list item) is swept into a bake or slice transition (`childBehavior: 'bake'`, or the
+N→1/1→N slice strategy), the `bake_system` snapshots its texture into `transition_atlas` once at
+transition start. For a static component this is correct. For a `VideoPlayer` component it is
+not: the snapshot freezes the video at whatever frame was current when the bake fired, and the
+frozen frame is what crossfades against the target for the full transition duration — playback
+does not resume until the transition completes and the entity returns to live rendering.
+
+**Desired behavior:** the video should keep streaming live throughout the transition. The morph
+should crossfade the *live, still-updating* video surface into the target's background — matching
+the same `mix(base_color, tex_color, crossfade_t)` blend the fragment shader already does for
+static bakes (`quad.wgsl`, `atlas_page == 2` already routes to `video_atlas`) — rather than
+freezing a snapshot. This is the effect that visually differentiates Proteus's morphing transitions
+from a conventional crossfade-and-cut; getting it right for video specifically (the one case where
+the source content is animating independently of the transition itself) is important to demo well.
+
+**Why this is non-trivial:** the bake pipeline's whole point is to collapse a component (and its
+children) into one static GPU snapshot so the transition system can treat 1→N/N→1 as ordinary
+1→1 morphs. A live video source breaks that assumption — it needs `base_texture` (or whichever
+side of the crossfade it occupies) to keep pointing at `video_atlas` and re-sample every frame
+instead of a frozen `transition_atlas` region, while still participating in the same slice/bake
+geometry math. Likely needs a per-entity flag (e.g. `Baked::live_video` or a check for
+`VideoPlayer` at bake time) that skips the snapshot-into-`transition_atlas` step for that specific
+sub-region and leaves its `atlas_page`/UV pointed at `video_atlas` for the duration of the
+transition, while everything else around it still bakes normally.
+
+**Definition of done:**
+- [ ] A `VideoPlayer` entity that is a source or target of a bake/slice transition keeps rendering
+  live video frames throughout the transition — no freeze
+- [ ] The video surface crossfades into (or out of) the transition target's background using the
+  existing `crossfade_t` blend, not a static snapshot
+- [ ] Reference demo: the Whale item's N→1 Slice back into the button (and any future 1↔1 video
+  transition) demonstrates this visibly
+- [ ] Regression test verifying the baked entity's instance data still points at `atlas_page == 2`
+  (not a `transition_atlas` snapshot) for the live-video sub-region during an active transition
+
+---
+
 ### M10 — TypeScript SDK *(critical path)*
 
 A developer builds the full interactive reference demo in TypeScript without touching Rust.
