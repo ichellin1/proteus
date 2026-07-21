@@ -65,33 +65,36 @@ struct VertexIn {
 }
 
 struct VertexOut {
-    @builtin(position)               clip_position: vec4<f32>,
+    @builtin(position)               clip_position:   vec4<f32>,
 
     // Position relative to the component center in pixels — used for SDF.
     // Always centered regardless of anchor setting.
     // When shadow is active, fragments outside the main shape (in the shadow area)
     // have |local_pos| > half_size; the shadow SDF handles them correctly.
-    @location(0)                     local_pos:     vec2<f32>,
+    @location(0)                     local_pos:       vec2<f32>,
     // Half-extents of the original (un-inflated) component in pixels.
-    @location(1)                     half_size:     vec2<f32>,
+    @location(1)                     half_size:       vec2<f32>,
 
-    // Atlas UVs
-    @location(2)                     atlas_uv:      vec2<f32>,  // primary (to-state)
-    @location(3)                     base_atlas_uv: vec2<f32>,  // from-state crossfade
+    // Raw UV parameters — .xy = offset, .zw = scale — passed through from the
+    // instance buffer without baking in.uv.  The fragment shader derives the
+    // actual sample coordinate from local_pos + half_size so that shadow/glow
+    // inflation does not distort textured content (video, BakedText).
+    @location(2)                     uv_params:       vec4<f32>,  // primary (to-state)
+    @location(3)                     base_uv_params:  vec4<f32>,  // from-state crossfade
 
     // Fragment-stage per-instance data
-    @location(4)                     color:         vec4<f32>,
-    @location(5)                     opacity:       f32,
-    @location(6)                     corner_radius: f32,
-    @location(7)                     crossfade_t:   f32,
-    @location(8)                     border_width:  f32,
-    @location(9)                     border_color:  vec4<f32>,
-    @location(10)                    border_offset: f32,
-    @location(11) @interpolate(flat) atlas_page:    u32,  // flat — no interpolation for integers
+    @location(4)                     color:           vec4<f32>,
+    @location(5)                     opacity:         f32,
+    @location(6)                     corner_radius:   f32,
+    @location(7)                     crossfade_t:     f32,
+    @location(8)                     border_width:    f32,
+    @location(9)                     border_color:    vec4<f32>,
+    @location(10)                    border_offset:   f32,
+    @location(11) @interpolate(flat) atlas_page:      u32,  // flat — no interpolation for integers
 
-    // Drop shadow (M8)
-    @location(12)                    shadow_params: vec4<f32>, // (offset_x, offset_y, softness, spread)
-    @location(13)                    shadow_color:  vec4<f32>, // RGBA; alpha == 0.0 = no shadow
+    // Drop shadow / Glow (M8 / M8.6)
+    @location(12)                    shadow_params:   vec4<f32>, // (offset_x, offset_y, softness, spread)
+    @location(13)                    shadow_color:    vec4<f32>, // RGBA; alpha == 0.0 = no shadow
 }
 
 @vertex
@@ -104,10 +107,6 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let inst_scale         = in.inst_size_rot_scale.w;
     let inst_opacity       = in.inst_opacity_radius.x;
     let inst_corner_radius = in.inst_opacity_radius.y;
-    let inst_uv_offset     = in.inst_uv.xy;
-    let inst_uv_scale      = in.inst_uv.zw;
-    let inst_base_uv_offset = in.inst_base_uv.xy;
-    let inst_base_uv_scale  = in.inst_base_uv.zw;
     let inst_crossfade_t   = in.inst_crossfade_bw.x;
     let inst_border_width  = in.inst_crossfade_bw.y;
 
@@ -171,9 +170,12 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.local_pos = centered;
     out.half_size = half;
 
-    // Map the base quad UVs into the atlas sub-regions.
-    out.atlas_uv      = inst_uv_offset      + in.uv * inst_uv_scale;
-    out.base_atlas_uv = inst_base_uv_offset + in.uv * inst_base_uv_scale;
+    // Pass raw UV parameters through to the fragment stage.  The fragment shader
+    // derives the sample coordinate from local_pos + half_size rather than from
+    // the per-vertex in.uv, which avoids distortion caused by shadow/glow
+    // geometry inflation stretching the vertex-interpolated UV across a larger area.
+    out.uv_params      = in.inst_uv;       // .xy = offset, .zw = scale
+    out.base_uv_params = in.inst_base_uv;  // .xy = base_offset, .zw = base_scale
 
     out.color         = in.inst_color;
     out.opacity       = inst_opacity;
@@ -242,6 +244,35 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Computed only for fragments inside (or on the edge of) the main shape.
     var main_color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if edge_alpha > 0.0 {
+        // Compute UV from the fragment's un-inflated normalized position.
+        //
+        // local_pos spans the inflated quad (including shadow/glow padding).
+        // half_size is the un-inflated entity half-extent.
+        // Mapping local_pos through half_size gives a 0..1 coordinate that
+        // covers exactly the entity bounds, independent of inflation amount.
+        // Clamping keeps shadow-region fragments from sampling outside [0,1].
+        //
+        // Y-axis flip: the world coordinate system has Y increasing UPWARD
+        // (top of entity = +half_size.y, bottom = -half_size.y), but the UV
+        // convention is Y-DOWN (top of texture = 0, bottom = 1).  Without the
+        // flip, texture content appears vertically inverted.  The quad mesh
+        // (QUAD_VERTICES in mesh.rs) encodes the same flip: the top-left vertex
+        // has position.y=+0.5 and uv.y=0.0; the bottom-left has position.y=-0.5
+        // and uv.y=1.0.
+        //
+        // For the white-pixel sentinel (uv_scale == 0) this collapses to
+        // `uv_offset + 0` — identical to the previous vertex-interpolated result.
+        let safe_half    = max(in.half_size, vec2(0.5, 0.5)); // guard against 0-size entities
+        let norm_uv_raw  = (in.local_pos + safe_half) / (safe_half * 2.0);
+        let norm_uv      = clamp(
+            // X is unchanged; Y is flipped to convert from world-Y-up to UV-Y-down.
+            vec2(norm_uv_raw.x, 1.0 - norm_uv_raw.y),
+            vec2(0.0, 0.0),
+            vec2(1.0, 1.0),
+        );
+        let atlas_uv      = in.uv_params.xy      + norm_uv * in.uv_params.zw;
+        let base_atlas_uv = in.base_uv_params.xy + norm_uv * in.base_uv_params.zw;
+
         // Texture sampling.
         // Primary texture: atlas_page selects which atlas to sample.
         // Components without a texture point at a 1×1 white pixel baked into main_atlas
@@ -253,18 +284,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // atlases have exactly one mip level.
         var tex_color: vec4<f32>;
         if in.atlas_page == 0u {
-            tex_color = textureSampleLevel(main_atlas,       atlas_sampler, in.atlas_uv, 0.0);
+            tex_color = textureSampleLevel(main_atlas,       atlas_sampler, atlas_uv, 0.0);
         } else if in.atlas_page == 1u {
-            tex_color = textureSampleLevel(transition_atlas, atlas_sampler, in.atlas_uv, 0.0);
+            tex_color = textureSampleLevel(transition_atlas, atlas_sampler, atlas_uv, 0.0);
         } else {
             // atlas_page == 2: streaming video texture (M9)
-            tex_color = textureSampleLevel(video_atlas,      atlas_sampler, in.atlas_uv, 0.0);
+            tex_color = textureSampleLevel(video_atlas,      atlas_sampler, atlas_uv, 0.0);
         }
 
         // Crossfade: blend from-state (always in transition_atlas) into to-state.
         // When crossfade_t == 0.0 this branch is skipped entirely.
         if in.crossfade_t > 0.0 {
-            let base_color = textureSampleLevel(transition_atlas, atlas_sampler, in.base_atlas_uv, 0.0);
+            let base_color = textureSampleLevel(transition_atlas, atlas_sampler, base_atlas_uv, 0.0);
             tex_color = mix(base_color, tex_color, in.crossfade_t);
         }
 

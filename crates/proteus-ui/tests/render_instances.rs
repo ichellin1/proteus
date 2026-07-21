@@ -31,7 +31,7 @@ use glam::{Vec2, Vec3, Vec4};
 use proteus_render::QuadPipeline;
 use proteus_ui::{
     collect_instances, linear, transition::TransitionConfig, BakedText, DropShadow, Glow,
-    ProteusWorld, QuadState, Text, TransitionRequest, Visibility,
+    ProteusWorld, QuadState, Text, TransitionRequest, VideoPlayer, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -411,6 +411,107 @@ fn no_glow_by_default() {
         "shadow_params must be all-zero when neither Glow nor DropShadow is present",
     );
 }
+
+// ---------------------------------------------------------------------------
+// M9 VideoPlayer tests
+// ---------------------------------------------------------------------------
+
+/// A `VideoPlayer` entity must have its background instance routed to
+/// `atlas_page = 2` (the `video_atlas` binding) with full-coverage UV mapping.
+/// This is the branch in `collect_instances` that had zero prior test coverage.
+#[test]
+fn video_player_sets_atlas_page_2() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), VideoPlayer));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(
+        instances.len(),
+        1,
+        "VideoPlayer emits one background instance"
+    );
+    assert_eq!(
+        instances[0].atlas_page, 2,
+        "VideoPlayer must route to atlas_page 2 (video_atlas)"
+    );
+    assert_eq!(
+        instances[0].uv_offset,
+        [0.0, 0.0],
+        "VideoPlayer uv_offset must be [0, 0] — full texture, no atlas sub-region"
+    );
+    assert_eq!(
+        instances[0].uv_scale,
+        [1.0, 1.0],
+        "VideoPlayer uv_scale must be [1, 1] — full texture coverage"
+    );
+}
+
+/// A `VideoPlayer` entity with `Glow` must emit both the atlas_page=2 routing
+/// *and* a correctly encoded glow in the same instance.  This guards the path
+/// where both the video branch and the shadow/glow branch are active at once —
+/// the combination that would have exposed the UV inflation distortion.
+#[test]
+fn video_player_with_glow_has_atlas_page_and_glow_params() {
+    let glow = Glow {
+        radius: 15.0,
+        color: Vec4::new(0.60, 0.65, 1.00, 1.0),
+        intensity: 0.7,
+    };
+
+    let mut world = World::new();
+    world.spawn((
+        QuadState {
+            color: Vec4::ONE, // white = unfiltered video
+            ..sky_blue_button()
+        },
+        VideoPlayer,
+        glow,
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    // Video routing.
+    assert_eq!(instances[0].atlas_page, 2, "must route to video_atlas");
+    assert_eq!(instances[0].uv_offset, [0.0, 0.0]);
+    assert_eq!(instances[0].uv_scale, [1.0, 1.0]);
+    // Glow encoded into shadow slots.
+    assert_f32_slice_approx(
+        &instances[0].shadow_params,
+        &[0.0, 0.0, 15.0, 0.0],
+        "shadow_params: zero offset, radius in softness slot, zero spread",
+    );
+    assert!(
+        instances[0].shadow_color[3] > 0.0,
+        "shadow_color.a must be > 0 to activate the glow branch in the shader"
+    );
+}
+
+/// `Glow::intensity > 1.0` must be clamped to 1.0 before the instance is
+/// emitted.  An effective alpha above 1.0 inverts the alpha-blending equation
+/// in the shader, producing visible negative-transparency artefacts.
+#[test]
+fn glow_intensity_above_one_is_clamped() {
+    let glow = Glow {
+        radius: 12.0,
+        color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+        intensity: 3.0, // 1.0 * 3.0 = 3.0 without the clamp
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), glow));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(
+        instances[0].shadow_color[3], 1.0,
+        "effective alpha must be clamped to 1.0 (was 3.0 before the fix)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 
 /// When both [`DropShadow`] and [`Glow`] are present on the same entity,
 /// `DropShadow` takes precedence and `Glow` is ignored.

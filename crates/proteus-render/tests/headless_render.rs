@@ -121,6 +121,7 @@ fn headless_quad_renders_to_expected_color() {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &render_view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.0,
@@ -134,19 +135,20 @@ fn headless_quad_renders_to_expected_color() {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pipeline.draw(&mut pass);
     }
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &render_target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &readback_buf,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(BYTES_PER_ROW),
                 rows_per_image: Some(HEIGHT),
@@ -164,7 +166,9 @@ fn headless_quad_renders_to_expected_color() {
     let slice = readback_buf.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-    device.poll(wgpu::Maintain::Wait);
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("device poll failed");
     rx.recv().unwrap().expect("readback buffer map failed");
 
     // Scope the BufferView so it's unmapped (dropped) before assertions can panic.
@@ -216,7 +220,7 @@ fn headless_quad_renders_to_expected_color() {
 async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
 
     // First try a real adapter; fall back to the software renderer (lavapipe /
@@ -229,16 +233,15 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         })
         .await
     {
-        Some(a) => a,
-        None => {
-            instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::None,
-                    compatible_surface: None,
-                    force_fallback_adapter: true,
-                })
-                .await?
-        }
+        Ok(a) => a,
+        Err(_) => instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                compatible_surface: None,
+                force_fallback_adapter: true,
+            })
+            .await
+            .ok()?,
     };
 
     eprintln!(
@@ -248,17 +251,15 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     );
 
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("headless-test"),
-                required_features: wgpu::Features::empty(),
-                // downlevel_defaults: permissive enough for software renderers,
-                // still enforces everything we actually use.
-                required_limits: wgpu::Limits::downlevel_defaults(),
-                memory_hints: Default::default(),
-            },
-            None,
-        )
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("headless-test"),
+            required_features: wgpu::Features::empty(),
+            // downlevel_defaults: permissive enough for software renderers,
+            // still enforces everything we actually use.
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            memory_hints: Default::default(),
+            ..Default::default()
+        })
         .await
         .ok()?;
 

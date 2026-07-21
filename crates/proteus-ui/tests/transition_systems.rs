@@ -400,3 +400,148 @@ fn full_transition_fires_complete_after_sufficient_ticks() {
     world.flush();
     assert!(world.get::<ActiveTransition>(entity).is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial / boundary tests
+// ---------------------------------------------------------------------------
+
+/// A near-zero duration (1e-5 s) is below the `1e-4` clamp floor in
+/// `ActiveTransition::new`.  The stored duration must be clamped up to `1e-4`,
+/// and any realistic frame dt (≥ 1/240 s ≈ 4 ms) must satisfy `raw_t >= 1.0`
+/// on the very first tick — completing the transition immediately without NaN.
+///
+/// Note: `duration = 0.0` would trigger a `debug_assert!` in
+/// `ActiveTransition::new` (intentional loud-caller-error warning).  We use
+/// `1e-5` here — positive so the assert is silent, but well below the clamp
+/// floor so we still exercise the clamping and instant-completion paths.
+#[test]
+fn near_zero_duration_transition_completes_in_first_tick() {
+    let mut world = make_world();
+    let entity = world
+        .spawn((
+            red(),
+            Lifecycle::Idle,
+            TransitionRequest {
+                to: blue(),
+                config: config(1e-5), // tiny positive — clamped to 1e-4 internally
+                from_state: None,
+            },
+        ))
+        .id();
+
+    run(&mut world, transition_setup_system);
+
+    // Stored duration must have been clamped to at least 1e-4.
+    let stored_duration = world
+        .get::<ActiveTransition>(entity)
+        .unwrap()
+        .config
+        .duration;
+    assert!(
+        (stored_duration - 1e-4).abs() < 1e-9,
+        "duration below 1e-4 must be clamped to exactly 1e-4, got {stored_duration}"
+    );
+
+    // One tick with a realistic 60 Hz frame time — massively overshoots 0.1 ms.
+    let one_frame_dt = 1.0 / 60.0; // ~16.7 ms >> 0.1 ms
+    set_dt(&mut world, one_frame_dt);
+    run(&mut world, transition_tick_system);
+
+    let active = world.get::<ActiveTransition>(entity).unwrap();
+    assert!(
+        active.is_complete,
+        "near-zero-duration transition must complete within the first tick"
+    );
+    // Final QuadState must snap to the `to` target with no NaN or Inf.
+    let state = world.get::<QuadState>(entity).unwrap();
+    assert!(
+        state.position.x.is_finite(),
+        "position must not be NaN or Inf after near-zero-duration transition"
+    );
+    assert!(
+        (state.position.x - blue().position.x).abs() < 1e-3,
+        "state must snap to `to` target, got x={}",
+        state.position.x
+    );
+}
+
+/// Inserting a new `TransitionRequest` while a transition is in-flight
+/// (retargeting) must snapshot the **current mid-flight `QuadState`** as the
+/// new from-state — not the original from-state.  This ensures smooth
+/// motion: the animation starts from wherever it was interrupted, not from
+/// its original start position.
+#[test]
+fn retargeting_midtransition_starts_from_current_state() {
+    // A third QuadState to retarget to — distinct from red() and blue().
+    let green = QuadState {
+        position: Vec3::new(400.0, 0.0, 0.0),
+        size: Vec2::new(50.0, 50.0),
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: Vec2::new(0.5, 0.5),
+        color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+        corner_radius: 0.0,
+    };
+
+    let mut world = make_world();
+    let entity = world
+        .spawn((
+            red(),
+            Lifecycle::Idle,
+            TransitionRequest {
+                to: blue(),
+                config: config(1.0), // 1-second linear red → blue
+                from_state: None,
+            },
+        ))
+        .id();
+
+    // Phase 1: convert the request to an active transition.
+    run(&mut world, transition_setup_system);
+
+    // Phase 2: advance exactly 0.5 s — QuadState is now mid-flight at t=0.5.
+    set_dt(&mut world, 0.5);
+    run(&mut world, transition_tick_system);
+
+    // Verify we are at the expected midpoint (position.x = 100).
+    let mid_state = world.get::<QuadState>(entity).unwrap().clone();
+    assert!(
+        (mid_state.position.x - 100.0).abs() < 1e-3,
+        "expected mid-flight x=100, got {}",
+        mid_state.position.x
+    );
+
+    // Phase 3: retarget — insert a new TransitionRequest while still in-flight.
+    world.entity_mut(entity).insert(TransitionRequest {
+        to: green.clone(),
+        config: config(1.0),
+        from_state: None, // from_state=None means "snapshot current QuadState"
+    });
+
+    // Phase 4: setup system runs — should replace the ActiveTransition,
+    // snapshotting the mid-flight QuadState as the new from-state.
+    run(&mut world, transition_setup_system);
+
+    let new_active = world.get::<ActiveTransition>(entity).unwrap();
+
+    // from-state must match the mid-flight snapshot, not the original red().
+    assert!(
+        (new_active.from.position.x - 100.0).abs() < 1e-3,
+        "retargeted from.position.x must be the mid-flight value (100), got {}",
+        new_active.from.position.x
+    );
+
+    // to-state must be the new target (green).
+    assert!(
+        (new_active.to.position.x - 400.0).abs() < 1e-3,
+        "retargeted to.position.x must be green (400), got {}",
+        new_active.to.position.x
+    );
+
+    // elapsed resets to zero for the fresh transition.
+    assert!(
+        new_active.elapsed < 1e-6,
+        "elapsed must reset to 0 on retarget, got {}",
+        new_active.elapsed
+    );
+}

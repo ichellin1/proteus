@@ -24,11 +24,21 @@
 //!
 //! ## Architecture
 //!
-//! Identical to `proteus-shell-native` but uses the wgpu WebGL2 backend:
-//! - `wgpu::Backends::GL` instead of `all()`
+//! Identical to `proteus-shell-native` but uses the wgpu browser backend:
+//! - `wgpu::Backends::all()` — prefers BROWSER_WEBGPU (Chrome 113+/Firefox 119+),
+//!   falls back to GL/WebGL2 on older browsers
 //! - `wgpu::SurfaceTarget::Canvas(canvas)` instead of a winit surface
-//! - `wgpu::Limits::downlevel_webgl2_defaults()` to match WebGL2 caps
+//! - `wgpu::Limits::downlevel_webgl2_defaults()` as a conservative baseline
+//!   (safe under both WebGPU and WebGL2)
 //! - No `pollster`; `init` is `async fn` called directly from JS via `await`
+//!
+//! ## Backend selection rationale
+//!
+//! `Backends::GL` (WebGL2-only) hangs at `request_adapter` in Chrome builds
+//! where native WebGPU is also present — the GL adapter future stalls waiting
+//! on internal wgpu machinery that expects the WebGPU path.  `Backends::all()`
+//! resolves this: wgpu picks BROWSER_WEBGPU first (fast, no stall), and falls
+//! back to WebGL2 if the browser doesn't support WebGPU.
 
 use wasm_bindgen::prelude::*;
 
@@ -56,14 +66,50 @@ mod inner {
 
     use glam::{Vec2, Vec3, Vec4};
 
-    use proteus_render::{FontAtlas, QuadPipeline, MAIN_ATLAS_SIZE};
+    use proteus_render::{FontAtlas, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
     use proteus_ui::{
         collect_instances, ease_in_out_quad,
         transition::{CompletedTransitions, TransitionConfig},
         BakedText, DropShadow, Entity, Glow, GroupSource, GroupTarget, Interactable,
         InteractionEvents, Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld,
-        QuadState, SplitStrategy, Text, TransitionRequest, Visibility,
+        QuadState, SplitStrategy, Text, TransitionRequest, VideoPlayer, Visibility,
     };
+
+    // -------------------------------------------------------------------------
+    // Video constants (M9)
+    // -------------------------------------------------------------------------
+
+    /// Width of the synthetic video texture uploaded per frame.
+    const VIDEO_W: u32 = 320;
+    /// Height of the synthetic video texture uploaded per frame.
+    const VIDEO_H: u32 = 180;
+
+    /// Generate one frame of synthetic video: animated sinusoidal colour bands.
+    /// `t` is elapsed time in seconds. Returns `VIDEO_W × VIDEO_H × 4` RGBA bytes.
+    ///
+    /// wasm32-unknown-unknown has no OS threads, so unlike the native shell
+    /// (which generates frames on a background thread), this runs inline in
+    /// `tick()` — the browser's single-threaded JS/wasm event loop is the only
+    /// option without Web Workers.
+    fn generate_video_frame(t: f64, width: u32, height: u32) -> Vec<u8> {
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        let ft = t as f32;
+        for y in 0..height {
+            for x in 0..width {
+                let nx = x as f32 / width as f32;
+                let ny = y as f32 / height as f32;
+                let r = ((nx * 6.0 + ft * 1.1).sin() * 0.5 + 0.5) * 0.8 + 0.1;
+                let g = ((ny * 4.0 + ft * 0.7).sin() * 0.5 + 0.5) * 0.8 + 0.1;
+                let b = (((nx + ny) * 5.0 + ft * 1.3).sin() * 0.5 + 0.5) * 0.8 + 0.1;
+                let i = ((y * width + x) * 4) as usize;
+                rgba[i] = (r * 255.0) as u8;
+                rgba[i + 1] = (g * 255.0) as u8;
+                rgba[i + 2] = (b * 255.0) as u8;
+                rgba[i + 3] = 255;
+            }
+        }
+        rgba
+    }
 
     // -------------------------------------------------------------------------
     // Demo scene geometry  (identical to proteus-shell-native)
@@ -188,6 +234,12 @@ mod inner {
         items: [Entity; 3],
         phase: DemoPhase,
         staged_pointer: StagedPointer,
+
+        // ── video (M9) ──────────────────────────────────────────────────────
+        /// TextureId returned by `pipeline.init_video` — used for suspend/resume.
+        video_id: TextureId,
+        /// Wall-clock seconds elapsed since init, accumulated from `tick(dt_ms)`.
+        video_elapsed: f64,
     }
 
     #[wasm_bindgen]
@@ -216,10 +268,15 @@ mod inner {
             let width = canvas.width().max(1);
             let height = canvas.height().max(1);
 
-            // WebGL2 instance.
+            // Browser instance — prefers WebGPU, falls back to WebGL2.
+            // Do NOT restrict to `Backends::GL` here: that path hangs at
+            // `request_adapter` in Chrome builds that also have WebGPU present
+            // because the GL future stalls on internal wgpu book-keeping that
+            // assumes the WebGPU path ran first.  `all()` lets wgpu pick the
+            // best backend available in the current browser.
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::GL,
-                ..Default::default()
+                backends: wgpu::Backends::all(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
 
             // Surface bound to the canvas.  On wasm32 the canvas reference has
@@ -228,7 +285,7 @@ mod inner {
                 .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
                 .map_err(|e| JsValue::from_str(&format!("create_surface: {e}")))?;
 
-            // Adapter — WebGL2 only, no high-performance preference on mobile.
+            // Adapter — no high-performance preference; compatible with our canvas surface.
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::None,
@@ -236,21 +293,20 @@ mod inner {
                     force_fallback_adapter: false,
                 })
                 .await
-                .ok_or_else(|| JsValue::from_str("no suitable WebGL2 adapter"))?;
+                .map_err(|_| JsValue::from_str("no suitable WebGPU or WebGL2 adapter"))?;
 
-            log::info!("Adapter: {}", adapter.get_info().name);
+            let info = adapter.get_info();
+            log::info!("Adapter: {} (backend: {:?})", info.name, info.backend);
 
-            // Device & queue — WebGL2 limits.
+            // Device & queue — conservative WebGL2-compatible limits (safe under WebGPU too).
             let (device, queue) = adapter
-                .request_device(
-                    &wgpu::DeviceDescriptor {
-                        label: Some("proteus-web"),
-                        required_features: wgpu::Features::empty(),
-                        required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                        memory_hints: Default::default(),
-                    },
-                    None,
-                )
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("proteus-web"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                    memory_hints: Default::default(),
+                    ..Default::default()
+                })
                 .await
                 .map_err(|e| JsValue::from_str(&format!("request_device: {e}")))?;
 
@@ -276,7 +332,7 @@ mod inner {
             surface.configure(&device, &surface_config);
 
             // Render pipeline.
-            let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
+            let mut pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
             pipeline.set_view_projection(&queue, QuadPipeline::ortho(width as f32, height as f32));
 
             log::info!(
@@ -288,6 +344,11 @@ mod inner {
 
             // Font atlas.
             let font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
+
+            // Video texture (M9). The returned VideoFrameSender is unused here —
+            // frames are pushed directly via `upload_video_frame` in `tick()`
+            // rather than through the channel the native shell's decoder thread uses.
+            let (video_id, _video_sender) = pipeline.init_video(&device, VIDEO_W, VIDEO_H);
 
             // ECS world + demo entities.
             let mut ui_world = ProteusWorld::new();
@@ -349,14 +410,20 @@ mod inner {
                 ui_world
                     .world
                     .spawn((
-                        item_quad(2),
+                        // item[2] streams video — set color to white so the frame is
+                        // displayed unfiltered.  The label "Whale" floats on top.
+                        QuadState {
+                            color: Vec4::ONE,
+                            ..item_quad(2)
+                        },
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
                         Text::new(item_labels[2], 18.0),
                         Interactable,
+                        VideoPlayer,
                         Glow {
                             radius: 17.0,
-                            color: Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender — matches item[2] fill
+                            color: Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender glow
                             intensity: 0.7,
                         },
                     ))
@@ -377,6 +444,8 @@ mod inner {
                 items,
                 phase: DemoPhase::ButtonIdle,
                 staged_pointer: StagedPointer::default(),
+                video_id,
+                video_elapsed: 0.0,
             })
         }
 
@@ -402,18 +471,26 @@ mod inner {
             self.bake_pending_text();
             self.advance_demo(dt);
 
+            // Push the next synthetic video frame (M9). Generated and uploaded
+            // inline each tick — see `generate_video_frame` for why this differs
+            // from the native shell's background-thread producer.
+            self.video_elapsed += dt as f64;
+            let frame = generate_video_frame(self.video_elapsed, VIDEO_W, VIDEO_H);
+            self.pipeline.upload_video_frame(&self.queue, &frame);
+
             // Collect visible instances.
             // See `proteus_ui::collect` for the two-instance-per-text-entity model.
             let instances = collect_instances(&mut self.ui_world.world);
 
             let frame = match self.surface.get_current_texture() {
-                Ok(f) => f,
-                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                wgpu::CurrentSurfaceTexture::Success(f)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                     self.surface.configure(&self.device, &self.surface_config);
                     return;
                 }
-                Err(e) => {
-                    log::error!("Surface error: {e}");
+                e => {
+                    log::error!("Surface error: {e:?}");
                     return;
                 }
             };
@@ -436,6 +513,7 @@ mod inner {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
                                 r: 0.94,
@@ -449,6 +527,7 @@ mod inner {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 if !instances.is_empty() {
@@ -474,6 +553,24 @@ mod inner {
                 &self.queue,
                 QuadPipeline::ortho(width as f32, height as f32),
             );
+        }
+
+        // ── Backgrounding (M9) ──────────────────────────────────────────────────
+
+        /// Release the video texture's GPU memory. Call this from a
+        /// `document.visibilitychange` listener when the tab becomes hidden.
+        #[wasm_bindgen]
+        pub fn on_background(&mut self) {
+            self.pipeline.suspend_video(&self.device, self.video_id);
+        }
+
+        /// Re-allocate the video texture after [`on_background`]. Call this
+        /// from a `document.visibilitychange` listener when the tab becomes
+        /// visible again.
+        #[wasm_bindgen]
+        pub fn on_foreground(&mut self) {
+            self.pipeline
+                .resume_video(&self.device, self.video_id, VIDEO_W, VIDEO_H);
         }
 
         // ── Pointer event entry points (called from JS) ────────────────────────
