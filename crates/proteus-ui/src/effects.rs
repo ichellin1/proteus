@@ -175,3 +175,61 @@ impl Glow {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Border
+// ---------------------------------------------------------------------------
+
+/// SDF-based border rendered in the fragment shader via the existing
+/// `sdf_rounded_rect` distance field — the same one `corner_radius` uses.
+///
+/// Attach this component to any entity that has a [`crate::QuadState`] to give
+/// it a border. Remove the component to disable it (zero runtime cost — the
+/// shader branch is not entered when `width == 0.0`).
+///
+/// ## Fields
+///
+/// - `width`  — border thickness in pixels. `0.0` disables the border.
+/// - `color`  — RGBA border color. `alpha == 0.0` is a no-op.
+/// - `offset` — placement relative to the shape edge: `-1.0` inner, `0.0`
+///   centered, `1.0` outer.
+///
+/// ## Limitation (inherited from the shader)
+///
+/// Only `offset = -1.0` (fully inner) renders correctly today. `0.0` shows
+/// only the inner half of the band, and `1.0` renders nothing — outer-border
+/// support requires inflating the quad geometry, which hasn't landed yet.
+/// [`Border::new`] defaults to `-1.0` for this reason.
+#[derive(Component, Clone, Debug)]
+pub struct Border {
+    /// Border thickness in pixels. `0.0` disables the border.
+    pub width: f32,
+    /// Border color and opacity. `alpha == 0.0` disables the border.
+    pub color: Vec4,
+    /// Placement relative to the shape edge: -1.0 inner, 0.0 center, 1.0 outer.
+    /// Only `-1.0` renders correctly — see the type-level limitation note.
+    pub offset: f32,
+}
+
+impl Default for Border {
+    /// A 2 px opaque white inner border.
+    fn default() -> Self {
+        Self {
+            width: 2.0,
+            color: Vec4::ONE,
+            offset: -1.0,
+        }
+    }
+}
+
+impl Border {
+    /// Compact factory: specify width and color; offset defaults to `-1.0`
+    /// (inner) — the only placement that renders correctly today.
+    pub fn new(width: f32, color: Vec4) -> Self {
+        Self {
+            width,
+            color,
+            ..Self::default()
+        }
+    }
+}

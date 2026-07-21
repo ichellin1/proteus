@@ -24,14 +24,18 @@
 //! | `glow_params_populate_instance` | M8.6: Glow encodes zero-offset halo into shadow slots |
 //! | `no_glow_by_default` | M8.6: absence of Glow → all-zero shadow fields |
 //! | `shadow_wins_over_glow` | M8.6: DropShadow takes precedence over Glow |
+//! | `border_params_populate_instance` | Border fields copy into instance border slots |
+//! | `no_border_by_default` | absence of Border → all-zero border fields |
+//! | `border_not_on_text_overlay` | overlay layer never carries border data |
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_render::QuadPipeline;
+use proteus_render::{QuadPipeline, TransitionAtlasAllocator};
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, BakedText, DropShadow, Glow,
-    ProteusWorld, QuadState, Text, TransitionRequest, VideoPlayer, Visibility,
+    collect_instances, linear, transition::TransitionConfig, ActiveTransition, BakedText,
+    BakedTexture, Border, DropShadow, Glow, ProteusWorld, QuadState, Text, TransitionRequest,
+    VideoPlayer, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -145,6 +149,7 @@ fn text_entity_produces_two_instances() {
     let baked = BakedText {
         uv_offset: [0.10, 0.20],
         uv_scale: [0.05, 0.01],
+        pixel_size: [60.0, 24.0],
     };
 
     let mut world = World::new();
@@ -196,6 +201,7 @@ fn text_color_applied_to_overlay() {
     let baked = BakedText {
         uv_offset: [0.0, 0.0],
         uv_scale: [0.1, 0.02],
+        pixel_size: [60.0, 24.0],
     };
 
     let mut world = World::new();
@@ -287,6 +293,7 @@ fn shadow_not_on_text_overlay() {
     let baked = BakedText {
         uv_offset: [0.1, 0.2],
         uv_scale: [0.05, 0.01],
+        pixel_size: [60.0, 24.0],
     };
 
     let mut world = World::new();
@@ -551,5 +558,222 @@ fn shadow_wins_over_glow() {
         &instances[0].shadow_color,
         &[0.0, 0.0, 0.0, 0.45],
         "shadow_color must come from DropShadow, not Glow",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Border
+// ---------------------------------------------------------------------------
+
+#[test]
+fn border_params_populate_instance() {
+    let border = Border {
+        width: 5.0,
+        color: Vec4::new(0.68, 0.85, 0.90, 1.0),
+        offset: -1.0,
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), border));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert!(
+        (instances[0].border_width - 5.0).abs() < 1e-5,
+        "border_width"
+    );
+    assert_f32_slice_approx(
+        &instances[0].border_color,
+        &[0.68, 0.85, 0.90, 1.0],
+        "border_color",
+    );
+    assert!(
+        (instances[0].border_offset - (-1.0)).abs() < 1e-5,
+        "border_offset"
+    );
+}
+
+#[test]
+fn no_border_by_default() {
+    let mut world = World::new();
+    world.spawn(sky_blue_button()); // no Border
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].border_width, 0.0, "border_width should be 0");
+    assert_f32_slice_approx(
+        &instances[0].border_color,
+        &[0.0, 0.0, 0.0, 0.0],
+        "border_color should be all-zero without Border",
+    );
+    assert_eq!(instances[0].border_offset, 0.0, "border_offset should be 0");
+}
+
+/// The text overlay instance (layer 1) must never carry border data, even when
+/// the entity has a `Border` component — the background layer already draws
+/// the border; duplicating it on the overlay would render it twice.
+#[test]
+fn border_not_on_text_overlay() {
+    let border = Border {
+        width: 5.0,
+        color: Vec4::new(0.68, 0.85, 0.90, 1.0),
+        offset: -1.0,
+    };
+    let baked = BakedText {
+        uv_offset: [0.1, 0.2],
+        uv_scale: [0.05, 0.01],
+        pixel_size: [60.0, 24.0],
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked, Text::new("START", 18.0), border));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 2, "background + text overlay");
+    assert_eq!(
+        instances[1].border_width, 0.0,
+        "text overlay must not carry border data"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BakedTexture (two-sided crossfade)
+// ---------------------------------------------------------------------------
+
+/// A valid `TransitionAllocId` for test fixtures — `BakedTexture::own_alloc`
+/// has no public constructor other than going through a real allocator (by
+/// design: it's meant to always correspond to a live allocation). The
+/// allocator itself is pure CPU bookkeeping, no GPU device needed.
+fn fixture_alloc_id() -> proteus_render::TransitionAllocId {
+    let mut allocator = TransitionAtlasAllocator::new(1024);
+    allocator.allocate(64, 64).unwrap().0
+}
+
+fn baked_texture() -> BakedTexture {
+    BakedTexture {
+        from_uv_offset: [0.1, 0.2],
+        from_uv_scale: [0.05, 0.05],
+        to_uv_offset: [0.6, 0.7],
+        to_uv_scale: [0.03, 0.03],
+        own_alloc: fixture_alloc_id(),
+    }
+}
+
+/// `BakedTexture` routes to the two crossfade UV pairs and forces
+/// `atlas_page = 1` (`transition_atlas` — the only atlas the shader's
+/// crossfade path reads `base_uv` from).
+#[test]
+fn baked_texture_populates_both_uv_sides() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_texture()));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].atlas_page, 1, "must sample transition_atlas");
+    assert_f32_slice_approx(&instances[0].base_uv_offset, &[0.1, 0.2], "base_uv_offset");
+    assert_f32_slice_approx(&instances[0].base_uv_scale, &[0.05, 0.05], "base_uv_scale");
+    assert_f32_slice_approx(&instances[0].uv_offset, &[0.6, 0.7], "uv_offset (to-side)");
+    assert_f32_slice_approx(&instances[0].uv_scale, &[0.03, 0.03], "uv_scale (to-side)");
+}
+
+/// With no `ActiveTransition` on the entity, `crossfade_t` defaults to 1.0 —
+/// show the to-side fully (matches a virtual that already finished, or one
+/// that's about to start with delay still pending).
+#[test]
+fn baked_texture_without_active_transition_shows_to_side_fully() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_texture()));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances[0].crossfade_t, 1.0);
+}
+
+/// `crossfade_t` tracks the entity's own `ActiveTransition` progress (eased),
+/// matching the same computation `transition_tick_system` uses.
+#[test]
+fn baked_texture_crossfade_t_tracks_active_transition_progress() {
+    let active = ActiveTransition::new(
+        sky_blue_button(),
+        gold_detail(),
+        TransitionConfig {
+            duration: 1.0,
+            delay: 0.0,
+            easing: linear,
+        },
+    );
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_texture(), active));
+
+    let instances = collect_instances(&mut world);
+
+    // Fresh ActiveTransition: elapsed = 0.0, so raw_t = 0.0 — but the shader
+    // skips its crossfade branch entirely at exactly 0.0 (a zero-cost no-bake
+    // fast path), so this is clamped to a tiny epsilon above zero rather than
+    // landing on 0.0 exactly.
+    assert!(
+        instances[0].crossfade_t > 0.0 && instances[0].crossfade_t < 0.01,
+        "expected a near-zero (but not exactly zero) crossfade_t, got {}",
+        instances[0].crossfade_t,
+    );
+}
+
+/// `crossfade_t` still respects the delay phase — burns delay first, exactly
+/// like `transition_tick_system`'s own elapsed-time accounting.
+#[test]
+fn baked_texture_crossfade_t_is_near_zero_during_delay() {
+    let mut active = ActiveTransition::new(
+        sky_blue_button(),
+        gold_detail(),
+        TransitionConfig {
+            duration: 1.0,
+            delay: 5.0,
+            easing: linear,
+        },
+    );
+    active.delay_remaining = 5.0; // still fully within the delay window
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_texture(), active));
+
+    let instances = collect_instances(&mut world);
+
+    assert!(
+        instances[0].crossfade_t < 0.01,
+        "expected near-zero crossfade_t during delay, got {}",
+        instances[0].crossfade_t,
+    );
+}
+
+/// The text overlay instance (layer 1) must never carry `BakedTexture`
+/// crossfade data — it isn't part of the baked snapshot's own crossfade;
+/// only the background layer is.
+#[test]
+fn baked_texture_not_on_text_overlay() {
+    let baked_text = BakedText {
+        uv_offset: [0.1, 0.2],
+        uv_scale: [0.05, 0.01],
+        pixel_size: [60.0, 24.0],
+    };
+
+    let mut world = World::new();
+    world.spawn((
+        sky_blue_button(),
+        baked_text,
+        Text::new("START", 18.0),
+        baked_texture(),
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 2, "background + text overlay");
+    assert_eq!(
+        instances[1].atlas_page, 0,
+        "text overlay must keep sampling main_atlas, not transition_atlas"
     );
 }

@@ -35,6 +35,25 @@
 //! a zero offset (producing a symmetric halo).  If both are present, `DropShadow`
 //! takes precedence.
 //!
+//! ## Border
+//!
+//! When a [`Border`] component is present its `width`/`color`/`offset` are copied
+//! directly into the instance's `border_width`/`border_color`/`border_offset`
+//! fields — independent of shadow/glow, so all three can be present at once.
+//!
+//! ## Baked texture crossfade (two-sided)
+//!
+//! When a [`BakedTexture`] component is present, its `from_*` fields become
+//! the background instance's `base_uv_offset`/`base_uv_scale` and its `to_*`
+//! fields become `uv_offset`/`uv_scale` (with `atlas_page` forced to `1` —
+//! `transition_atlas` holds both sides). `crossfade_t` is driven from the
+//! entity's own [`ActiveTransition`] progress each frame. Used by
+//! transition-bake virtual slices (see `topology`) so a slice crossfades
+//! texel-for-texel from an actual cropped snapshot of the source entity's
+//! rendered appearance to an actual snapshot of its target's rendered
+//! appearance — shape, border, *and* text on both ends — rather than a
+//! flat-color approximation on either side.
+//!
 //! ## Video (M9)
 //!
 //! When a [`crate::VideoPlayer`] component is present the background instance's
@@ -54,17 +73,55 @@ use glam::Vec4;
 use proteus_render::{QuadInstance, QuadPipeline};
 
 use crate::{
-    effects::{DropShadow, Glow},
+    effects::{Border, DropShadow, Glow},
     video::VideoPlayer,
     ActiveTransition, BakedText, QuadState, Text, Virtual, Visibility,
 };
+
+// ---------------------------------------------------------------------------
+// BakedTexture
+// ---------------------------------------------------------------------------
+
+/// A two-sided background-instance crossfade: UV regions within
+/// `transition_atlas` holding baked snapshots of *both* a virtual slice's
+/// origin and its destination appearance.
+///
+/// Used by transition-bake virtual slices (see `topology::one_to_n_setup_system`
+/// / `n_to_one_setup_system`): the source entity is baked once and sliced into
+/// N thirds (the `from_*` side, different per slice), and each target entity is
+/// baked once in full (the `to_*` side, one whole snapshot per slice — shape,
+/// border, *and* text). Each frame, [`push_entity_instances`] reads the
+/// entity's own [`ActiveTransition`] to compute `crossfade_t`, so the slice
+/// crossfades texel-for-texel from the source's cropped appearance to the
+/// target's real appearance — not just geometry, and not a flat-color
+/// approximation on either end.
+///
+/// `own_alloc` is whichever side of the bake is unique to this specific
+/// virtual (the target bake for 1→N, the source bake for N→1) — freed when
+/// this virtual despawns. The side shared across all virtuals in the group
+/// (the one common source bake for 1→N, the one common destination bake for
+/// N→1) is *not* stored here — see `ActiveGroupTransition::shared_alloc`,
+/// freed once when the whole group completes.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct BakedTexture {
+    /// Normalised UV origin of the from-side, within `transition_atlas`.
+    pub from_uv_offset: [f32; 2],
+    /// Normalised UV extent of the from-side, within `transition_atlas`.
+    pub from_uv_scale: [f32; 2],
+    /// Normalised UV origin of the to-side, within `transition_atlas`.
+    pub to_uv_offset: [f32; 2],
+    /// Normalised UV extent of the to-side, within `transition_atlas`.
+    pub to_uv_scale: [f32; 2],
+    /// This virtual's own bake allocation — freed on despawn.
+    pub own_alloc: proteus_render::TransitionAllocId,
+}
 
 // ---------------------------------------------------------------------------
 // quad_state_to_instance
 // ---------------------------------------------------------------------------
 
 /// Convert a [`QuadState`], optional [`BakedText`], optional [`DropShadow`],
-/// and optional [`Glow`] into a [`QuadInstance`].
+/// optional [`Glow`], and optional [`Border`] into a [`QuadInstance`].
 ///
 /// - If `baked` is `None` the UV fields address the white-pixel sentinel in
 ///   `main_atlas`, so the quad renders as a solid colour.
@@ -75,6 +132,8 @@ use crate::{
 /// - If `shadow` is `None` and `glow` is `Some`, the glow is encoded into the
 ///   same shadow slots with a zero offset, producing a symmetric halo.  The halo
 ///   color is taken from `Glow::color` and is independent of the entity's fill.
+/// - If `border` is `Some` its fields are copied straight into the instance's
+///   border slots, independent of shadow/glow.
 ///
 /// In the two-instance model this is called **twice** per text entity:
 /// once with `baked = None, shadow = Some(...), glow = Some(...)` for the
@@ -85,6 +144,7 @@ pub fn quad_state_to_instance(
     baked: Option<&BakedText>,
     shadow: Option<&DropShadow>,
     glow: Option<&Glow>,
+    border: Option<&Border>,
 ) -> QuadInstance {
     let (uv_offset, uv_scale) = match baked {
         Some(b) => (b.uv_offset, b.uv_scale),
@@ -115,6 +175,11 @@ pub fn quad_state_to_instance(
         },
     };
 
+    let (border_width, border_color, border_offset) = match border {
+        Some(b) => (b.width, b.color.to_array(), b.offset),
+        None => (0.0, [0.0, 0.0, 0.0, 0.0], 0.0),
+    };
+
     QuadInstance {
         position: qs.position.to_array(),
         size: qs.size.to_array(),
@@ -130,9 +195,9 @@ pub fn quad_state_to_instance(
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
         crossfade_t: 0.0,
-        border_width: 0.0,
-        border_color: [0.0, 0.0, 0.0, 0.0],
-        border_offset: 0.0,
+        border_width,
+        border_color,
+        border_offset,
         shadow_params,
         shadow_color,
     }
@@ -141,6 +206,94 @@ pub fn quad_state_to_instance(
 // ---------------------------------------------------------------------------
 // collect_instances
 // ---------------------------------------------------------------------------
+
+/// Append one entity's instance(s) — background, plus a text overlay if it
+/// has baked glyph data — to `out`. Shared by [`collect_instances`] (which
+/// already has `qs` from its batched query) and [`collect_entity_instances`]
+/// (a single-entity convenience wrapper for callers outside the per-frame
+/// render loop, e.g. baking a source entity's appearance for a transition).
+fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec<QuadInstance>) {
+    // (a) Solid-color (or video/baked-texture) background quad — shadow or
+    //     glow applied here. DropShadow takes precedence over Glow when both
+    //     are present.
+    let shadow = world.get::<DropShadow>(e);
+    let glow = world.get::<Glow>(e);
+    let border = world.get::<Border>(e);
+    let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
+    if world.get::<VideoPlayer>(e).is_some() {
+        bg_inst.atlas_page = 2;
+        bg_inst.uv_offset = [0.0, 0.0];
+        bg_inst.uv_scale = [1.0, 1.0];
+    }
+    // A BakedTexture drives a two-sided crossfade: base_uv/scale point at the
+    // source's baked snapshot, uv/scale (atlas_page 1) point at the target's
+    // own baked snapshot, and crossfade_t tracks this entity's own
+    // ActiveTransition progress (mirrors the eased-t computation used for the
+    // text-overlay fade below). Clamped to a tiny epsilon above zero rather
+    // than allowed to land on exactly 0.0 — the shader skips the crossfade
+    // branch entirely at crossfade_t == 0.0 (a zero-cost fast path when no
+    // bake is in play), which would otherwise show the to-side for one frame
+    // before any elapsed time has accumulated.
+    if let Some(bt) = world.get::<BakedTexture>(e) {
+        bg_inst.atlas_page = 1; // transition_atlas — holds both baked snapshots
+        bg_inst.uv_offset = bt.to_uv_offset;
+        bg_inst.uv_scale = bt.to_uv_scale;
+        bg_inst.base_uv_offset = bt.from_uv_offset;
+        bg_inst.base_uv_scale = bt.from_uv_scale;
+        bg_inst.crossfade_t = world
+            .get::<ActiveTransition>(e)
+            .map(|active| {
+                let raw_t = if active.delay_remaining > 0.0 {
+                    0.0
+                } else {
+                    (active.elapsed / active.config.duration).min(1.0)
+                };
+                (active.config.easing)(raw_t).max(0.0001)
+            })
+            .unwrap_or(1.0); // no active transition — show the to-side fully
+    }
+    out.push(bg_inst);
+
+    // (b) Text overlay — only for entities with baked glyph data.
+    //     No shadow/glow on the overlay: it sits on top of the background (which
+    //     already casts the shadow/glow), so doubling it would look wrong.
+    if let Some(b) = world.get::<BakedText>(e) {
+        let text_color = world.get::<Text>(e).map(|t| t.color).unwrap_or(Vec4::ONE);
+        let mut text_qs = qs.clone();
+        text_qs.color = text_color;
+        // Size the overlay to the glyph run's actual footprint (centered on
+        // the parent, since anchor is unchanged) rather than stretching it
+        // to fill the parent's full geometry.
+        text_qs.size = b.pixel_size.into();
+        // The parent's corner_radius doesn't apply to the overlay — it was
+        // harmless when the overlay matched the parent's size, but on the
+        // overlay's now much smaller glyph-sized quad an inherited radius
+        // (e.g. a circular button's) can exceed the quad's own half-size,
+        // collapsing the rounded-rect SDF down to a sliver around the
+        // center and clipping away most of the text.
+        text_qs.corner_radius = 0.0;
+        let mut text_inst = quad_state_to_instance(&text_qs, Some(b), None, None, None);
+
+        // Virtual entities carry the *source* entity's text during a group
+        // transition.  Fade it out in sync with the geometry so that the
+        // texels dissolve rather than snapping off at completion.
+        // We mirror the same eased-t computation that transition_tick_system
+        // uses so the text fade tracks the geometry exactly.
+        if world.get::<Virtual>(e).is_some() {
+            if let Some(active) = world.get::<ActiveTransition>(e) {
+                let raw_t = if active.delay_remaining > 0.0 {
+                    0.0
+                } else {
+                    (active.elapsed / active.config.duration).min(1.0)
+                };
+                let eased_t = (active.config.easing)(raw_t);
+                text_inst.opacity = 1.0 - eased_t;
+            }
+        }
+
+        out.push(text_inst);
+    }
+}
 
 /// Collect all visible [`QuadInstance`]s from the ECS world.
 ///
@@ -166,47 +319,24 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
         if !vis.is_none_or(|v| v) {
             continue;
         }
-        // (a) Solid-color (or video) background quad — shadow or glow applied here.
-        //     DropShadow takes precedence over Glow when both are present.
-        //     When the entity has a VideoPlayer component the quad samples from
-        //     atlas_page 2 (video_atlas) with UV covering the full texture.
-        let shadow = world.get::<DropShadow>(e);
-        let glow = world.get::<Glow>(e);
-        let mut bg_inst = quad_state_to_instance(&qs, None, shadow, glow);
-        if world.get::<VideoPlayer>(e).is_some() {
-            bg_inst.atlas_page = 2;
-            bg_inst.uv_offset = [0.0, 0.0];
-            bg_inst.uv_scale = [1.0, 1.0];
-        }
-        out.push(bg_inst);
-        // (b) Text overlay — only for entities with baked glyph data.
-        //     No shadow/glow on the overlay: it sits on top of the background (which
-        //     already casts the shadow/glow), so doubling it would look wrong.
-        if let Some(b) = world.get::<BakedText>(e) {
-            let text_color = world.get::<Text>(e).map(|t| t.color).unwrap_or(Vec4::ONE);
-            let mut text_qs = qs.clone();
-            text_qs.color = text_color;
-            let mut text_inst = quad_state_to_instance(&text_qs, Some(b), None, None);
+        push_entity_instances(world, e, &qs, &mut out);
+    }
+    out
+}
 
-            // Virtual entities carry the *source* entity's text during a group
-            // transition.  Fade it out in sync with the geometry so that the
-            // texels dissolve rather than snapping off at completion.
-            // We mirror the same eased-t computation that transition_tick_system
-            // uses so the text fade tracks the geometry exactly.
-            if world.get::<Virtual>(e).is_some() {
-                if let Some(active) = world.get::<ActiveTransition>(e) {
-                    let raw_t = if active.delay_remaining > 0.0 {
-                        0.0
-                    } else {
-                        (active.elapsed / active.config.duration).min(1.0)
-                    };
-                    let eased_t = (active.config.easing)(raw_t);
-                    text_inst.opacity = 1.0 - eased_t;
-                }
-            }
-
-            out.push(text_inst);
-        }
+/// Build the [`QuadInstance`]s for a single entity, ignoring [`Visibility`].
+///
+/// A convenience wrapper around the same per-entity logic [`collect_instances`]
+/// uses, for callers that need one entity's instances outside the normal
+/// per-frame render loop — e.g. baking a source entity's rendered appearance
+/// into a texture before a Slice group transition (see
+/// `QuadPipeline::bake_instances_to_main_atlas`). Returns an empty vec if the
+/// entity has no [`QuadState`].
+pub fn collect_entity_instances(world: &World, entity: Entity) -> Vec<QuadInstance> {
+    let mut out = Vec::new();
+    if let Some(qs) = world.get::<QuadState>(entity) {
+        let qs = qs.clone();
+        push_entity_instances(world, entity, &qs, &mut out);
     }
     out
 }
