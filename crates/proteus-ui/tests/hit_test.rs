@@ -141,6 +141,75 @@ fn virtual_entity_not_hit_testable() {
     );
 }
 
+/// Clicking exactly on the left edge of a quad's AABB must register as a hit.
+/// `quad_contains` is defined as `[left, right)` — the left boundary is inclusive.
+///
+/// Quad at (100, 100) with size 100×100 and center anchor occupies x ∈ [50, 150).
+/// x=50 is the left edge and must be inside the bounds.
+#[test]
+fn click_at_left_boundary_hits() {
+    let mut world = ProteusWorld::new();
+    // Bounds: x ∈ [50, 150), y ∈ [50, 150).
+    let e = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+
+    let clicked = click_at(&mut world, Vec2::new(50.0, 100.0));
+
+    assert_eq!(
+        clicked,
+        vec![e],
+        "left boundary x=50 must be inside [50, 150)"
+    );
+}
+
+/// Clicking exactly on the right edge of a quad's AABB must register as a miss.
+/// `quad_contains` is defined as `[left, right)` — the right boundary is exclusive.
+///
+/// Quad at (100, 100) with size 100×100 and center anchor occupies x ∈ [50, 150).
+/// x=150 is the right edge and must be outside the bounds.
+#[test]
+fn click_at_right_boundary_misses() {
+    let mut world = ProteusWorld::new();
+    // Bounds: x ∈ [50, 150), y ∈ [50, 150).
+    world.world.spawn((quad_at(100.0, 100.0), Interactable));
+
+    let clicked = click_at(&mut world, Vec2::new(150.0, 100.0));
+
+    assert!(
+        clicked.is_empty(),
+        "right boundary x=150 must be outside [50, 150)"
+    );
+}
+
+/// When two quads overlap the pointer position, the one inserted later into the
+/// ECS world wins — matching GPU draw order (last drawn = visually on top).
+/// This specifies the current semantics; the alternative (first insertion wins)
+/// would be equally valid but different.
+#[test]
+fn top_draw_order_entity_wins_when_quads_overlap() {
+    let mut world = ProteusWorld::new();
+
+    // Both quads centered at (100, 100), same size — fully overlapping.
+    let _bottom = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+    let top = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+
+    let clicked = click_at(&mut world, Vec2::new(100.0, 100.0));
+
+    assert_eq!(
+        clicked,
+        vec![top],
+        "later-inserted (top draw order) entity must win over earlier-inserted"
+    );
+}
+
 /// `hover_entered` fires on the first frame the pointer overlaps an entity;
 /// `hover_exited` fires on the first frame the pointer no longer overlaps it.
 #[test]

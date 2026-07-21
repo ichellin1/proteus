@@ -7,7 +7,4 @@ pub enum GpuError {
 
     #[error("Failed to create GPU device: {0}")]
     DeviceCreation(#[from] wgpu::RequestDeviceError),
-
-    #[error("Surface error: {0}")]
-    Surface(#[from] wgpu::SurfaceError),
 }

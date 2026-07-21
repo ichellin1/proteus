@@ -241,8 +241,8 @@ impl QuadPipeline {
         // --- Pipeline layout ---
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("quad_pipeline_layout"),
-            bind_group_layouts: &[&uniform_layout, &atlas_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&uniform_layout), Some(&atlas_layout)],
+            immediate_size: 0,
         });
 
         // --- Render pipeline ---
@@ -251,13 +251,13 @@ impl QuadPipeline {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[quad_vertex_layout(), QuadInstance::buffer_layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     // Standard alpha blending: src_alpha * src + (1 - src_alpha) * dst
@@ -277,7 +277,7 @@ impl QuadPipeline {
             },
             depth_stencil: None, // Z ordering via instance sort order for now
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -336,7 +336,7 @@ impl QuadPipeline {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -470,14 +470,14 @@ impl QuadPipeline {
         );
 
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self._main_atlas,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             rgba_data,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
                 rows_per_image: Some(height),
@@ -581,14 +581,14 @@ impl QuadPipeline {
             rgba.len(),
         );
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.video_atlas,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             rgba,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
@@ -740,14 +740,14 @@ impl QuadPipeline {
         // Write a 1×1 white pixel at (0, 0) in main_atlas.
         // Components with no texture use uv_offset=[0,0], uv_scale=[1/atlas_size].
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &main_atlas,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &[255u8, 255, 255, 255], // RGBA white
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4),
                 rows_per_image: Some(1),

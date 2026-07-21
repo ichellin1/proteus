@@ -913,3 +913,60 @@ fn slice_child_behavior_sets_per_virtual_duration() {
     assert!((durations[1] - 0.2).abs() < 1e-5, "mid duration = 0.2");
     assert!((durations[2] - 0.3).abs() < 1e-5, "longest duration = 0.3");
 }
+
+// ---------------------------------------------------------------------------
+// Edge-case / boundary
+// ---------------------------------------------------------------------------
+
+/// A `OneToNRequest` with an empty `targets` vec is a degenerate but valid
+/// call.  The system must not panic and must produce **zero** virtual entities.
+///
+/// With no children to animate there is nothing to coordinate, so
+/// `one_to_n_setup_system` should be a silent no-op with respect to virtual
+/// entity creation (both Bake and Slice strategies).
+#[test]
+fn one_to_n_with_zero_targets_is_noop() {
+    let mut world = make_world();
+
+    // Slice strategy — this is the path that spawns virtual entities.
+    world.spawn((
+        red(),
+        Lifecycle::Idle,
+        OneToNRequest {
+            targets: vec![], // empty — no children
+            default_config: default_cfg(),
+            child_behavior: None,
+            strategy: SplitStrategy::Slice,
+        },
+    ));
+
+    run(&mut world, one_to_n_setup_system);
+    world.flush();
+
+    assert_eq!(
+        count_with::<Virtual>(&mut world),
+        0,
+        "zero targets must produce zero virtual entities"
+    );
+
+    // Bake strategy with zero targets — also must not spawn anything.
+    world.spawn((
+        red(),
+        Lifecycle::Idle,
+        OneToNRequest {
+            targets: vec![],
+            default_config: default_cfg(),
+            child_behavior: None,
+            strategy: SplitStrategy::Bake,
+        },
+    ));
+
+    run(&mut world, one_to_n_setup_system);
+    world.flush();
+
+    assert_eq!(
+        count_with::<Virtual>(&mut world),
+        0,
+        "bake strategy with zero targets must also produce zero virtual entities"
+    );
+}

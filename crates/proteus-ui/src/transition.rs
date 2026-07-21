@@ -107,16 +107,24 @@ impl ActiveTransition {
     pub fn new(from: QuadState, to: QuadState, config: TransitionConfig) -> Self {
         debug_assert!(
             config.duration > 0.0,
-            "TransitionConfig.duration must be positive (got {})",
+            "TransitionConfig.duration must be positive (got {}); treating as instant",
             config.duration
         );
+        // Clamp to 0.1 ms minimum so division in transition_tick_system never
+        // produces NaN.  A zero or negative duration is a caller error; in
+        // practice any non-zero tick will immediately satisfy raw_t >= 1.0.
+        let duration = config.duration.max(1e-4);
         let delay_remaining = config.delay.max(0.0);
         Self {
             from,
             to,
             elapsed: 0.0,
             delay_remaining,
-            config,
+            config: TransitionConfig {
+                duration,
+                delay: config.delay,
+                easing: config.easing,
+            },
             is_complete: false,
         }
     }

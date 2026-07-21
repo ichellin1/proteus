@@ -19,7 +19,7 @@ repository = "https://github.com/isaacchellin/proteus"
 [workspace.dependencies]
 # GPU
 # "webgl" is required for the WebGL2 backend on wasm — without it, web builds are WebGPU-only
-wgpu = { version = "22", features = ["wgsl", "webgl"] }
+wgpu = { version = "29", features = ["wgsl", "webgl"] }
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 etagere = "0.3"  # shelf-based 2D atlas packing (used by TextureRegistry)

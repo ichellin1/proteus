@@ -433,6 +433,103 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // UV-computation tests — mirrors the WGSL fragment shader logic in Rust.
+    //
+    // The fragment shader computes `norm_uv` from `local_pos` and `half_size`:
+    //
+    //   let safe_half   = max(half_size, 0.5);
+    //   let norm_uv_raw = (local_pos + safe_half) / (safe_half * 2.0);
+    //   let norm_uv     = clamp(vec2(norm_uv_raw.x, 1.0 - norm_uv_raw.y), 0, 1);
+    //
+    // The Y-flip (1.0 - raw.y) is required because:
+    //   • World Y increases UPWARD: top of entity = +half_y, bottom = -half_y
+    //   • UV Y convention is DOWN:  top of texture = 0,      bottom = 1
+    //
+    // Without the flip, textures (BakedText, VideoPlayer) appear upside-down.
+    // -----------------------------------------------------------------------
+
+    /// Mirror of the fragment-shader UV computation from quad.wgsl.
+    fn compute_norm_uv(local_pos: glam::Vec2, half_size: glam::Vec2) -> glam::Vec2 {
+        let safe_half = half_size.max(glam::Vec2::splat(0.5));
+        let raw = (local_pos + safe_half) / (safe_half * 2.0);
+        // Y-flip: world Y goes up; UV Y goes down.
+        glam::Vec2::new(raw.x, 1.0 - raw.y).clamp(glam::Vec2::ZERO, glam::Vec2::ONE)
+    }
+
+    /// Top-center of the entity (local_pos.y = +half_y) must sample the TOP of
+    /// the texture (UV.y = 0.0).  Without the Y-flip this returns 1.0 instead.
+    #[test]
+    fn uv_top_of_entity_samples_texture_top() {
+        let half = glam::Vec2::new(100.0, 50.0);
+        let top_center = glam::Vec2::new(0.0, half.y);
+        let uv = compute_norm_uv(top_center, half);
+        assert!(
+            (uv.x - 0.5).abs() < 1e-5,
+            "UV X at center should be 0.5, got {}",
+            uv.x
+        );
+        assert!(
+            (uv.y - 0.0).abs() < 1e-5,
+            "UV Y at entity top must be 0.0 (texture top), got {} — Y-flip missing?",
+            uv.y
+        );
+    }
+
+    /// Bottom-center of the entity (local_pos.y = -half_y) must sample the BOTTOM
+    /// of the texture (UV.y = 1.0).  Without the Y-flip this returns 0.0 instead.
+    #[test]
+    fn uv_bottom_of_entity_samples_texture_bottom() {
+        let half = glam::Vec2::new(100.0, 50.0);
+        let bottom_center = glam::Vec2::new(0.0, -half.y);
+        let uv = compute_norm_uv(bottom_center, half);
+        assert!(
+            (uv.x - 0.5).abs() < 1e-5,
+            "UV X at center should be 0.5, got {}",
+            uv.x
+        );
+        assert!(
+            (uv.y - 1.0).abs() < 1e-5,
+            "UV Y at entity bottom must be 1.0 (texture bottom), got {} — Y-flip missing?",
+            uv.y
+        );
+    }
+
+    /// Top-left corner of the entity in world-Y-up space is (−half_x, +half_y).
+    /// It must map to UV (0, 0) — the top-left of the texture.
+    #[test]
+    fn uv_top_left_entity_corner_maps_to_uv_origin() {
+        let half = glam::Vec2::new(100.0, 50.0);
+        let top_left = glam::Vec2::new(-half.x, half.y);
+        let uv = compute_norm_uv(top_left, half);
+        assert!((uv.x - 0.0).abs() < 1e-5, "UV X at left edge should be 0.0");
+        assert!((uv.y - 0.0).abs() < 1e-5, "UV Y at top should be 0.0");
+    }
+
+    /// Bottom-right corner of the entity in world-Y-up space is (+half_x, −half_y).
+    /// It must map to UV (1, 1) — the bottom-right of the texture.
+    #[test]
+    fn uv_bottom_right_entity_corner_maps_to_uv_one_one() {
+        let half = glam::Vec2::new(100.0, 50.0);
+        let bottom_right = glam::Vec2::new(half.x, -half.y);
+        let uv = compute_norm_uv(bottom_right, half);
+        assert!(
+            (uv.x - 1.0).abs() < 1e-5,
+            "UV X at right edge should be 1.0"
+        );
+        assert!((uv.y - 1.0).abs() < 1e-5, "UV Y at bottom should be 1.0");
+    }
+
+    /// Center of the entity must always map to UV (0.5, 0.5).
+    #[test]
+    fn uv_center_of_entity_maps_to_uv_center() {
+        let half = glam::Vec2::new(200.0, 80.0);
+        let center = glam::Vec2::ZERO;
+        let uv = compute_norm_uv(center, half);
+        assert!((uv.x - 0.5).abs() < 1e-5, "UV X at center should be 0.5");
+        assert!((uv.y - 0.5).abs() < 1e-5, "UV Y at center should be 0.5");
+    }
+
     /// 90° CCW rotation: a point at (1, 0) should become (0, 1).
     /// Use a 2×2 quad at center anchor so vertex (0.5, -0.5) → world (1, -1) pre-rotation,
     /// then after 90° CCW it should be (1, 1).

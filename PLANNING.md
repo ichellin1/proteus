@@ -11,7 +11,7 @@ Phase A  Vision                  ✅ complete
 Phase B  Architecture            ✅ complete
 Phase C  Dependencies & Tooling  ✅ complete
 Phase D  Project Plan & Roadmap  ✅ complete
-Phase E  Build                   ← ready to begin
+Phase E  Build                   In Progress
 ```
 
 ---
@@ -1496,6 +1496,45 @@ by `suspend_video` (swaps to 1×1 placeholder, rebuilds bind group) and `resume_
   buffered frames per tick and uploads only the most recent (stale frames discarded).
   *Note: "no frame drops" in the strict sense is not guaranteed — the producer may skip frames
   under load; the guarantee is that the displayed frame is always the freshest available.*
+
+**Web verification status:** M9 infrastructure is implemented and verified on native. End-to-end
+web verification (browser rendering of video frames via the GPU pipeline) is pending the wgpu
+22→29 upgrade completing — the web shell was non-functional during M9 development due to the
+`maxInterStageShaderComponents` Chrome rejection bug. Web verification is an M9.5 prerequisite.
+
+---
+
+### M9.5 — MP4 Playback *(off critical path — begins after M9 web verification)*
+
+Real MP4 file decoding feeding the M9 GPU streaming pipeline. M9 established the infrastructure
+for per-frame RGBA upload to the GPU; M9.5 adds an actual decoder that produces those frames
+from a real video file, on both web and native targets.
+
+**Approach:**
+
+*Web:* Use an HTML `<video>` element as the decoder. On each frame (via `requestVideoFrameCallback`
+or a canvas-based fallback), draw the current frame to an offscreen `<canvas>`, read back the RGBA
+pixels, and pass them to the existing `upload_video_frame()` WASM entry point. The browser handles
+all codec support (H.264, VP8, VP9, AV1) transparently — no Rust decoder needed on web.
+
+*Native:* Use a pure-Rust decoder stack. `mp4parse` for container parsing + a decoder crate for
+the video stream (e.g. `openh264` for H.264, `dav1d` bindings for AV1). Decoded YUV frames are
+converted to RGBA and handed to the existing `consume_video_frame` pipeline. Decoding runs on a
+background thread; the existing `sync_channel(2)` producer/consumer model handles frame delivery
+to the render thread without modification.
+
+**Definition of done:**
+- [ ] Web: a real `.mp4` file plays back visibly in the browser via the M9 GPU pipeline — frames
+  decode correctly, display without tearing, and the existing latest-frame-wins delivery holds
+- [ ] Web: browser tab backgrounding suspends video frame delivery cleanly (`suspend_video` called,
+  no GPU writes while occluded); foregrounding resumes correctly (`resume_video`)
+- [ ] Native: a real `.mp4` file plays back via a background decoder thread feeding the existing
+  `sync_channel` pipeline — frames appear on screen at approximately the encoded frame rate
+- [ ] End-to-end demo: the reference demo's video list item plays actual MP4 content on both
+  web and native (replacing the synthetic test frames used during M9 development)
+- [ ] No main-thread stall on either target — decoding is fully off the render thread
+- [ ] Codec support documented: which codecs are supported on web (browser-dependent) and native
+  (explicitly chosen decoder crates), noted in a `CODECS.md` or equivalent
 
 ---
 

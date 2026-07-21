@@ -350,7 +350,7 @@ impl RenderState {
         // --- wgpu instance ---
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         // --- Surface ---
@@ -372,15 +372,13 @@ impl RenderState {
 
         // --- Device & queue ---
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("proteus-native"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: Default::default(),
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("proteus-native"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: Default::default(),
+                ..Default::default()
+            })
             .await
             .expect("failed to create GPU device");
 
@@ -990,14 +988,15 @@ impl RenderState {
 
         // 8. Acquire swap-chain texture.
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.surface_config);
                 self.window.request_redraw();
                 return;
             }
-            Err(e) => {
-                log::error!("Surface error: {e}");
+            e => {
+                log::error!("Surface error: {e:?}");
                 return;
             }
         };
@@ -1020,6 +1019,7 @@ impl RenderState {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.94,
@@ -1033,6 +1033,7 @@ impl RenderState {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             if !instances.is_empty() {
