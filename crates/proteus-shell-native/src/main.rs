@@ -1,27 +1,26 @@
-//! `proteus-shell-native` — native desktop entry point (M5 reference demo).
+//! `proteus-shell-native` — native desktop entry point.
 //!
-//! Runs a scripted, looping transition sequence that exercises all three
-//! Proteus topologies back-to-back:
+//! ## Demo redesign (in progress)
 //!
-//! ```text
-//! ButtonIdle ──(1→N Bake)──► ButtonToList ──► ListIdle
-//!      ▲                                           │
-//!      │                                     (1→1) │
-//!      │                                           ▼
-//! ListToButton ◄──(N→1 Slice)── ListIdle ◄── DetailIdle
-//!                                               ▲
-//!                                         (1→1) │
-//!                                         DetailToList
-//! ```
+//! The reference demo is being rebuilt from scratch. This is step 1: the
+//! entry screen — a single circular "START" button, centered on screen.
+//!
+//! - Fades in on load (opacity 0 → 1).
+//! - Glows on hover: halo radius animates 0 → 15 px over 1 s while the
+//!   pointer is over the button, and reverses (from wherever it currently is)
+//!   over 1 s when the pointer leaves.
+//!
+//! Subsequent steps will add the next scene(s) on top of this.
 //!
 //! ## Frame order each tick
 //!
 //! 1. Compute delta time (capped at 50 ms).
-//! 2. `ui_world.update(dt)` — full ECS schedule (Transition + Group systems).
-//! 3. `bake_pending_text()` — rasterise any Text entities that lack BakedText.
-//! 4. `advance_demo(dt)` — read `CompletedTransitions`, mutate `DemoPhase`.
-//! 5. Collect visible `QuadState`s → `QuadInstance`s (visibility-filtered).
-//! 6. GPU render pass.
+//! 2. Flush staged pointer events → `PointerInput`.
+//! 3. `ui_world.update(dt)` — full ECS schedule (hit test, transitions).
+//! 4. `bake_pending_text()` — rasterise any Text entities that lack BakedText.
+//! 5. Advance intro fade + hover glow (drives `QuadState`/`Border`/`Text`/`Glow` directly).
+//! 6. Collect visible `QuadState`s → `QuadInstance`s.
+//! 7. GPU render pass.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,106 +33,134 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use std::thread;
-
-use proteus_render::{FontAtlas, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
+use proteus_render::{FontAtlas, GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
 use proteus_ui::{
-    collect_instances, ease_in_out_quad,
-    transition::{CompletedTransitions, TransitionConfig},
-    BakedText, DropShadow, Entity, Glow, GroupSource, GroupTarget, Interactable, InteractionEvents,
-    Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy,
-    Text, TransitionRequest, VideoPlayer, Visibility,
+    collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig, BakedText,
+    Border, Entity, Glow, GroupSource, GroupTarget, Interactable, InteractionEvents, Lifecycle,
+    NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
+    Visibility,
 };
 
 // ---------------------------------------------------------------------------
-// Video constants (M9)
+// Design tokens
 // ---------------------------------------------------------------------------
 
-/// Width of the synthetic video texture uploaded per frame.
-const VIDEO_W: u32 = 320;
-/// Height of the synthetic video texture uploaded per frame.
-const VIDEO_H: u32 = 180;
+/// App background — mid gray (#BBBBBB).
+const BG_COLOR: wgpu::Color = wgpu::Color {
+    r: 0xBB as f64 / 255.0,
+    g: 0xBB as f64 / 255.0,
+    b: 0xBB as f64 / 255.0,
+    a: 1.0,
+};
 
-/// Generate one frame of synthetic video: animated sinusoidal colour bands.
-/// `t` is elapsed time in seconds. Returns `VIDEO_W × VIDEO_H × 4` RGBA bytes.
-fn generate_video_frame(t: f64, width: u32, height: u32) -> Vec<u8> {
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
-    let ft = t as f32;
-    for y in 0..height {
-        for x in 0..width {
-            let nx = x as f32 / width as f32;
-            let ny = y as f32 / height as f32;
-            // Bands along X, Y, and diagonal — each at a different phase speed.
-            let r = ((nx * 6.0 + ft * 1.1).sin() * 0.5 + 0.5) * 0.8 + 0.1;
-            let g = ((ny * 4.0 + ft * 0.7).sin() * 0.5 + 0.5) * 0.8 + 0.1;
-            let b = (((nx + ny) * 5.0 + ft * 1.3).sin() * 0.5 + 0.5) * 0.8 + 0.1;
-            let i = ((y * width + x) * 4) as usize;
-            rgba[i] = (r * 255.0) as u8;
-            rgba[i + 1] = (g * 255.0) as u8;
-            rgba[i + 2] = (b * 255.0) as u8;
-            rgba[i + 3] = 255;
-        }
-    }
-    rgba
+/// Button fill — navy blue.
+fn navy() -> Vec4 {
+    Vec4::new(0.0, 0.0, 0.502, 1.0)
 }
+
+/// Border and label color — white.
+fn white() -> Vec4 {
+    Vec4::ONE
+}
+
+const BUTTON_DIAMETER: f32 = 200.0;
+const BORDER_WIDTH: f32 = 5.0;
+
+/// Seconds to wait before the entry fade begins.
+const INTRO_DELAY: f32 = 1.0;
+/// Seconds for the entry fade (opacity 0 → 1).
+const INTRO_DURATION: f32 = 0.6;
+/// Seconds for a full 0 → 30 px (or 30 → 0 px) hover glow sweep.
+const GLOW_DURATION: f32 = 0.33;
+const GLOW_MAX_RADIUS: f32 = 30.0;
+
+/// Seconds for the button ↔ tiles morph, either direction.
+const BUTTON_TILES_MORPH_DURATION: f32 = 0.667;
+
+// ---------------------------------------------------------------------------
+// Video tiles — placeholder "box cover" art
+// ---------------------------------------------------------------------------
+//
+// No image-loading pipeline exists yet (no PNG/JPEG decode, no static-texture
+// atlas upload — only solid colors, baked SDF text, offscreen bakes, and
+// streamed video frames). Until that's built, each tile is a solid-color
+// placeholder standing in for real box art, labeled with the video's title.
+
+const TILE_WIDTH: f32 = 200.0;
+/// Placeholder "poster" aspect ratio (2:3 width:height) — uniform across all
+/// three tiles since there's no real per-title box art to derive it from yet.
+const TILE_HEIGHT: f32 = TILE_WIDTH * 1.5;
+const TILE_GAP: f32 = 100.0;
+const TILE_CORNER_RADIUS: f32 = 12.0;
+
+const TILE_LABELS: [&str; 3] = ["Big Buck Bunny", "Sintel", "Jellyfish"];
+const TILE_COLORS: [Vec4; 3] = [
+    Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck Bunny
+    Vec4::new(0.10, 0.45, 0.35, 1.0), // deep teal — Sintel
+    Vec4::new(0.10, 0.55, 0.65, 1.0), // aqua — Jellyfish
+];
 
 // ---------------------------------------------------------------------------
 // Demo scene geometry
 // ---------------------------------------------------------------------------
 
-/// The central button that starts and ends each loop.
-fn button_quad() -> QuadState {
+/// The circular "START" button — perfectly centered, alpha 0 (fades in via
+/// `advance_intro_and_hover`).
+fn start_button_quad() -> QuadState {
     QuadState {
         position: Vec3::new(0.0, 0.0, 0.5),
-        size: Vec2::new(200.0, 48.0),
+        size: Vec2::new(BUTTON_DIAMETER, BUTTON_DIAMETER),
         rotation: 0.0,
         scale: 1.0,
         anchor: Vec2::new(0.5, 0.5),
-        color: Vec4::new(0.37, 0.65, 1.00, 1.0), // sky blue
-        corner_radius: 0.0,
+        color: Vec4::new(navy().x, navy().y, navy().z, 0.0), // starts transparent
+        // Half the diameter → a square quad with this corner radius renders as
+        // a full circle (see sdf_rounded_rect).
+        corner_radius: BUTTON_DIAMETER / 2.0,
     }
 }
 
-/// One of the three list items that the button expands into.
-/// `idx` 0 = top, 1 = middle, 2 = bottom.
-fn item_quad(idx: usize) -> QuadState {
-    // Stack vertically: top item at +80, spacing of 72 px.
-    let y = 80.0 - idx as f32 * 72.0;
-    let color = match idx {
-        0 => Vec4::new(0.25, 0.90, 0.60, 1.0), // emerald
-        1 => Vec4::new(0.20, 0.80, 0.90, 1.0), // cyan
-        _ => Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender
-    };
+fn start_button_border() -> Border {
+    Border {
+        width: BORDER_WIDTH,
+        color: Vec4::new(white().x, white().y, white().z, 0.0),
+        offset: -1.0, // inner — the only placement that renders correctly today
+    }
+}
+
+/// Shared by the button and the tiles — "the same hover over/out effect".
+fn hover_glow() -> Glow {
+    Glow {
+        radius: 0.0, // animated by advance_intro_and_hover / advance_tile_hover
+        color: navy(),
+        intensity: 0.8,
+    }
+}
+
+/// One of the three video tiles the button spreads into.
+/// `idx` 0 = left, 1 = center, 2 = right.
+fn tile_quad(idx: usize) -> QuadState {
+    // Center-to-center spacing = tile width + the requested 100px edge gap.
+    let spacing = TILE_WIDTH + TILE_GAP;
+    let x = (idx as f32 - 1.0) * spacing;
     QuadState {
-        position: Vec3::new(0.0, y, 0.5),
-        size: Vec2::new(220.0, 44.0),
+        position: Vec3::new(x, 0.0, 0.5),
+        size: Vec2::new(TILE_WIDTH, TILE_HEIGHT),
         rotation: 0.0,
         scale: 1.0,
         anchor: Vec2::new(0.5, 0.5),
-        color,
-        corner_radius: 0.0,
+        color: TILE_COLORS[idx],
+        corner_radius: TILE_CORNER_RADIUS,
     }
 }
 
-/// The detail view that item[0] morphs into.
-fn detail_quad() -> QuadState {
-    QuadState {
-        position: Vec3::new(0.0, 0.0, 0.5),
-        size: Vec2::new(280.0, 100.0),
-        rotation: 0.0,
-        scale: 1.0,
-        anchor: Vec2::new(0.5, 0.5),
-        color: Vec4::new(1.00, 0.82, 0.28, 1.0), // gold
-        corner_radius: 0.0,
-    }
-}
-
-/// Default 1→1 transition timing used for most phases.
-fn demo_config() -> TransitionConfig {
-    TransitionConfig {
-        duration: 0.60,
-        delay: 0.0,
-        easing: ease_in_out_quad,
+/// Same white inner border as the START button. Full alpha immediately —
+/// tiles appear via the button-spread morph, not a separate fade.
+fn tile_border() -> Border {
+    Border {
+        width: BORDER_WIDTH,
+        color: white(),
+        offset: -1.0,
     }
 }
 
@@ -141,36 +168,19 @@ fn demo_config() -> TransitionConfig {
 // Demo phase state machine
 // ---------------------------------------------------------------------------
 
-/// Click-driven demo phases (M7). Idle phases wait for user input; transition
-/// phases are in-flight and block input until they complete.
-#[derive(Debug)]
+/// Click-driven demo phases. Idle phases wait for user input; the transition
+/// phase is in-flight and tracks per-target completion.
 enum DemoPhase {
-    /// Button visible — click it to expand.
+    /// Button visible — click it to spread into the three video tiles.
     ButtonIdle,
-
-    /// 1→N Bake in progress: button → three list items.
-    ButtonToList { items_done: usize },
-
-    /// Three items visible — click item[0] (Elephant) to zoom in.
-    ListIdle,
-
-    /// 1→1 transition: item[0] → detail view.
-    ListToDetail,
-
-    /// Detail view — click anywhere on it to return to list.
-    DetailIdle,
-
-    /// 1→1 transition: item[0] → list position.
-    DetailToList,
-
-    /// item[0] alone; 1.5 s auto-pause before flanking items appear.
-    ListSoloIdle { timer: f32 },
-
-    /// All three items visible — click any item to converge back to button.
-    ListReformIdle,
-
-    /// N→1 Slice in progress: items → button.
-    ListToButton { request_inserted: bool },
+    /// 1→N Slice in progress: button splitting into three slices that morph
+    /// into the tiles.
+    ButtonToTiles,
+    /// Three tiles visible — click any tile to converge back into the button.
+    /// (Reverse-morph replay, for eyeballing the transition while it's tuned.)
+    TilesIdle,
+    /// N→1 Slice in progress: tiles converging back into the button.
+    TilesToButton { request_inserted: bool },
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +203,7 @@ struct StagedPointer {
 
 fn main() {
     env_logger::init();
-    log::info!("Proteus M5 reference demo — native shell");
+    log::info!("Proteus reference demo — native shell");
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = ProteusApp::default();
@@ -212,20 +222,14 @@ struct ProteusApp {
 impl ApplicationHandler for ProteusApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(state) = self.state.as_mut() {
-            // App returning to foreground after suspension — re-allocate the video
-            // texture that was released in `suspended()`.
-            state
-                .pipeline
-                .resume_video(&state.device, state.video_id, VIDEO_W, VIDEO_H);
             state.window.request_redraw();
             return;
         }
-        // First launch — create window + GPU resources.
         let window = Arc::new(
             event_loop
                 .create_window(
                     WindowAttributes::default()
-                        .with_title("Proteus — M5 Reference Demo")
+                        .with_title("Proteus — Reference Demo")
                         .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 800u32)),
                 )
                 .expect("failed to create window"),
@@ -238,13 +242,6 @@ impl ApplicationHandler for ProteusApp {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(state) = &self.state {
             state.window.request_redraw();
-        }
-    }
-
-    /// Release the video texture GPU memory when the app is backgrounded (M9).
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(state) = self.state.as_mut() {
-            state.pipeline.suspend_video(&state.device, state.video_id);
         }
     }
 
@@ -266,14 +263,8 @@ impl ApplicationHandler for ProteusApp {
                 state.resize(size);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // `position` is in physical pixels; `surface_config` dimensions are also
-                // physical pixels (set from PhysicalSize in resize()).  `ortho()` is
-                // called with physical dimensions, so world-space units = physical pixels.
-                // Do NOT divide by scale_factor — that would compress the cursor into
-                // logical-pixel space while QuadState positions stay in physical-pixel space.
                 let w = state.surface_config.width as f32;
                 let h = state.surface_config.height as f32;
-                // Convert window-space (origin top-left, Y down) → world-space (origin centre, Y up).
                 let wx = position.x as f32 - w / 2.0;
                 let wy = h / 2.0 - position.y as f32;
                 state.staged_pointer.position = Some(Vec2::new(wx, wy));
@@ -308,57 +299,51 @@ impl ApplicationHandler for ProteusApp {
 // ---------------------------------------------------------------------------
 
 /// All GPU resources, ECS world, and demo state for one window.
+///
+/// `QuadPipeline` and `GpuContext` live *inside* `ui_world.world` as ECS
+/// resources, not as fields here — `topology::one_to_n_setup_system` /
+/// `n_to_one_setup_system` need to reach them to bake Slice transitions
+/// automatically. `device`/`queue` stay as fields too (cheap clones) for the
+/// swapchain/surface work below, which the ECS has no business touching.
 struct RenderState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: QuadPipeline,
 
-    /// Proteus ECS world + schedule.
     ui_world: ProteusWorld,
-
-    /// CPU-side font atlas for rasterising text (M4 / M5).
     font_atlas: FontAtlas,
 
-    // ── demo entities ──────────────────────────────────────────────────────
-    /// The central button (always-present, starts visible).
     button: Entity,
-
-    /// The three list items (start hidden; expand from button via 1→N Bake).
-    items: [Entity; 3],
-
-    // ── demo state ─────────────────────────────────────────────────────────
+    tiles: [Entity; 3],
     phase: DemoPhase,
 
-    // ── input ──────────────────────────────────────────────────────────────
+    // ── demo animation state ───────────────────────────────────────────────
+    intro_delay_remaining: f32,
+    intro_elapsed: f32,
+    hover_progress: f32,
+    is_hovering: bool,
+    tile_hover_progress: [f32; 3],
+    tile_is_hovering: [bool; 3],
+
     staged_pointer: StagedPointer,
-
-    // ── timing ─────────────────────────────────────────────────────────────
     last_frame: Instant,
-
-    // ── video (M9) ────────────────────────────────────────────────────────────
-    /// TextureId returned by `pipeline.init_video` — used for suspend/resume.
-    video_id: TextureId,
 }
 
 impl RenderState {
     async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
 
-        // --- wgpu instance ---
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
-        // --- Surface ---
         let surface = instance
             .create_surface(window.clone())
             .expect("failed to create surface");
 
-        // --- Adapter ---
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -370,7 +355,6 @@ impl RenderState {
 
         log::info!("GPU adapter: {}", adapter.get_info().name);
 
-        // --- Device & queue ---
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("proteus-native"),
@@ -382,7 +366,6 @@ impl RenderState {
             .await
             .expect("failed to create GPU device");
 
-        // --- Surface configuration ---
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
@@ -403,8 +386,7 @@ impl RenderState {
         };
         surface.configure(&device, &surface_config);
 
-        // --- Pipeline ---
-        let mut pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
+        let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
         pipeline.set_view_projection(
             &queue,
             QuadPipeline::ortho(size.width as f32, size.height as f32),
@@ -417,120 +399,78 @@ impl RenderState {
             surface_format,
         );
 
-        // --- Font atlas ---
         let font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
 
-        // --- Video texture (M9) ---
-        // Allocate the video texture slot at 320×180.  The sender is moved into
-        // a background thread that generates synthetic colour-band frames at 30 fps.
-        // The render loop calls consume_video_frame() to upload the latest frame.
-        let (video_id, video_sender) = pipeline.init_video(&device, VIDEO_W, VIDEO_H);
-
-        // Spawn the synthetic video producer on a background thread.
-        // Replace the body of this closure with any real decoder you like.
-        //
-        // No sleep here: sync_channel(2) provides natural backpressure.  When
-        // the render loop hasn't consumed yet, send() blocks — so the producer
-        // is gated by the display refresh automatically, with no hardcoded rate.
-        // Animation time comes from the wall clock so speed is always correct.
-        thread::spawn(move || {
-            let start = std::time::Instant::now();
-            loop {
-                let t = start.elapsed().as_secs_f64();
-                let frame = generate_video_frame(t, VIDEO_W, VIDEO_H);
-                // Blocks when the 2-frame buffer is full (backpressure).
-                // Returns false if the pipeline has been dropped — exit cleanly.
-                if !video_sender.send(frame) {
-                    break;
-                }
-            }
-        });
-
-        // --- ECS world ---
         let mut ui_world = ProteusWorld::new();
+        // GpuContext + QuadPipeline live in the ECS world, not as RenderState
+        // fields — this is what lets transition-setup systems bake Slice
+        // transitions automatically (see topology::one_to_n_setup_system).
+        ui_world.world.insert_resource(GpuContext {
+            device: device.clone(),
+            queue: queue.clone(),
+        });
+        ui_world.world.insert_resource(pipeline);
 
-        // Button: starts visible, shows "View Items" label.
-        // Interactable marks it as a hit-test target.
         let button = ui_world
             .world
             .spawn((
-                button_quad(),
+                start_button_quad(),
                 Lifecycle::Idle,
                 Visibility::VISIBLE,
-                Text::new("View Items", 22.0),
+                Text::new("START", 36.0).with_color(Vec4::new(
+                    white().x,
+                    white().y,
+                    white().z,
+                    0.0, // fades in with the rest of the button
+                )),
                 Interactable,
-                DropShadow {
-                    offset: Vec2::new(4.0, -4.0),
-                    color: Vec4::new(0.0, 0.0, 0.0, 0.45),
-                    softness: 13.0,
-                    spread: 0.0,
-                },
-                Glow {
-                    radius: 17.0,
-                    color: Vec4::new(0.37, 0.65, 1.0, 1.0), // sky blue — matches button fill
-                    intensity: 0.7,
-                },
+                start_button_border(),
+                hover_glow(),
             ))
             .id();
 
-        // List items: start hidden; text is pre-baked even while hidden so it
-        // is ready the instant the items become visible.
-        let item_labels = ["Elephant", "Tiger", "Whale"];
-        let items = [
+        // Tiles start hidden; text is pre-baked while hidden so it's ready
+        // the instant the button-spread transition reveals them.
+        let tiles = [
             ui_world
                 .world
                 .spawn((
-                    item_quad(0),
+                    tile_quad(0),
                     Lifecycle::Idle,
                     Visibility::HIDDEN,
-                    Text::new(item_labels[0], 18.0),
+                    Text::new(TILE_LABELS[0], 20.0).with_color(white()),
                     Interactable,
-                    Glow {
-                        radius: 17.0,
-                        color: Vec4::new(1.00, 0.82, 0.28, 1.0), // gold — matches detail view fill
-                        intensity: 0.7,
-                    },
+                    tile_border(),
+                    hover_glow(),
                 ))
                 .id(),
             ui_world
                 .world
                 .spawn((
-                    item_quad(1),
+                    tile_quad(1),
                     Lifecycle::Idle,
                     Visibility::HIDDEN,
-                    Text::new(item_labels[1], 18.0),
+                    Text::new(TILE_LABELS[1], 20.0).with_color(white()),
                     Interactable,
-                    Glow {
-                        radius: 17.0,
-                        color: Vec4::new(0.20, 0.80, 0.90, 1.0), // cyan — matches item[1] fill
-                        intensity: 0.7,
-                    },
+                    tile_border(),
+                    hover_glow(),
                 ))
                 .id(),
             ui_world
                 .world
                 .spawn((
-                    // item[2] streams video — set color to white so the frame is
-                    // displayed unfiltered.  The label "Whale" floats on top.
-                    QuadState {
-                        color: Vec4::ONE,
-                        ..item_quad(2)
-                    },
+                    tile_quad(2),
                     Lifecycle::Idle,
                     Visibility::HIDDEN,
-                    Text::new(item_labels[2], 18.0),
+                    Text::new(TILE_LABELS[2], 20.0).with_color(white()),
                     Interactable,
-                    VideoPlayer,
-                    Glow {
-                        radius: 17.0,
-                        color: Vec4::new(0.60, 0.65, 1.00, 1.0), // lavender glow
-                        intensity: 0.7,
-                    },
+                    tile_border(),
+                    hover_glow(),
                 ))
                 .id(),
         ];
 
-        log::info!("Demo entities — button {:?}, items {:?}", button, items);
+        log::info!("Demo entities — button {:?}, tiles {:?}", button, tiles);
 
         Self {
             window,
@@ -538,15 +478,19 @@ impl RenderState {
             surface_config,
             device,
             queue,
-            pipeline,
             ui_world,
             font_atlas,
             button,
-            items,
+            tiles,
             phase: DemoPhase::ButtonIdle,
+            intro_delay_remaining: INTRO_DELAY,
+            intro_elapsed: 0.0,
+            hover_progress: 0.0,
+            is_hovering: false,
+            tile_hover_progress: [0.0; 3],
+            tile_is_hovering: [false; 3],
             staged_pointer: StagedPointer::default(),
             last_frame: Instant::now(),
-            video_id,
         }
     }
 
@@ -561,22 +505,22 @@ impl RenderState {
         self.surface_config.width = size.width;
         self.surface_config.height = size.height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.pipeline.set_view_projection(
-            &self.queue,
-            QuadPipeline::ortho(size.width as f32, size.height as f32),
-        );
+        self.ui_world
+            .world
+            .resource::<QuadPipeline>()
+            .set_view_projection(
+                &self.queue,
+                QuadPipeline::ortho(size.width as f32, size.height as f32),
+            );
     }
 
     // -------------------------------------------------------------------------
-    // Text bake pass (M4 / M5)
+    // Text bake pass
     // -------------------------------------------------------------------------
 
-    /// For every entity with `Text` but no `BakedText`:
-    /// rasterise → upload to main_atlas → insert `BakedText`.
-    ///
-    /// Processes hidden entities too, so text is ready before items become visible.
+    /// For every entity with `Text` but no `BakedText`: rasterise → upload to
+    /// main_atlas → insert `BakedText`.
     fn bake_pending_text(&mut self) {
-        // Step 1: collect (entity, content, size_px) — ends the query borrow.
         let all_text: Vec<(Entity, String, f32)> = {
             let mut q = self.ui_world.world.query::<(Entity, &Text)>();
             q.iter(&self.ui_world.world)
@@ -584,7 +528,6 @@ impl RenderState {
                 .collect()
         };
 
-        // Step 2: filter to those missing BakedText.
         let pending: Vec<(Entity, String, f32)> = all_text
             .into_iter()
             .filter(|(e, _, _)| self.ui_world.world.get::<BakedText>(*e).is_none())
@@ -596,31 +539,124 @@ impl RenderState {
                 continue;
             };
 
-            self.pipeline.write_to_main_atlas(
-                &self.queue,
-                region.x,
-                region.y,
-                region.width,
-                region.height,
-                &region.rgba_pixels,
-            );
+            self.ui_world
+                .world
+                .resource::<QuadPipeline>()
+                .write_to_main_atlas(
+                    &self.queue,
+                    region.x,
+                    region.y,
+                    region.width,
+                    region.height,
+                    &region.rgba_pixels,
+                );
 
             let uv_offset = region.uv_offset(MAIN_ATLAS_SIZE);
             let uv_scale = region.uv_scale(MAIN_ATLAS_SIZE);
 
-            log::info!(
-                "Text baked: {entity:?} '{content}' @ {size_px}px → atlas \
-                 ({},{}) {}×{} uv={uv_offset:?} scale={uv_scale:?}",
-                region.x,
-                region.y,
-                region.width,
-                region.height,
-            );
-
             self.ui_world.world.entity_mut(entity).insert(BakedText {
                 uv_offset,
                 uv_scale,
+                pixel_size: [region.width as f32, region.height as f32],
             });
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Intro fade + hover glow
+    // -------------------------------------------------------------------------
+
+    /// Advances the one-shot entry fade and the hover glow sweep, then writes
+    /// the results directly onto the button's `QuadState`/`Border`/`Text`/`Glow`
+    /// components.
+    ///
+    /// Neither animation goes through `TransitionRequest` — they aren't
+    /// morphs between two declared forms, just continuous alpha/radius sweeps
+    /// driven by elapsed time and hover state, so it's simpler to drive them
+    /// directly here than to route them through the transition system.
+    fn advance_intro_and_hover(&mut self, dt: f32) {
+        // --- Intro fade (waits INTRO_DELAY, then plays once, 0 → 1, never reverses) ---
+        // Burn off the delay first; any leftover dt in the same tick carries
+        // into the fade itself rather than being dropped (same pattern as
+        // ActiveTransition's delay handling in transition.rs).
+        let fade_dt = if self.intro_delay_remaining > 0.0 {
+            let burned = dt.min(self.intro_delay_remaining);
+            self.intro_delay_remaining -= burned;
+            dt - burned
+        } else {
+            dt
+        };
+        self.intro_elapsed = (self.intro_elapsed + fade_dt).min(INTRO_DURATION);
+        let raw_t = self.intro_elapsed / INTRO_DURATION;
+        let alpha = ease_out_quad(raw_t);
+
+        // --- Hover glow ---
+        // `InteractionEvents` only reports *changes* (enter/exit this frame),
+        // so `is_hovering` latches that into persistent state between events.
+        {
+            let events = self.ui_world.world.resource::<InteractionEvents>();
+            if events.hover_entered.contains(&self.button) {
+                self.is_hovering = true;
+            } else if events.hover_exited.contains(&self.button) {
+                self.is_hovering = false;
+            }
+        }
+        // A full 0→1 (or 1→0) sweep takes GLOW_DURATION seconds; reversing
+        // mid-sweep starts from wherever `hover_progress` currently is.
+        let target = if self.is_hovering { 1.0 } else { 0.0 };
+        let step = dt / GLOW_DURATION;
+        if self.hover_progress < target {
+            self.hover_progress = (self.hover_progress + step).min(target);
+        } else if self.hover_progress > target {
+            self.hover_progress = (self.hover_progress - step).max(target);
+        }
+
+        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.button) {
+            qs.color.w = alpha;
+        }
+        if let Some(mut border) = self.ui_world.world.get_mut::<Border>(self.button) {
+            border.color.w = alpha;
+        }
+        if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.button) {
+            text.color.w = alpha;
+        }
+        if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(self.button) {
+            // The shadow/glow SDF fills the shape's entire interior, not just a
+            // ring at the edge — it's normally masked by the opaque main fill
+            // sitting on top of it. While the main fill's alpha is below 1
+            // (during the intro fade) that masking is incomplete, so scale the
+            // glow's own alpha by the same `alpha` to keep it suppressed until
+            // the button is actually opaque.
+            glow.color.w = alpha;
+            glow.radius = self.hover_progress * GLOW_MAX_RADIUS;
+        }
+    }
+
+    /// Same hover glow sweep as the button, applied to each of the three
+    /// tiles. Tiles are always fully opaque once visible (they arrive via
+    /// the button-spread morph, not a fade), so unlike
+    /// `advance_intro_and_hover` there's no alpha to suppress the glow with.
+    fn advance_tile_hover(&mut self, dt: f32) {
+        for i in 0..3 {
+            let entity = self.tiles[i];
+            {
+                let events = self.ui_world.world.resource::<InteractionEvents>();
+                if events.hover_entered.contains(&entity) {
+                    self.tile_is_hovering[i] = true;
+                } else if events.hover_exited.contains(&entity) {
+                    self.tile_is_hovering[i] = false;
+                }
+            }
+            let target = if self.tile_is_hovering[i] { 1.0 } else { 0.0 };
+            let step = dt / GLOW_DURATION;
+            if self.tile_hover_progress[i] < target {
+                self.tile_hover_progress[i] = (self.tile_hover_progress[i] + step).min(target);
+            } else if self.tile_hover_progress[i] > target {
+                self.tile_hover_progress[i] = (self.tile_hover_progress[i] - step).max(target);
+            }
+            if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
+                glow.radius = self.tile_hover_progress[i] * GLOW_MAX_RADIUS;
+            }
         }
     }
 
@@ -628,13 +664,10 @@ impl RenderState {
     // Demo state machine
     // -------------------------------------------------------------------------
 
-    /// Advance the demo one frame.
-    ///
-    /// Reads `InteractionEvents` (populated by `hit_test_system` during
-    /// `ui_world.update()`) and drives the state machine by click.
-    /// Transition phases ignore input — clicks are only acted on in idle phases.
-    fn advance_demo(&mut self, dt: f32) {
-        // Snapshot the events for this frame.
+    /// Advance the demo one frame: read `InteractionEvents` (populated by
+    /// `hit_test_system` during `ui_world.update()`) and drive `DemoPhase` by
+    /// click.
+    fn advance_demo(&mut self) {
         let clicked: Vec<Entity> = self
             .ui_world
             .world
@@ -645,138 +678,58 @@ impl RenderState {
         let phase = std::mem::replace(&mut self.phase, DemoPhase::ButtonIdle);
 
         self.phase = match phase {
-            // ── Button idle: click the button to expand ───────────────────────
+            // ── Button idle: click to spread into the three tiles ──────────
             DemoPhase::ButtonIdle => {
                 if clicked.contains(&self.button) {
-                    log::info!("Phase: ButtonIdle → ButtonToList (1→N Bake)");
-                    self.start_button_to_list();
-                    DemoPhase::ButtonToList { items_done: 0 }
+                    self.start_button_to_tiles();
+                    DemoPhase::ButtonToTiles
                 } else {
                     DemoPhase::ButtonIdle
                 }
             }
 
-            // ── 1→N Bake: count per-item completions ─────────────────────────
-            DemoPhase::ButtonToList { mut items_done } => {
-                let completed: Vec<Entity> = self
-                    .ui_world
-                    .world
-                    .resource::<CompletedTransitions>()
-                    .entities
-                    .clone();
-                for e in completed {
-                    if self.items.contains(&e) {
-                        items_done += 1;
-                    }
-                }
-                if items_done >= self.items.len() {
-                    log::info!("Phase: ButtonToList → ListIdle");
-                    DemoPhase::ListIdle
+            // ── 1→N Slice: wait for the tiles to be revealed ────────────────
+            // Slice transitions run through virtual entities and a group
+            // coordinator (see `topology::group_transition_complete_system`),
+            // not the per-entity `CompletedTransitions` list — the tiles are
+            // held `Visibility::HIDDEN` until the whole group finishes, so
+            // watching for that flip is the direct signal.
+            DemoPhase::ButtonToTiles => {
+                let all_revealed = self.tiles.iter().all(
+                    |&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible),
+                );
+                if all_revealed {
+                    DemoPhase::TilesIdle
                 } else {
-                    DemoPhase::ButtonToList { items_done }
+                    DemoPhase::ButtonToTiles
                 }
             }
 
-            // ── List idle: click Elephant to zoom in ──────────────────────────
-            DemoPhase::ListIdle => {
-                if clicked.contains(&self.items[0]) {
-                    log::info!("Phase: ListIdle → ListToDetail (1→1)");
-                    self.start_list_to_detail();
-                    DemoPhase::ListToDetail
-                } else {
-                    DemoPhase::ListIdle
-                }
-            }
-
-            // ── 1→1: item[0] → detail view ───────────────────────────────────
-            DemoPhase::ListToDetail => {
-                let completed: Vec<Entity> = self
-                    .ui_world
-                    .world
-                    .resource::<CompletedTransitions>()
-                    .entities
-                    .clone();
-                if completed.contains(&self.items[0]) {
-                    log::info!("Phase: ListToDetail → DetailIdle");
-                    DemoPhase::DetailIdle
-                } else {
-                    DemoPhase::ListToDetail
-                }
-            }
-
-            // ── Detail idle: click anywhere on detail to go back ──────────────
-            DemoPhase::DetailIdle => {
-                if clicked.contains(&self.items[0]) {
-                    log::info!("Phase: DetailIdle → DetailToList (1→1)");
-                    self.start_detail_to_list();
-                    DemoPhase::DetailToList
-                } else {
-                    DemoPhase::DetailIdle
-                }
-            }
-
-            // ── 1→1: item[0] → list position ─────────────────────────────────
-            DemoPhase::DetailToList => {
-                let completed: Vec<Entity> = self
-                    .ui_world
-                    .world
-                    .resource::<CompletedTransitions>()
-                    .entities
-                    .clone();
-                if completed.contains(&self.items[0]) {
-                    log::info!("Phase: DetailToList → ListSoloIdle");
-                    DemoPhase::ListSoloIdle { timer: 0.0 }
-                } else {
-                    DemoPhase::DetailToList
-                }
-            }
-
-            // ── Solo idle: 1.5 s auto-pause, Elephant alone ───────────────────
-            DemoPhase::ListSoloIdle { timer } => {
-                let t = timer + dt;
-                if t >= 1.5 {
-                    log::info!("Phase: ListSoloIdle → ListReformIdle");
-                    self.ui_world
-                        .world
-                        .entity_mut(self.items[1])
-                        .insert(Visibility::VISIBLE);
-                    self.ui_world
-                        .world
-                        .entity_mut(self.items[2])
-                        .insert(Visibility::VISIBLE);
-                    DemoPhase::ListReformIdle
-                } else {
-                    DemoPhase::ListSoloIdle { timer: t }
-                }
-            }
-
-            // ── Reform idle: click any item to converge back to button ────────
-            DemoPhase::ListReformIdle => {
-                let any_item_clicked = self.items.iter().any(|e| clicked.contains(e));
-                if any_item_clicked {
-                    log::info!("Phase: ListReformIdle → ListToButton (N→1 Slice)");
-                    DemoPhase::ListToButton {
+            // ── Tiles idle: click any tile to converge back into the button ─
+            DemoPhase::TilesIdle => {
+                let any_tile_clicked = self.tiles.iter().any(|e| clicked.contains(e));
+                if any_tile_clicked {
+                    DemoPhase::TilesToButton {
                         request_inserted: false,
                     }
                 } else {
-                    DemoPhase::ListReformIdle
+                    DemoPhase::TilesIdle
                 }
             }
 
-            // ── N→1 Slice: items → button ─────────────────────────────────────
-            DemoPhase::ListToButton { request_inserted } => {
+            // ── N→1 Slice: tiles converge back into the button ─────────────
+            DemoPhase::TilesToButton { request_inserted } => {
                 if !request_inserted {
-                    self.start_list_to_button();
+                    self.start_tiles_to_button();
                 }
                 let lifecycle = self.ui_world.world.get::<Lifecycle>(self.button);
                 let visibility = self.ui_world.world.get::<Visibility>(self.button);
                 let done = matches!(lifecycle, Some(Lifecycle::Idle))
                     && matches!(visibility, Some(v) if v.visible);
                 if done {
-                    log::info!("Phase: ListToButton → ButtonIdle");
                     DemoPhase::ButtonIdle
                 } else {
-                    DemoPhase::ListToButton {
+                    DemoPhase::TilesToButton {
                         request_inserted: true,
                     }
                 }
@@ -784,163 +737,67 @@ impl RenderState {
         };
     }
 
-    // -------------------------------------------------------------------------
-    // Transition helpers
-    // -------------------------------------------------------------------------
+    /// 1→N Slice: the button splits into three vertical slices that each
+    /// morph into their own tile. The baked-texture crossfade (each slice
+    /// showing an actual crop of the button's rendered appearance — shape,
+    /// border, and text — dissolving into a real bake of its target tile,
+    /// not a flat-color approximation) is entirely `one_to_n_setup_system`'s
+    /// job now: it reaches `GpuContext`/`QuadPipeline` as ECS resources and
+    /// does the baking itself. This just declares the request.
+    fn start_button_to_tiles(&mut self) {
+        let targets = (0..3)
+            .map(|i| GroupTarget {
+                entity: self.tiles[i],
+                state: tile_quad(i),
+            })
+            .collect();
 
-    /// Phase 1 — 1→N Bake: button expands into the three list items.
-    ///
-    /// The Bake strategy does NOT make targets visible automatically;
-    /// the caller (us) must do so first.
-    ///
-    /// All three items use the same `default_config` (no stagger) so they
-    /// start simultaneously and feel like a single parallel burst.
-    fn start_button_to_list(&mut self) {
-        // Snap each item to the button's current geometry BEFORE making it
-        // visible.  `one_to_n_setup_system` runs in the next `update()` call
-        // and its Commands aren't applied until the frame after that, so
-        // there is a 2-frame window between "item becomes visible" and
-        // "transition_tick starts interpolating from button geometry".
-        // During that window the item must render where the button already
-        // is — otherwise the final item positions flash for 2 frames before
-        // the animation rewinds them to the start.
-        let src = self
-            .ui_world
-            .world
-            .get::<QuadState>(self.button)
-            .cloned()
-            .unwrap_or_else(button_quad);
-
-        for &item in &self.items {
-            self.ui_world
-                .world
-                .entity_mut(item)
-                .insert(src.clone()) // at button position — no flash
-                .insert(Visibility::VISIBLE);
-        }
-
-        // Insert OneToNRequest on the button (source).
-        // child_behavior: None → all targets share default_config (delay 0).
         self.ui_world
             .world
             .entity_mut(self.button)
             .insert(OneToNRequest {
-                targets: vec![
-                    GroupTarget {
-                        entity: self.items[0],
-                        state: item_quad(0),
-                    },
-                    GroupTarget {
-                        entity: self.items[1],
-                        state: item_quad(1),
-                    },
-                    GroupTarget {
-                        entity: self.items[2],
-                        state: item_quad(2),
-                    },
-                ],
-                default_config: demo_config(),
+                targets,
+                default_config: TransitionConfig {
+                    duration: BUTTON_TILES_MORPH_DURATION,
+                    delay: 0.0,
+                    easing: ease_in_out_quad,
+                },
                 child_behavior: None,
-                strategy: SplitStrategy::Bake,
+                strategy: SplitStrategy::Slice,
             });
     }
 
-    /// Phase 3 — 1→1: item[0] expands to the detail quad.
-    ///
-    /// Items[1] and [2] are hidden (snapped off-screen during the detail view).
-    fn start_list_to_detail(&mut self) {
-        // Snap-hide the flanking items while item[0] takes centre stage.
-        self.ui_world
-            .world
-            .entity_mut(self.items[1])
-            .insert(Visibility::HIDDEN);
-        self.ui_world
-            .world
-            .entity_mut(self.items[2])
-            .insert(Visibility::HIDDEN);
+    /// N→1 Slice: the three tiles converge back into the button — the same
+    /// morph, played in reverse, so the transition can be replayed easily
+    /// while it's being tuned. `NToOneRequest` is inserted on the
+    /// *destination* (button); it reads each tile's current `QuadState` from
+    /// the `GroupSource.state` snapshot taken here.
+    fn start_tiles_to_button(&mut self) {
+        let sources: Vec<GroupSource> = self
+            .tiles
+            .iter()
+            .enumerate()
+            .map(|(i, &tile)| GroupSource {
+                entity: tile,
+                state: self
+                    .ui_world
+                    .world
+                    .get::<QuadState>(tile)
+                    .cloned()
+                    .unwrap_or_else(|| tile_quad(i)),
+            })
+            .collect();
 
-        // 1→1: item[0] → detail_quad().
-        self.ui_world
-            .world
-            .entity_mut(self.items[0])
-            .insert(TransitionRequest {
-                to: detail_quad(),
-                from_state: None,
-                config: demo_config(),
-            });
-    }
-
-    /// Phase 5 — 1→1: item[0] contracts back to its list geometry.
-    ///
-    /// Items[1] and [2] remain hidden here; they are revealed later in
-    /// `ListSoloIdle` after a beat so the viewer notices Elephant alone.
-    fn start_detail_to_list(&mut self) {
-        // 1→1: item[0] → item_quad(0).
-        self.ui_world
-            .world
-            .entity_mut(self.items[0])
-            .insert(TransitionRequest {
-                to: item_quad(0),
-                from_state: None,
-                config: demo_config(),
-            });
-    }
-
-    /// Phase 7 — N→1 Slice: three list items merge back into the button.
-    ///
-    /// `NToOneRequest` is inserted on the *destination* (button). It reads the
-    /// current `QuadState` of each source entity from the `GroupSource.state`
-    /// snapshot provided by the caller.
-    fn start_list_to_button(&mut self) {
-        // Snapshot the current geometry of each item (should be item_quad(0..2)
-        // after DetailToList completed).
-        let s0 = self
-            .ui_world
-            .world
-            .get::<QuadState>(self.items[0])
-            .cloned()
-            .unwrap_or_else(|| item_quad(0));
-        let s1 = self
-            .ui_world
-            .world
-            .get::<QuadState>(self.items[1])
-            .cloned()
-            .unwrap_or_else(|| item_quad(1));
-        let s2 = self
-            .ui_world
-            .world
-            .get::<QuadState>(self.items[2])
-            .cloned()
-            .unwrap_or_else(|| item_quad(2));
-
-        // child_behavior: None → all three converge in parallel with default_config.
-        //
-        // With stagger, each virtual entity completes at a different time and
-        // sits at its sky-blue destination slice while the others are still
-        // animating.  That produces up to 0.24 s of "ghost" sky-blue rectangles
-        // at the button position before the group detects completion — exactly
-        // the "three white rectangles" the user reported.  Parallel convergence
-        // collapses all three completions to the same frame, making the snap to
-        // the button invisible.
         self.ui_world
             .world
             .entity_mut(self.button)
             .insert(NToOneRequest {
-                sources: vec![
-                    GroupSource {
-                        entity: self.items[0],
-                        state: s0,
-                    },
-                    GroupSource {
-                        entity: self.items[1],
-                        state: s1,
-                    },
-                    GroupSource {
-                        entity: self.items[2],
-                        state: s2,
-                    },
-                ],
-                default_config: demo_config(),
+                sources,
+                default_config: TransitionConfig {
+                    duration: BUTTON_TILES_MORPH_DURATION,
+                    delay: 0.0,
+                    easing: ease_in_out_quad,
+                },
                 child_behavior: None,
             });
     }
@@ -950,12 +807,10 @@ impl RenderState {
     // -------------------------------------------------------------------------
 
     fn render(&mut self) {
-        // 1. Delta time — cap to prevent large jumps after pauses.
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
 
-        // 2. Flush staged pointer events into the ECS PointerInput resource.
         {
             let mut pi = self.ui_world.world.resource_mut::<PointerInput>();
             pi.position = self.staged_pointer.position;
@@ -963,35 +818,29 @@ impl RenderState {
             pi.just_released = self.staged_pointer.just_released;
             pi.is_pressed = self.staged_pointer.is_pressed;
         }
-        // Clear one-shot flags — they are only true for one frame.
         self.staged_pointer.just_pressed = false;
         self.staged_pointer.just_released = false;
 
-        // 3. Tick ECS (hit_test_system → transition systems).
         self.ui_world.update(dt);
-
-        // 4. Bake any pending text entities.
         self.bake_pending_text();
+        self.advance_intro_and_hover(dt);
+        self.advance_tile_hover(dt);
+        self.advance_demo();
 
-        // 5. Advance demo state machine (reads InteractionEvents from step 3).
-        self.advance_demo(dt);
-
-        // 6. Pull the latest video frame from the BYOV channel (M9).
-        //    The background producer thread sends frames at ~30 fps; we drain
-        //    the channel here and upload only the freshest one.  Entities
-        //    without VideoPlayer are unaffected (they use atlas_page 0).
-        self.pipeline.consume_video_frame(&self.queue);
-
-        // 7. Collect visible instance data.
-        //    See `proteus_ui::collect` for the two-instance-per-text-entity model.
         let instances = collect_instances(&mut self.ui_world.world);
 
-        // 8. Acquire swap-chain texture.
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.surface_config);
+                self.window.request_redraw();
+                return;
+            }
+            // Window covered, minimized, or off-screen — not an error, just
+            // nothing to draw into right now. Skip the frame and try again
+            // once the window is visible.
+            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
                 self.window.request_redraw();
                 return;
             }
@@ -1003,8 +852,10 @@ impl RenderState {
 
         let view = frame.texture.create_view(&Default::default());
 
+        let mut pipeline = self.ui_world.world.resource_mut::<QuadPipeline>();
+
         if !instances.is_empty() {
-            self.pipeline.upload_instances(&self.queue, &instances);
+            pipeline.upload_instances(&self.queue, &instances);
         }
 
         let mut encoder = self
@@ -1021,12 +872,7 @@ impl RenderState {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.94,
-                            g: 0.94,
-                            b: 0.96,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(BG_COLOR),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1037,7 +883,7 @@ impl RenderState {
             });
 
             if !instances.is_empty() {
-                self.pipeline.draw(&mut pass);
+                pipeline.draw(&mut pass);
             }
         }
 

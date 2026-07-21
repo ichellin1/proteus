@@ -11,7 +11,7 @@
 //!         │
 //!         │ (shell calls QuadPipeline::write_to_main_atlas)
 //!         ▼
-//! BakedText { uv_offset, uv_scale }  ← written back onto the entity
+//! BakedText { uv_offset, uv_scale, pixel_size }  ← written back onto the entity
 //!         │
 //!         │ (render loop uses these UVs in QuadInstance)
 //!         ▼
@@ -94,7 +94,9 @@ impl Text {
 /// and uploaded to the GPU `main_atlas`.
 ///
 /// The render loop reads `uv_offset` and `uv_scale` to point the entity's
-/// [`QuadInstance`] at the correct atlas sub-region.
+/// [`QuadInstance`] at the correct atlas sub-region, and `pixel_size` to size
+/// the text overlay quad to the glyph run's actual footprint rather than
+/// stretching it to fill the parent entity's full geometry.
 ///
 /// [`QuadInstance`]: proteus_render::QuadInstance
 #[derive(Component, Clone, Debug, PartialEq)]
@@ -105,6 +107,11 @@ pub struct BakedText {
     /// Normalised UV extent of the text region.
     /// `uv_offset + uv_scale` gives the bottom-right UV corner.
     pub uv_scale: [f32; 2],
+    /// The baked glyph run's actual size in pixels (`BakedRegion::width`/`height`).
+    /// The text overlay instance uses this as its quad size — centered on the
+    /// parent entity — instead of the parent's own size, so text renders at
+    /// its natural footprint rather than stretched to fill the component.
+    pub pixel_size: [f32; 2],
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +156,7 @@ mod tests {
         let baked = BakedText {
             uv_offset: [0.1, 0.2],
             uv_scale: [0.3, 0.05],
+            pixel_size: [60.0, 24.0],
         };
         let mut world = World::new();
         let e = world.spawn(baked.clone()).id();
@@ -166,6 +174,7 @@ mod tests {
                 BakedText {
                     uv_offset: [0.0, 0.0],
                     uv_scale: [0.1, 0.02],
+                    pixel_size: [40.0, 16.0],
                 },
             ))
             .id();

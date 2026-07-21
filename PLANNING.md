@@ -1578,6 +1578,42 @@ transition, while everything else around it still bakes normally.
 
 ---
 
+### M9.7 — Static Image Support *(off critical path — moved up, needed for the reference demo)*
+
+No image-loading pipeline exists yet — the only ways to get pixels into `main_atlas` today are the
+1×1 white sentinel, baked SDF text glyphs, offscreen bake render targets, and streamed video
+frames (`video_atlas`). The reference demo's video tiles currently use solid-color placeholders
+standing in for real box-cover art. This milestone closes that gap: decode a static image file
+(PNG/JPEG) on both targets and upload it into `main_atlas` through the same atlas-region mechanism
+`FontAtlas`/`BakedText` already use for text, so a component can reference it exactly like any
+other texture.
+
+**Approach:** Add the `image` crate (pure Rust, works on both native and wasm32) as a dependency.
+A new `proteus_render::static_texture` module decodes RGBA8 pixels from bytes and hands them to
+the existing shelf/atlas-packing path (`etagere`, already a dependency per Phase C) — the same
+`write_to_main_atlas` upload used by text baking, just with decoded image pixels instead of
+rasterized glyph coverage. A new `Image` ECS component (analogous to `Text`/`BakedText`) declares
+`src`/`bytes` on an entity; the shell's per-frame bake-pending pass uploads it once and inserts a
+`BakedImage { uv_offset, uv_scale, pixel_size }` component, mirroring `BakedText` exactly —
+including the `pixel_size`-driven quad-sizing fix from the text overlay work, so images aren't
+stretched to fill an unrelated parent size either.
+
+**Definition of done:**
+- [ ] `image` crate added as a workspace dependency; decodes PNG and JPEG on native and wasm32
+- [ ] `Image` component (`src: bytes` or a resolved path/URL, resolved by the shell) triggers a
+  bake-and-upload pass identical in shape to the `Text` → `BakedText` flow
+- [ ] `BakedImage { uv_offset, uv_scale, pixel_size }` — same shape as `BakedText`, read by
+  `collect_instances` to size and UV-map the entity's quad
+- [ ] Decoded images are packed into `main_atlas` via the existing atlas region allocator — no new
+  atlas page required
+- [ ] Reference demo: the three video tiles use real box-cover images instead of solid-color
+  placeholders
+- [ ] Regression tests: decode → atlas upload → instance UV/size correctness, mirroring the
+  existing `BakedText` test coverage in `render_instances.rs`
+- [ ] Works on both native and web (wasm32) shells
+
+---
+
 ### M10 — TypeScript SDK *(critical path)*
 
 A developer builds the full interactive reference demo in TypeScript without touching Rust.

@@ -35,10 +35,17 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
+use glam::Vec4;
 
+use proteus_render::{
+    GpuContext, QuadInstance, QuadPipeline, TransitionAllocId, TransitionRegion,
+    TRANSITION_ATLAS_SIZE,
+};
+
+use crate::collect::{quad_state_to_instance, BakedTexture};
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
-use crate::effects::{DropShadow, Glow};
-use crate::text::BakedText;
+use crate::effects::{Border, DropShadow, Glow};
+use crate::text::{BakedText, Text};
 use crate::transition::{ActiveTransition, TransitionConfig};
 
 // ---------------------------------------------------------------------------
@@ -185,6 +192,13 @@ pub struct ActiveGroupTransition {
     /// Used to detect completion: when the count of complete virtuals that
     /// carry `PartOfGroup(coordinator)` equals `total`, the group is done.
     pub total: usize,
+    /// The one `transition_atlas` bake shared by every virtual in this group
+    /// (the source's bake for 1→N, the destination's bake for N→1) — as
+    /// opposed to each virtual's own individual bake, tracked per-virtual on
+    /// its own `BakedTexture::own_alloc`. `None` when baking was unavailable
+    /// or failed and the group fell back to flat-color slices.
+    /// `group_transition_complete_system` frees this once, on completion.
+    pub shared_alloc: Option<TransitionAllocId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,12 +234,23 @@ pub fn horizontal_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
     assert!(n > 0, "horizontal_slices: n must be > 0");
     let slice_w = source.size.x / n as f32;
     let leftmost_center = source.position.x - source.size.x * 0.5 + slice_w * 0.5;
+    // Clamp corner_radius to the slice's own half-extents. Uncapped, a large
+    // radius inherited from the source (e.g. a circular button's radius =
+    // half its full width) exceeds a narrow slice's half-width, and the
+    // rounded-rect SDF collapses to little more than a sliver around the
+    // slice's center — the same degenerate case fixed for the text overlay
+    // quad in collect.rs, here applied to slice geometry instead.
+    let corner_radius = source
+        .corner_radius
+        .min(slice_w * 0.5)
+        .min(source.size.y * 0.5);
     (0..n)
         .map(|i| {
             let x = leftmost_center + slice_w * i as f32;
             QuadState {
                 position: glam::Vec3::new(x, source.position.y, source.position.z),
                 size: glam::Vec2::new(slice_w, source.size.y),
+                corner_radius,
                 ..source.clone()
             }
         })
@@ -254,6 +279,128 @@ pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
 }
 
 // ---------------------------------------------------------------------------
+// Transition-bake helpers — shared by one_to_n_setup_system and n_to_one_setup_system
+// ---------------------------------------------------------------------------
+
+/// Visual components (beyond `QuadState`, which the caller already has —
+/// either from the coordinator's own query or a `GroupTarget`/`GroupSource`'s
+/// stored `state`) needed to bake an entity's rendered appearance.
+type BakeVisualsQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Option<&'static Border>,
+        Option<&'static Glow>,
+        Option<&'static DropShadow>,
+        Option<&'static BakedText>,
+        Option<&'static Text>,
+    ),
+>;
+
+/// Build the `QuadInstance`s that represent `entity`'s own rendered
+/// appearance — background (+ text overlay, if any) — the same two-instance
+/// shape `collect_instances` produces per frame, just for one entity, once,
+/// on demand.
+///
+/// This is deliberately its own named step (see `bake_one` below) rather than
+/// inlined: a future composite-component feature (parent + children baked as
+/// one unit) swaps this for a version that also walks a `Hierarchy`/children
+/// component and gathers every descendant's instances too — nothing else in
+/// `bake_one` or the setup systems would need to change.
+fn gather_bake_instances(
+    visuals: &BakeVisualsQuery,
+    entity: Entity,
+    qs: &QuadState,
+) -> Vec<QuadInstance> {
+    let Ok((border, glow, shadow, baked_text, text)) = visuals.get(entity) else {
+        return vec![quad_state_to_instance(qs, None, None, None, None)];
+    };
+
+    let mut out = vec![quad_state_to_instance(qs, None, shadow, glow, border)];
+
+    if let Some(b) = baked_text {
+        let mut text_qs = qs.clone();
+        text_qs.color = text.map(|t| t.color).unwrap_or(Vec4::ONE);
+        // Same footprint-sizing / corner_radius-zeroing fix as the per-frame
+        // text overlay in collect.rs — see that file for the full rationale.
+        text_qs.size = b.pixel_size.into();
+        text_qs.corner_radius = 0.0;
+        out.push(quad_state_to_instance(&text_qs, Some(b), None, None, None));
+    }
+
+    out
+}
+
+/// Normalise a `TransitionRegion` into `(uv_offset, uv_scale)` within
+/// `transition_atlas`.
+fn region_uv(region: &TransitionRegion) -> ([f32; 2], [f32; 2]) {
+    let atlas = TRANSITION_ATLAS_SIZE as f32;
+    (
+        [region.x as f32 / atlas, region.y as f32 / atlas],
+        [region.width as f32 / atlas, region.height as f32 / atlas],
+    )
+}
+
+/// Divide a baked region into `n` equal left-to-right UV thirds — the UV-space
+/// counterpart of `horizontal_slices`, used to pair each geometry slice with
+/// its matching crop of the shared bake.
+fn region_uv_slices(region: &TransitionRegion, n: usize) -> Vec<([f32; 2], [f32; 2])> {
+    let atlas = TRANSITION_ATLAS_SIZE as f32;
+    let slice_w = region.width as f32 / n as f32;
+    (0..n)
+        .map(|i| {
+            let x = region.x as f32 + slice_w * i as f32;
+            (
+                [x / atlas, region.y as f32 / atlas],
+                [slice_w / atlas, region.height as f32 / atlas],
+            )
+        })
+        .collect()
+}
+
+/// Bake `entity`'s rendered appearance (per `qs`) into a freshly allocated
+/// `transition_atlas` region. Returns `None` if there's nothing to bake or
+/// the atlas is full — callers treat that as "fall back to flat-color
+/// geometry for this entity," not a hard error.
+fn bake_one(
+    pipeline: &mut QuadPipeline,
+    gpu: &GpuContext,
+    visuals: &BakeVisualsQuery,
+    entity: Entity,
+    qs: &QuadState,
+) -> Option<(TransitionAllocId, TransitionRegion)> {
+    let instances = gather_bake_instances(visuals, entity, qs);
+    if instances.is_empty() {
+        return None;
+    }
+
+    let width = qs.size.x.max(1.0).ceil() as u32;
+    let height = qs.size.y.max(1.0).ceil() as u32;
+    let (alloc_id, granted) = pipeline.allocate_transition_region(width, height)?;
+
+    // The allocator may grant a padded region (shelf packers commonly round
+    // up) — bake and UV-address only the requested width×height within it,
+    // not the full grant, so slice UV math stays exact.
+    let region = TransitionRegion {
+        x: granted.x,
+        y: granted.y,
+        width,
+        height,
+    };
+    let view_projection =
+        QuadPipeline::ortho_centered(qs.position.x, qs.position.y, qs.size.x, qs.size.y);
+    pipeline.bake_instances_to_transition_atlas(
+        &gpu.device,
+        &gpu.queue,
+        &instances,
+        view_projection,
+        region.as_tuple(),
+    );
+
+    Some((alloc_id, region))
+}
+
+// ---------------------------------------------------------------------------
 // one_to_n_setup_system
 // ---------------------------------------------------------------------------
 
@@ -271,10 +418,19 @@ pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
 /// - Spawns N [`Virtual`] entities, each starting at a horizontal slice of
 ///   the source and lerping to the corresponding target's state.
 /// - Attaches [`ActiveGroupTransition`] to the source (coordinator).
+/// - When [`GpuContext`]/[`QuadPipeline`] are available (`Option<Res<...>>` —
+///   absent in, e.g., a bare test `World`): bakes the source once and each
+///   target once, and each virtual crossfades texel-for-texel between its
+///   slice of the source bake and its target's own bake — real shape,
+///   border, and text on both ends, not a flat-color approximation. If GPU
+///   resources are unavailable, or a bake fails (atlas full), falls back to
+///   today's flat-color slice geometry for that virtual.
 pub fn one_to_n_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &OneToNRequest, &QuadState)>,
-    source_visuals: Query<(Option<&DropShadow>, Option<&Glow>, Option<&BakedText>)>,
+    visuals: BakeVisualsQuery,
+    gpu: Option<Res<GpuContext>>,
+    mut pipeline: Option<ResMut<QuadPipeline>>,
 ) {
     for (source_entity, request, source_state) in query.iter() {
         let n = request.targets.len();
@@ -311,33 +467,53 @@ pub fn one_to_n_setup_system(
             }
 
             SplitStrategy::Slice => {
-                // Normalize to N→N via virtual entities.
-                let slices = horizontal_slices(source_state, n);
-
                 // Hide all target entities until the transition completes.
                 for target in &request.targets {
                     commands.entity(target.entity).insert(Visibility::HIDDEN);
                 }
-
                 let reveal: Vec<Entity> = request.targets.iter().map(|t| t.entity).collect();
-                let total = n;
 
-                // Snapshot the source entity's visual components so each virtual
-                // slice inherits them.  This ensures effects and baked text remain
-                // visible throughout the transition rather than popping out the
-                // instant the source entity is hidden.
-                let src_shadow = source_visuals
+                // Try the baked, two-sided crossfade path: bake the source
+                // once (shared across every slice), then each target once
+                // (one bake per slice). Only proceeds if GPU resources are
+                // present *and* the shared source bake succeeds — a partial
+                // source bake can't produce meaningful slice crops.
+                let mut shared_alloc: Option<TransitionAllocId> = None;
+                let mut from_uv_slices: Vec<([f32; 2], [f32; 2])> = Vec::new();
+                let mut target_bakes: Vec<Option<(TransitionAllocId, TransitionRegion)>> =
+                    Vec::new();
+
+                if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
+                    if let Some((src_id, src_region)) =
+                        bake_one(pipeline, gpu, &visuals, source_entity, source_state)
+                    {
+                        shared_alloc = Some(src_id);
+                        from_uv_slices = region_uv_slices(&src_region, n);
+                        target_bakes = request
+                            .targets
+                            .iter()
+                            .map(|t| bake_one(pipeline, gpu, &visuals, t.entity, &t.state))
+                            .collect();
+                    }
+                }
+
+                // Snapshot the source entity's visual components so a
+                // fallen-back (non-baked) virtual still inherits them —
+                // today's behavior, unchanged.
+                let src_glow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(s, _, _)| s.cloned());
-                let src_glow = source_visuals
+                    .and_then(|(_, g, _, _, _)| g.cloned());
+                let src_shadow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, g, _)| g.cloned());
-                let src_baked = source_visuals
+                    .and_then(|(_, _, s, _, _)| s.cloned());
+                let src_baked = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, b)| b.cloned());
+                    .and_then(|(_, _, _, b, _)| b.cloned());
+
+                let slices = horizontal_slices(source_state, n);
 
                 // Spawn one virtual entity per slice.
                 for (i, (slice_state, target)) in
@@ -348,24 +524,60 @@ pub fn one_to_n_setup_system(
                         .map(|f| f(i, n))
                         .unwrap_or(request.default_config);
 
-                    let active =
-                        ActiveTransition::new(slice_state.clone(), target.state.clone(), cfg);
+                    let own_bake = target_bakes.get(i).copied().flatten();
+                    let (from_state, to_state, baked_texture) = match (shared_alloc, own_bake) {
+                        (Some(_), Some((own_id, own_region))) => {
+                            let (from_off, from_scale) = from_uv_slices[i];
+                            let (to_off, to_scale) = region_uv(&own_region);
+                            // Both ends flattened to a plain white pass-through
+                            // quad — the baked pixels carry the real shape,
+                            // color, and text, so the QuadState wrapping them
+                            // shouldn't also tint or re-round on top.
+                            let from_state = QuadState {
+                                color: Vec4::ONE,
+                                corner_radius: 0.0,
+                                ..slice_state.clone()
+                            };
+                            let to_state = QuadState {
+                                color: Vec4::ONE,
+                                corner_radius: 0.0,
+                                ..target.state.clone()
+                            };
+                            let baked_texture = BakedTexture {
+                                from_uv_offset: from_off,
+                                from_uv_scale: from_scale,
+                                to_uv_offset: to_off,
+                                to_uv_scale: to_scale,
+                                own_alloc: own_id,
+                            };
+                            (from_state, to_state, Some(baked_texture))
+                        }
+                        _ => (slice_state.clone(), target.state.clone(), None),
+                    };
+
+                    let active = ActiveTransition::new(from_state.clone(), to_state, cfg);
 
                     let mut entity_cmd = commands.spawn((
-                        slice_state.clone(),
+                        from_state,
                         Lifecycle::Transitioning,
                         active,
                         Virtual,
                         PartOfGroup(source_entity),
                     ));
-                    if let Some(ref s) = src_shadow {
-                        entity_cmd.insert(s.clone());
-                    }
-                    if let Some(ref g) = src_glow {
-                        entity_cmd.insert(g.clone());
-                    }
-                    if let Some(ref b) = src_baked {
-                        entity_cmd.insert(b.clone());
+                    if let Some(bt) = baked_texture {
+                        entity_cmd.insert(bt);
+                    } else {
+                        // Fallback path (no bake): propagate the source's own
+                        // visuals, exactly as before this feature existed.
+                        if let Some(ref s) = src_shadow {
+                            entity_cmd.insert(s.clone());
+                        }
+                        if let Some(ref g) = src_glow {
+                            entity_cmd.insert(g.clone());
+                        }
+                        if let Some(ref b) = src_baked {
+                            entity_cmd.insert(b.clone());
+                        }
                     }
                 }
 
@@ -374,7 +586,8 @@ pub fn one_to_n_setup_system(
                     Lifecycle::Transitioning,
                     ActiveGroupTransition {
                         reveal_on_complete: reveal,
-                        total,
+                        total: n,
+                        shared_alloc,
                     },
                 ));
             }
@@ -394,10 +607,20 @@ pub fn one_to_n_setup_system(
 ///   to the corresponding horizontal slice of the destination.
 /// - Attaches [`ActiveGroupTransition`] to the destination (coordinator).
 /// - On group completion: destination entity becomes visible.
+///
+/// The mirror image of [`one_to_n_setup_system`]'s baked crossfade, with
+/// source/target roles swapped: each source is baked individually (its own
+/// bake, freed with its virtual), and the destination is baked once and
+/// sliced (the shared bake, freed once on group completion). Same
+/// `Option<Res<GpuContext>>`/`Option<ResMut<QuadPipeline>>` graceful
+/// degradation to flat-color slices when GPU resources are unavailable or a
+/// bake fails.
 pub fn n_to_one_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &NToOneRequest, &QuadState)>,
-    source_visuals: Query<(Option<&DropShadow>, Option<&Glow>, Option<&BakedText>)>,
+    visuals: BakeVisualsQuery,
+    gpu: Option<Res<GpuContext>>,
+    mut pipeline: Option<ResMut<QuadPipeline>>,
 ) {
     for (dest_entity, request, dest_state) in query.iter() {
         let n = request.sources.len();
@@ -422,9 +645,28 @@ pub fn n_to_one_setup_system(
         // Compute target slices — one per source.
         let target_slices = horizontal_slices(dest_state, n);
 
+        // Try the baked, two-sided crossfade path: bake the destination once
+        // (shared across every virtual), then each source once (one bake per
+        // virtual). Mirrors one_to_n_setup_system with roles swapped.
+        let mut shared_alloc: Option<TransitionAllocId> = None;
+        let mut to_uv_slices: Vec<([f32; 2], [f32; 2])> = Vec::new();
+        let mut source_bakes: Vec<Option<(TransitionAllocId, TransitionRegion)>> = Vec::new();
+
+        if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
+            if let Some((dest_id, dest_region)) =
+                bake_one(pipeline, gpu, &visuals, dest_entity, dest_state)
+            {
+                shared_alloc = Some(dest_id);
+                to_uv_slices = region_uv_slices(&dest_region, n);
+                source_bakes = request
+                    .sources
+                    .iter()
+                    .map(|s| bake_one(pipeline, gpu, &visuals, s.entity, &s.state))
+                    .collect();
+            }
+        }
+
         // Spawn one virtual entity per source, transitioning to the matching slice.
-        // Each virtual inherits the source entity's visual components so effects
-        // and baked text remain present throughout the transition.
         for (i, (source, target_slice)) in
             request.sources.iter().zip(target_slices.iter()).enumerate()
         {
@@ -433,18 +675,48 @@ pub fn n_to_one_setup_system(
                 .map(|f| f(i, n))
                 .unwrap_or(request.default_config);
 
-            let active = ActiveTransition::new(source.state.clone(), target_slice.clone(), cfg);
+            let own_bake = source_bakes.get(i).copied().flatten();
+            let (from_state, to_state, baked_texture) = match (shared_alloc, own_bake) {
+                (Some(_), Some((own_id, own_region))) => {
+                    let (to_off, to_scale) = to_uv_slices[i];
+                    let (from_off, from_scale) = region_uv(&own_region);
+                    let from_state = QuadState {
+                        color: Vec4::ONE,
+                        corner_radius: 0.0,
+                        ..source.state.clone()
+                    };
+                    let to_state = QuadState {
+                        color: Vec4::ONE,
+                        corner_radius: 0.0,
+                        ..target_slice.clone()
+                    };
+                    let baked_texture = BakedTexture {
+                        from_uv_offset: from_off,
+                        from_uv_scale: from_scale,
+                        to_uv_offset: to_off,
+                        to_uv_scale: to_scale,
+                        own_alloc: own_id,
+                    };
+                    (from_state, to_state, Some(baked_texture))
+                }
+                _ => (source.state.clone(), target_slice.clone(), None),
+            };
+
+            let active = ActiveTransition::new(from_state.clone(), to_state, cfg);
 
             let mut entity_cmd = commands.spawn((
-                source.state.clone(),
+                from_state,
                 Lifecycle::Transitioning,
                 active,
                 Virtual,
                 PartOfGroup(dest_entity),
             ));
 
-            // Propagate visual components from the source entity.
-            if let Ok((shadow, glow, baked)) = source_visuals.get(source.entity) {
+            if let Some(bt) = baked_texture {
+                entity_cmd.insert(bt);
+            } else if let Ok((_, glow, shadow, baked, _)) = visuals.get(source.entity) {
+                // Fallback path (no bake): propagate the source entity's own
+                // visuals, exactly as before this feature existed.
                 if let Some(s) = shadow {
                     entity_cmd.insert(s.clone());
                 }
@@ -461,6 +733,7 @@ pub fn n_to_one_setup_system(
         commands.entity(dest_entity).insert(ActiveGroupTransition {
             reveal_on_complete: vec![dest_entity],
             total: n,
+            shared_alloc,
         });
     }
 }
@@ -478,22 +751,35 @@ pub fn n_to_one_setup_system(
 /// 1. Inserts `Visibility::VISIBLE` on all `reveal_on_complete` entities.
 /// 2. Sets the coordinator's `Lifecycle` to `Idle`.
 /// 3. Removes `ActiveGroupTransition` from the coordinator.
-/// 4. Queues despawn of all virtual entities in the group.
+/// 4. If a [`QuadPipeline`] resource is available: frees the coordinator's
+///    `shared_alloc` (once) and each virtual's own `BakedTexture::own_alloc`
+///    (if baking was used for that group at all).
+/// 5. Queues despawn of all virtual entities in the group.
 ///
 /// Completion is idempotent: once all deferred commands from step 3 are
 /// applied (next `FlushCommands`), the virtual entities are gone and the
 /// coordinator has no `ActiveGroupTransition`, so the system does no work.
 pub fn group_transition_complete_system(
     mut commands: Commands,
-    virtuals: Query<(Entity, &PartOfGroup, &ActiveTransition), With<Virtual>>,
+    virtuals: Query<
+        (
+            Entity,
+            &PartOfGroup,
+            &ActiveTransition,
+            Option<&BakedTexture>,
+        ),
+        With<Virtual>,
+    >,
     mut coordinators: Query<(&ActiveGroupTransition, &mut Lifecycle)>,
+    mut pipeline: Option<ResMut<QuadPipeline>>,
 ) {
     // Build a map: coordinator_entity → (all_virtual_entities, complete_count).
-    let mut by_coord: HashMap<Entity, (Vec<Entity>, usize)> = HashMap::new();
+    type CoordEntry = (Vec<(Entity, Option<TransitionAllocId>)>, usize);
+    let mut by_coord: HashMap<Entity, CoordEntry> = HashMap::new();
 
-    for (v_entity, PartOfGroup(coord_entity), active) in virtuals.iter() {
+    for (v_entity, PartOfGroup(coord_entity), active, baked) in virtuals.iter() {
         let entry = by_coord.entry(*coord_entity).or_insert((vec![], 0));
-        entry.0.push(v_entity);
+        entry.0.push((v_entity, baked.map(|b| b.own_alloc)));
         if active.is_complete {
             entry.1 += 1;
         }
@@ -515,6 +801,18 @@ pub fn group_transition_complete_system(
             commands.entity(entity).insert(Visibility::VISIBLE);
         }
 
+        // Free the transition_atlas allocations this group used, if any.
+        if let Some(pipeline) = pipeline.as_deref_mut() {
+            if let Some(shared) = group.shared_alloc {
+                pipeline.free_transition_region(shared);
+            }
+            for (_, own_alloc) in &v_entities {
+                if let Some(id) = own_alloc {
+                    pipeline.free_transition_region(*id);
+                }
+            }
+        }
+
         // Restore coordinator lifecycle and remove group state.
         *lifecycle = Lifecycle::Idle;
         commands
@@ -522,7 +820,7 @@ pub fn group_transition_complete_system(
             .remove::<ActiveGroupTransition>();
 
         // Despawn all virtual entities.
-        for v_entity in v_entities {
+        for (v_entity, _) in v_entities {
             commands.entity(v_entity).despawn();
         }
     }
@@ -601,6 +899,34 @@ mod tests {
         for s in &slices {
             assert_eq!(s.color, Vec4::new(1.0, 0.0, 0.0, 1.0));
             assert_eq!(s.corner_radius, 0.0);
+        }
+    }
+
+    /// A circular source (corner_radius == half its full width, e.g. a round
+    /// button) sliced into narrow strips must not carry that radius through
+    /// unclamped — it would exceed each slice's own half-width and collapse
+    /// the rounded-rect SDF to a sliver. See the comment in
+    /// `horizontal_slices` for the full explanation.
+    #[test]
+    fn horizontal_slices_clamps_corner_radius_to_slice_half_extents() {
+        let circle = QuadState {
+            position: Vec3::new(0.0, 0.0, 0.5),
+            size: Vec2::new(200.0, 200.0),
+            rotation: 0.0,
+            scale: 1.0,
+            anchor: Vec2::new(0.5, 0.5),
+            color: Vec4::ONE,
+            corner_radius: 100.0, // full circle: radius == half the width
+        };
+        let slices = horizontal_slices(&circle, 3);
+        let slice_half_width = (200.0 / 3.0) / 2.0;
+        for s in &slices {
+            assert!(
+                s.corner_radius <= slice_half_width + 1e-4,
+                "corner_radius {} exceeds slice half-width {slice_half_width}",
+                s.corner_radius,
+            );
+            assert!(s.corner_radius > 0.0, "clamping should not zero it out");
         }
     }
 
