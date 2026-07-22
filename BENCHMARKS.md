@@ -66,9 +66,11 @@ This is intentionally naïve — it represents the pattern that most hand-writte
 
 ### Results
 
-> ⏳ **Pending** — requires M3 (WASM shell runnable in browser, TypeScript SDK wired up).
-> Results will be recorded here once `wasm-pack build` output is loadable from an HTML page
-> and the JS baseline harness is written.
+> ⏳ **Pending.** The web shell itself has run in-browser since well before this was last updated
+> (M1–M9.8 are all complete — see [ROADMAP.md](./ROADMAP.md)). What's actually missing is the
+> *harness*: a JS baseline implementation to compare against, and ideally the TypeScript SDK
+> (M12) so the comparison uses the same public API a real developer would. Results will be
+> recorded here once both exist.
 
 #### Median frame time (ms) — Chrome, Apple M-series
 
@@ -91,9 +93,11 @@ This is intentionally naïve — it represents the pattern that most hand-writte
 
 ---
 
-## M12 benchmark: native performance
+## M13 benchmark: native performance
 
-> ⏳ **Pending** — M12 (native targets).
+> ⏳ **Pending** — M13 (Developer Release), which carries the native performance benchmark
+> requirement in its Definition of Done (moved there when M11 — Native Parity was retired as its
+> own milestone; see [PLANNING.md](./PLANNING.md)).
 
 Instanced rendering on native (Metal / Vulkan / DX12) with bevy_ecs driving the scene graph. Measures frames per second at component counts up to 100 000, and GPU time via `wgpu::QuerySet` timestamp queries.
 
@@ -105,7 +109,7 @@ Instanced rendering on native (Metal / Vulkan / DX12) with bevy_ecs driving the 
 # Rust CPU-side microbenchmarks (criterion)
 cargo bench -p proteus-render
 
-# Browser benchmark harness (M3+)
+# Browser benchmark harness (needs M12 — TypeScript SDK)
 cd benches/browser
 npm install
 npm run bench
