@@ -17,6 +17,10 @@ crates/proteus-shell-web/www/videos/
 crates/proteus-shell-native/images/
 crates/proteus-shell-web/www/images/
 
+# Staged demo-assets bundle awaiting upload to a GitHub Release (see
+# scripts/fetch-assets.sh) — not source, not meant to be tracked in git.
+release-assets/
+
 # Editor
 .vscode/
 .idea/
