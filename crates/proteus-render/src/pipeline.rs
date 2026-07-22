@@ -867,8 +867,20 @@ impl QuadPipeline {
             return;
         }
         let mut latest: Option<Vec<u8>> = None;
+        let mut drained = 0u32;
         while let Ok(frame) = rx.try_recv() {
             latest = Some(frame);
+            drained += 1;
+        }
+        // More than one frame queued up since the last call means the render
+        // loop fell behind the decoder for at least one tick — everything but
+        // the freshest gets discarded here. Logged so playback smoothness
+        // issues can be attributed to this coalescing vs. decoder-side jitter.
+        if drained > 1 {
+            log::debug!(
+                "consume_video_frame: {} stale frame(s) discarded (render loop behind decoder)",
+                drained - 1
+            );
         }
         if let Some(frame) = latest {
             self.upload_video_frame(queue, &frame);

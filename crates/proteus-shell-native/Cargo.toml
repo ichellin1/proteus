@@ -21,3 +21,7 @@ pollster = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
+# MP4 playback (M9.5) — a reference "bring-your-own-player" example that
+# shells out to `ffmpeg`/`ffprobe` (must be on PATH). Only this shell crate
+# knows about MP4/ffmpeg; proteus-render/proteus-ui only see the generic
+# VideoFrameSender channel (see src/mp4_player.rs).
