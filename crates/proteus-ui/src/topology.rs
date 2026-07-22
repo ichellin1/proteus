@@ -45,6 +45,7 @@ use proteus_render::{
 use crate::collect::{quad_state_to_instance, BakedTexture};
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 use crate::effects::{Border, DropShadow, Glow};
+use crate::image::BakedImage;
 use crate::text::{BakedText, Text};
 use crate::transition::{ActiveTransition, TransitionConfig};
 
@@ -294,6 +295,7 @@ type BakeVisualsQuery<'w, 's> = Query<
         Option<&'static DropShadow>,
         Option<&'static BakedText>,
         Option<&'static Text>,
+        Option<&'static BakedImage>,
     ),
 >;
 
@@ -312,11 +314,21 @@ fn gather_bake_instances(
     entity: Entity,
     qs: &QuadState,
 ) -> Vec<QuadInstance> {
-    let Ok((border, glow, shadow, baked_text, text)) = visuals.get(entity) else {
+    let Ok((border, glow, shadow, baked_text, text, baked_image)) = visuals.get(entity) else {
         return vec![quad_state_to_instance(qs, None, None, None, None)];
     };
 
-    let mut out = vec![quad_state_to_instance(qs, None, shadow, glow, border)];
+    let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
+    // A static image (M9.7 box-cover art) is a one-time UV mapping into
+    // main_atlas (atlas_page 0, already the default) — same handling as the
+    // per-frame path in collect.rs's push_entity_instances. Without this, a
+    // Slice-transition target with BakedImage would bake as its flat
+    // placeholder color instead of the actual box art it shows once revealed.
+    if let Some(image) = baked_image {
+        bg_inst.uv_offset = image.uv_offset;
+        bg_inst.uv_scale = image.uv_scale;
+    }
+    let mut out = vec![bg_inst];
 
     if let Some(b) = baked_text {
         let mut text_qs = qs.clone();
@@ -503,15 +515,15 @@ pub fn one_to_n_setup_system(
                 let src_glow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, g, _, _, _)| g.cloned());
+                    .and_then(|(_, g, _, _, _, _)| g.cloned());
                 let src_shadow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, s, _, _)| s.cloned());
+                    .and_then(|(_, _, s, _, _, _)| s.cloned());
                 let src_baked = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, _, b, _)| b.cloned());
+                    .and_then(|(_, _, _, b, _, _)| b.cloned());
 
                 let slices = horizontal_slices(source_state, n);
 
@@ -714,7 +726,7 @@ pub fn n_to_one_setup_system(
 
             if let Some(bt) = baked_texture {
                 entity_cmd.insert(bt);
-            } else if let Ok((_, glow, shadow, baked, _)) = visuals.get(source.entity) {
+            } else if let Ok((_, glow, shadow, baked, _, _)) = visuals.get(source.entity) {
                 // Fallback path (no bake): propagate the source entity's own
                 // visuals, exactly as before this feature existed.
                 if let Some(s) = shadow {
@@ -891,6 +903,38 @@ mod tests {
             let gap = slices[i].position.x - slices[i - 1].position.x;
             assert!((gap - slice_w).abs() < 1e-3, "gap={}", gap);
         }
+    }
+
+    /// Regression test: `gather_bake_instances` must include a target's
+    /// `BakedImage` UV in the baked background instance. Before this fix,
+    /// `BakeVisualsQuery` didn't query `BakedImage` at all, so a Slice
+    /// transition's target (e.g. a video tile with box-cover art) baked as
+    /// its flat placeholder color instead of the actual box art it shows
+    /// once revealed — no crossfade ever showed the real image.
+    #[test]
+    fn gather_bake_instances_includes_baked_image_uv() {
+        use crate::image::BakedImage;
+        use bevy_ecs::system::SystemState;
+
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                source(),
+                BakedImage {
+                    uv_offset: [0.4, 0.5],
+                    uv_scale: [0.2, 0.3],
+                    pixel_size: [400.0, 600.0],
+                },
+            ))
+            .id();
+
+        let mut state: SystemState<BakeVisualsQuery> = SystemState::new(&mut world);
+        let visuals = state.get(&world);
+
+        let instances = gather_bake_instances(&visuals, entity, &source());
+        assert_eq!(instances.len(), 1, "no BakedText — just the background");
+        assert_eq!(instances[0].uv_offset, [0.4, 0.5]);
+        assert_eq!(instances[0].uv_scale, [0.2, 0.3]);
     }
 
     #[test]

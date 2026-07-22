@@ -1590,39 +1590,80 @@ transition, while everything else around it still bakes normally.
 
 ---
 
-### M9.7 — Static Image Support *(off critical path — moved up, needed for the reference demo)*
+### M9.7 — Static Image Support *(off critical path — complete)*
 
-No image-loading pipeline exists yet — the only ways to get pixels into `main_atlas` today are the
-1×1 white sentinel, baked SDF text glyphs, offscreen bake render targets, and streamed video
-frames (`video_atlas`). The reference demo's video tiles currently use solid-color placeholders
-standing in for real box-cover art. This milestone closes that gap: decode a static image file
+No image-loading pipeline existed before this — the only ways to get pixels into `main_atlas`
+were the 1×1 white sentinel, baked SDF text glyphs, offscreen bake render targets, and streamed
+video frames (`video_atlas`). The reference demo's video tiles used solid-color placeholders
+standing in for real box-cover art. This milestone closed that gap: decode a static image file
 (PNG/JPEG) on both targets and upload it into `main_atlas` through the same atlas-region mechanism
-`FontAtlas`/`BakedText` already use for text, so a component can reference it exactly like any
-other texture.
+`FontAtlas`/`BakedText` already use for text, so a component references it exactly like any other
+texture.
 
-**Approach:** Add the `image` crate (pure Rust, works on both native and wasm32) as a dependency.
-A new `proteus_render::static_texture` module decodes RGBA8 pixels from bytes and hands them to
-the existing shelf/atlas-packing path (`etagere`, already a dependency per Phase C) — the same
-`write_to_main_atlas` upload used by text baking, just with decoded image pixels instead of
-rasterized glyph coverage. A new `Image` ECS component (analogous to `Text`/`BakedText`) declares
-`src`/`bytes` on an entity; the shell's per-frame bake-pending pass uploads it once and inserts a
-`BakedImage { uv_offset, uv_scale, pixel_size }` component, mirroring `BakedText` exactly —
-including the `pixel_size`-driven quad-sizing fix from the text overlay work, so images aren't
-stretched to fill an unrelated parent size either.
+**Approach (as built):** Added the `image` crate (pure Rust `png`/`jpeg` decoders only — no system
+codec dependency, works unmodified on native and wasm32) as a workspace dependency.
+`proteus_render::static_texture::decode_image` decodes RGBA8 pixels from bytes; the result is
+handed to a new `FontAtlas::bake_image` method rather than a second, independent packer — `FontAtlas`
+is really "the CPU-side packer for `main_atlas`," and there is exactly one instance of it per
+application session, shared between text and images. (A second packer writing into the same atlas
+texture without knowing about the first's claimed regions would silently collide.) A new
+`Image { bytes: Arc<[u8]> }` / `BakedImage { uv_offset, uv_scale, pixel_size }` ECS component pair
+mirrors `Text`/`BakedText`'s two-phase declare-then-bake shape exactly; each shell's per-frame
+`bake_pending_images` pass (parallel to `bake_pending_text`) decodes and uploads once per entity.
+
+One deliberate deviation from `BakedText`: `BakedImage` does **not** use `pixel_size` to resize the
+entity's own `QuadState`. `Text` renders as a second overlay instance layered on a (possibly
+differently-sized) parent quad, so `BakedText::pixel_size` exists to size that overlay to the
+glyph run's own footprint. `Image` has no such parent/overlay split — it maps directly onto the
+entity's own background instance at whatever size the entity's `QuadState` already declares, same
+as a plain solid-color fill. `pixel_size` is still carried on `BakedImage` for parity and any
+future aspect-fit logic, just not applied automatically.
+
+Asset loading differs by target, same split as M9.5's video pipeline: native reads image bytes
+from disk at tile-spawn time (`std::fs::read`, gracefully falling back to the placeholder
+`TILE_COLORS` fill on a missing/unreadable file); web fetches them over HTTP in `index.html` and
+hands the bytes to a new `ProteusApp::set_tile_image` entry point.
+
+**Bugs found and fixed during real-asset verification:**
+- Real box-cover photos are typically much larger than the demo's placeholder assumptions — e.g.
+  a 2000×3000px source — and `main_atlas` is 2048×2048 and shared with baked text. The bake path
+  didn't downscale decoded pixels before packing, so a large source either failed to fit at all or
+  starved the shelf packer's remaining space. Fixed with `static_texture::resize_to_fit` —
+  aspect-preserved downscale to a 600px max side, called on every `decode_image` result before
+  `FontAtlas::bake_image`.
+- The `VideoPlayer`/`BakedImage` priority conflict from M9.8 (below): before that milestone's fix,
+  a tile mid-playback rendered as a small, blown-up fragment of the video instead of the full frame.
+- Two separate "placeholder tint bleeds through during a transition" bugs, both the same root
+  cause: `tile_quad()` always bakes in the placeholder `TILE_COLORS` tint, but a `TransitionRequest`/
+  `GroupTarget` lerps `QuadState.color` all the way to whatever target state it's given. Once a
+  tile's box art loads and its resting color is corrected to white, any code that still built a
+  transition's *target* state from a bare `tile_quad()` call (`start_screen_to_tiles`,
+  `start_button_to_tiles`) dragged the color back toward the placeholder for the whole transition,
+  self-correcting only once the real entity was revealed with its own (already-white) `QuadState`.
+  Fixed in both call sites by overriding the target's color to white whenever that tile already has
+  `BakedImage`.
+- `topology.rs`'s bake path for the button↔tiles Slice transition (`BakeVisualsQuery`/
+  `gather_bake_instances`) is a separate visual-gathering step from `collect.rs`'s per-frame one,
+  and didn't know about `BakedImage` at all — a Slice target baked as its flat placeholder color,
+  never the real box art. Fixed by adding `Option<&BakedImage>` to the query.
 
 **Definition of done:**
-- [ ] `image` crate added as a workspace dependency; decodes PNG and JPEG on native and wasm32
-- [ ] `Image` component (`src: bytes` or a resolved path/URL, resolved by the shell) triggers a
-  bake-and-upload pass identical in shape to the `Text` → `BakedText` flow
-- [ ] `BakedImage { uv_offset, uv_scale, pixel_size }` — same shape as `BakedText`, read by
-  `collect_instances` to size and UV-map the entity's quad
-- [ ] Decoded images are packed into `main_atlas` via the existing atlas region allocator — no new
-  atlas page required
-- [ ] Reference demo: the three video tiles use real box-cover images instead of solid-color
-  placeholders
-- [ ] Regression tests: decode → atlas upload → instance UV/size correctness, mirroring the
-  existing `BakedText` test coverage in `render_instances.rs`
-- [ ] Works on both native and web (wasm32) shells
+- [x] `image` crate added as a workspace dependency; decodes PNG and JPEG on native and wasm32
+- [x] `Image` component (`bytes: Arc<[u8]>`, resolved by the shell) triggers a bake-and-upload pass
+  parallel in shape to the `Text` → `BakedText` flow
+- [x] `BakedImage { uv_offset, uv_scale, pixel_size }` — same shape as `BakedText`, read by
+  `collect_instances` (and, for the button↔tiles Slice bake, `topology.rs`'s
+  `gather_bake_instances`) to UV-map the entity's background instance (see above for why
+  `pixel_size` doesn't resize the quad, unlike `BakedText`)
+- [x] Decoded images are downscaled to a bounded max dimension (`resize_to_fit`) and packed into
+  `main_atlas` via the existing `FontAtlas` shelf packer — no new atlas page, no second
+  independent allocator
+- [x] Reference demo: the three video tiles use real box-cover images instead of solid-color
+  placeholders (on both shells) — confirmed working with real assets, including through the
+  button↔tiles and tiles↔screen transitions
+- [x] Regression tests: decode → atlas upload → instance UV/size correctness, mirroring the
+  existing `BakedText` test coverage in `render_instances.rs` (`baked_image_*` tests)
+- [x] Works on both native and web (wasm32) shells — visually verified on both
 
 ---
 

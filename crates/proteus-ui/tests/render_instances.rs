@@ -33,9 +33,9 @@ use glam::{Vec2, Vec3, Vec4};
 
 use proteus_render::{QuadPipeline, TransitionAtlasAllocator};
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, ActiveTransition, BakedText,
-    BakedTexture, Border, DropShadow, Glow, ProteusWorld, QuadState, Text, TransitionRequest,
-    VideoPlayer, Visibility,
+    collect_instances, linear, transition::TransitionConfig, ActiveTransition, BakedImage,
+    BakedText, BakedTexture, Border, DropShadow, Glow, ProteusWorld, QuadState, Text,
+    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -495,6 +495,151 @@ fn video_player_with_glow_has_atlas_page_and_glow_params() {
     );
 }
 
+/// Regression test: a tile carries a permanent `BakedImage` (box art) and,
+/// once clicked, a `VideoPlayer` — both present on the same entity.
+/// `VideoPlayer` must win outright: atlas_page must stay 2 (video_atlas) and
+/// the UV must stay the full-texture [0,0]/[1,1] mapping, not get overwritten
+/// by BakedImage's small main_atlas sub-rectangle (which previously caused
+/// the video to render as a small, blown-up fragment instead of the full
+/// frame — the two components' UVs point at entirely different atlases).
+#[test]
+fn video_player_takes_priority_over_baked_image() {
+    let baked_image = BakedImage {
+        uv_offset: [0.4, 0.5],
+        uv_scale: [0.2, 0.3],
+        pixel_size: [400.0, 600.0],
+    };
+
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_image, VideoPlayer));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(
+        instances[0].atlas_page, 2,
+        "VideoPlayer must route to video_atlas even with BakedImage present"
+    );
+    assert_eq!(
+        instances[0].uv_offset,
+        [0.0, 0.0],
+        "must use VideoPlayer's full-texture UV, not BakedImage's sub-rectangle"
+    );
+    assert_eq!(
+        instances[0].uv_scale,
+        [1.0, 1.0],
+        "must use VideoPlayer's full-texture UV, not BakedImage's sub-rectangle"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// VideoCrossfade (M9.8 — live video ↔ box-art blend)
+// ---------------------------------------------------------------------------
+
+fn crossfade_baked_image() -> BakedImage {
+    BakedImage {
+        uv_offset: [0.4, 0.5],
+        uv_scale: [0.2, 0.3],
+        pixel_size: [400.0, 600.0],
+    }
+}
+
+/// `video_t = 0.0` shows the base image fully — same UV/atlas_page as if
+/// VideoPlayer weren't present at all, and no crossfade branch engaged
+/// (crossfade_t must stay 0.0, the shader's zero-cost skip value).
+#[test]
+fn video_crossfade_at_zero_shows_image_fully() {
+    let mut world = World::new();
+    world.spawn((
+        sky_blue_button(),
+        crossfade_baked_image(),
+        VideoPlayer,
+        VideoCrossfade { video_t: 0.0 },
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].atlas_page, 0, "must sample main_atlas");
+    assert_f32_slice_approx(&instances[0].uv_offset, &[0.4, 0.5], "uv_offset");
+    assert_f32_slice_approx(&instances[0].uv_scale, &[0.2, 0.3], "uv_scale");
+    assert_eq!(
+        instances[0].crossfade_t, 0.0,
+        "crossfade_t must be exactly 0.0 (shader's zero-cost skip), not blending"
+    );
+}
+
+/// `video_t = 1.0` shows video fully — same as `VideoPlayer` with no
+/// `BakedImage`/`VideoCrossfade` at all.
+#[test]
+fn video_crossfade_at_one_shows_video_fully() {
+    let mut world = World::new();
+    world.spawn((
+        sky_blue_button(),
+        crossfade_baked_image(),
+        VideoPlayer,
+        VideoCrossfade { video_t: 1.0 },
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].atlas_page, 2, "must sample video_atlas");
+    assert_eq!(instances[0].uv_offset, [0.0, 0.0]);
+    assert_eq!(instances[0].uv_scale, [1.0, 1.0]);
+}
+
+/// `video_t = 0.5` blends live: to-side is video (video_atlas, full UV),
+/// from-side is the box art (main_atlas, its own sub-rectangle) — the two
+/// atlases the shader's `base_atlas_page` field exists to let differ.
+#[test]
+fn video_crossfade_midway_blends_video_and_image() {
+    let mut world = World::new();
+    world.spawn((
+        sky_blue_button(),
+        crossfade_baked_image(),
+        VideoPlayer,
+        VideoCrossfade { video_t: 0.5 },
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].atlas_page, 2, "to-side: video_atlas");
+    assert_eq!(instances[0].uv_offset, [0.0, 0.0], "to-side: full video UV");
+    assert_eq!(instances[0].uv_scale, [1.0, 1.0], "to-side: full video UV");
+    assert_eq!(
+        instances[0].base_atlas_page, 0,
+        "from-side must be main_atlas, not the default transition_atlas"
+    );
+    assert_f32_slice_approx(
+        &instances[0].base_uv_offset,
+        &[0.4, 0.5],
+        "from-side uses the box art's own uv_offset",
+    );
+    assert_f32_slice_approx(
+        &instances[0].base_uv_scale,
+        &[0.2, 0.3],
+        "from-side uses the box art's own uv_scale",
+    );
+    assert_f32_slice_approx(&[instances[0].crossfade_t], &[0.5], "crossfade_t");
+}
+
+/// Absent `VideoCrossfade`, `VideoPlayer` + `BakedImage` together still
+/// default to fully video (video_t implicitly 1.0) — preserves the pre-M9.8
+/// behavior for anyone not opting into the crossfade.
+#[test]
+fn video_without_crossfade_component_defaults_to_full_video() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), crossfade_baked_image(), VideoPlayer));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances[0].atlas_page, 2);
+    assert_eq!(instances[0].uv_offset, [0.0, 0.0]);
+    assert_eq!(instances[0].uv_scale, [1.0, 1.0]);
+}
+
 /// `Glow::intensity > 1.0` must be clamped to 1.0 before the instance is
 /// emitted.  An effective alpha above 1.0 inverts the alpha-blending equation
 /// in the shader, producing visible negative-transparency artefacts.
@@ -775,5 +920,101 @@ fn baked_texture_not_on_text_overlay() {
     assert_eq!(
         instances[1].atlas_page, 0,
         "text overlay must keep sampling main_atlas, not transition_atlas"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BakedImage (static image, M9.7)
+// ---------------------------------------------------------------------------
+
+fn baked_image() -> BakedImage {
+    BakedImage {
+        uv_offset: [0.4, 0.5],
+        uv_scale: [0.2, 0.3],
+        pixel_size: [400.0, 600.0],
+    }
+}
+
+/// `BakedImage` routes to the background instance's UV, staying on
+/// `atlas_page = 0` (`main_atlas`) — no page switch, unlike video/crossfade.
+#[test]
+fn baked_image_populates_uv() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_image()));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].atlas_page, 0, "must sample main_atlas");
+    assert_f32_slice_approx(&instances[0].uv_offset, &[0.4, 0.5], "uv_offset");
+    assert_f32_slice_approx(&instances[0].uv_scale, &[0.2, 0.3], "uv_scale");
+}
+
+/// Unlike `BakedText`'s overlay, `BakedImage` maps directly onto the
+/// background instance and does not resize the entity's own quad —
+/// `pixel_size` is carried on the component but not applied to `QuadState`.
+#[test]
+fn baked_image_does_not_resize_entity_quad() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_image()));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(
+        instances.len(),
+        1,
+        "image maps onto the single background instance"
+    );
+    assert_f32_slice_approx(
+        &instances[0].size,
+        &[120.0, 40.0],
+        "quad size must stay the entity's own declared size, not pixel_size",
+    );
+}
+
+/// `QuadState::color` still tints an image the same way it tints a plain
+/// solid-color fill — no special-casing for `BakedImage`.
+#[test]
+fn baked_image_color_still_tints() {
+    let mut world = World::new();
+    world.spawn((sky_blue_button(), baked_image()));
+
+    let instances = collect_instances(&mut world);
+
+    assert_f32_slice_approx(
+        &instances[0].color,
+        &[0.37, 0.65, 1.0, 1.0],
+        "background color (tint) should be unaffected by BakedImage",
+    );
+}
+
+/// A poster image can still carry a text label overlay on top — the two
+/// systems (image on the background layer, text as a second layer) are
+/// independent, same as a solid-color background with a label.
+#[test]
+fn baked_image_coexists_with_text_overlay() {
+    let baked_text = BakedText {
+        uv_offset: [0.1, 0.2],
+        uv_scale: [0.05, 0.01],
+        pixel_size: [60.0, 24.0],
+    };
+
+    let mut world = World::new();
+    world.spawn((
+        sky_blue_button(),
+        baked_image(),
+        baked_text,
+        Text::new("Big Buck Bunny", 18.0),
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 2, "background (image) + text overlay");
+    assert_eq!(instances[0].atlas_page, 0, "background samples main_atlas");
+    assert_f32_slice_approx(&instances[0].uv_offset, &[0.4, 0.5], "background uv_offset");
+    assert_f32_slice_approx(
+        &instances[1].uv_offset,
+        &[0.1, 0.2],
+        "text overlay must keep its own BakedText UV, unaffected by the image",
     );
 }
