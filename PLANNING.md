@@ -1207,25 +1207,54 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ### Decided
 
-- [x] **Critical path:** M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M10 → M12.
-  Each step is a hard prerequisite for the next. Nothing on this path can be parallelized without
-  the prior milestone being solid — rendering before transitions, transitions before topologies,
-  topologies before demo, regression testing before interactivity, interactivity before SDK,
-  SDK before developer release.
+- [x] **Critical path:** M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M10 → M11 → M12 → M13.
+  Each step is a hard prerequisite for the next. Rendering before transitions, transitions before
+  topologies, topologies before demo, regression testing before interactivity, interactivity
+  before composition/hierarchy, composition/hierarchy before resource management, resource
+  management before SDK, SDK before developer release.
+
+  **Renumbered from an earlier plan** (audit + realignment pass, post-M9.8): what was M5.5
+  (Component Composition & Hierarchy, previously described only in ROADMAP.md, never added to
+  this document) is now **M10**. It was first scoped as a prerequisite for *both* M7 and the
+  TypeScript SDK — parent/child composition seemed necessary before interactivity could be
+  meaningful. In practice M7 shipped without it: hit-testing, hover, and click all work fine on
+  flat entities, and M8 through M9.8 were built on top with no hierarchy at all. So it never
+  actually blocked anything on the path it was slotted into — it sat un-scheduled and undone.
+  It's placed here, immediately before the SDK, because the SDK *is* where it becomes a hard
+  blocker: a public API without real parent/child composition would force every consumer through
+  the M5 `Text`-on-entity shortcut (see M10's own milestone entry) as if it were permanent, which
+  it was never meant to be.
+
+  **Resource management is new — M11.** Audited to be roughly 10–15% of what Phase B's
+  architecture section actually specifies (see M11's own entry for the gap in detail): no
+  reference counting exists anywhere, `main_atlas` has no freeing mechanism at all, and three
+  independent, disconnected allocators (`FontAtlas`'s shelf packer, `TransitionAtlasAllocator`,
+  `TextureRegistry`) exist where the design calls for one unified system. This was an oversight —
+  the design was written, the gap was never captured as trackable work. Placed after component
+  composition (M10) and before the SDK (M12): the SDK's public texture-handle API
+  (`heroImage.free()`, ref counting, eviction) has nothing real to wrap without it.
+
+  **Native Parity dropped as a standalone milestone.** Every feature shipped since M9 has, in
+  practice, been built and verified on both `proteus-shell-native` and `proteus-shell-web` in
+  lockstep within the same work, not as a separate follow-up pass — cross-shell parity is already
+  how this project works, not a future gate. Formalized as a standing requirement instead of a
+  milestone: **every milestone's Definition of Done from here forward is implicitly
+  cross-shell** (native + web) unless a DoD item says otherwise. What M11's old DoD also covered —
+  a CI matrix across macOS/Linux/Windows and platform-specific behavioral differences *within*
+  native itself (not native-vs-web) — is a narrower, still-real concern folded into M13
+  (Developer Release)'s DoD as a final pre-release check, rather than tracked continuously.
 
 - [x] **Off-critical-path milestones (can run in parallel once their prerequisites are met):**
-  - M8 (Shader Effects) — can begin after M2 (rendering pipeline stable). Does not block M12.
-  - M9 (Video) — can begin after M7 (interactivity needed for meaningful video UX). Does not block M12.
-  - M11 (Native Parity) — can begin after M5 (shared core proven). Does not block M12 directly,
-    but must complete before M12 since native parity is a V1 requirement.
+  - M8 (Shader Effects) — can begin after M2 (rendering pipeline stable). Does not block M13.
+  - M9 (Video) — can begin after M7 (interactivity needed for meaningful video UX). Does not block M13.
 
 - [x] **M6 before M7:** visual regression testing is locked in before interactivity is introduced.
   This ensures any rendering regressions introduced during M7 work are caught immediately.
   Changing this order would mean working without a safety net on the most complex milestone.
 
-- [x] **TypeScript SDK (M10) is V1 and required before developer release (M12).** The primary
+- [x] **TypeScript SDK (M12) is V1 and required before developer release (M13).** The primary
   developer-facing API is TypeScript. A developer release without a polished TS SDK would only
-  serve Rust consumers — too narrow for a public release. M10 stays on the critical path.
+  serve Rust consumers — too narrow for a public release. M12 stays on the critical path.
 
 - [x] **M0 updated to include CI as an exit criterion.** GitHub Actions (cargo test, cargo clippy,
   cargo fmt --check, wasm-pack build) must be green before M0 is considered complete. CI configured
@@ -1247,7 +1276,7 @@ M0 is not complete until Phases A–D are done. See ROADMAP.md for the external-
 
 ---
 
-### M0 — Foundation *(in progress)*
+### M0 — Foundation *(complete)*
 
 The project foundation. Nothing in M1 or beyond starts until this is complete.
 
@@ -1258,7 +1287,7 @@ The project foundation. Nothing in M1 or beyond starts until this is complete.
 - [x] Architecture design (PLANNING.md) — Phase B complete
 - [x] Dependencies & tooling decisions (Cargo.toml, LICENSE files) — Phase C complete
 - [x] Project plan and milestones finalized (ROADMAP.md, this section) — Phase D complete
-- [ ] CI: GitHub Actions running `cargo test`, `cargo clippy`, `cargo fmt --check`,
+- [x] CI: GitHub Actions running `cargo test`, `cargo clippy`, `cargo fmt --check`,
   and `wasm-pack build` on every push — all green
 
 ---
@@ -1268,13 +1297,14 @@ The project foundation. Nothing in M1 or beyond starts until this is complete.
 wgpu device initializes, a textured quad renders. The instanced draw call is proven end to end.
 
 **Definition of done:**
-- [ ] wgpu device initializes on WebGL2 (browser via WASM) and native (macOS minimum)
-- [ ] A single textured quad renders correctly on both targets — correct position, size, UV mapping
-- [ ] Instance buffer works: 1000 quads render correctly in a single instanced draw call
-- [ ] Unit tests: vertex layout, transform math (position, scale, rotation, anchor)
-- [ ] Integration test: headless render produces expected pixel output (reference image)
+- [x] wgpu device initializes on WebGL2 (browser via WASM) and native (macOS minimum)
+- [x] A single textured quad renders correctly on both targets — correct position, size, UV mapping
+- [x] Instance buffer works: 1000 quads render correctly in a single instanced draw call
+- [x] Unit tests: vertex layout, transform math (position, scale, rotation, anchor)
+- [x] Integration test: headless render produces expected pixel output (reference image)
 - [ ] Benchmark: WASM+instanced rendering vs equivalent pure TypeScript/WebGL2 — result documented
   in a `BENCHMARKS.md` file. Must demonstrate O(1) or near-O(1) boundary crossing behavior.
+  *(Methodology written; results table still `TBD` — genuinely incomplete, not just unchecked.)*
 
 ---
 
@@ -1283,15 +1313,15 @@ wgpu device initializes, a textured quad renders. The instanced draw call is pro
 The lerp transition system works end to end. One quad morphs into another.
 
 **Definition of done:**
-- [ ] `bevy_ecs` world initializes with the full system schedule running in the correct order
+- [x] `bevy_ecs` world initializes with the full system schedule running in the correct order
   (see system scheduling in Phase B)
-- [ ] A 1→1 lerp transition animates correctly: position, size, color all interpolate over the
+- [x] A 1→1 lerp transition animates correctly: position, size, color all interpolate over the
   declared duration
-- [ ] Frame-rate independent: the same transition at 30fps and 60fps takes the same wall-clock
+- [x] Frame-rate independent: the same transition at 30fps and 60fps takes the same wall-clock
   duration (delta-time based `t` advancement via Bevy `Time` resource)
-- [ ] `TransitionComplete` message fires correctly at `t = 1.0`; `Lifecycle` updates to `idle`
-- [ ] Easing function is pluggable: a custom `t → t` function can be passed at the call site
-- [ ] Unit tests: lerp math, `t` advancement, easing substitution, `TransitionComplete` timing
+- [x] `TransitionComplete` message fires correctly at `t = 1.0`; `Lifecycle` updates to `idle`
+- [x] Easing function is pluggable: a custom `t → t` function can be passed at the call site
+- [x] Unit tests: lerp math, `t` advancement, easing substitution, `TransitionComplete` timing
 
 ---
 
@@ -1300,44 +1330,111 @@ The lerp transition system works end to end. One quad morphs into another.
 All transition topologies working. A button splits into a list; the list collapses back.
 
 **Definition of done:**
-- [ ] **1→N:** a single quad splits into N target quads (N=5 minimum). Both `childBehavior: 'bake'`
+- [x] **1→N:** a single quad splits into N target quads (N=5 minimum). Both `childBehavior: 'bake'`
   (normalize to 1→1) and the slice strategy (normalize to N→N via virtual entities) work correctly
-- [ ] **N→1:** N source quads converge into one target. Virtual slice entities are created, rendered
+- [x] **N→1:** N source quads converge into one target. Virtual slice entities are created, rendered
   during the transition, and cleaned up by `transition_complete_system`
-- [ ] `childBehavior` iterator works — per-child duration, delay, and easing config each applied
+- [x] `childBehavior` iterator works — per-child duration, delay, and easing config each applied
   independently
-- [ ] Virtual entity `Virtual` marker: input and navigation systems skip virtual entities entirely
-- [ ] Integration test: button → list → button round trip. ECS state (entity count, Lifecycle,
+- [x] Virtual entity `Virtual` marker: input and navigation systems skip virtual entities entirely
+- [x] Integration test: button → list → button round trip. ECS state (entity count, Lifecycle,
   Visibility) is correct after each transition. No entity leaks.
 
 ---
 
-### M4 — Text Phase 1
+### M4 — Text Phase 1 *(complete)*
 
-Single-line SDF text. Components can carry readable labels.
+Single-line rasterized text. Components can carry readable labels.
+
+**Scope note (revised):** the original DoD described this as "SDF text" and included font-atlas
+lifecycle management under `TextureRegistry`. Neither is accurate to what shipped or where it
+belongs:
+- The implementation (`FontAtlas`/`bake_text`, fontdue-based) rasterizes each glyph to an
+  anti-aliased coverage bitmap, not a true signed-distance-field. It reads clearly at the sizes
+  this milestone targets; a real SDF approach (resolution-independent scaling, sharper edges at
+  extreme sizes) is future work if ever needed — tracked with Text Phase 2/3/4 in Post-V1, not here.
+- Font atlas *lifecycle* — reference counting, eviction, unifying it with the other ad-hoc
+  allocators (`TransitionAtlasAllocator`, `TextureRegistry`) — is a resource-management concern,
+  not a text-rendering one. Moved to the resource-management milestone; see that milestone's DoD
+  for the actual tracking item.
 
 **Definition of done:**
-- [ ] Single-line SDF text renders on a component with a declared text property
-- [ ] Font atlas is generated and managed through `TextureRegistry` (`TextureKind::Static`)
-- [ ] Text is readable without aliasing artifacts at sizes from 12px to 48px
-- [ ] Text renders correctly on WebGL2 (browser) and native
-- [ ] Text content is treated as a texture in the rendering pipeline — the transition system
+- [x] Single-line rasterized text renders on a component with a declared text property
+- [x] Text is readable without aliasing artifacts at sizes from 12px to 48px
+- [x] Text renders correctly on WebGL2 (browser) and native
+- [x] Text content is treated as a texture in the rendering pipeline — the transition system
   handles text-bearing components identically to any other textured quad
 
 ---
 
-### M5 — Reference Demo
+### M5 — Reference Demo *(complete)*
 
-The paradigm demo: button → list → detail view. Scripted, labeled, 60fps in a browser.
+The paradigm demo: a button expands into multiple tiles, one of which expands further into a
+detail/screen view — and collapses back. Interactive, running in both native and browser shells.
+
+**Scope note (revised):** the original DoD described "button → list → detail view," required a
+literal "list," and gated on 60fps/hosted-artifact/screen-recording. None of that matches what
+this milestone is actually for or what shipped:
+- The demo's actual shape is button → N tiles → single detail/screen view — same paradigm
+  (one component expanding, one branch expanding further), different content than "list." This is
+  the shape the DoD should have described.
+- Video playback (MP4 decode, the tiles↔screen crossfade) is **not** part of this milestone's DoD
+  — that's M9/M9.5/M9.8's job. M5 is about the transition-topology demo structure standing on its
+  own, independent of what content eventually plays inside it.
+- 60fps verification, a committed/hosted WASM artifact, and a screen recording are all descoped
+  from this milestone's DoD, not built. A frame-rate readout is worth having eventually as a dev
+  tool (an on-screen FPS HUD), but that's tooling, not a gate on this milestone — tracked
+  informally for later, not a checkbox here.
 
 **Definition of done:**
-- [ ] button → list → detail view transition sequence runs correctly in a browser (WebGL2)
-- [ ] All components carry SDF text labels (from M4)
-- [ ] Demo runs at a stable 60fps on a mid-range device throughout all transitions — no frame drops
-- [ ] Demo is viewable without a local build: either hosted or a pre-built WASM artifact committed
-  to the repository
-- [ ] Screen recording captured and committed to `docs/` for documentation purposes
-- [ ] No hardcoded timing hacks — all transitions use the declared `duration`/`easing` mechanism
+- [x] Button → N tiles → single detail/screen-view morph sequence runs correctly, driven by user
+  clicks, in both the native and browser shells
+- [x] Components carry appropriate visual identity for their content — the button carries a text
+  label; tiles carry box-cover art (M9.7) rather than text, which supersedes the original "all
+  components carry text labels" requirement now that tiles use images instead
+- [x] No hardcoded timing hacks — all transitions use the declared `duration`/`easing` mechanism
+  (`TransitionConfig`)
+
+---
+
+### M10 — Component Composition & Hierarchy *(critical path — not started)*
+
+Parent/child entity relationships, relative-coordinate `QuadState`, and cascading
+visibility/opacity. Previously described only in ROADMAP.md (as "M5.5"), never added here — see
+the critical path note above for the renumbering and why it's scheduled now, before the SDK,
+rather than where it was originally (incorrectly) slotted before M7.
+
+**Why this is needed:** every component built so far — button, tiles, video screen — is a single
+flat entity. There is no parent/child relationship anywhere in `proteus-ui`: `QuadState` has no
+concept of a parent, no relative coordinates, no cascading. `stub_visibility_system` and
+`stub_opacity_system` (`crates/proteus-ui/src/schedule.rs`) are exactly what their names say —
+empty function bodies, present only to hold their slot in the schedule (`ProteusSet::Visibility`/
+`ProteusSet::Opacity`). A labeled button today is one entity carrying both a `QuadState` and a
+`Text` component simultaneously (the M5 shortcut) rather than a `Quad` entity with a `Text` child
+— composition doesn't exist to build it the intended way even if a developer wanted to.
+
+**Approach:** introduce a real parent/child relationship (`bevy_ecs` has first-class support for
+this — `ChildOf`/hierarchy relations — evaluate using it directly rather than hand-rolling one).
+Children declare position relative to the parent's origin; a system computes world-space
+`QuadState` from the local declared state plus the parent chain. Visibility and opacity cascade
+down the tree. Parent transitions carry children by default (`childBehavior: 'bake'`, already
+speced in Phase B); children can also transition independently.
+
+**Definition of done:**
+- [ ] A real parent/child entity relationship exists in `proteus-ui` — a component can declare
+  children, and a child's transform is relative to its parent's, not screen coordinates
+- [ ] `stub_visibility_system`/`stub_opacity_system` replaced with real cascade implementations —
+  parent `Visibility::HIDDEN` makes the whole subtree inert; parent `opacity` multiplies down
+- [ ] `Text` becomes a true leaf entity with its own identity and `QuadState`, rather than a
+  component bolted onto the same entity as its container (removes the M5 shortcut)
+- [ ] A labeled button is composed as a `Quad` parent containing a `Text` child, demonstrated in
+  the reference demo (replacing the current single-entity `Text::new(...)` pattern for at least
+  one component)
+- [ ] Parent transitions carry children by default; a child can also transition independently of
+  its parent (e.g. cross-fade a label while its container morphs) — both demonstrated with tests
+- [ ] Regression tests: hierarchy construction/teardown, coordinate-space resolution (child world
+  position given parent position + relative offset), visibility/opacity cascade, no entity leaks
+  on parent destroy
 
 ---
 
@@ -1388,7 +1485,7 @@ User input drives transitions. The reference demo becomes interactive.
 - [x] Regression tests: `hit_test.rs` covers hidden/virtual opt-out, AABB hit, hover enter/exit
 - [x] Existing visual regression tests (M6) still pass after M7 work
 
-**Deferred to M10 (full handler API):**
+**Deferred to M12 (full handler API):**
 - [ ] All handlers: `onPress`, `onRelease`, `onFocus`, `onBlur`, `onDrag`
 - [ ] `allowInput`/`allowNavigation` transition config flags
 - [ ] `signal.set()` from an `onClick` handler triggering a transition
@@ -1550,43 +1647,84 @@ the child process directly for immediate teardown.
 
 ---
 
-### M9.6 — Live Video Crossfade During Transitions *(off critical path — begins after M9.5)*
+### M9.6 — Live Video Crossfade During Bake/Slice Group Transitions *(off critical path — not started)*
 
-**Captured as a known gap, not yet implemented.** Currently, when a `VideoPlayer` entity (e.g.
-the Whale list item) is swept into a bake or slice transition (`childBehavior: 'bake'`, or the
-N→1/1→N slice strategy), the `bake_system` snapshots its texture into `transition_atlas` once at
-transition start. For a static component this is correct. For a `VideoPlayer` component it is
-not: the snapshot freezes the video at whatever frame was current when the bake fired, and the
-frozen frame is what crossfades against the target for the full transition duration — playback
-does not resume until the transition completes and the entity returns to live rendering.
+**Scope note (narrowed):** this milestone originally covered *all* live-video-crossfade cases.
+The plain 1↔1 `TransitionRequest` case — a single entity carrying both `VideoPlayer` and
+`BakedImage` crossfading between them, e.g. the tiles↔screen morph in the reference demo — has
+since shipped as its own milestone, **M9.8**, via a different (and simpler) mechanism than the one
+sketched below. See M9.8 for what that covers and how. What remains here, still unbuilt, is the
+harder case M9.8 deliberately doesn't touch: a `VideoPlayer` entity swept into a **group**
+transition (`childBehavior: 'bake'`, or the N→1/1→N slice strategy) still gets its texture
+snapshotted into `transition_atlas` once at transition start via `bake_system` — correct for a
+static component, wrong for video, which freezes at whatever frame was current when the bake
+fired and doesn't resume until the transition completes.
 
-**Desired behavior:** the video should keep streaming live throughout the transition. The morph
-should crossfade the *live, still-updating* video surface into the target's background — matching
-the same `mix(base_color, tex_color, crossfade_t)` blend the fragment shader already does for
-static bakes (`quad.wgsl`, `atlas_page == 2` already routes to `video_atlas`) — rather than
-freezing a snapshot. This is the effect that visually differentiates Proteus's morphing transitions
-from a conventional crossfade-and-cut; getting it right for video specifically (the one case where
-the source content is animating independently of the transition itself) is important to demo well.
+**Desired behavior:** the video should keep streaming live throughout a bake/slice group
+transition, the same way M9.8 already achieves for the 1↔1 case — crossfading the *live,
+still-updating* video surface into the target's background via the existing
+`mix(base_color, tex_color, crossfade_t)` shader blend, rather than freezing a snapshot.
 
-**Why this is non-trivial:** the bake pipeline's whole point is to collapse a component (and its
-children) into one static GPU snapshot so the transition system can treat 1→N/N→1 as ordinary
-1→1 morphs. A live video source breaks that assumption — it needs `base_texture` (or whichever
-side of the crossfade it occupies) to keep pointing at `video_atlas` and re-sample every frame
-instead of a frozen `transition_atlas` region, while still participating in the same slice/bake
-geometry math. Likely needs a per-entity flag (e.g. `Baked::live_video` or a check for
+**Why this is non-trivial (and different from M9.8):** the bake pipeline's whole point is to
+collapse a component (and its children) into one static GPU snapshot so the transition system can
+treat 1→N/N→1 as ordinary 1→1 morphs. A live video source breaks that assumption — it needs
+`base_texture` (or whichever side of the crossfade it occupies) to keep pointing at `video_atlas`
+and re-sample every frame instead of a frozen `transition_atlas` region, while still participating
+in the same slice/bake geometry math. M9.8's `base_atlas_page` field on `QuadInstance` (added to
+let a crossfade's two sides read from different atlases) is directly reusable here, but the
+group-transition bake path (`topology.rs`'s `gather_bake_instances`/`bake_one`, shared by
+`one_to_n_setup_system`/`n_to_one_setup_system`) would need a per-entity check (e.g. for
 `VideoPlayer` at bake time) that skips the snapshot-into-`transition_atlas` step for that specific
-sub-region and leaves its `atlas_page`/UV pointed at `video_atlas` for the duration of the
-transition, while everything else around it still bakes normally.
+sub-region and leaves its `atlas_page`/UV pointed at `video_atlas` for the transition's duration,
+while everything else around it still bakes normally. Nothing in the reference demo currently
+exercises this path — no `VideoPlayer` entity is ever a source/target of a group transition — so
+there's no existing demo scene to validate against; one would need to be added.
 
 **Definition of done:**
-- [ ] A `VideoPlayer` entity that is a source or target of a bake/slice transition keeps rendering
-  live video frames throughout the transition — no freeze
+- [ ] A `VideoPlayer` entity that is a source or target of a *bake or slice group* transition
+  (`OneToNRequest`/`NToOneRequest`) keeps rendering live video frames throughout — no freeze
 - [ ] The video surface crossfades into (or out of) the transition target's background using the
-  existing `crossfade_t` blend, not a static snapshot
-- [ ] Reference demo: the Whale item's N→1 Slice back into the button (and any future 1↔1 video
-  transition) demonstrates this visibly
+  existing `crossfade_t` blend and M9.8's `base_atlas_page` mechanism, not a static snapshot
+- [ ] Reference demo extended with a scene exercising this path (none currently does)
 - [ ] Regression test verifying the baked entity's instance data still points at `atlas_page == 2`
-  (not a `transition_atlas` snapshot) for the live-video sub-region during an active transition
+  (not a `transition_atlas` snapshot) for the live-video sub-region during an active group transition
+
+---
+
+### M9.8 — Live Video ↔ Box-Art Crossfade (1↔1 Transitions) *(off critical path — complete)*
+
+Crossfades a single entity's live, still-updating video feed against its own static box-cover art
+— the tiles↔screen morph in the reference demo. Built in response to the same underlying problem
+M9.6 identified (a naive bake would freeze the video), but scoped to the plain 1↔1
+`TransitionRequest` case only, which is what the demo actually needed and which turned out not to
+require the group-transition bake machinery M9.6 sketched. See M9.6 for the still-open harder case
+(a `VideoPlayer` entity swept into a bake/slice *group* transition), which this milestone
+deliberately does not cover.
+
+**Approach (as built):** `QuadInstance` gained `base_atlas_page` — previously the crossfade's
+"from" side was hardcoded to always sample `transition_atlas`; this field lets it independently
+select `main_atlas`, `transition_atlas`, or `video_atlas` instead, the last free vertex-attribute
+slot (16 of 16 now used; see `mesh.rs`). `quad.wgsl`'s fragment shader reads it to pick the
+from-side texture. A new `VideoCrossfade { video_t }` component (`proteus-ui/src/video.rs`) blends
+an entity's `BakedImage` (from-side, `main_atlas`) into its `VideoPlayer` feed (to-side,
+`video_atlas`, always live — never snapshotted) — `0.0` = fully the image, `1.0` = fully video.
+`collect_instances` reads `video_t` but does not decide when to move it; only the caller knows
+whether a transition is running forward or backward, so the shell (not the framework) owns
+advancing it — the same value works for both directions because the shell swaps which state
+(image vs. video) is being approached, not the blend formula itself. Playback starts the moment a
+tile is clicked and keeps running through the reverse (screen→tiles) morph too, only actually
+stopping once that morph completes, so it crossfades out symmetrically instead of cutting.
+
+**Definition of done:**
+- [x] A `VideoPlayer` entity that also carries `BakedImage` crossfades live between the two via
+  `VideoCrossfade`, in both directions, with no snapshot/freeze at any point
+- [x] `QuadInstance::base_atlas_page` lets the crossfade's from-side sample a different atlas than
+  the to-side's `atlas_page` (shader change verified via the existing GPU-backed headless render
+  test, not just compiled)
+- [x] Reference demo: the tiles↔screen morph demonstrates this visibly on both native and web
+- [x] Regression tests: `video_crossfade_at_zero_shows_image_fully`,
+  `video_crossfade_at_one_shows_video_fully`, `video_crossfade_midway_blends_video_and_image`,
+  `video_without_crossfade_component_defaults_to_full_video` (`render_instances.rs`)
 
 ---
 
@@ -1667,7 +1805,59 @@ hands the bytes to a new `ProteusApp::set_tile_image` entry point.
 
 ---
 
-### M10 — TypeScript SDK *(critical path)*
+### M11 — Resource Management *(critical path — not started)*
+
+Real reference counting, eviction, and a texture lifecycle that matches what Phase B's
+architecture section actually specifies. Identified by audit, not originally scheduled — see the
+critical path note above for why.
+
+**The gap, precisely:** Phase B specifies `TextureRegistry` backed by `SlotMap` (generation-safe
+IDs), `TextureEntry { atlas_region, ref_count, size, format, state, kind }`, reference counting
+auto-tracked against component lifecycle, `TextureState::{Loading,Ready,Evicted,Failed}`,
+eternal-vs-ephemeral textures with LRU eviction, a restoration queue, and backgrounding-driven
+eviction. What exists in `crates/proteus-render/src/texture_registry.rs` today:
+```rust
+pub type TextureId = u32;                    // plain u32 — no SlotMap, no generation counter
+pub enum TextureKind { Video }                // only Video — no Static
+struct Entry { id, kind, width, height, active: bool }  // no ref_count, atlas_region, state, eternal, or last_used
+```
+No `unregister`/`free` method exists — once registered, an entry lives in the backing `Vec`
+forever. There is no reference counting anywhere in the codebase, no LRU eviction, no restoration
+queue, no `TextureState`. Beyond that gap, there are **three independent, disconnected**
+allocation mechanisms today, none sharing the designed `TextureEntry` abstraction: `FontAtlas`'s
+own shelf packer (`main_atlas` — text and, since M9.7, static images too — **no freeing at all**,
+a fact documented in its own doc comment as a known gap since M4), `TransitionAtlasAllocator`
+(`transition_atlas` — the one piece actually built to the design: real etagere-backed
+allocate/free, correctly tied to transition start/completion), and `TextureRegistry`
+(`video_atlas` — metadata-only, effectively single-slot in practice, suspend/resume driven
+entirely by explicit shell code rather than any generic policy).
+
+**Open design question, not resolved by this entry:** should `FontAtlas`, `TransitionAtlasAllocator`,
+and `TextureRegistry` actually be unified into one system, or is the current three-way split a
+reasonable simplification worth documenting as intentional rather than closing? Decide this before
+implementation begins, not during it.
+
+**Definition of done:**
+- [ ] `TextureKind::Static` exists; `FontAtlas`-baked text and images (M4, M9.7) are tracked
+  through `TextureRegistry`, closing the gap M4's scope note pointed here
+- [ ] Real reference counting: incremented when a component references a texture, decremented on
+  `free()`/`freeResources()`/`destroy()`/reassignment — GPU memory released at zero, not before
+- [ ] A working `free`/`unregister` path exists for `main_atlas` entries — today baked text/images
+  are permanent for the app's lifetime; this milestone gives them one
+- [ ] LRU eviction for ephemeral (non-`eternal`) textures when capacity is reached, per the
+  documented eviction order (unreferenced ephemeral oldest-first, then referenced ephemeral,
+  eternal never evicted)
+- [ ] `eternal`/`last_used` fields exist and are honored by the eviction policy
+- [ ] Backgrounding-driven eviction generalized beyond video — today only `suspend_video`/
+  `resume_video` exist; the same lifecycle should apply to any resource-backed texture
+- [ ] The `FontAtlas`/`TransitionAtlasAllocator`/`TextureRegistry` unification question (above) is
+  explicitly decided and the decision documented here, whichever way it goes
+- [ ] Regression tests: ref-count increment/decrement, eviction order under simulated pressure,
+  free-then-reuse of a `main_atlas` region
+
+---
+
+### M12 — TypeScript SDK *(critical path)*
 
 A developer builds the full interactive reference demo in TypeScript without touching Rust.
 
@@ -1682,26 +1872,18 @@ A developer builds the full interactive reference demo in TypeScript without tou
 - [ ] `proteus.get(id)` returns a fully typed `ComponentData` interface (no raw `JsValue`)
 - [ ] The SDK wires `requestAnimationFrame` → `proteus.tick()` automatically by default;
   manual tick control is available for custom render loop integration
+- [ ] The SDK's texture handle (`proteus.texture()`) is a real wrapper over M11's reference
+  counting and eviction, not a stub — `heroImage.free()`, `.state()`, `.onEvicted()`/`.onRestored()`
+  all do what Phase B specifies
 
 ---
 
-### M11 — Native Parity *(off critical path — can begin after M5)*
-
-The full interactive reference demo runs identically on macOS, Linux, and Windows.
-
-**Definition of done:**
-- [ ] The full interactive reference demo (from M7) runs correctly on macOS, Linux, and Windows
-  via the native shell (`proteus-shell-native` with `winit`)
-- [ ] CI runs the test suite on all three platforms (GitHub Actions matrix)
-- [ ] Visual regression tests (M6) pass on all three native platforms
-- [ ] Performance benchmarks on native documented in `BENCHMARKS.md`
-- [ ] No platform-specific behavioral differences in transitions, input handling, or text rendering
-
----
-
-### M12 — Developer Release
+### M13 — Developer Release
 
 Documentation, examples, and enough polish for an outside developer to pick up Proteus and build.
+Also the final pre-release checkpoint for concerns that were tracked continuously rather than as
+their own milestone — see the critical path note above on why Native Parity was retired as a
+standalone milestone in favor of an ongoing cross-shell requirement.
 
 **Definition of done:**
 - [ ] Public documentation: README covers installation, quickstart, and links to full docs;
@@ -1714,6 +1896,14 @@ Documentation, examples, and enough polish for an outside developer to pick up P
 - [ ] `CONTRIBUTING.md` covers: how to build, how to run tests, PR process
 - [ ] An outside developer with no prior codebase knowledge can follow the README,
   install the SDK, and produce a working component with a transition
+- [ ] Final cross-shell parity audit: every V1 feature confirmed working identically on native and
+  web, as a last check on the standing per-milestone requirement (not a re-test from scratch)
+- [ ] CI runs the test suite across macOS, Linux, and Windows (GitHub Actions matrix) for the
+  native shell specifically — this is *cross-platform* parity within native, distinct from the
+  native-vs-web parity checked above
+- [ ] No platform-specific behavioral differences in transitions, input handling, or text
+  rendering across macOS/Linux/Windows
+- [ ] Performance benchmarks on native documented in `BENCHMARKS.md`
 
 ---
 
@@ -1727,6 +1917,13 @@ Planned future work, not part of the V1 scope:
 - Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
 - Transition `direction` and `stagger` — superseded by the `childBehavior` iterator pattern. Developers implement these as iterator functions rather than framework primitives. No separate post-V1 work needed.
 - XR shell (WebXR / OpenXR)
+- Benchmark tests — a proper, ongoing performance benchmark suite beyond M1's single WASM-boundary
+  measurement (frame time under load, transition-heavy scenes, large instance counts, etc.)
+- GUI component library — scrolling lists, grids, forms, and other common patterns built on top of
+  the core primitives, likely depending on M10's composition/hierarchy work
+- Embedded systems demo — running the native shell on constrained hardware (Android TV, Raspberry
+  Pi 4) to validate the framework outside desktop-class GPUs
+- Dogfooding — build a personal website using Proteus and publish it on GitHub Pages
 
 ---
 
