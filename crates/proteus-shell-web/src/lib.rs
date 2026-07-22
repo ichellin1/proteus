@@ -78,9 +78,9 @@ mod inner {
     use proteus_render::{FontAtlas, GpuContext, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
     use proteus_ui::{
         collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig,
-        BakedText, Border, Entity, Glow, GroupTarget, Interactable, InteractionEvents, Lifecycle,
-        OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
-        TransitionRequest, VideoPlayer, Visibility,
+        BakedImage, BakedText, Border, Entity, Glow, GroupTarget, Image, Interactable,
+        InteractionEvents, Lifecycle, OneToNRequest, PointerInput, ProteusWorld, QuadState,
+        SplitStrategy, Text, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
     };
 
     // -------------------------------------------------------------------------
@@ -135,12 +135,18 @@ mod inner {
     const TILE_GAP: f32 = 100.0;
     const TILE_CORNER_RADIUS: f32 = 12.0;
 
-    const TILE_LABELS: [&str; 3] = ["Big Buck Bunny", "Sintel", "Jellyfish"];
     const TILE_COLORS: [Vec4; 3] = [
         Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck Bunny
         Vec4::new(0.10, 0.45, 0.35, 1.0), // deep teal — Sintel
         Vec4::new(0.10, 0.55, 0.65, 1.0), // aqua — Jellyfish
     ];
+
+    /// Real box-cover photos are routinely far larger than the tiles'
+    /// on-screen footprint (200×300) — cap decoded images to this before
+    /// packing them into `main_atlas` (2048×2048, shared with baked text),
+    /// which they'd otherwise not fit in at all or would starve of remaining
+    /// space. 2x the tile height leaves headroom for high-DPI displays.
+    const MAX_TILE_IMAGE_SIDE: u32 = 600;
 
     // -------------------------------------------------------------------------
     // Demo scene geometry  (identical to proteus-shell-native)
@@ -473,8 +479,9 @@ mod inner {
                 ))
                 .id();
 
-            // Tiles start hidden; text is pre-baked while hidden so it's ready
-            // the instant the button-spread transition reveals them.
+            // Tiles start hidden; box-cover art (fetched separately, see
+            // set_tile_image) makes a text label redundant, so tiles carry
+            // no Text component.
             let tiles = [
                 ui_world
                     .world
@@ -482,7 +489,6 @@ mod inner {
                         tile_quad(0),
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
-                        Text::new(TILE_LABELS[0], 20.0).with_color(white()),
                         Interactable,
                         tile_border(),
                         hover_glow(),
@@ -494,7 +500,6 @@ mod inner {
                         tile_quad(1),
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
-                        Text::new(TILE_LABELS[1], 20.0).with_color(white()),
                         Interactable,
                         tile_border(),
                         hover_glow(),
@@ -506,7 +511,6 @@ mod inner {
                         tile_quad(2),
                         Lifecycle::Idle,
                         Visibility::HIDDEN,
-                        Text::new(TILE_LABELS[2], 20.0).with_color(white()),
                         Interactable,
                         tile_border(),
                         hover_glow(),
@@ -559,6 +563,7 @@ mod inner {
 
             self.ui_world.update(dt);
             self.bake_pending_text();
+            self.bake_pending_images();
             self.advance_intro_and_hover(dt);
             self.advance_tile_hover(dt);
             self.advance_demo(dt);
@@ -720,7 +725,7 @@ mod inner {
             self.ui_world
                 .world
                 .entity_mut(self.tiles[tile_idx as usize])
-                .insert(VideoPlayer);
+                .insert((VideoPlayer, VideoCrossfade { video_t: 0.0 }));
             self.playing_video = Some(PlayingVideo {
                 tile_idx: tile_idx as usize,
                 texture_id,
@@ -737,6 +742,27 @@ mod inner {
                     .world
                     .resource::<QuadPipeline>()
                     .upload_video_frame(&self.queue, rgba);
+            }
+        }
+
+        /// Attaches box-cover art to `tiles[tile_idx]` (M9.7). Call once,
+        /// after JS has fetched the image file's bytes — there's no fetch on
+        /// the Rust side; `bake_pending_images` (run every `tick()`) decodes
+        /// and uploads it to `main_atlas` on the next frame.
+        #[wasm_bindgen]
+        pub fn set_tile_image(&mut self, tile_idx: u32, bytes: &[u8]) {
+            self.ui_world
+                .world
+                .entity_mut(self.tiles[tile_idx as usize])
+                .insert(Image::new(bytes));
+            // Untinted — the real box art replaces the placeholder
+            // TILE_COLORS fill, so it shouldn't be tinted by it.
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.tiles[tile_idx as usize])
+            {
+                qs.color = white();
             }
         }
     }
@@ -777,6 +803,69 @@ mod inner {
                 let uv_offset = region.uv_offset(MAIN_ATLAS_SIZE);
                 let uv_scale = region.uv_scale(MAIN_ATLAS_SIZE);
                 self.ui_world.world.entity_mut(entity).insert(BakedText {
+                    uv_offset,
+                    uv_scale,
+                    pixel_size: [region.width as f32, region.height as f32],
+                });
+            }
+        }
+
+        /// For every entity with `Image` but no `BakedImage`: decode → upload
+        /// to main_atlas (via the same shelf packer `bake_pending_text` uses
+        /// — see `FontAtlas::bake_image`) → insert `BakedImage`. Mirrors
+        /// `bake_pending_text` exactly. There's no fetch here — `Image` is
+        /// only ever inserted once JS has already fetched the bytes and
+        /// handed them over via `set_tile_image`.
+        fn bake_pending_images(&mut self) {
+            let all_images: Vec<(Entity, std::sync::Arc<[u8]>)> = {
+                let mut q = self.ui_world.world.query::<(Entity, &Image)>();
+                q.iter(&self.ui_world.world)
+                    .map(|(e, img)| (e, img.bytes.clone()))
+                    .collect()
+            };
+            let pending: Vec<(Entity, std::sync::Arc<[u8]>)> = all_images
+                .into_iter()
+                .filter(|(e, _)| self.ui_world.world.get::<BakedImage>(*e).is_none())
+                .collect();
+
+            for (entity, bytes) in pending {
+                let decoded = match proteus_render::decode_image(&bytes) {
+                    Ok(decoded) => decoded,
+                    Err(e) => {
+                        log::warn!("bake_pending_images: {e}");
+                        continue;
+                    }
+                };
+                // Real photos routinely arrive far larger than main_atlas
+                // (2048×2048, shared with baked text) can sensibly hold — cap
+                // to a size comfortably above the tiles' on-screen footprint.
+                let decoded = proteus_render::resize_to_fit(decoded, MAX_TILE_IMAGE_SIDE);
+
+                let Some(region) =
+                    self.font_atlas
+                        .bake_image(&decoded.rgba_pixels, decoded.width, decoded.height)
+                else {
+                    log::warn!(
+                        "bake_pending_images: atlas full — could not bake {}×{} image",
+                        decoded.width,
+                        decoded.height,
+                    );
+                    continue;
+                };
+                self.ui_world
+                    .world
+                    .resource::<QuadPipeline>()
+                    .write_to_main_atlas(
+                        &self.queue,
+                        region.x,
+                        region.y,
+                        region.width,
+                        region.height,
+                        &region.rgba_pixels,
+                    );
+                let uv_offset = region.uv_offset(MAIN_ATLAS_SIZE);
+                let uv_scale = region.uv_scale(MAIN_ATLAS_SIZE);
+                self.ui_world.world.entity_mut(entity).insert(BakedImage {
                     uv_offset,
                     uv_scale,
                     pixel_size: [region.width as f32, region.height as f32],
@@ -974,10 +1063,12 @@ mod inner {
                 }
 
                 // ── Screen idle: click it to morph back into its tile shape ────
+                // Playback keeps running through the reverse morph — see
+                // advance_screen_to_tiles_fade — and only actually stops once
+                // that morph completes, below, so the video crossfades live
+                // into the box art on the way back instead of cutting instantly.
                 DemoPhase::ScreenIdle { screen_idx } => {
                     if clicked.contains(&self.tiles[screen_idx]) {
-                        self.stop_video();
-                        self.pending_video_stop = true;
                         self.start_screen_to_tiles(screen_idx);
                         DemoPhase::ScreenToTiles {
                             screen_idx,
@@ -1004,6 +1095,8 @@ mod inner {
                         BUTTON_TILES_MORPH_DURATION + BUTTON_TILES_MORPH_DURATION * 0.5;
                     let done = matches!(lifecycle, Some(Lifecycle::Idle)) && elapsed >= fade_total;
                     if done {
+                        self.stop_video();
+                        self.pending_video_stop = true;
                         DemoPhase::TilesIdle
                     } else {
                         DemoPhase::ScreenToTiles {
@@ -1024,9 +1117,28 @@ mod inner {
         /// does the baking itself. This just declares the request.
         fn start_button_to_tiles(&mut self) {
             let targets = (0..3)
-                .map(|i| GroupTarget {
-                    entity: self.tiles[i],
-                    state: tile_quad(i),
+                .map(|i| {
+                    let mut state = tile_quad(i);
+                    // tile_quad() always bakes in the placeholder TILE_COLORS
+                    // tint — fine before any image has loaded, but wrong once
+                    // one has: each virtual slice's QuadState.color lerps
+                    // toward this target state over the whole transition, so
+                    // without this override the box art would render visibly
+                    // tinted throughout the morph even though the real tile
+                    // (already corrected to white() at load) shows it
+                    // untinted the moment it's revealed.
+                    if self
+                        .ui_world
+                        .world
+                        .get::<BakedImage>(self.tiles[i])
+                        .is_some()
+                    {
+                        state.color = white();
+                    }
+                    GroupTarget {
+                        entity: self.tiles[i],
+                        state,
+                    }
                 })
                 .collect();
 
@@ -1075,7 +1187,7 @@ mod inner {
             self.ui_world
                 .world
                 .entity_mut(self.tiles[playing.tile_idx])
-                .remove::<VideoPlayer>();
+                .remove::<(VideoPlayer, VideoCrossfade)>();
             self.ui_world
                 .world
                 .resource_mut::<QuadPipeline>()
@@ -1085,11 +1197,26 @@ mod inner {
         /// Direct 1→1 morph, reversed: `tiles[screen_idx]` returns to its own
         /// `tile_quad` shape.
         fn start_screen_to_tiles(&mut self, screen_idx: usize) {
+            let mut to = tile_quad(screen_idx);
+            // tile_quad() always bakes in the placeholder TILE_COLORS tint —
+            // fine the first time (nothing has loaded yet), but wrong on
+            // every replay: this TransitionRequest lerps QuadState.color all
+            // the way to `to`, so without this override the reverse morph
+            // would drag a tile whose box art already loaded back to its
+            // placeholder tint, undoing the one-time white() set at load.
+            if self
+                .ui_world
+                .world
+                .get::<BakedImage>(self.tiles[screen_idx])
+                .is_some()
+            {
+                to.color = white();
+            }
             self.ui_world
                 .world
                 .entity_mut(self.tiles[screen_idx])
                 .insert(TransitionRequest {
-                    to: tile_quad(screen_idx),
+                    to,
                     config: TransitionConfig {
                         duration: BUTTON_TILES_MORPH_DURATION,
                         delay: 0.0,
@@ -1106,13 +1233,18 @@ mod inner {
         /// the other two tiles fade out completely (fill, border, label, glow)
         /// over half the duration.
         fn advance_tiles_to_screen_fade(&mut self, clicked_idx: usize, elapsed: f32) {
-            let label_t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
-            let label_alpha = 1.0 - ease_out_quad(label_t);
-            if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.tiles[clicked_idx]) {
-                text.color.w = label_alpha;
-            }
+            let t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
             if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(self.tiles[clicked_idx]) {
                 glow.radius = 0.0;
+            }
+            // Live crossfade (M9.8): box art → video, same easing as the
+            // morph's own geometry so both read as one motion.
+            if let Some(mut crossfade) = self
+                .ui_world
+                .world
+                .get_mut::<VideoCrossfade>(self.tiles[clicked_idx])
+            {
+                crossfade.video_t = ease_in_out_quad(t);
             }
 
             let fade_duration = BUTTON_TILES_MORPH_DURATION * 0.5;
@@ -1128,9 +1260,6 @@ mod inner {
                 if let Some(mut border) = self.ui_world.world.get_mut::<Border>(tile) {
                     border.color.w = fade_alpha;
                 }
-                if let Some(mut text) = self.ui_world.world.get_mut::<Text>(tile) {
-                    text.color.w = fade_alpha;
-                }
                 if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(tile) {
                     glow.radius = 0.0;
                     glow.color.w = fade_alpha;
@@ -1139,13 +1268,20 @@ mod inner {
         }
 
         /// Mirror image of `advance_tiles_to_screen_fade` for the reverse morph:
-        /// the returning tile's label fades back in over the full duration, and
         /// the other two tiles fade back in over the first half.
         fn advance_screen_to_tiles_fade(&mut self, screen_idx: usize, elapsed: f32) {
-            let label_t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
-            let label_alpha = ease_out_quad(label_t);
-            if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.tiles[screen_idx]) {
-                text.color.w = label_alpha;
+            let t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
+            // Live crossfade (M9.8), reversed: video → box art. Same easing
+            // as the forward direction, counting down from 1.0 instead of up
+            // from 0.0 — see push_entity_instances in proteus-ui's collect.rs
+            // for why this works out correctly without inverting the
+            // geometry morph's easing.
+            if let Some(mut crossfade) = self
+                .ui_world
+                .world
+                .get_mut::<VideoCrossfade>(self.tiles[screen_idx])
+            {
+                crossfade.video_t = 1.0 - ease_in_out_quad(t);
             }
 
             // The other two tiles wait out a delay matching the full morph
@@ -1164,9 +1300,6 @@ mod inner {
                 }
                 if let Some(mut border) = self.ui_world.world.get_mut::<Border>(tile) {
                     border.color.w = fade_alpha;
-                }
-                if let Some(mut text) = self.ui_world.world.get_mut::<Text>(tile) {
-                    text.color.w = fade_alpha;
                 }
                 if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(tile) {
                     glow.color.w = fade_alpha;

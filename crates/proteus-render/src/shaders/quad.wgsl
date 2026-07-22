@@ -62,6 +62,10 @@ struct VertexIn {
     // .x = shadow offset X, .y = shadow offset Y, .z = softness (px), .w = spread (px)
     @location(13) inst_shadow_params:  vec4<f32>,
     @location(14) inst_shadow_color:   vec4<f32>,  // RGBA; alpha == 0.0 disables shadow
+    // Which atlas base_uv samples from during crossfade — independent of
+    // inst_atlas_page (the "to" side). 0 = main_atlas, 1 = transition_atlas
+    // (default), 2 = video_atlas. See mesh.rs's QuadInstance::base_atlas_page.
+    @location(15) inst_base_atlas_page: u32,
 }
 
 struct VertexOut {
@@ -95,6 +99,8 @@ struct VertexOut {
     // Drop shadow / Glow (M8 / M8.6)
     @location(12)                    shadow_params:   vec4<f32>, // (offset_x, offset_y, softness, spread)
     @location(13)                    shadow_color:    vec4<f32>, // RGBA; alpha == 0.0 = no shadow
+
+    @location(14) @interpolate(flat) base_atlas_page: u32,  // flat — which atlas base_uv samples from
 }
 
 @vertex
@@ -187,6 +193,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.atlas_page    = in.inst_atlas_page;
     out.shadow_params = in.inst_shadow_params;
     out.shadow_color  = in.inst_shadow_color;
+    out.base_atlas_page = in.inst_base_atlas_page;
 
     return out;
 }
@@ -292,10 +299,23 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             tex_color = textureSampleLevel(video_atlas,      atlas_sampler, atlas_uv, 0.0);
         }
 
-        // Crossfade: blend from-state (always in transition_atlas) into to-state.
+        // Crossfade: blend from-state into to-state. base_atlas_page selects
+        // which atlas the from-state samples from — independent of the
+        // to-state's atlas_page above. Almost always transition_atlas (the
+        // baked-slice crossfade's from-side), but a live video↔box-art
+        // crossfade (M9.8) needs the from-side pinned to main_atlas while the
+        // to-side streams from video_atlas every frame — snapshotting live
+        // video into a static bake would freeze it mid-transition.
         // When crossfade_t == 0.0 this branch is skipped entirely.
         if in.crossfade_t > 0.0 {
-            let base_color = textureSampleLevel(transition_atlas, atlas_sampler, base_atlas_uv, 0.0);
+            var base_color: vec4<f32>;
+            if in.base_atlas_page == 0u {
+                base_color = textureSampleLevel(main_atlas, atlas_sampler, base_atlas_uv, 0.0);
+            } else if in.base_atlas_page == 1u {
+                base_color = textureSampleLevel(transition_atlas, atlas_sampler, base_atlas_uv, 0.0);
+            } else {
+                base_color = textureSampleLevel(video_atlas, atlas_sampler, base_atlas_uv, 0.0);
+            }
             tex_color = mix(base_color, tex_color, in.crossfade_t);
         }
 

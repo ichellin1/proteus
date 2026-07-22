@@ -11,6 +11,7 @@ pub mod material;
 pub mod mesh;
 pub mod pipeline;
 pub mod scene;
+pub mod static_texture;
 pub mod texture_registry;
 pub mod transition_atlas;
 
@@ -20,6 +21,7 @@ pub use pipeline::{
     GpuContext, QuadPipeline, VideoFrameSender, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
     MAIN_ATLAS_SIZE, TRANSITION_ATLAS_SIZE,
 };
+pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
 pub use texture_registry::{TextureId, TextureKind, TextureRegistry};
 pub use transition_atlas::{TransitionAllocId, TransitionAtlasAllocator, TransitionRegion};
 

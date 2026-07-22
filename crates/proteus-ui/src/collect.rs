@@ -62,6 +62,23 @@
 //! (white) for unfiltered video.  Any `BakedText` overlay is still emitted on
 //! top as a second instance so labels can float above the video.
 //!
+//! ## Static image (M9.7)
+//!
+//! When a [`crate::BakedImage`] component is present, its `uv_offset`/`uv_scale`
+//! (into `main_atlas`, `atlas_page` 0 — the default, so no page switch needed)
+//! replace the background instance's white-pixel-sentinel UV. Unlike video/
+//! baked-texture, this is a one-time static mapping — no per-frame recompute.
+//! `QuadState::color` still tints the image; use `Vec4::ONE` for unfiltered.
+//!
+//! **When both are present on the same entity** (e.g. a tile carrying its
+//! permanent box-cover `BakedImage` that also gets a `VideoPlayer` once
+//! activated), see [`crate::VideoCrossfade`] (M9.8) — it drives a live blend
+//! between the two rather than either flatly overriding the other. Their
+//! UVs point at different atlases (`main_atlas` vs `video_atlas`), so naively
+//! applying both without going through `VideoCrossfade` is a bug, not an
+//! effect: the video texture gets sampled through a UV window sized for the
+//! image, showing a small, blown-up fragment instead of the full frame.
+//!
 //! ## Visibility
 //!
 //! Entities with [`Visibility::HIDDEN`] are excluded from the output. Entities with
@@ -74,8 +91,8 @@ use proteus_render::{QuadInstance, QuadPipeline};
 
 use crate::{
     effects::{Border, DropShadow, Glow},
-    video::VideoPlayer,
-    ActiveTransition, BakedText, QuadState, Text, Virtual, Visibility,
+    video::{VideoCrossfade, VideoPlayer},
+    ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +212,12 @@ pub fn quad_state_to_instance(
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
         crossfade_t: 0.0,
+        // Matches every crossfade user before this field existed — the only
+        // one is BakedTexture, whose from-side always lives in
+        // transition_atlas. push_entity_instances overrides this for the
+        // video+image live-crossfade case (see its VideoPlayer/BakedImage
+        // handling below).
+        base_atlas_page: 1,
         border_width,
         border_color,
         border_offset,
@@ -220,10 +243,56 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
     let glow = world.get::<Glow>(e);
     let border = world.get::<Border>(e);
     let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
-    if world.get::<VideoPlayer>(e).is_some() {
-        bg_inst.atlas_page = 2;
-        bg_inst.uv_offset = [0.0, 0.0];
-        bg_inst.uv_scale = [1.0, 1.0];
+    // Video and static-image UV routing. When only one of VideoPlayer/
+    // BakedImage is present it's a flat assignment (no blending). When both
+    // are present (M9.8 — e.g. a tile with permanent box-cover art that also
+    // gets a VideoPlayer once activated), VideoCrossfade's video_t drives a
+    // live blend between them: the "to"/"from" sides swap depending on which
+    // way video_t is headed, so playing forward (image → video) and reverse
+    // (video → image) both use the same crossfade_t = video_t formula rather
+    // than needing an inverted easing curve for one direction. The caller
+    // (not collect_instances) decides video_t each frame — only it knows
+    // whether a transition is running forward or backward.
+    match (
+        world.get::<VideoPlayer>(e).is_some(),
+        world.get::<BakedImage>(e),
+    ) {
+        (true, Some(image)) => {
+            let video_t = world
+                .get::<VideoCrossfade>(e)
+                .map(|c| c.video_t.clamp(0.0, 1.0))
+                .unwrap_or(1.0); // no VideoCrossfade — show video fully, as before M9.8
+            if video_t >= 0.9999 {
+                bg_inst.atlas_page = 2;
+                bg_inst.uv_offset = [0.0, 0.0];
+                bg_inst.uv_scale = [1.0, 1.0];
+            } else if video_t <= 0.0001 {
+                bg_inst.uv_offset = image.uv_offset;
+                bg_inst.uv_scale = image.uv_scale;
+            } else {
+                // to-side: video (video_atlas); from-side: box art (main_atlas).
+                bg_inst.atlas_page = 2;
+                bg_inst.uv_offset = [0.0, 0.0];
+                bg_inst.uv_scale = [1.0, 1.0];
+                bg_inst.base_atlas_page = 0;
+                bg_inst.base_uv_offset = image.uv_offset;
+                bg_inst.base_uv_scale = image.uv_scale;
+                bg_inst.crossfade_t = video_t;
+            }
+        }
+        (true, None) => {
+            bg_inst.atlas_page = 2;
+            bg_inst.uv_offset = [0.0, 0.0];
+            bg_inst.uv_scale = [1.0, 1.0];
+        }
+        (false, Some(image)) => {
+            // A static image is a one-time UV mapping into main_atlas
+            // (atlas_page 0, already the default) — no per-frame recompute,
+            // unlike video.
+            bg_inst.uv_offset = image.uv_offset;
+            bg_inst.uv_scale = image.uv_scale;
+        }
+        (false, None) => {}
     }
     // A BakedTexture drives a two-sided crossfade: base_uv/scale point at the
     // source's baked snapshot, uv/scale (atlas_page 1) point at the target's

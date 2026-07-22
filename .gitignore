@@ -12,6 +12,11 @@ pkg/
 crates/proteus-shell-native/assets/videos/
 crates/proteus-shell-web/www/videos/
 
+# Box-cover image demo assets (M9.7) — sample PNG/JPEG art for the reference
+# demo's video tiles, not source. Place your own under these paths; see PLANNING.md.
+crates/proteus-shell-native/images/
+crates/proteus-shell-web/www/images/
+
 # Editor
 .vscode/
 .idea/

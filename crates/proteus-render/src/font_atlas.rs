@@ -268,6 +268,37 @@ impl FontAtlas {
         })
     }
 
+    /// Pack already-decoded RGBA8 pixels (e.g. from
+    /// [`crate::static_texture::decode_image`]) into the atlas.
+    ///
+    /// Shares this `FontAtlas`'s shelf-packer cursor with [`bake_text`] —
+    /// despite the type's name, it's really "the CPU-side packer for
+    /// `main_atlas`", and there is exactly one instance of it per
+    /// application session. A second, independent packer writing into the
+    /// same atlas texture would allocate without knowing about the other's
+    /// claimed regions and silently overlap.
+    ///
+    /// `rgba.len()` must equal `width * height * 4`. Returns `None` if the
+    /// atlas has no room left for a region this size.
+    ///
+    /// [`bake_text`]: FontAtlas::bake_text
+    pub fn bake_image(&mut self, rgba: &[u8], width: u32, height: u32) -> Option<BakedRegion> {
+        debug_assert_eq!(
+            rgba.len(),
+            (width * height * 4) as usize,
+            "bake_image: expected {width}×{height}×4 bytes, got {}",
+            rgba.len(),
+        );
+        let (atlas_x, atlas_y) = self.allocate(width, height)?;
+        Some(BakedRegion {
+            x: atlas_x,
+            y: atlas_y,
+            width,
+            height,
+            rgba_pixels: rgba.to_vec(),
+        })
+    }
+
     // ---------------------------------------------------------------------------
     // Shelf packer
     // ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 etagere = "0.3"  # shelf-based 2D atlas packing (used by TextureRegistry)
 fontdue = "0.8"  # pure-Rust font rasterization — no system font dependencies
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }  # static image decode (M9.7) — pure Rust, works on native and wasm32
 
 # ECS
 bevy_ecs = "0.18"  # standalone ECS runtime — does not pull in the full Bevy engine

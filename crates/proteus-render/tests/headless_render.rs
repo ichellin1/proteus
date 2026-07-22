@@ -102,6 +102,7 @@ fn headless_quad_renders_to_expected_color() {
             border_offset: 0.0,
             shadow_params: [0.0, 0.0, 0.0, 0.0],
             shadow_color: [0.0, 0.0, 0.0, 0.0],
+            base_atlas_page: 1,
         }],
     );
 

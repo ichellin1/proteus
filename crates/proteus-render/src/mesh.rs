@@ -136,7 +136,18 @@ pub struct QuadInstance {
     pub shadow_params: [f32; 4], // offset 124, size 16
     /// Shadow color RGBA.  Alpha = 0 means no shadow.
     pub shadow_color: [f32; 4], // offset 140, size 16
-} // total       156 bytes
+
+    // --- Crossfade base atlas (M9.8 — live video crossfade) ---
+    /// Which atlas `base_uv_offset`/`base_uv_scale` sample from during a
+    /// crossfade. 0 = main_atlas, 1 = transition_atlas (default — matches
+    /// every crossfade user before this field existed), 2 = video_atlas.
+    /// Lets the "from" side of a crossfade be a *different* atlas than the
+    /// "to" side's `atlas_page` — e.g. a tile's baked box-cover art
+    /// (main_atlas) crossfading into its still-live, still-updating video
+    /// feed (video_atlas) during the tile↔screen morph, without ever
+    /// snapshotting the video into a static bake (which would freeze it).
+    pub base_atlas_page: u32, // offset 156, size 4
+} // total       160 bytes
 
 impl QuadInstance {
     /// Returns the wgpu vertex buffer layout for the instance buffer (step per instance).
@@ -161,13 +172,14 @@ impl QuadInstance {
     /// |  12 | Float32    | 120 – 124  | border_offset                              |
     /// |  13 | Float32x4  | 124 – 140  | shadow_params (offset_x, offset_y, softness, spread) |
     /// |  14 | Float32x4  | 140 – 156  | shadow_color                               |
+    /// |  15 | Uint32     | 156 – 160  | base_atlas_page                            |
     ///
-    /// Total: 13 instance attributes + 2 vertex attributes = 15. Limit is 16.
+    /// Total: 14 instance attributes + 2 vertex attributes = 16. Limit is 16.
     ///
-    /// **Vertex attribute budget:** 15 of 16 locations are in use (1 slot remaining).
-    /// Adding any new per-instance field would exceed the Metal limit and require
-    /// packing two existing fields into a single attribute location.  Consider
-    /// this before adding to `QuadInstance` or `QuadVertex`.
+    /// **Vertex attribute budget: exhausted — 16 of 16 locations in use.** Any
+    /// further field requires packing two existing fields into a single
+    /// attribute location (as already done throughout this layout) rather
+    /// than adding a new location outright.
     pub fn buffer_layout() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
@@ -252,6 +264,12 @@ impl QuadInstance {
                     shader_location: 14,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                // loc 15: base_atlas_page (u32)
+                wgpu::VertexAttribute {
+                    offset: 156,
+                    shader_location: 15,
+                    format: wgpu::VertexFormat::Uint32,
+                },
             ],
         }
     }
@@ -259,7 +277,7 @@ impl QuadInstance {
 
 // Compile-time size guard. If QuadInstance changes, this fails immediately
 // and forces the developer to audit buffer_layout() offsets.
-const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 156);
+const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 160);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -296,11 +314,12 @@ mod tests {
         assert_eq!(offset_of!(QuadInstance, border_offset), 120);
         assert_eq!(offset_of!(QuadInstance, shadow_params), 124);
         assert_eq!(offset_of!(QuadInstance, shadow_color), 140);
+        assert_eq!(offset_of!(QuadInstance, base_atlas_page), 156);
     }
 
     #[test]
     fn quad_instance_total_size() {
-        assert_eq!(std::mem::size_of::<QuadInstance>(), 156);
+        assert_eq!(std::mem::size_of::<QuadInstance>(), 160);
     }
 
     // -----------------------------------------------------------------------

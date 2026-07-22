@@ -18,6 +18,7 @@
 pub mod collect;
 pub mod component;
 pub mod effects;
+pub mod image;
 pub mod input;
 pub mod schedule;
 pub mod signal;
@@ -33,6 +34,7 @@ pub use collect::{
 };
 pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 pub use effects::{Border, DropShadow, Glow};
+pub use image::{BakedImage, Image};
 pub use input::{quad_contains, Interactable, InteractionEvents, PointerInput};
 pub use schedule::ProteusWorld;
 pub use text::{BakedText, Text};
@@ -44,4 +46,4 @@ pub use transition::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,
     CompletedTransitions, EasingFn, FrameTime, TransitionComplete, TransitionConfig,
 };
-pub use video::VideoPlayer;
+pub use video::{VideoCrossfade, VideoPlayer};
