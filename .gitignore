@@ -7,6 +7,11 @@
 dist/
 pkg/
 
+# Video demo assets (M9.5) — sample .mp4 clips for the reference demo's
+# video tiles, not source. Place your own under these paths; see PLANNING.md.
+crates/proteus-shell-native/assets/videos/
+crates/proteus-shell-web/www/videos/
+
 # Editor
 .vscode/
 .idea/
