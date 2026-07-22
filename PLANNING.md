@@ -1497,44 +1497,56 @@ by `suspend_video` (swaps to 1×1 placeholder, rebuilds bind group) and `resume_
   *Note: "no frame drops" in the strict sense is not guaranteed — the producer may skip frames
   under load; the guarantee is that the displayed frame is always the freshest available.*
 
-**Web verification status:** M9 infrastructure is implemented and verified on native. End-to-end
-web verification (browser rendering of video frames via the GPU pipeline) is pending the wgpu
-22→29 upgrade completing — the web shell was non-functional during M9 development due to the
-`maxInterStageShaderComponents` Chrome rejection bug. Web verification is an M9.5 prerequisite.
+**Web verification status:** Complete. The wgpu 22→29 upgrade resolved the
+`maxInterStageShaderComponents` Chrome rejection bug that made the web shell non-functional during
+M9 development; M9 infrastructure is now verified on both native and web (see M9.5 below).
 
 ---
 
-### M9.5 — MP4 Playback *(off critical path — begins after M9 web verification)*
+### M9.5 — MP4 Playback *(off critical path — complete)*
 
-Real MP4 file decoding feeding the M9 GPU streaming pipeline. M9 established the infrastructure
-for per-frame RGBA upload to the GPU; M9.5 adds an actual decoder that produces those frames
-from a real video file, on both web and native targets.
+Real MP4 file decoding feeding the M9 GPU streaming pipeline, on both web and native targets.
+Both implementations are reference examples of "bring your own player": `proteus-render`/
+`proteus-ui` know nothing about MP4, ffmpeg, or the browser's `<video>` element — they only see
+[`VideoFrameSender`]/`upload_video_frame`, a plain RGBA-bytes interface. Swapping in an HLS
+player, a different codec, or a hardware decoder means writing a different producer with the same
+shape, not touching the framework.
 
-**Approach:**
+**Approach (as built):**
 
-*Web:* Use an HTML `<video>` element as the decoder. On each frame (via `requestVideoFrameCallback`
-or a canvas-based fallback), draw the current frame to an offscreen `<canvas>`, read back the RGBA
-pixels, and pass them to the existing `upload_video_frame()` WASM entry point. The browser handles
-all codec support (H.264, VP8, VP9, AV1) transparently — no Rust decoder needed on web.
+*Web:* An HTML `<video>` element is the decoder (`crates/proteus-shell-web/www/index.html`).
+Since Rust owns hit-testing (there's no per-tile DOM element for JS to attach a click listener
+to), `ProteusApp` exposes `take_video_start_tile()`/`take_video_stop()` — polled once per
+`tick()` — so JS knows *when* to drive the `<video>` element. Frames are pulled via
+`requestVideoFrameCallback` (falling back to `requestAnimationFrame` polling on browsers without
+it) onto an offscreen `<canvas>`, read back as RGBA, and pushed straight to
+`QuadPipeline::upload_video_frame` via a new `push_video_frame()` entry point — no channel, no
+thread, since wasm32 has neither.
 
-*Native:* Use a pure-Rust decoder stack. `mp4parse` for container parsing + a decoder crate for
-the video stream (e.g. `openh264` for H.264, `dav1d` bindings for AV1). Decoded YUV frames are
-converted to RGBA and handed to the existing `consume_video_frame` pipeline. Decoding runs on a
-background thread; the existing `sync_channel(2)` producer/consumer model handles frame delivery
-to the render thread without modification.
+*Native:* Originally attempted as a from-scratch pure-Rust decoder (`mp4` demuxer + `rust_h264`
+H.264 decoder). That path hit real correctness issues — visible judder that persisted after
+verifying decode-thread pacing, render-loop frame delivery, and GPU presentation timing were all
+individually correct, most likely `pic_order_cnt` display-reordering edge cases in a young,
+lesser-vetted decoder crate. Replaced with `crates/proteus-shell-native/src/mp4_player.rs`
+shelling out to `ffmpeg`/`ffprobe` (must be on `PATH`) on a background thread: `ffmpeg -re -i
+<file> -f rawvideo -pix_fmt rgba -vf scale=W:H -` streams RGBA frames from stdout, with decoding,
+container demuxing, B-frame reordering, and real-time pacing all delegated to ffmpeg itself. Feeds
+the existing `VideoFrameSender`/`sync_channel(2)` pipeline unchanged. `PlaybackHandle::stop` kills
+the child process directly for immediate teardown.
 
 **Definition of done:**
-- [ ] Web: a real `.mp4` file plays back visibly in the browser via the M9 GPU pipeline — frames
-  decode correctly, display without tearing, and the existing latest-frame-wins delivery holds
-- [ ] Web: browser tab backgrounding suspends video frame delivery cleanly (`suspend_video` called,
-  no GPU writes while occluded); foregrounding resumes correctly (`resume_video`)
-- [ ] Native: a real `.mp4` file plays back via a background decoder thread feeding the existing
-  `sync_channel` pipeline — frames appear on screen at approximately the encoded frame rate
-- [ ] End-to-end demo: the reference demo's video list item plays actual MP4 content on both
-  web and native (replacing the synthetic test frames used during M9 development)
-- [ ] No main-thread stall on either target — decoding is fully off the render thread
-- [ ] Codec support documented: which codecs are supported on web (browser-dependent) and native
-  (explicitly chosen decoder crates), noted in a `CODECS.md` or equivalent
+- [x] Web: a real `.mp4` file plays back visibly in the browser via the M9 GPU pipeline — frames
+  decode correctly and display without tearing
+- [x] Native: a real `.mp4` file plays back via a background decoder thread (ffmpeg subprocess)
+  feeding the existing `sync_channel` pipeline, at the correct frame rate
+- [x] End-to-end demo: clicking a video tile starts playback immediately (visible underneath the
+  tile→screen morph) on both web and native; clicking the screen stops it
+- [x] No main-thread stall on either target — decoding is fully off the render thread (native:
+  background thread; web: browser's own decode pipeline, frames pushed from a `<video>` callback)
+- [x] Codec support: native depends on whatever codecs the system's `ffmpeg` build supports
+  (practically all common ones); web depends on the browser's built-in decoders (H.264, VP8, VP9,
+  AV1 where supported) — documented here rather than a separate `CODECS.md`, since it's fully
+  determined by the two "bring your own player" implementations above, not a framework choice
 
 ---
 

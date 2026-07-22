@@ -45,8 +45,9 @@
 //! Kept identical to `proteus-shell-native` scene-for-scene so the two shells
 //! never drift (see PLANNING.md's M9.6 note on a prior divergence): a
 //! circular "START" button that fades in and glows on hover, splits into
-//! three video tiles on click (1→N Slice, baked crossfade), and converges
-//! back on clicking any tile (N→1 Slice).
+//! three video tiles on click (1→N Slice, baked crossfade), and — on
+//! clicking any tile — morphs that tile directly into a video screen (plain
+//! 1→1) while the other two fade out, reversing the same way on click.
 
 use wasm_bindgen::prelude::*;
 
@@ -74,12 +75,12 @@ mod inner {
 
     use glam::{Vec2, Vec3, Vec4};
 
-    use proteus_render::{FontAtlas, GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
+    use proteus_render::{FontAtlas, GpuContext, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
     use proteus_ui::{
         collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig,
-        BakedText, Border, Entity, Glow, GroupSource, GroupTarget, Interactable, InteractionEvents,
-        Lifecycle, NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState,
-        SplitStrategy, Text, Visibility,
+        BakedText, Border, Entity, Glow, GroupTarget, Interactable, InteractionEvents, Lifecycle,
+        OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
+        TransitionRequest, VideoPlayer, Visibility,
     };
 
     // -------------------------------------------------------------------------
@@ -206,21 +207,76 @@ mod inner {
     }
 
     // -------------------------------------------------------------------------
+    // Video screen — MP4 playback surface (M9.5)
+    // -------------------------------------------------------------------------
+    //
+    // Sized proportionally to 720p (16:9) rather than rendered at that
+    // resolution — the actual decode resolution comes from the browser's own
+    // `<video>` element (see `ProteusApp::start_video`, called from JS once
+    // `loadedmetadata` fires) and is whatever `QuadPipeline::init_video` was
+    // called with.
+    //
+    // Unlike the button↔tiles morph, this isn't a group transition: clicking a
+    // tile morphs *that one tile* directly into the screen shape (a plain 1→1
+    // `TransitionRequest`, same border/geometry machinery any single entity
+    // uses) while the other two tiles simply fade out in place. Reversed the
+    // same way on click. No slicing, no baking — the tile clicked keeps its own
+    // identity throughout and just becomes the screen.
+
+    /// Fraction of the window width the screen occupies.
+    const SCREEN_WIDTH_FRACTION: f32 = 0.9;
+    /// 720p (1280×720) height:width ratio.
+    const SCREEN_ASPECT: f32 = 720.0 / 1280.0;
+    const SCREEN_CORNER_RADIUS: f32 = 8.0;
+
+    /// The video screen shape, sized to `SCREEN_WIDTH_FRACTION` of the
+    /// current canvas width at a 720p aspect ratio. Recomputed (not cached)
+    /// each time a tiles→screen transition starts, so a resize between visits
+    /// isn't stale.
+    ///
+    /// `color` is white (untinted) rather than black: once `VideoPlayer` is
+    /// attached, `QuadState.color` multiplies the sampled video texture (see
+    /// `proteus_ui::video`), so a black target would render real video frames
+    /// as solid black. Before the first pushed frame arrives the video
+    /// texture is zero-initialized (transparent), so the screen is briefly
+    /// see-through rather than a black card — an acceptable startup blip.
+    fn video_screen_quad(canvas_width: f32) -> QuadState {
+        let width = canvas_width * SCREEN_WIDTH_FRACTION;
+        let height = width * SCREEN_ASPECT;
+        QuadState {
+            position: Vec3::new(0.0, 0.0, 0.5),
+            size: Vec2::new(width, height),
+            rotation: 0.0,
+            scale: 1.0,
+            anchor: Vec2::new(0.5, 0.5),
+            color: Vec4::ONE,
+            corner_radius: SCREEN_CORNER_RADIUS,
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Demo phase state machine
     // -------------------------------------------------------------------------
 
     /// Click-driven demo phases. Idle phases wait for user input; the transition
-    /// phase is in-flight and tracks per-target completion.
+    /// phase is in-flight and tracks elapsed time to drive the manual fades that
+    /// run alongside the framework-driven `TransitionRequest` morph.
     enum DemoPhase {
         /// Button visible — click it to spread into the three video tiles.
         ButtonIdle,
         /// 1→N Slice in progress: button splitting into three slices that morph
         /// into the tiles.
         ButtonToTiles,
-        /// Three tiles visible — click any tile to converge back into the button.
+        /// Three tiles visible — click any tile to converge into the video screen.
         TilesIdle,
-        /// N→1 Slice in progress: tiles converging back into the button.
-        TilesToButton { request_inserted: bool },
+        /// The clicked tile (`tiles[clicked_idx]`) is morphing into the video
+        /// screen while the other two fade out; `elapsed` drives the manual fade.
+        TilesToScreen { clicked_idx: usize, elapsed: f32 },
+        /// Video screen visible (as `tiles[screen_idx]`) — click it to morph back.
+        ScreenIdle { screen_idx: usize },
+        /// `tiles[screen_idx]` is morphing back into its tile shape while the
+        /// other two fade back in; `elapsed` drives the manual fade.
+        ScreenToTiles { screen_idx: usize, elapsed: f32 },
     }
 
     // -------------------------------------------------------------------------
@@ -268,6 +324,24 @@ mod inner {
         is_hovering: bool,
         tile_hover_progress: [f32; 3],
         tile_is_hovering: [bool; 3],
+
+        // ── MP4 playback (M9.5) ─────────────────────────────────────────────
+        // There's no background decode thread on wasm32 — the browser's own
+        // `<video>` element is the decoder (see index.html). Rust's job is
+        // just to (a) signal *when* to start/stop, via the `pending_video_*`
+        // fields JS polls once per `tick()`, and (b) accept pushed frames via
+        // `push_video_frame` and forward them straight to
+        // `QuadPipeline::upload_video_frame` — no channel, no thread.
+        playing_video: Option<PlayingVideo>,
+        pending_video_start: Option<u32>,
+        pending_video_stop: bool,
+    }
+
+    /// Tracks the one video currently playing (at most one — the video
+    /// screen is always a single tile at a time).
+    struct PlayingVideo {
+        tile_idx: usize,
+        texture_id: TextureId,
     }
 
     #[wasm_bindgen]
@@ -459,6 +533,9 @@ mod inner {
                 is_hovering: false,
                 tile_hover_progress: [0.0; 3],
                 tile_is_hovering: [false; 3],
+                playing_video: None,
+                pending_video_start: None,
+                pending_video_stop: false,
             })
         }
 
@@ -484,7 +561,7 @@ mod inner {
             self.bake_pending_text();
             self.advance_intro_and_hover(dt);
             self.advance_tile_hover(dt);
-            self.advance_demo();
+            self.advance_demo(dt);
 
             // Collect visible instances.
             // See `proteus_ui::collect` for the two-instance-per-text-entity model.
@@ -596,6 +673,71 @@ mod inner {
         pub fn on_mouse_up(&mut self) {
             self.staged_pointer.is_pressed = false;
             self.staged_pointer.just_released = true;
+        }
+
+        // ── MP4 playback (M9.5) ─────────────────────────────────────────────
+        //
+        // There's no background decode thread on wasm32 — the browser's own
+        // `<video>` element is the decoder. JS polls `take_video_start_tile`/
+        // `take_video_stop` once per `tick()` to learn when a tile was
+        // clicked (Rust owns hit-testing; there's no per-tile DOM element for
+        // JS to attach its own click listener to), drives a hidden `<video>`
+        // element accordingly, and pushes decoded frames via
+        // `push_video_frame` — see index.html for the JS side.
+
+        /// Returns the tile index playback should start for, once, or
+        /// `undefined` if nothing changed since the last call. Call once per
+        /// `tick()`; on `Some`, load/play that tile's video file and — once
+        /// `loadedmetadata` fires — call [`start_video`](Self::start_video).
+        #[wasm_bindgen]
+        pub fn take_video_start_tile(&mut self) -> Option<u32> {
+            self.pending_video_start.take()
+        }
+
+        /// Returns `true` once, the first `tick()` after the screen was
+        /// clicked to stop playback — the corresponding `<video>` element
+        /// should be paused. Rust-side texture/component cleanup has already
+        /// happened by the time this flips true.
+        #[wasm_bindgen]
+        pub fn take_video_stop(&mut self) -> bool {
+            std::mem::replace(&mut self.pending_video_stop, false)
+        }
+
+        /// Sizes the pipeline's video texture and attaches `VideoPlayer` to
+        /// `tiles[tile_idx]`. Call once `<video>`'s `loadedmetadata` event has
+        /// fired, passing its `videoWidth`/`videoHeight`.
+        #[wasm_bindgen]
+        pub fn start_video(&mut self, tile_idx: u32, width: u32, height: u32) {
+            let (texture_id, _sender) = self
+                .ui_world
+                .world
+                .resource_mut::<QuadPipeline>()
+                .init_video(&self.device, width, height);
+            // `_sender` (the BYOV channel's sending half) goes unused on
+            // wasm32 — `push_video_frame` uploads directly instead of routing
+            // through the channel, since blocking on a full bounded channel
+            // would deadlock with no second thread free to drain it.
+            self.ui_world
+                .world
+                .entity_mut(self.tiles[tile_idx as usize])
+                .insert(VideoPlayer);
+            self.playing_video = Some(PlayingVideo {
+                tile_idx: tile_idx as usize,
+                texture_id,
+            });
+        }
+
+        /// Uploads one decoded RGBA frame (`width×height×4` bytes, matching
+        /// whatever `start_video` was called with) straight to the video
+        /// texture. Call once per `<video>` `requestVideoFrameCallback`.
+        #[wasm_bindgen]
+        pub fn push_video_frame(&mut self, rgba: &[u8]) {
+            if self.playing_video.is_some() {
+                self.ui_world
+                    .world
+                    .resource::<QuadPipeline>()
+                    .upload_video_frame(&self.queue, rgba);
+            }
         }
     }
 
@@ -746,8 +888,8 @@ mod inner {
 
         /// Advance the demo one frame: read `InteractionEvents` (populated by
         /// `hit_test_system` during `ui_world.update()`) and drive `DemoPhase` by
-        /// click.
-        fn advance_demo(&mut self) {
+        /// click. `dt` drives the manual tile↔screen fade timers.
+        fn advance_demo(&mut self, dt: f32) {
             let clicked: Vec<Entity> = self
                 .ui_world
                 .world
@@ -785,32 +927,88 @@ mod inner {
                     }
                 }
 
-                // ── Tiles idle: click any tile to converge back into the button ─
+                // ── Tiles idle: click a tile to morph it into the video screen ──
                 DemoPhase::TilesIdle => {
-                    let any_tile_clicked = self.tiles.iter().any(|e| clicked.contains(e));
-                    if any_tile_clicked {
-                        DemoPhase::TilesToButton {
-                            request_inserted: false,
+                    if let Some(clicked_idx) = self.tiles.iter().position(|e| clicked.contains(e)) {
+                        self.start_tiles_to_screen(clicked_idx);
+                        // Playback starts the instant the tile is clicked, not
+                        // when the morph finishes — it plays underneath the
+                        // morph. JS polls `take_video_start_tile` once per
+                        // tick and, once the browser's <video> element has
+                        // loaded metadata, calls back into `start_video`.
+                        self.pending_video_start = Some(clicked_idx as u32);
+                        DemoPhase::TilesToScreen {
+                            clicked_idx,
+                            elapsed: 0.0,
                         }
                     } else {
                         DemoPhase::TilesIdle
                     }
                 }
 
-                // ── N→1 Slice: tiles converge back into the button ─────────────
-                DemoPhase::TilesToButton { request_inserted } => {
-                    if !request_inserted {
-                        self.start_tiles_to_button();
-                    }
-                    let lifecycle = self.ui_world.world.get::<Lifecycle>(self.button);
-                    let visibility = self.ui_world.world.get::<Visibility>(self.button);
+                // ── Clicked tile morphs into the screen; the other two fade out ─
+                // The morph itself is a plain `TransitionRequest` on
+                // `tiles[clicked_idx]`, ticked by the framework during
+                // `ui_world.update()`; only the label/other-tile fades are driven
+                // here, from the same elapsed clock so they stay in lockstep.
+                DemoPhase::TilesToScreen {
+                    clicked_idx,
+                    elapsed,
+                } => {
+                    let elapsed = elapsed + dt;
+                    self.advance_tiles_to_screen_fade(clicked_idx, elapsed);
+                    let morphing = self.tiles[clicked_idx];
+                    let lifecycle = self.ui_world.world.get::<Lifecycle>(morphing);
                     let done = matches!(lifecycle, Some(Lifecycle::Idle))
-                        && matches!(visibility, Some(v) if v.visible);
+                        && elapsed >= BUTTON_TILES_MORPH_DURATION;
                     if done {
-                        DemoPhase::ButtonIdle
+                        DemoPhase::ScreenIdle {
+                            screen_idx: clicked_idx,
+                        }
                     } else {
-                        DemoPhase::TilesToButton {
-                            request_inserted: true,
+                        DemoPhase::TilesToScreen {
+                            clicked_idx,
+                            elapsed,
+                        }
+                    }
+                }
+
+                // ── Screen idle: click it to morph back into its tile shape ────
+                DemoPhase::ScreenIdle { screen_idx } => {
+                    if clicked.contains(&self.tiles[screen_idx]) {
+                        self.stop_video();
+                        self.pending_video_stop = true;
+                        self.start_screen_to_tiles(screen_idx);
+                        DemoPhase::ScreenToTiles {
+                            screen_idx,
+                            elapsed: 0.0,
+                        }
+                    } else {
+                        DemoPhase::ScreenIdle { screen_idx }
+                    }
+                }
+
+                // ── Screen morphs back into its tile; the other two fade back in ─
+                DemoPhase::ScreenToTiles {
+                    screen_idx,
+                    elapsed,
+                } => {
+                    let elapsed = elapsed + dt;
+                    self.advance_screen_to_tiles_fade(screen_idx, elapsed);
+                    let morphing = self.tiles[screen_idx];
+                    let lifecycle = self.ui_world.world.get::<Lifecycle>(morphing);
+                    // The other two tiles' fade-in now runs after the morph
+                    // completes (delay = full morph duration), so the phase
+                    // isn't done until that fade has finished too.
+                    let fade_total =
+                        BUTTON_TILES_MORPH_DURATION + BUTTON_TILES_MORPH_DURATION * 0.5;
+                    let done = matches!(lifecycle, Some(Lifecycle::Idle)) && elapsed >= fade_total;
+                    if done {
+                        DemoPhase::TilesIdle
+                    } else {
+                        DemoPhase::ScreenToTiles {
+                            screen_idx,
+                            elapsed,
                         }
                     }
                 }
@@ -847,38 +1045,133 @@ mod inner {
                 });
         }
 
-        /// N→1 Slice: the three tiles converge back into the button — the same
-        /// morph, played in reverse. `NToOneRequest` is inserted on the
-        /// *destination* (button); it reads each tile's current `QuadState` from
-        /// the `GroupSource.state` snapshot taken here.
-        fn start_tiles_to_button(&mut self) {
-            let sources: Vec<GroupSource> = self
-                .tiles
-                .iter()
-                .enumerate()
-                .map(|(i, &tile)| GroupSource {
-                    entity: tile,
-                    state: self
-                        .ui_world
-                        .world
-                        .get::<QuadState>(tile)
-                        .cloned()
-                        .unwrap_or_else(|| tile_quad(i)),
-                })
-                .collect();
-
+        /// Direct 1→1 morph: `tiles[clicked_idx]` becomes the video screen. A
+        /// plain `TransitionRequest` on the tile itself — no group/slice
+        /// machinery, since only one entity is changing shape.
+        fn start_tiles_to_screen(&mut self, clicked_idx: usize) {
+            let canvas_width = self.surface_config.width as f32;
             self.ui_world
                 .world
-                .entity_mut(self.button)
-                .insert(NToOneRequest {
-                    sources,
-                    default_config: TransitionConfig {
+                .entity_mut(self.tiles[clicked_idx])
+                .insert(TransitionRequest {
+                    to: video_screen_quad(canvas_width),
+                    config: TransitionConfig {
                         duration: BUTTON_TILES_MORPH_DURATION,
                         delay: 0.0,
                         easing: ease_in_out_quad,
                     },
-                    child_behavior: None,
+                    from_state: None,
                 });
+        }
+
+        /// Stops whatever video is currently playing: removes `VideoPlayer`
+        /// from its tile and releases the video texture's GPU memory.
+        /// Rust-side cleanup only — `take_video_stop` separately tells JS to
+        /// pause the actual `<video>` element. A no-op if nothing is playing.
+        fn stop_video(&mut self) {
+            let Some(playing) = self.playing_video.take() else {
+                return;
+            };
+            self.ui_world
+                .world
+                .entity_mut(self.tiles[playing.tile_idx])
+                .remove::<VideoPlayer>();
+            self.ui_world
+                .world
+                .resource_mut::<QuadPipeline>()
+                .suspend_video(&self.device, playing.texture_id);
+        }
+
+        /// Direct 1→1 morph, reversed: `tiles[screen_idx]` returns to its own
+        /// `tile_quad` shape.
+        fn start_screen_to_tiles(&mut self, screen_idx: usize) {
+            self.ui_world
+                .world
+                .entity_mut(self.tiles[screen_idx])
+                .insert(TransitionRequest {
+                    to: tile_quad(screen_idx),
+                    config: TransitionConfig {
+                        duration: BUTTON_TILES_MORPH_DURATION,
+                        delay: 0.0,
+                        easing: ease_in_out_quad,
+                    },
+                    from_state: None,
+                });
+        }
+
+        /// Drives the manual fades that accompany `start_tiles_to_screen`'s
+        /// `TransitionRequest` (which only lerps `QuadState` — position, size,
+        /// fill color, corner radius — and leaves `Border`/`Text`/`Glow` alone):
+        /// the morphing tile's label fades out over the full morph duration, and
+        /// the other two tiles fade out completely (fill, border, label, glow)
+        /// over half the duration.
+        fn advance_tiles_to_screen_fade(&mut self, clicked_idx: usize, elapsed: f32) {
+            let label_t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
+            let label_alpha = 1.0 - ease_out_quad(label_t);
+            if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.tiles[clicked_idx]) {
+                text.color.w = label_alpha;
+            }
+            if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(self.tiles[clicked_idx]) {
+                glow.radius = 0.0;
+            }
+
+            let fade_duration = BUTTON_TILES_MORPH_DURATION * 0.5;
+            let fade_t = (elapsed / fade_duration).clamp(0.0, 1.0);
+            let fade_alpha = 1.0 - ease_out_quad(fade_t);
+            for (i, &tile) in self.tiles.iter().enumerate() {
+                if i == clicked_idx {
+                    continue;
+                }
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(tile) {
+                    qs.color.w = fade_alpha;
+                }
+                if let Some(mut border) = self.ui_world.world.get_mut::<Border>(tile) {
+                    border.color.w = fade_alpha;
+                }
+                if let Some(mut text) = self.ui_world.world.get_mut::<Text>(tile) {
+                    text.color.w = fade_alpha;
+                }
+                if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(tile) {
+                    glow.radius = 0.0;
+                    glow.color.w = fade_alpha;
+                }
+            }
+        }
+
+        /// Mirror image of `advance_tiles_to_screen_fade` for the reverse morph:
+        /// the returning tile's label fades back in over the full duration, and
+        /// the other two tiles fade back in over the first half.
+        fn advance_screen_to_tiles_fade(&mut self, screen_idx: usize, elapsed: f32) {
+            let label_t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
+            let label_alpha = ease_out_quad(label_t);
+            if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.tiles[screen_idx]) {
+                text.color.w = label_alpha;
+            }
+
+            // The other two tiles wait out a delay matching the full morph
+            // duration (staying invisible until the morphing tile has fully
+            // settled back into shape) before fading in over half that duration.
+            let fade_delay = BUTTON_TILES_MORPH_DURATION;
+            let fade_duration = BUTTON_TILES_MORPH_DURATION * 0.5;
+            let fade_t = ((elapsed - fade_delay) / fade_duration).clamp(0.0, 1.0);
+            let fade_alpha = ease_out_quad(fade_t);
+            for (i, &tile) in self.tiles.iter().enumerate() {
+                if i == screen_idx {
+                    continue;
+                }
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(tile) {
+                    qs.color.w = fade_alpha;
+                }
+                if let Some(mut border) = self.ui_world.world.get_mut::<Border>(tile) {
+                    border.color.w = fade_alpha;
+                }
+                if let Some(mut text) = self.ui_world.world.get_mut::<Text>(tile) {
+                    text.color.w = fade_alpha;
+                }
+                if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(tile) {
+                    glow.color.w = fade_alpha;
+                }
+            }
         }
     }
 } // mod inner

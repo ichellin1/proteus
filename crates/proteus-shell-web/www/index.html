@@ -29,8 +29,8 @@
 
     canvas {
       display: block;
-      width: 800px;
-      height: 600px;
+      width: 1000px;
+      height: 700px;
       /* Crisp pixels — no browser smoothing */
       image-rendering: pixelated;
     }
@@ -51,7 +51,7 @@
     The CSS width/height only controls display size (pixel density handled by devicePixelRatio).
     For simplicity this demo uses 1:1 logical pixels.
   -->
-  <canvas id="proteus-canvas" width="800" height="600"></canvas>
+  <canvas id="proteus-canvas" width="1000" height="700"></canvas>
   <p id="status">Loading…</p>
 
   <script type="module">
@@ -88,12 +88,85 @@
         canvas.addEventListener('mousedown',  e => { if (e.button === 0) app.on_mouse_down(); });
         canvas.addEventListener('mouseup',    e => { if (e.button === 0) app.on_mouse_up(); });
 
+        // ── MP4 playback (M9.5) ────────────────────────────────────────────
+        //
+        // No decode thread here — the browser's own <video> element is the
+        // decoder. Rust owns hit-testing (there's no per-tile DOM element to
+        // attach a click listener to), so it signals *when* to start/stop via
+        // take_video_start_tile()/take_video_stop(), polled once per tick();
+        // this side just drives a hidden <video>, extracts decoded frames
+        // onto an offscreen canvas, and pushes the pixels back into wasm.
+        const TILE_VIDEO_SRCS = [
+          'videos/big_buck_bunny.mp4',
+          'videos/sintel.mp4',
+          'videos/jellyfish.mp4',
+        ];
+
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'auto';
+        video.style.display = 'none';
+        document.body.appendChild(video);
+
+        const frameCanvas = document.createElement('canvas');
+        const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
+
+        // Bumped on every start/stop so a stray callback from a video that's
+        // no longer current (e.g. the user clicked another tile, or clicked
+        // the screen to stop, right as a callback was in flight) is dropped
+        // instead of pushing frames into whatever's playing now.
+        let playbackGeneration = 0;
+
+        function pushCurrentFrame() {
+          frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
+          const { data } = frameCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
+          app.push_video_frame(data);
+        }
+
+        function frameLoop(generation) {
+          if (generation !== playbackGeneration || video.paused || video.ended) return;
+          pushCurrentFrame();
+          if ('requestVideoFrameCallback' in video) {
+            video.requestVideoFrameCallback(() => frameLoop(generation));
+          } else {
+            // Fallback for browsers without requestVideoFrameCallback
+            // (e.g. older Firefox): just keep pace with rAF instead.
+            requestAnimationFrame(() => frameLoop(generation));
+          }
+        }
+
+        function startVideo(tileIdx) {
+          playbackGeneration++;
+          const generation = playbackGeneration;
+          video.src = TILE_VIDEO_SRCS[tileIdx];
+          video.addEventListener('loadedmetadata', () => {
+            if (generation !== playbackGeneration) return; // superseded before it loaded
+            frameCanvas.width = video.videoWidth;
+            frameCanvas.height = video.videoHeight;
+            app.start_video(tileIdx, video.videoWidth, video.videoHeight);
+            video.play().then(() => frameLoop(generation)).catch(err => {
+              console.error('video.play() failed:', err);
+            });
+          }, { once: true });
+        }
+
+        function stopVideo() {
+          playbackGeneration++; // invalidates any in-flight frameLoop callback
+          video.pause();
+        }
+
         // Drive the render loop via requestAnimationFrame.
         let lastTs = null;
         function frame(ts) {
           const dt = lastTs !== null ? ts - lastTs : 0;
           lastTs = ts;
           app.tick(dt);          // dt in milliseconds
+
+          const startTile = app.take_video_start_tile();
+          if (startTile !== undefined) startVideo(startTile);
+          if (app.take_video_stop()) stopVideo();
+
           requestAnimationFrame(frame);
         }
         requestAnimationFrame(frame);
