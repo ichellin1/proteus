@@ -1935,34 +1935,6 @@ Planned future work, not part of the V1 scope:
 
 The fun part.
 
----
-
-## Phase F — Patent (Parallel Track)
-
-**Status: Not Started**
-
-*Can begin after Phase B (Architecture) is complete. Does not block the build.*
-
-Proteus represents a novel UX paradigm and technical system that may be patentable. This is a parallel track — it runs alongside the build rather than before it.
-
-### Context
-
-- An original POC was built ~11 years ago in JavaScript and WebGL at a prior employer. The concept was never patented and was not developed further.
-- Proteus as designed goes significantly beyond that original work: the formal transition topology model (1→1, 1→N, N→1), composable transitions as first-class objects, the agentic API design, and the portable GPU-native architecture are all novel over the POC.
-- The strategy is to establish novelty *over* the original POC rather than derive from it.
-- **Legal consultation required before filing.** Key questions for an attorney: employment agreement IP clauses from the time of the POC, prior art implications of the original work, and provisional vs. full application strategy.
-
-### To Do
-
-- [ ] Consult a patent attorney — establish IP ownership position relative to the original POC, confirm patentability, and decide on provisional vs. full application
-- [ ] Document what the original POC demonstrated and what Proteus adds that is novel over it
-- [ ] Draft patent claims once architecture is settled — utility patent covering the metamorphic component system, transition topology model, and composable transition primitives
-- [ ] Draft design patent claims for the visual/ornamental aspects of the transition paradigm
-- [ ] Identify figures needed — the patent will require precise diagrams of the transition topologies and system architecture
-- [ ] Attorney review and filing
-
----
-
 ## Open Questions
 
 Questions that have surfaced but don't yet have answers. Pull them into the relevant phase above as they get resolved.
