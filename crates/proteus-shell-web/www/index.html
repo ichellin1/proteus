@@ -88,6 +88,29 @@
         canvas.addEventListener('mousedown',  e => { if (e.button === 0) app.on_mouse_down(); });
         canvas.addEventListener('mouseup',    e => { if (e.button === 0) app.on_mouse_up(); });
 
+        // ── Box-cover images (M9.7) ────────────────────────────────────────
+        //
+        // No fetch on the Rust side — bytes are pulled over HTTP here and
+        // handed to wasm via set_tile_image(); bake_pending_images() (run
+        // every tick()) decodes and uploads them to main_atlas from there.
+        // Fire-and-forget: a failed fetch just leaves that tile on its
+        // placeholder TILE_COLORS fill (set_tile_image is simply never
+        // called for it).
+        const TILE_IMAGE_SRCS = [
+          'images/Big_buck_bunny.jpg',
+          'images/sintel.jpg',
+          'images/jellyfish.jpg',
+        ];
+        TILE_IMAGE_SRCS.forEach((src, tileIdx) => {
+          fetch(src)
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => app.set_tile_image(tileIdx, new Uint8Array(buf)))
+            .catch(err => console.warn(`tile ${tileIdx}: could not load ${src}:`, err));
+        });
+
         // ── MP4 playback (M9.5) ────────────────────────────────────────────
         //
         // No decode thread here — the browser's own <video> element is the
@@ -106,6 +129,7 @@
         video.muted = true;
         video.playsInline = true;
         video.preload = 'auto';
+        video.loop = true; // demo playback loops rather than stopping at EOF
         video.style.display = 'none';
         document.body.appendChild(video);
 
