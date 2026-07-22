@@ -15,15 +15,57 @@ Proteus is a cross-platform UI framework written in Rust. Its defining idea: **U
 ```
 crates/
   proteus-gpu/          # Layer 0: wgpu device abstraction
-  proteus-render/       # Layer 1: scene graph, materials, transition pipeline
+  proteus-render/       # Layer 1: scene graph, instanced render pipeline, transition pipeline
   proteus-ui/           # Layer 2: metamorphic component model, transition topologies
   proteus-shell-web/    # Layer 3: WebGL2/WebGPU WASM shell, TypeScript bridge
   proteus-shell-native/ # Layer 3: native windowing shell (winit)
 ```
 
-## Status
+## Build & Run
 
-🚧 **M0 — Foundation** — Phases A–D complete (vision, architecture, dependencies & tooling, project plan). CI setup is the remaining M0 exit criterion. M1 (First Pixel) is next. See [ROADMAP.md](./ROADMAP.md).
+The reference demo (a "START" button that morphs into three video tiles, each of which morphs
+into a full playback screen) runs on both shells from the same `proteus-ui`/`proteus-render` core.
+
+### Native
+
+```
+cargo run -p proteus-shell-native
+```
+
+Requires `ffmpeg`/`ffprobe` on `PATH` for MP4 playback (native decodes video by shelling out to
+`ffmpeg`; see `crates/proteus-shell-native/src/mp4_player.rs`). Without it, playback just logs a
+warning and the tile↔screen morph still runs.
+
+Box-cover art and video clips are read from disk and are not committed to the repo — place your
+own at `crates/proteus-shell-native/images/` and `crates/proteus-shell-native/assets/videos/`
+(see the comments above `TILE_IMAGE_PATHS`/`TILE_VIDEO_PATHS` in `main.rs` for exact filenames).
+Missing files degrade gracefully to placeholder colors/no video, they don't crash the app.
+
+### Web
+
+```
+wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
+```
+
+Then serve `crates/proteus-shell-web/www/` over HTTP (not `file://` — the page fetches its wasm,
+video, and image assets) and open it in a browser, e.g.:
+
+```
+python3 -m http.server 8000 --directory crates/proteus-shell-web/www
+```
+
+Same asset requirement as native — place box-cover images and video clips at
+`crates/proteus-shell-web/www/images/` and `crates/proteus-shell-web/www/videos/` (see
+`TILE_IMAGE_SRCS`/`TILE_VIDEO_SRCS` in `www/index.html`). The web shell decodes video via the
+browser's own `<video>` element, so there's no `ffmpeg` dependency on this target.
+
+### Tests
+
+```
+cargo test --workspace
+cargo clippy --workspace --all-targets
+cargo fmt --check
+```
 
 ## License
 
