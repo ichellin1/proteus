@@ -1247,6 +1247,9 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 - [x] **Off-critical-path milestones (can run in parallel once their prerequisites are met):**
   - M8 (Shader Effects) — can begin after M2 (rendering pipeline stable). Does not block M13.
   - M9 (Video) — can begin after M7 (interactivity needed for meaningful video UX). Does not block M13.
+  - M10.5 (Static Component Baking) — can begin after M10 (needs its children-walk machinery).
+    Does not block M13.
+  - M10.6 (Oriented Hit-Test Boxes) — can begin after M10. Does not block M13.
 
 - [x] **M6 before M7:** visual regression testing is locked in before interactivity is introduced.
   This ensures any rendering regressions introduced during M7 work are caught immediately.
@@ -1413,16 +1416,26 @@ empty function bodies, present only to hold their slot in the schedule (`Proteus
 `Text` component simultaneously (the M5 shortcut) rather than a `Quad` entity with a `Text` child
 — composition doesn't exist to build it the intended way even if a developer wanted to.
 
-**Approach:** introduce a real parent/child relationship (`bevy_ecs` has first-class support for
-this — `ChildOf`/hierarchy relations — evaluate using it directly rather than hand-rolling one).
-Children declare position relative to the parent's origin; a system computes world-space
-`QuadState` from the local declared state plus the parent chain. Visibility and opacity cascade
-down the tree. Parent transitions carry children by default (`childBehavior: 'bake'`, already
-speced in Phase B); children can also transition independently.
+**Approach:** adopt `bevy_ecs::hierarchy::{ChildOf, Children}` directly (bevy_ecs 0.18.1, already
+our pinned version, ships these as first-class relationship components with automatic cascading
+despawn) rather than hand-rolling a `Hierarchy` component. A child's `QuadState` fields are
+declared in its parent's local frame; world-space resolution composes **position, rotation, and
+scale** — not position alone. Rotations add, scales multiply, and a child's local position offset
+is scaled and rotated by the parent's world transform before being translated by the parent's
+world position (standard scene-graph composition — a rotated or scaled parent correctly
+rotates/scales its children, not just moves them). `size`/`anchor`/`color`/`corner_radius` stay
+the child's own values. Resolution is an on-demand pure function computed fresh every frame from
+current parent+child state (not a cached/persisted component), which is also what lets a future
+declarative/percentage-relative positioning system (see Post-V1's "ECS layout system") slot in
+later without changing this milestone's resolution/render/bake pipeline. Visibility and opacity
+cascade down the tree via real systems in the existing `ProteusSet::Visibility`/`Opacity` slots.
+Parent transitions carry children by default as a natural consequence of relative coordinates (no
+special-casing needed); children can also transition independently.
 
 **Definition of done:**
-- [ ] A real parent/child entity relationship exists in `proteus-ui` — a component can declare
-  children, and a child's transform is relative to its parent's, not screen coordinates
+- [ ] A real parent/child entity relationship exists in `proteus-ui` (via `bevy_ecs`'s `ChildOf`/
+  `Children`) — a component can declare children, and a child's transform is relative to its
+  parent's, not screen coordinates
 - [ ] `stub_visibility_system`/`stub_opacity_system` replaced with real cascade implementations —
   parent `Visibility::HIDDEN` makes the whole subtree inert; parent `opacity` multiplies down
 - [ ] `Text` becomes a true leaf entity with its own identity and `QuadState`, rather than a
@@ -1433,8 +1446,55 @@ speced in Phase B); children can also transition independently.
 - [ ] Parent transitions carry children by default; a child can also transition independently of
   its parent (e.g. cross-fade a label while its container morphs) — both demonstrated with tests
 - [ ] Regression tests: hierarchy construction/teardown, coordinate-space resolution (child world
-  position given parent position + relative offset), visibility/opacity cascade, no entity leaks
-  on parent destroy
+  position/rotation/scale given the parent's current position/rotation/scale + the child's
+  relative offset — including a rotated-parent case, not position composition alone),
+  visibility/opacity cascade, no entity leaks on parent destroy
+- [ ] `Interactable` children hit-test against their resolved world position, not raw local
+  coordinates (a correctness fix, not new scope — previously every entity was flat so this never
+  came up; event bubbling and oriented/rotated hit-test boxes are explicitly out of scope, see
+  M10.6)
+
+---
+
+### M10.5 — Static Component Baking *(off critical path — not started)*
+
+`bake: true` collapses a composite (parent + children) into a single permanent textured quad at
+spawn or on-demand, destroying the child entities and freeing the ECS/render cost of the subtree.
+Identified during M10 planning as the same kind of gap M11 turned out to be: Phase A fully
+resolved this design ("Static baking — resolved," above) but it was never attached to any
+milestone in this document or `ROADMAP.md`. Scheduled right after M10 because it builds directly
+on M10's hierarchy work — baking a subtree needs the same children-walk M10 introduces for the
+transition-bake crossfade (`gather_bake_instances`) — and because the underlying primitive,
+`QuadPipeline::bake_instances_to_main_atlas` (`proteus-render`), already exists and is unused,
+unlike M11 which had nothing built yet when it was caught.
+
+**Definition of done:**
+- [ ] `Baked` marker component; `bake_system` (currently `stub_bake_system` in `schedule.rs`)
+  detects `Added<Baked>`, renders the subtree via `QuadPipeline::bake_instances_to_main_atlas`,
+  despawns the child entities, and replaces the parent's texture reference
+- [ ] Works for a composite created at startup and one created dynamically at runtime
+- [ ] Baked texture is freed on `component.destroy()`
+- [ ] Regression test: bake a `Quad` + `Text` composite, assert the child entities are gone and
+  the parent renders identically to before baking
+
+---
+
+### M10.6 — Oriented Hit-Test Boxes *(off critical path — not started)*
+
+`quad_contains`'s hit-test box is axis-aligned and ignores `QuadState::rotation` for every entity
+today, root or child (`input.rs:27-29`: "good enough for M7; full convex-hull testing can land
+with M5.5 hierarchy" — M5.5 being this milestone's old number, before the M10/M10.5 split).
+Identified during M10 planning: small, pre-existing, and easy to lose track of once the hierarchy
+work lands, so it gets its own explicit slot rather than staying a dangling code comment.
+
+**Definition of done:**
+- [ ] `quad_contains` (or a new oriented variant used by `hit_test_system`) accounts for
+  `QuadState::rotation` — a point-in-rotated-rectangle test (inverse-rotate the point into the
+  quad's local frame around its anchor, then test axis-aligned bounds), not just the current
+  axis-aligned box
+- [ ] Applies uniformly to root and child entities
+- [ ] Regression test: a button rotated 45° is hit only within its true rotated footprint, not the
+  larger axis-aligned bounding box of the unrotated shape
 
 ---
 

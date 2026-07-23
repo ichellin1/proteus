@@ -36,6 +36,8 @@ M13 Developer Release
 
 - **M8 — Shader Effects** — can begin after M2
 - **M9 — Video** (and its sub-milestones M9.5–M9.8) — can begin after M7
+- **M10.5 — Static Component Baking** — can begin after M10
+- **M10.6 — Oriented Hit-Test Boxes** — can begin after M10
 
 **Cross-shell parity is a standing requirement, not a milestone.** Every milestone's definition of
 done is implicitly "works identically on the native and web shells" unless stated otherwise —
@@ -157,20 +159,44 @@ which is what the demo actually needed; the harder group-transition case remains
 
 ## M10 — Component Composition & Hierarchy *(not started)*
 
-Parent/child entity relationships, relative-coordinate `QuadState`, and cascading
-visibility/opacity. This is the milestone where:
+Parent/child entity relationships, relative-coordinate `QuadState` (position, rotation, *and*
+scale all compose down the parent chain — not position alone), and cascading visibility/opacity.
+This is the milestone where:
 
 - `Text` becomes a true leaf entity with its own identity and `QuadState`
 - A labeled button is composed as a `Quad` parent containing a `Text` child
-- The child's position is declared relative to the parent, not in screen coordinates
+- The child's position, rotation, and scale are declared relative to the parent, not in screen
+  coordinates — a rotated or scaled parent correctly rotates/scales its children too
 - Parent transitions carry children with them by default; children can also transition
   independently (e.g., cross-fade the label while the container morphs)
 - `stub_visibility_system` and `stub_opacity_system` in `schedule.rs` are replaced with real
   cascade implementations
 - The M5 `Text`-on-entity shortcut is removed
+- `Interactable` children hit-test correctly against their resolved world position (previously
+  every entity was flat, so this never came up)
 
 (Previously numbered M5.5 and scoped as a prerequisite for M7; M7 shipped without it, so it's
 rescheduled here, immediately before the SDK, where it becomes a real blocker.)
+
+## M10.5 — Static Component Baking *(off critical path — not started)*
+
+`bake: true` collapses a composite (parent + children) into a single permanent textured quad at
+spawn or on-demand, destroying the child entities and freeing the ECS/render cost of the subtree.
+Fully designed during Phase A of `PLANNING.md` ("Static baking — resolved") but never attached to
+a milestone anywhere — the same kind of gap M11 turned out to be, caught during M10 planning.
+Builds directly on M10's hierarchy work (baking a subtree needs the same children-walk M10
+introduces for the transition-bake crossfade), and `QuadPipeline::bake_instances_to_main_atlas`
+already exists in `proteus-render`, unused — the primitive is there, just never wired to an ECS
+component/system.
+
+## M10.6 — Oriented Hit-Test Boxes *(off critical path — not started)*
+
+`quad_contains`'s hit-test box is axis-aligned and ignores `QuadState::rotation` for every entity,
+root or child — a pre-existing gap (`input.rs` has flagged it since M7: "good enough for M7; full
+convex-hull testing can land with M5.5 hierarchy" — M5.5 being this milestone's old number). Small,
+but easy to lose track of once the hierarchy work lands, so it gets its own explicit slot: a
+rotated button or a rotated child should be hit-testable within its true rotated footprint, not the
+larger axis-aligned box of its unrotated shape.
 
 ## M11 — Resource Management *(not started)*
 
@@ -227,7 +253,12 @@ Planned future work, not part of the V1 scope:
   proves insufficient
 - **Live video crossfade during group transitions (M9.6)** — if not completed as part of V1
 - **ECS layout system** — `VStack`, `HStack`, `Grid` with automatic transition of position
-  changes (items glide when the list grows or shrinks — no manual transition calls)
+  changes (items glide when the list grows or shrinks — no manual transition calls). Also where
+  declarative/relative child positioning belongs — e.g. a child declaring its position as "center"
+  or as a percentage of its parent's current geometry — and the responsive re-layout that implies
+  when a parent's geometry changes, including mid-transition. M10's world-position resolution is
+  recomputed fresh from current parent+child state every frame specifically so this can slot in
+  later without changing the resolution/render/bake pipeline it establishes.
 - **Advanced transition effects** — non-linear easing library, particle dissolution,
   fluid deformation
 - **Custom shader authoring** — formal support for developer-written WGSL effects

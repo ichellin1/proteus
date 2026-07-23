@@ -10,8 +10,9 @@
 //! transition_setup     TransitionRequest → ActiveTransition
 //! transition_tick      advance t, lerp QuadState
 //! transition_complete  t=1.0 → fire event, restore Idle
-//! visibility           cascade Visibility changes         [stub M2]
-//! opacity              cascade effective opacity          [stub M2]
+//! visibility           cascade Visibility → EffectiveVisibility  [real since M10]
+//! opacity              cascade Opacity → EffectiveOpacity        [real since M10]
+//! cascade_flush        ApplyDeferred so Bake/Render see this frame's cascades [M10]
 //! bake                 offscreen texture composites       [stub M2]
 //! render               build instance buffer, draw        [stub M2]
 //! ```
@@ -22,6 +23,7 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ApplyDeferred;
 
+use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{hit_test_system, HoveredEntity, InteractionEvents, PointerInput};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
@@ -59,6 +61,10 @@ pub enum ProteusSet {
     Visibility,
     /// Compute effective opacity down the hierarchy.
     Opacity,
+    /// Apply the deferred `Commands` `Visibility`/`Opacity` cascades queued
+    /// this frame, so `Bake`/`Render` read fresh (not last-frame-stale)
+    /// `EffectiveVisibility`/`EffectiveOpacity`.
+    CascadeFlush,
     /// Offscreen texture bake composites.
     Bake,
     /// Build the GPU instance buffer and submit the draw call.
@@ -72,8 +78,6 @@ pub enum ProteusSet {
 // in place before the real implementations land in later milestones.
 
 fn stub_navigation_system() {}
-fn stub_visibility_system() {}
-fn stub_opacity_system() {}
 fn stub_bake_system() {}
 fn stub_render_system() {}
 
@@ -149,6 +153,7 @@ pub fn build_schedule() -> Schedule {
             ProteusSet::GroupTransitionComplete,
             ProteusSet::Visibility,
             ProteusSet::Opacity,
+            ProteusSet::CascadeFlush,
             ProteusSet::Bake,
             ProteusSet::Render,
         )
@@ -162,10 +167,16 @@ pub fn build_schedule() -> Schedule {
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     // Stub systems — hold their slot until real implementations land.
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
-    schedule.add_systems(stub_visibility_system.in_set(ProteusSet::Visibility));
-    schedule.add_systems(stub_opacity_system.in_set(ProteusSet::Opacity));
     schedule.add_systems(stub_bake_system.in_set(ProteusSet::Bake));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
+
+    // M10: real cascade systems replace the visibility/opacity stubs. Both
+    // write via `Commands` (deferred), so `CascadeFlush`'s `ApplyDeferred`
+    // must run before `Bake`/`Render` read the result — otherwise they'd see
+    // last frame's stale `EffectiveVisibility`/`EffectiveOpacity`.
+    schedule.add_systems(visibility_system.in_set(ProteusSet::Visibility));
+    schedule.add_systems(opacity_system.in_set(ProteusSet::Opacity));
+    schedule.add_systems(ApplyDeferred.in_set(ProteusSet::CascadeFlush));
 
     // Real transition systems — the heart of M2.
     schedule.add_systems(transition_setup_system.in_set(ProteusSet::TransitionSetup));

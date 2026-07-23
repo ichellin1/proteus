@@ -24,9 +24,12 @@
 //!
 //! ## Hit testing
 //!
-//! The hit test uses axis-aligned bounding boxes derived from `QuadState`.
-//! Rotation and non-uniform scale are not yet accounted for (good enough for
-//! M7; full convex-hull testing can land with M5.5 hierarchy).
+//! The hit test uses axis-aligned bounding boxes derived from `QuadState`,
+//! resolved to world space (M10 — see `hierarchy::resolve_world_position_query`)
+//! so an `Interactable` child hit-tests against where it's actually drawn, not
+//! its raw parent-relative coordinates. Rotation and non-uniform scale are
+//! still not accounted for — a pre-existing gap affecting root and child
+//! entities alike, tracked as its own milestone (M10.6), not fixed here.
 //!
 //! Entities are tested in world insertion order; the **last** entity whose
 //! bounds contain the pointer wins (matches GPU draw order — last drawn =
@@ -34,10 +37,12 @@
 //!
 //! Virtual entities and hidden entities are never hit-testable.
 
+use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 
 use crate::component::Virtual;
+use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
 use crate::{QuadState, Visibility};
 
 // ---------------------------------------------------------------------------
@@ -144,7 +149,12 @@ pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
 type HitTestQuery<'w, 's> = Query<
     'w,
     's,
-    (Entity, &'static QuadState, Option<&'static Visibility>),
+    (
+        Entity,
+        &'static QuadState,
+        Option<&'static Visibility>,
+        Option<&'static EffectiveVisibility>,
+    ),
     (With<Interactable>, Without<Virtual>),
 >;
 
@@ -152,11 +162,19 @@ type HitTestQuery<'w, 's> = Query<
 ///
 /// Reads [`PointerInput`], finds the topmost interactable entity under the
 /// pointer, and writes [`InteractionEvents`].
+///
+/// M10: an `Interactable` child's *local* `QuadState` is relative to its
+/// parent, so it's resolved to world space (via [`resolve_world_position_query`])
+/// before hit-testing — otherwise a child's hit region would silently test the
+/// wrong screen location. Root entities are unaffected (resolution is a no-op
+/// when there's no `ChildOf` ancestor).
 pub fn hit_test_system(
     pointer: Res<PointerInput>,
     mut events: ResMut<InteractionEvents>,
     mut hovered: ResMut<HoveredEntity>,
     query: HitTestQuery,
+    quad_states: Query<&QuadState>,
+    parents: Query<&ChildOf>,
 ) {
     // Clear last frame's events.
     events.clicked.clear();
@@ -174,12 +192,18 @@ pub fn hit_test_system(
     // Find the topmost entity whose bounds contain the pointer.
     // Entities are tested in world order; last hit wins (matches draw order).
     let mut hit: Option<Entity> = None;
-    for (e, qs, vis) in query.iter() {
-        // Skip hidden entities — they are invisible and not interactive.
-        if vis.is_some_and(|v| !v.visible) {
+    for (e, qs, vis, eff_vis) in query.iter() {
+        // Prefer the cascaded EffectiveVisibility; fall back to the entity's
+        // own raw Visibility for callers that run hit_test_system without the
+        // full schedule (existing test convention in this crate).
+        let visible = eff_vis
+            .map(|v| v.0)
+            .unwrap_or_else(|| vis.is_none_or(|v| v.visible));
+        if !visible {
             continue;
         }
-        if quad_contains(qs, pos) {
+        let world_qs = resolve_world_position_query(e, qs, &quad_states, &parents);
+        if quad_contains(&world_qs, pos) {
             hit = Some(e);
         }
     }

@@ -30,6 +30,18 @@
 //! transition system lerps `QuadState` (position, size, color, corner_radius)
 //! while the baked text texture stays in the atlas. This means text can shrink,
 //! grow, move, and fade exactly like any other component — no special-casing.
+//!
+//! ## Composition (M10)
+//!
+//! `Text` is a standalone leaf entity with its own identity and `QuadState` —
+//! it does not need to live on the same entity as the container it labels.
+//! The M5 shortcut (a single entity carrying both a container `QuadState` and
+//! a `Text`/label) is gone: a labeled button is now a `Quad` parent entity
+//! with a `Text` child (`ChildOf`), the child's `QuadState` declared relative
+//! to the parent. Nothing here changed structurally to make that possible —
+//! `Text`/`BakedText` only ever needed `content`/`size_px`/`color` and a
+//! `QuadState` on the *same* entity as themselves, which is exactly as true
+//! for a child entity as it was for the old single-entity shortcut.
 
 use bevy_ecs::prelude::*;
 use glam::Vec4;

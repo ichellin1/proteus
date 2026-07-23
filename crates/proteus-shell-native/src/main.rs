@@ -38,7 +38,7 @@ use winit::{
 use proteus_render::{FontAtlas, GpuContext, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
 use proteus_ui::{
     collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig, BakedImage,
-    BakedText, Border, Entity, Glow, GroupTarget, Image, Interactable, InteractionEvents,
+    BakedText, Border, ChildOf, Entity, Glow, GroupTarget, Image, Interactable, InteractionEvents,
     Lifecycle, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
     TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
@@ -132,6 +132,30 @@ const TILE_IMAGE_PATHS: [&str; 3] = [
     concat!(env!("CARGO_MANIFEST_DIR"), "/images/jellyfish.jpg"),
 ];
 
+/// Title shown in the hover overlay (M10) — each tile's `tile_labels[idx]`
+/// `Text` child.
+const TILE_TITLES: [&str; 3] = ["Big Buck Bunny", "Sintel", "Jellyfish"];
+
+/// Hover-overlay label size.
+const TILE_LABEL_SIZE_PX: f32 = 20.0;
+
+/// Extra multiplier applied to the title label's `QuadState::scale` (M10)
+/// while its tile is showing as the video screen rather than a grid tile —
+/// the baked glyph run itself stays the same size (re-baking text at a
+/// different size isn't something the render path does per-frame), but
+/// `scale` composes multiplicatively down the hierarchy same as position/
+/// rotation (see `hierarchy::compose_with_parent`), so bumping the label
+/// child's own local `scale` is enough to render it visibly larger against
+/// the much bigger screen without touching the baked texture at all.
+const TILE_LABEL_SCREEN_SCALE: f32 = 1.8;
+
+/// Fully-faded-in opacity of the black hover overlay (M10). The overlay's own
+/// alpha animates `0.0 → TILE_OVERLAY_MAX_ALPHA` on hover-enter and back on
+/// hover-exit, driven by the same `tile_hover_progress` sweep that already
+/// drives the hover glow — same duration, same easing (linear step), just a
+/// different destination component.
+const TILE_OVERLAY_MAX_ALPHA: f32 = 0.55;
+
 /// Real box-cover photos are routinely far larger than the tiles' on-screen
 /// footprint (200×300) — cap decoded images to this before packing them into
 /// `main_atlas` (2048×2048, shared with baked text), which they'd otherwise
@@ -200,6 +224,43 @@ fn tile_border() -> Border {
         width: BORDER_WIDTH,
         color: white(),
         offset: -1.0,
+    }
+}
+
+/// Hover-overlay `Text` + black-tint children (M10) — a `Quad` (tile) parent
+/// with two `Text`/plain-`Quad` children, composed via `ChildOf` rather than
+/// the M5 single-entity shortcut. Both children declare a zero relative
+/// offset (centered on the tile, same coordinate space the tile itself is
+/// declared in) and start fully transparent; `advance_tile_hover` animates
+/// their alpha in lockstep with the existing hover glow sweep. Cascading
+/// visibility (M10) means neither child needs its own hide/reveal logic when
+/// the button↔tiles morph hides or reveals the parent tile — that falls out
+/// of `EffectiveVisibility` automatically.
+///
+/// Inset from the tile's own border by `BORDER_WIDTH` on every side so the
+/// overlay sits inside the border ring rather than covering it.
+///
+/// This is only the *starting* size/`corner_radius` — `tiles[i]` is the same
+/// entity throughout the tile↔screen morph, so its geometry keeps changing
+/// (tile-sized in grid view, the video screen's very different proportions
+/// once settled, anything in between mid-morph). Since a child's size/
+/// `corner_radius` are its own local values, not composed from the parent
+/// (see `hierarchy::compose_with_parent`), `advance_tile_hover` recomputes
+/// both every frame from the parent's *current* geometry so the overlay
+/// keeps matching it continuously rather than staying stuck at its tile-sized
+/// footprint once the tile becomes the video screen.
+fn tile_overlay_quad() -> QuadState {
+    QuadState {
+        position: Vec3::ZERO,
+        size: Vec2::new(
+            TILE_WIDTH - 2.0 * BORDER_WIDTH,
+            TILE_HEIGHT - 2.0 * BORDER_WIDTH,
+        ),
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: Vec2::new(0.5, 0.5),
+        color: Vec4::new(0.0, 0.0, 0.0, 0.0), // alpha animated by advance_tile_hover
+        corner_radius: (TILE_CORNER_RADIUS - BORDER_WIDTH).max(0.0),
     }
 }
 
@@ -354,10 +415,16 @@ impl ApplicationHandler for ProteusApp {
                 state.resize(size);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let w = state.surface_config.width as f32;
-                let h = state.surface_config.height as f32;
-                let wx = position.x as f32 - w / 2.0;
-                let wy = h / 2.0 - position.y as f32;
+                // `position` (like `surface_config.width`/`height`) is in
+                // physical pixels; the world-space coordinate system is
+                // logical pixels (see the comment in `RenderState::new`), so
+                // both need the same scale_factor division to land in the
+                // same space the render projection uses.
+                let scale_factor = state.window.scale_factor() as f32;
+                let w = state.surface_config.width as f32 / scale_factor;
+                let h = state.surface_config.height as f32 / scale_factor;
+                let wx = (position.x as f32 / scale_factor) - w / 2.0;
+                let wy = h / 2.0 - (position.y as f32 / scale_factor);
                 state.staged_pointer.position = Some(Vec2::new(wx, wy));
             }
             WindowEvent::CursorLeft { .. } => {
@@ -407,7 +474,14 @@ struct RenderState {
     font_atlas: FontAtlas,
 
     button: Entity,
+    /// The button's "START" label — a `Text` child entity (M10), not a
+    /// component on the button entity itself. See its spawn site for why.
+    button_label: Entity,
     tiles: [Entity; 3],
+    /// Per-tile black hover overlay — a `Quad` child of `tiles[i]` (M10).
+    tile_overlays: [Entity; 3],
+    /// Per-tile title label — a `Text` child of `tiles[i]` (M10).
+    tile_labels: [Entity; 3],
     phase: DemoPhase,
 
     // ── demo animation state ───────────────────────────────────────────────
@@ -521,10 +595,23 @@ impl RenderState {
             .expect("failed to create GPU device");
 
         let surface_caps = surface.get_capabilities(&adapter);
+        // Explicitly avoid an sRGB-tagged surface format: every color in this
+        // app (QuadState::color, Text::color, etc.) is authored as a flat,
+        // already-gamma-space value (e.g. navy's blue channel is 0.502 —
+        // plainly 128/255, a standard 8-bit color pick, not linear light).
+        // The fragment shader passes these through with no linear/gamma
+        // conversion of its own, so an sRGB swapchain format would make the
+        // GPU apply an unwanted *second* gamma encode on top of values that
+        // are already gamma-encoded — washing out colors and lightening
+        // blacks. This isn't hypothetical: native was previously picking
+        // `Bgra8UnormSrgb` here while the web build's WebGL2 surface offers
+        // no sRGB-capable format at all and fell back to plain `Bgra8Unorm`
+        // (no encode) — that mismatch was the actual cause of native's
+        // duller colors relative to the browser.
         let surface_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
@@ -541,9 +628,23 @@ impl RenderState {
         surface.configure(&device, &surface_config);
 
         let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
+        // The window was requested at a *logical* size (`with_inner_size`
+        // takes `LogicalSize`), but `window.inner_size()` always returns the
+        // *physical* size winit actually created — e.g. a 1280×800 logical
+        // window becomes a 2560×1600 physical surface at a 2x (Retina) scale
+        // factor. The demo's own geometry constants (`BUTTON_DIAMETER`,
+        // `TILE_WIDTH`, etc.) were sized assuming 1 world unit ≈ 1 logical
+        // pixel, so the projection needs to divide by `scale_factor` here —
+        // otherwise everything renders at `1/scale_factor` its intended size
+        // on any HiDPI display, while the surface itself stays at the full
+        // physical resolution for a sharp (non-blurry) render.
+        let scale_factor = window.scale_factor() as f32;
         pipeline.set_view_projection(
             &queue,
-            QuadPipeline::ortho(size.width as f32, size.height as f32),
+            QuadPipeline::ortho(
+                size.width as f32 / scale_factor,
+                size.height as f32 / scale_factor,
+            ),
         );
 
         log::info!(
@@ -571,15 +672,37 @@ impl RenderState {
                 start_button_quad(),
                 Lifecycle::Idle,
                 Visibility::VISIBLE,
+                Interactable,
+                start_button_border(),
+                hover_glow(),
+            ))
+            .id();
+
+        // The "START" label (M10): a `Quad` parent (the button, above)
+        // containing a `Text` child — the composition model this milestone
+        // introduces, replacing the M5 shortcut where Text lived on the same
+        // entity as its container. The child's QuadState is declared relative
+        // to the button's origin (zero offset — centered on the button, same
+        // as the old single-entity layout) with fully transparent color so
+        // its own background instance (every text-bearing entity emits one,
+        // per the two-instance render model) stays invisible; only the
+        // BakedText overlay — tinted by `Text::color` below — is visible.
+        let button_label = ui_world
+            .world
+            .spawn((
+                QuadState {
+                    color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                    ..Default::default()
+                },
+                Lifecycle::Idle,
+                Visibility::VISIBLE,
                 Text::new("START", 36.0).with_color(Vec4::new(
                     white().x,
                     white().y,
                     white().z,
                     0.0, // fades in with the rest of the button
                 )),
-                Interactable,
-                start_button_border(),
-                hover_glow(),
+                ChildOf(button),
             ))
             .id();
 
@@ -643,7 +766,46 @@ impl RenderState {
             }
         }
 
-        log::info!("Demo entities — button {:?}, tiles {:?}", button, tiles);
+        // Hover overlay + title label (M10) — two children per tile, spawned
+        // after (so they draw on top of) the tile's own box-art background.
+        // Order: overlay first, label second, matching "layered above the
+        // overlay" — draw order follows insertion order (see collect.rs).
+        let mut tile_overlays = [Entity::PLACEHOLDER; 3];
+        let mut tile_labels = [Entity::PLACEHOLDER; 3];
+        for (idx, &tile) in tiles.iter().enumerate() {
+            tile_overlays[idx] = ui_world
+                .world
+                .spawn((
+                    tile_overlay_quad(),
+                    Lifecycle::Idle,
+                    Visibility::VISIBLE,
+                    ChildOf(tile),
+                ))
+                .id();
+            tile_labels[idx] = ui_world
+                .world
+                .spawn((
+                    QuadState {
+                        color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                        ..Default::default()
+                    },
+                    Lifecycle::Idle,
+                    Visibility::VISIBLE,
+                    Text::new(TILE_TITLES[idx], TILE_LABEL_SIZE_PX)
+                        .with_color(Vec4::new(1.0, 1.0, 1.0, 0.0)), // alpha animated by advance_tile_hover
+                    ChildOf(tile),
+                ))
+                .id();
+        }
+
+        log::info!(
+            "Demo entities — button {:?}, button_label {:?}, tiles {:?}, tile_overlays {:?}, tile_labels {:?}",
+            button,
+            button_label,
+            tiles,
+            tile_overlays,
+            tile_labels
+        );
 
         Self {
             window,
@@ -654,7 +816,10 @@ impl RenderState {
             ui_world,
             font_atlas,
             button,
+            button_label,
             tiles,
+            tile_overlays,
+            tile_labels,
             phase: DemoPhase::ButtonIdle,
             intro_delay_remaining: INTRO_DELAY,
             intro_elapsed: 0.0,
@@ -680,12 +845,18 @@ impl RenderState {
         self.surface_config.width = size.width;
         self.surface_config.height = size.height;
         self.surface.configure(&self.device, &self.surface_config);
+        // See the matching comment in `RenderState::new` — `size` is
+        // physical pixels; the projection needs logical ones.
+        let scale_factor = self.window.scale_factor() as f32;
         self.ui_world
             .world
             .resource::<QuadPipeline>()
             .set_view_projection(
                 &self.queue,
-                QuadPipeline::ortho(size.width as f32, size.height as f32),
+                QuadPipeline::ortho(
+                    size.width as f32 / scale_factor,
+                    size.height as f32 / scale_factor,
+                ),
             );
     }
 
@@ -811,8 +982,9 @@ impl RenderState {
     // -------------------------------------------------------------------------
 
     /// Advances the one-shot entry fade and the hover glow sweep, then writes
-    /// the results directly onto the button's `QuadState`/`Border`/`Text`/`Glow`
-    /// components.
+    /// the results directly onto the button's `QuadState`/`Border`/`Glow`
+    /// components and its `button_label` child's `Text` component (M10 —
+    /// `Text` lives on its own child entity now, not on the button itself).
     ///
     /// Neither animation goes through `TransitionRequest` — they aren't
     /// morphs between two declared forms, just continuous alpha/radius sweeps
@@ -861,7 +1033,7 @@ impl RenderState {
         if let Some(mut border) = self.ui_world.world.get_mut::<Border>(self.button) {
             border.color.w = alpha;
         }
-        if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.button) {
+        if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.button_label) {
             text.color.w = alpha;
         }
         if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(self.button) {
@@ -880,7 +1052,32 @@ impl RenderState {
     /// tiles. Tiles are always fully opaque once visible (they arrive via
     /// the button-spread morph, not a fade), so unlike
     /// `advance_intro_and_hover` there's no alpha to suppress the glow with.
+    ///
+    /// M10: also drives the hover overlay + title label children's alpha off
+    /// the same `tile_hover_progress` sweep — same duration as the glow, just
+    /// a different destination component. Neither child needs its own
+    /// hide/reveal logic when the parent tile itself is hidden/revealed by
+    /// the button↔tiles morph — cascading `EffectiveVisibility` handles that.
+    ///
+    /// While the tile↔screen morph is in flight (`TilesToScreen`/
+    /// `ScreenToTiles`), the hover effect targets 0 regardless of the
+    /// tracked hover state — hover shouldn't compete visually with an
+    /// in-flight geometry morph. This forces the *target*, not
+    /// `tile_is_hovering` itself: `tile_is_hovering` keeps tracking the
+    /// pointer's real state (updated below from `hover_entered`/
+    /// `hover_exited`), so once the morph settles back into `TilesIdle`/
+    /// `ScreenIdle`, hover immediately reflects wherever the pointer actually
+    /// is — including "still hovering, ramp back up" if it never left.
+    /// Forcing `tile_is_hovering` itself instead would desync from
+    /// `hit_test_system`'s own edge-triggered hover tracking: if the pointer
+    /// never moves off the tile during the whole morph, no new
+    /// `hover_entered` event would ever fire afterward to correct it, leaving
+    /// hover stuck off until the pointer jiggles.
     fn advance_tile_hover(&mut self, dt: f32) {
+        let transitioning = matches!(
+            self.phase,
+            DemoPhase::TilesToScreen { .. } | DemoPhase::ScreenToTiles { .. }
+        );
         for i in 0..3 {
             let entity = self.tiles[i];
             {
@@ -891,7 +1088,13 @@ impl RenderState {
                     self.tile_is_hovering[i] = false;
                 }
             }
-            let target = if self.tile_is_hovering[i] { 1.0 } else { 0.0 };
+            let target = if transitioning {
+                0.0
+            } else if self.tile_is_hovering[i] {
+                1.0
+            } else {
+                0.0
+            };
             let step = dt / GLOW_DURATION;
             if self.tile_hover_progress[i] < target {
                 self.tile_hover_progress[i] = (self.tile_hover_progress[i] + step).min(target);
@@ -900,6 +1103,65 @@ impl RenderState {
             }
             if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
                 glow.radius = self.tile_hover_progress[i] * GLOW_MAX_RADIUS;
+            }
+            // M10: `tiles[i]` is the same entity throughout the tile↔screen
+            // morph (see the module doc — clicking a tile morphs *that one
+            // tile* directly into the screen shape), so its `QuadState.size`/
+            // `corner_radius` are whatever the in-flight `TransitionRequest`
+            // has lerped them to right now — tile-sized in grid view, the
+            // screen's 720p-ish proportions once settled as the video player,
+            // and anything in between mid-morph. The overlay/label are
+            // separate child entities with their own fixed local size, so
+            // without this they'd stay stuck at their tile-sized footprint
+            // and look wrong pasted onto the much larger/differently-shaped
+            // video screen. Recomputed fresh every frame (not just at spawn)
+            // so they track the parent continuously, matching it exactly at
+            // every point of the morph rather than snapping at the end.
+            let tile_geometry = self
+                .ui_world
+                .world
+                .get::<QuadState>(entity)
+                .map(|qs| (qs.size, qs.corner_radius));
+            if let Some(mut overlay_qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.tile_overlays[i])
+            {
+                if let Some((tile_size, tile_corner_radius)) = tile_geometry {
+                    overlay_qs.size = (tile_size - Vec2::splat(2.0 * BORDER_WIDTH)).max(Vec2::ZERO);
+                    overlay_qs.corner_radius = (tile_corner_radius - BORDER_WIDTH).max(0.0);
+                }
+                overlay_qs.color.w = self.tile_hover_progress[i] * TILE_OVERLAY_MAX_ALPHA;
+            }
+            if let Some(mut label) = self.ui_world.world.get_mut::<Text>(self.tile_labels[i]) {
+                label.color.w = self.tile_hover_progress[i];
+            }
+            // Larger title on the video screen than in grid view. The baked
+            // glyph run itself is a fixed size, but `scale` composes down the
+            // hierarchy multiplicatively, so bumping the label child's own
+            // local scale renders the same glyphs visibly bigger. Tied to
+            // `self.phase` rather than tile geometry directly: the label's
+            // alpha is already forced to zero for this tile during the
+            // in-flight morph (see `advance_tiles_to_screen_fade`/
+            // `advance_screen_to_tiles_fade`), so there's nothing to
+            // interpolate — it only needs the right value once settled into
+            // `TilesIdle` or `ScreenIdle`.
+            let label_scale = match self.phase {
+                DemoPhase::ScreenIdle { screen_idx } if screen_idx == i => TILE_LABEL_SCREEN_SCALE,
+                DemoPhase::TilesToScreen { clicked_idx, .. } if clicked_idx == i => {
+                    TILE_LABEL_SCREEN_SCALE
+                }
+                DemoPhase::ScreenToTiles { screen_idx, .. } if screen_idx == i => {
+                    TILE_LABEL_SCREEN_SCALE
+                }
+                _ => 1.0,
+            };
+            if let Some(mut label_qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.tile_labels[i])
+            {
+                label_qs.scale = label_scale;
             }
         }
     }
@@ -1089,7 +1351,9 @@ impl RenderState {
     /// plain `TransitionRequest` on the tile itself — no group/slice
     /// machinery, since only one entity is changing shape.
     fn start_tiles_to_screen(&mut self, clicked_idx: usize) {
-        let window_width = self.surface_config.width as f32;
+        // `surface_config.width` is physical pixels; world-space geometry is
+        // logical pixels (see the comment in `RenderState::new`).
+        let window_width = self.surface_config.width as f32 / self.window.scale_factor() as f32;
         self.ui_world
             .world
             .entity_mut(self.tiles[clicked_idx])
@@ -1203,6 +1467,26 @@ impl RenderState {
         if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(self.tiles[clicked_idx]) {
             glow.radius = 0.0;
         }
+        // M10: hover overlay + title label are deactivated for every tile for
+        // the duration of the morph — hover shouldn't compete visually with
+        // an in-flight geometry morph, and without this the clicked tile's
+        // label would ride along (children move with their parent "for
+        // free," per M10) onto the video screen at its old tile-sized hover
+        // alpha. `advance_tile_hover` already ramps `tile_hover_progress`
+        // toward 0 while transitioning (see its doc comment), but that ramp
+        // takes up to `GLOW_DURATION` and lags a frame behind the phase
+        // change; this hard-zeroes it immediately, the same way `glow.radius`
+        // is forced above.
+        for &overlay in &self.tile_overlays {
+            if let Some(mut overlay_qs) = self.ui_world.world.get_mut::<QuadState>(overlay) {
+                overlay_qs.color.w = 0.0;
+            }
+        }
+        for &label in &self.tile_labels {
+            if let Some(mut label) = self.ui_world.world.get_mut::<Text>(label) {
+                label.color.w = 0.0;
+            }
+        }
         // Live crossfade (M9.8): box art → video, same easing as the morph's
         // own geometry so both read as one motion.
         if let Some(mut crossfade) = self
@@ -1237,6 +1521,19 @@ impl RenderState {
     /// the other two tiles fade back in over the first half.
     fn advance_screen_to_tiles_fade(&mut self, screen_idx: usize, elapsed: f32) {
         let t = (elapsed / BUTTON_TILES_MORPH_DURATION).clamp(0.0, 1.0);
+        // M10: see the matching comment in advance_tiles_to_screen_fade — hover
+        // overlay + title label are deactivated for every tile for the
+        // duration of this morph too.
+        for &overlay in &self.tile_overlays {
+            if let Some(mut overlay_qs) = self.ui_world.world.get_mut::<QuadState>(overlay) {
+                overlay_qs.color.w = 0.0;
+            }
+        }
+        for &label in &self.tile_labels {
+            if let Some(mut label) = self.ui_world.world.get_mut::<Text>(label) {
+                label.color.w = 0.0;
+            }
+        }
         // Live crossfade (M9.8), reversed: video → box art. Same easing as
         // the forward direction, just counting down from 1.0 instead of up
         // from 0.0 — see push_entity_instances in collect.rs for why this
