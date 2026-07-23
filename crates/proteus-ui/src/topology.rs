@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 
+use bevy_ecs::hierarchy::Children;
 use bevy_ecs::prelude::*;
 use glam::Vec4;
 
@@ -45,6 +46,7 @@ use proteus_render::{
 use crate::collect::{quad_state_to_instance, BakedTexture};
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 use crate::effects::{Border, DropShadow, Glow};
+use crate::hierarchy::compose_with_parent;
 use crate::image::BakedImage;
 use crate::text::{BakedText, Text};
 use crate::transition::{ActiveTransition, TransitionConfig};
@@ -302,15 +304,19 @@ type BakeVisualsQuery<'w, 's> = Query<
 /// Build the `QuadInstance`s that represent `entity`'s own rendered
 /// appearance — background (+ text overlay, if any) — the same two-instance
 /// shape `collect_instances` produces per frame, just for one entity, once,
-/// on demand.
+/// on demand. Then recurses into every descendant (M10), composing each
+/// child's world state via [`compose_with_parent`] and folding its own
+/// instances in too.
 ///
-/// This is deliberately its own named step (see `bake_one` below) rather than
-/// inlined: a future composite-component feature (parent + children baked as
-/// one unit) swaps this for a version that also walks a `Hierarchy`/children
-/// component and gathers every descendant's instances too — nothing else in
-/// `bake_one` or the setup systems would need to change.
+/// This exists so a composite (e.g. a `Quad` button with a `Text` child) bakes
+/// as a whole for the transition-bake crossfade (`bake_one`, below) — without
+/// it, baking just the button entity would silently drop the child's visuals
+/// (its "START" label) from the crop the moment `Text` becomes a real child
+/// entity instead of living on the same entity as its container.
 fn gather_bake_instances(
     visuals: &BakeVisualsQuery,
+    children_q: &Query<&Children>,
+    quad_states: &Query<&QuadState>,
     entity: Entity,
     qs: &QuadState,
 ) -> Vec<QuadInstance> {
@@ -338,6 +344,23 @@ fn gather_bake_instances(
         text_qs.size = b.pixel_size.into();
         text_qs.corner_radius = 0.0;
         out.push(quad_state_to_instance(&text_qs, Some(b), None, None, None));
+    }
+
+    // M10: fold in every descendant's own instances too, recursively (not
+    // just direct children) — matches collect_instances's per-frame handling
+    // of an arbitrarily deep hierarchy.
+    if let Ok(children) = children_q.get(entity) {
+        for child in children.iter() {
+            let child_local = quad_states.get(child).cloned().unwrap_or_default();
+            let child_world = compose_with_parent(qs, &child_local);
+            out.extend(gather_bake_instances(
+                visuals,
+                children_q,
+                quad_states,
+                child,
+                &child_world,
+            ));
+        }
     }
 
     out
@@ -378,10 +401,12 @@ fn bake_one(
     pipeline: &mut QuadPipeline,
     gpu: &GpuContext,
     visuals: &BakeVisualsQuery,
+    children_q: &Query<&Children>,
+    quad_states: &Query<&QuadState>,
     entity: Entity,
     qs: &QuadState,
 ) -> Option<(TransitionAllocId, TransitionRegion)> {
-    let instances = gather_bake_instances(visuals, entity, qs);
+    let instances = gather_bake_instances(visuals, children_q, quad_states, entity, qs);
     if instances.is_empty() {
         return None;
     }
@@ -441,6 +466,8 @@ pub fn one_to_n_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &OneToNRequest, &QuadState)>,
     visuals: BakeVisualsQuery,
+    children_q: Query<&Children>,
+    quad_states: Query<&QuadState>,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
 ) {
@@ -496,15 +523,31 @@ pub fn one_to_n_setup_system(
                     Vec::new();
 
                 if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
-                    if let Some((src_id, src_region)) =
-                        bake_one(pipeline, gpu, &visuals, source_entity, source_state)
-                    {
+                    if let Some((src_id, src_region)) = bake_one(
+                        pipeline,
+                        gpu,
+                        &visuals,
+                        &children_q,
+                        &quad_states,
+                        source_entity,
+                        source_state,
+                    ) {
                         shared_alloc = Some(src_id);
                         from_uv_slices = region_uv_slices(&src_region, n);
                         target_bakes = request
                             .targets
                             .iter()
-                            .map(|t| bake_one(pipeline, gpu, &visuals, t.entity, &t.state))
+                            .map(|t| {
+                                bake_one(
+                                    pipeline,
+                                    gpu,
+                                    &visuals,
+                                    &children_q,
+                                    &quad_states,
+                                    t.entity,
+                                    &t.state,
+                                )
+                            })
                             .collect();
                     }
                 }
@@ -631,6 +674,8 @@ pub fn n_to_one_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &NToOneRequest, &QuadState)>,
     visuals: BakeVisualsQuery,
+    children_q: Query<&Children>,
+    quad_states: Query<&QuadState>,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
 ) {
@@ -665,15 +710,31 @@ pub fn n_to_one_setup_system(
         let mut source_bakes: Vec<Option<(TransitionAllocId, TransitionRegion)>> = Vec::new();
 
         if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
-            if let Some((dest_id, dest_region)) =
-                bake_one(pipeline, gpu, &visuals, dest_entity, dest_state)
-            {
+            if let Some((dest_id, dest_region)) = bake_one(
+                pipeline,
+                gpu,
+                &visuals,
+                &children_q,
+                &quad_states,
+                dest_entity,
+                dest_state,
+            ) {
                 shared_alloc = Some(dest_id);
                 to_uv_slices = region_uv_slices(&dest_region, n);
                 source_bakes = request
                     .sources
                     .iter()
-                    .map(|s| bake_one(pipeline, gpu, &visuals, s.entity, &s.state))
+                    .map(|s| {
+                        bake_one(
+                            pipeline,
+                            gpu,
+                            &visuals,
+                            &children_q,
+                            &quad_states,
+                            s.entity,
+                            &s.state,
+                        )
+                    })
                     .collect();
             }
         }
@@ -928,13 +989,76 @@ mod tests {
             ))
             .id();
 
-        let mut state: SystemState<BakeVisualsQuery> = SystemState::new(&mut world);
-        let visuals = state.get(&world);
+        let mut state: SystemState<(BakeVisualsQuery, Query<&Children>, Query<&QuadState>)> =
+            SystemState::new(&mut world);
+        let (visuals, children_q, quad_states) = state.get(&world);
 
-        let instances = gather_bake_instances(&visuals, entity, &source());
+        let instances =
+            gather_bake_instances(&visuals, &children_q, &quad_states, entity, &source());
         assert_eq!(instances.len(), 1, "no BakedText — just the background");
         assert_eq!(instances[0].uv_offset, [0.4, 0.5]);
         assert_eq!(instances[0].uv_scale, [0.2, 0.3]);
+    }
+
+    /// Regression test (M10): `gather_bake_instances` must walk *every*
+    /// descendant, not just the entity itself — otherwise a composite (e.g. a
+    /// `Quad` button with a `Text` child) loses the child's visuals from the
+    /// Slice-transition crossfade the moment `Text` becomes a real child
+    /// entity instead of living on the same entity as its container. Uses a
+    /// three-level chain (entity → child → grandchild) to prove recursion
+    /// isn't hard-coded to one level.
+    #[test]
+    fn gather_bake_instances_walks_every_descendant() {
+        use bevy_ecs::hierarchy::ChildOf;
+        use bevy_ecs::system::SystemState;
+
+        let mut world = World::new();
+        let root = world.spawn(source()).id();
+        let child = world
+            .spawn((
+                QuadState {
+                    color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                    ..Default::default()
+                },
+                BakedText {
+                    uv_offset: [0.1, 0.1],
+                    uv_scale: [0.2, 0.2],
+                    pixel_size: [50.0, 20.0],
+                },
+                Text::new("child", 16.0),
+                ChildOf(root),
+            ))
+            .id();
+        let _grandchild = world
+            .spawn((
+                QuadState {
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                    ..Default::default()
+                },
+                BakedImage {
+                    uv_offset: [0.6, 0.6],
+                    uv_scale: [0.1, 0.1],
+                    pixel_size: [10.0, 10.0],
+                },
+                ChildOf(child),
+            ))
+            .id();
+
+        let mut state: SystemState<(BakeVisualsQuery, Query<&Children>, Query<&QuadState>)> =
+            SystemState::new(&mut world);
+        let (visuals, children_q, quad_states) = state.get(&world);
+
+        let instances = gather_bake_instances(&visuals, &children_q, &quad_states, root, &source());
+
+        // root: 1 background instance (no BakedText on root).
+        // child: 1 background + 1 text overlay (BakedText present).
+        // grandchild: 1 background (BakedImage, no BakedText).
+        assert_eq!(
+            instances.len(),
+            4,
+            "expected root bg + child bg + child text overlay + grandchild bg, got {}",
+            instances.len()
+        );
     }
 
     #[test]

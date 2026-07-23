@@ -18,6 +18,7 @@
 pub mod collect;
 pub mod component;
 pub mod effects;
+pub mod hierarchy;
 pub mod image;
 pub mod input;
 pub mod schedule;
@@ -28,12 +29,17 @@ pub mod transition;
 pub mod video;
 
 // Convenience re-exports for the most commonly used types.
+pub use bevy_ecs::hierarchy::{ChildOf, Children};
 pub use bevy_ecs::prelude::Entity;
 pub use collect::{
     collect_entity_instances, collect_instances, quad_state_to_instance, BakedTexture,
 };
 pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 pub use effects::{Border, DropShadow, Glow};
+pub use hierarchy::{
+    opacity_system, resolve_world_position, resolve_world_position_query, visibility_system,
+    EffectiveOpacity, EffectiveVisibility, Opacity,
+};
 pub use image::{BakedImage, Image};
 pub use input::{quad_contains, Interactable, InteractionEvents, PointerInput};
 pub use schedule::ProteusWorld;

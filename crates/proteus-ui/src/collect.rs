@@ -84,6 +84,7 @@
 //! Entities with [`Visibility::HIDDEN`] are excluded from the output. Entities with
 //! no `Visibility` component at all are treated as visible (the default).
 
+use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use glam::Vec4;
 
@@ -91,6 +92,9 @@ use proteus_render::{QuadInstance, QuadPipeline};
 
 use crate::{
     effects::{Border, DropShadow, Glow},
+    hierarchy::{
+        compose_with_parent, resolve_world_position, EffectiveOpacity, EffectiveVisibility, Opacity,
+    },
     video::{VideoCrossfade, VideoPlayer},
     ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual, Visibility,
 };
@@ -236,6 +240,16 @@ pub fn quad_state_to_instance(
 /// (a single-entity convenience wrapper for callers outside the per-frame
 /// render loop, e.g. baking a source entity's appearance for a transition).
 fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec<QuadInstance>) {
+    // Cascaded opacity (M10). Prefers the cascaded `EffectiveOpacity` (written
+    // by `opacity_system` when the full schedule runs); falls back to the
+    // entity's own raw `Opacity` for callers that build a bare `World` and
+    // invoke `collect_instances` without running the schedule (existing test
+    // convention throughout this crate), and finally to fully opaque.
+    let effective_opacity = world
+        .get::<EffectiveOpacity>(e)
+        .map(|o| o.0)
+        .unwrap_or_else(|| world.get::<Opacity>(e).map(|o| o.0).unwrap_or(1.0));
+
     // (a) Solid-color (or video/baked-texture) background quad — shadow or
     //     glow applied here. DropShadow takes precedence over Glow when both
     //     are present.
@@ -243,6 +257,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
     let glow = world.get::<Glow>(e);
     let border = world.get::<Border>(e);
     let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
+    bg_inst.opacity = effective_opacity;
     // Video and static-image UV routing. When only one of VideoPlayer/
     // BakedImage is present it's a flat assignment (no blending). When both
     // are present (M9.8 — e.g. a tile with permanent box-cover art that also
@@ -342,6 +357,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
         // center and clipping away most of the text.
         text_qs.corner_radius = 0.0;
         let mut text_inst = quad_state_to_instance(&text_qs, Some(b), None, None, None);
+        text_inst.opacity = effective_opacity;
 
         // Virtual entities carry the *source* entity's text during a group
         // transition.  Fade it out in sync with the geometry so that the
@@ -356,7 +372,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
                     (active.elapsed / active.config.duration).min(1.0)
                 };
                 let eased_t = (active.config.easing)(raw_t);
-                text_inst.opacity = 1.0 - eased_t;
+                text_inst.opacity *= 1.0 - eased_t;
             }
         }
 
@@ -369,43 +385,114 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
 /// Call this once per frame after `ProteusWorld::update()`, then pass the
 /// returned vec to [`QuadPipeline::upload_instances`].
 ///
-/// Ordering within the returned vec matches the order entities were inserted
-/// into the world. For text entities the background instance always precedes
-/// the text overlay instance.
+/// ## Draw order (M10)
+///
+/// Instances are collected via an explicit depth-first walk starting from
+/// **root** entities (no [`ChildOf`]), each root's own instance(s) pushed
+/// before recursing into its children in [`Children`] order — so a child
+/// always draws on top of its parent, and root entities layer by
+/// `QuadState::position.z` ascending (lower z = further back).
+///
+/// This is deliberately explicit rather than relying on however `World`'s own
+/// archetype storage happens to iterate entities: with component composition
+/// (a `Text` child, a hover-overlay child, and so on) in the picture, the
+/// *number of distinct archetypes* — and how entities migrate between them as
+/// components get inserted (e.g. `BakedText` after baking) — varies enough
+/// that a flat, unordered query over "every entity with `QuadState`" is not
+/// guaranteed to visit a parent before its children. Before hierarchy existed
+/// this never came up, because every entity was a root with no descendants.
 pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
-    // Collect (entity, QuadState, Option<visible>) while holding the query borrow,
-    // then drop it before calling world.get() for BakedText / Text / DropShadow / Glow.
-    let states: Vec<(Entity, QuadState, Option<bool>)> = {
-        let mut q = world.query::<(Entity, &QuadState, Option<&Visibility>)>();
+    // Root = has QuadState, has no ChildOf. Snapshotted while holding the
+    // query borrow, then dropped before the recursive world.get() calls in
+    // collect_subtree/push_entity_instances.
+    let mut roots: Vec<(Entity, QuadState, Option<bool>, Option<bool>)> = {
+        let mut q = world.query_filtered::<(
+            Entity,
+            &QuadState,
+            Option<&Visibility>,
+            Option<&EffectiveVisibility>,
+        ), Without<ChildOf>>();
         q.iter(world)
-            .map(|(e, qs, vis)| (e, qs.clone(), vis.map(|v| v.visible)))
+            .map(|(e, qs, vis, eff_vis)| {
+                (e, qs.clone(), vis.map(|v| v.visible), eff_vis.map(|v| v.0))
+            })
             .collect()
     };
+    roots.sort_by(|a, b| {
+        a.1.position
+            .z
+            .partial_cmp(&b.1.position.z)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut out = Vec::new();
-    for (e, qs, vis) in states {
-        // Entities with no Visibility component default to visible.
-        if !vis.is_none_or(|v| v) {
-            continue;
-        }
-        push_entity_instances(world, e, &qs, &mut out);
+    for (e, local_qs, vis, eff_vis) in roots {
+        // Root: local QuadState *is* world QuadState (no ancestor to compose with).
+        collect_subtree(world, e, &local_qs, vis, eff_vis, false, &mut out);
     }
     out
 }
 
-/// Build the [`QuadInstance`]s for a single entity, ignoring [`Visibility`].
+/// Depth-first: push `entity`'s own instance(s) (subject to `force_visible`),
+/// then recurse into each child in [`Children`] order, composing each
+/// child's world state via [`compose_with_parent`]. See [`collect_instances`]
+/// for why this ordering is explicit rather than incidental.
+fn collect_subtree(
+    world: &World,
+    entity: Entity,
+    world_qs: &QuadState,
+    vis: Option<bool>,
+    eff_vis: Option<bool>,
+    force_visible: bool,
+    out: &mut Vec<QuadInstance>,
+) {
+    // Prefer the cascaded EffectiveVisibility (written by visibility_system
+    // when the full schedule runs); fall back to the entity's own raw
+    // Visibility for callers that build a bare World and invoke
+    // collect_instances directly without running the schedule (existing test
+    // convention throughout this crate); default to visible.
+    let visible = force_visible || eff_vis.unwrap_or_else(|| vis.unwrap_or(true));
+    if visible {
+        push_entity_instances(world, entity, world_qs, out);
+    }
+
+    let Some(children) = world.get::<Children>(entity) else {
+        return;
+    };
+    for child in children.iter() {
+        let Some(child_local) = world.get::<QuadState>(child) else {
+            continue;
+        };
+        let child_world = compose_with_parent(world_qs, child_local);
+        let child_vis = world.get::<Visibility>(child).map(|v| v.visible);
+        let child_eff_vis = world.get::<EffectiveVisibility>(child).map(|v| v.0);
+        collect_subtree(
+            world,
+            child,
+            &child_world,
+            child_vis,
+            child_eff_vis,
+            force_visible,
+            out,
+        );
+    }
+}
+
+/// Build the [`QuadInstance`]s for a single entity **and its descendants**,
+/// ignoring [`Visibility`] throughout the whole subtree.
 ///
 /// A convenience wrapper around the same per-entity logic [`collect_instances`]
-/// uses, for callers that need one entity's instances outside the normal
-/// per-frame render loop — e.g. baking a source entity's rendered appearance
-/// into a texture before a Slice group transition (see
+/// uses, for callers that need one entity's (composite) instances outside the
+/// normal per-frame render loop — e.g. baking a source entity's rendered
+/// appearance into a texture before a Slice group transition (see
 /// `QuadPipeline::bake_instances_to_main_atlas`). Returns an empty vec if the
 /// entity has no [`QuadState`].
 pub fn collect_entity_instances(world: &World, entity: Entity) -> Vec<QuadInstance> {
     let mut out = Vec::new();
     if let Some(qs) = world.get::<QuadState>(entity) {
-        let qs = qs.clone();
-        push_entity_instances(world, entity, &qs, &mut out);
+        let local_qs = qs.clone();
+        let world_qs = resolve_world_position(world, entity, &local_qs);
+        collect_subtree(world, entity, &world_qs, None, None, true, &mut out);
     }
     out
 }
