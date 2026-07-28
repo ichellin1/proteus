@@ -21,3 +21,7 @@ anyhow = { workspace = true }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
 proteus-render = { path = "../proteus-render" }
+# wgpu/pollster: headless-GPU integration test for M10.5 static baking,
+# same pattern as proteus-render/tests/headless_render.rs.
+wgpu = { workspace = true }
+pollster = { workspace = true }

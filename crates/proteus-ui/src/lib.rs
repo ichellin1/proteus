@@ -15,6 +15,7 @@
 //! - [`transition::CompletedTransitions`] — resource; drain after `world.update()` to react
 //! - [`schedule::ProteusWorld`] — the ECS world + schedule; call `update(dt)` once per frame
 
+pub mod bake;
 pub mod collect;
 pub mod component;
 pub mod effects;
@@ -29,6 +30,7 @@ pub mod transition;
 pub mod video;
 
 // Convenience re-exports for the most commonly used types.
+pub use bake::{bake_system, Baked, BakedComposite};
 pub use bevy_ecs::hierarchy::{ChildOf, Children};
 pub use bevy_ecs::prelude::Entity;
 pub use collect::{

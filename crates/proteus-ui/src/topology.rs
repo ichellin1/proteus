@@ -288,7 +288,11 @@ pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
 /// Visual components (beyond `QuadState`, which the caller already has —
 /// either from the coordinator's own query or a `GroupTarget`/`GroupSource`'s
 /// stored `state`) needed to bake an entity's rendered appearance.
-type BakeVisualsQuery<'w, 's> = Query<
+///
+/// `pub(crate)` so `bake::bake_system` (M10.5 — static component baking) can
+/// reuse it too; the underlying capture logic is identical whether the bake
+/// is transition-time (this module) or permanent (`bake.rs`).
+pub(crate) type BakeVisualsQuery<'w, 's> = Query<
     'w,
     's,
     (
@@ -313,7 +317,11 @@ type BakeVisualsQuery<'w, 's> = Query<
 /// it, baking just the button entity would silently drop the child's visuals
 /// (its "START" label) from the crop the moment `Text` becomes a real child
 /// entity instead of living on the same entity as its container.
-fn gather_bake_instances(
+///
+/// `pub(crate)` so `bake::bake_system` (M10.5) can reuse it for permanent
+/// static baking — same recursive subtree capture, different destination
+/// atlas/lifetime.
+pub(crate) fn gather_bake_instances(
     visuals: &BakeVisualsQuery,
     children_q: &Query<&Children>,
     quad_states: &Query<&QuadState>,
