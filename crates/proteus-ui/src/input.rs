@@ -24,12 +24,12 @@
 //!
 //! ## Hit testing
 //!
-//! The hit test uses axis-aligned bounding boxes derived from `QuadState`,
-//! resolved to world space (M10 — see `hierarchy::resolve_world_position_query`)
-//! so an `Interactable` child hit-tests against where it's actually drawn, not
-//! its raw parent-relative coordinates. Rotation and non-uniform scale are
-//! still not accounted for — a pre-existing gap affecting root and child
-//! entities alike, tracked as its own milestone (M10.6), not fixed here.
+//! The hit test uses `qs`'s true (oriented, scaled) footprint, resolved to
+//! world space (M10 — see `hierarchy::resolve_world_position_query`) so an
+//! `Interactable` child hit-tests against where it's actually drawn, not its
+//! raw parent-relative coordinates, and rotated to match `QuadState::rotation`
+//! (M10.6 — see `quad_contains`) so a rotated entity's hit region matches its
+//! rendered footprint rather than the unrotated shape's axis-aligned box.
 //!
 //! Entities are tested in world insertion order; the **last** entity whose
 //! bounds contain the pointer wins (matches GPU draw order — last drawn =
@@ -128,17 +128,34 @@ pub struct Interactable;
 // ---------------------------------------------------------------------------
 
 /// Returns `true` if `point` (window-space pixels, origin top-left) is inside
-/// the axis-aligned bounding box of `qs`.
+/// `qs`'s true footprint — accounting for rotation and (uniform) scale, not
+/// just an axis-aligned box (M10.6).
+///
+/// `QuadState::position` is the world location of the rotation *pivot* — the
+/// anchor point, per the vertex shader's own transform order (scale, then
+/// anchor-shift, then rotate, then translate to `position`; see
+/// `hierarchy::compose_with_parent`'s doc for the same convention used to
+/// compose a child's world transform). So testing containment is the inverse
+/// of that: shift `point` into a frame centered on the pivot, rotate it
+/// *back* by `-rotation` to undo the quad's rotation, then test against the
+/// same anchor-relative axis-aligned extents the pre-M10.6 version already
+/// used — now additionally scaled by `QuadState::scale`, since the rendered
+/// quad is too (a second latent gap this function had: `scale` was
+/// previously ignored entirely, so a scaled entity's hit box didn't match
+/// its rendered size even before rotation was in the picture).
 ///
 /// Accounts for `QuadState::anchor` — a center-anchored quad (0.5, 0.5) has
-/// its origin at the center; a top-left-anchored quad (0.0, 0.0) has its
-/// origin at the top-left corner.
+/// its pivot at the center; a top-left-anchored quad (0.0, 0.0) has its pivot
+/// at the top-left corner.
 pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
-    let left = qs.position.x - qs.anchor.x * qs.size.x;
-    let top = qs.position.y - qs.anchor.y * qs.size.y;
-    let right = left + qs.size.x;
-    let bottom = top + qs.size.y;
-    point.x >= left && point.x < right && point.y >= top && point.y < bottom
+    let delta = point - qs.position.truncate();
+    let local = Vec2::from_angle(-qs.rotation).rotate(delta);
+
+    let scaled_size = qs.size * qs.scale;
+    let min = -qs.anchor * scaled_size;
+    let max = (Vec2::ONE - qs.anchor) * scaled_size;
+
+    local.x >= min.x && local.x < max.x && local.y >= min.y && local.y < max.y
 }
 
 // ---------------------------------------------------------------------------

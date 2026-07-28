@@ -1505,7 +1505,7 @@ contact with the actual codebase:
 
 ---
 
-### M10.6 — Oriented Hit-Test Boxes *(off critical path — not started)*
+### M10.6 — Oriented Hit-Test Boxes *(off critical path — complete)*
 
 `quad_contains`'s hit-test box is axis-aligned and ignores `QuadState::rotation` for every entity
 today, root or child (`input.rs:27-29`: "good enough for M7; full convex-hull testing can land
@@ -1513,14 +1513,21 @@ with M5.5 hierarchy" — M5.5 being this milestone's old number, before the M10/
 Identified during M10 planning: small, pre-existing, and easy to lose track of once the hierarchy
 work lands, so it gets its own explicit slot rather than staying a dangling code comment.
 
+**Scope note:** while fixing rotation, also fixed `qs.scale` being ignored entirely by
+`quad_contains` — a second latent gap the same underlying code had (a scaled entity's hit box
+didn't match its rendered size, independent of rotation). Same function, same reason (hit box
+should match rendered footprint), no separate design question.
+
 **Definition of done:**
-- [ ] `quad_contains` (or a new oriented variant used by `hit_test_system`) accounts for
-  `QuadState::rotation` — a point-in-rotated-rectangle test (inverse-rotate the point into the
-  quad's local frame around its anchor, then test axis-aligned bounds), not just the current
-  axis-aligned box
-- [ ] Applies uniformly to root and child entities
-- [ ] Regression test: a button rotated 45° is hit only within its true rotated footprint, not the
+- [x] `quad_contains` accounts for `QuadState::rotation` (and `scale`) — inverse-rotates the point
+  into the quad's local frame around its anchor pivot, then tests axis-aligned bounds scaled by
+  `qs.scale`, not just the original unrotated/unscaled box
+- [x] Applies uniformly to root and child entities (verified via a rotated parent + zero-offset
+  child fixture — the child's resolved world rotation composes from the parent per
+  `hierarchy::compose_with_parent`, and `quad_contains` correctly uses that composed value)
+- [x] Regression test: a button rotated 45° is hit only within its true rotated footprint, not the
   larger axis-aligned bounding box of the unrotated shape
+  (`crates/proteus-ui/tests/hit_test.rs`)
 
 ---
 
