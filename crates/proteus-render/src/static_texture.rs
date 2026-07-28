@@ -1,14 +1,13 @@
 //! Static image decoding (M9.7) — PNG/JPEG bytes → RGBA8 pixels.
 //!
-//! Decoded pixels are handed to [`crate::FontAtlas::bake_image`], which packs
-//! them into `main_atlas` via the same shelf packer text baking already uses
-//! (see that module's docs for why sharing one packer instance matters — two
-//! independent packers writing into the same atlas texture would collide).
+//! Decoded pixels are handed to [`crate::TextureRegistry::register_static`] (M11) for `main_atlas`
+//! placement, then uploaded via [`crate::QuadPipeline::write_to_main_atlas`] — the same two-step
+//! flow rasterized text goes through.
 //!
 //! Pure Rust (the `image` crate's `png`/`jpeg` decoders have no system
 //! dependency), so this works unmodified on both native and wasm32.
 
-/// Decoded RGBA8 image, ready to hand to [`crate::FontAtlas::bake_image`].
+/// Decoded RGBA8 image, ready to register via [`crate::TextureRegistry::register_static`].
 pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
@@ -35,9 +34,10 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, String> {
 /// Real photos routinely arrive far larger than anything sensible to pack
 /// whole into `main_atlas` (2048×2048, shared with baked text) — a
 /// 2000×3000px source, for instance, cannot fit at all in that height, and
-/// even a source under 2048px in both dimensions can still starve the shelf
-/// packer's remaining space for everything else it needs to hold. Call this
-/// on every [`decode_image`] result before [`crate::FontAtlas::bake_image`].
+/// even a source under 2048px in both dimensions can still starve the
+/// registry's remaining space for everything else it needs to hold. Call this
+/// on every [`decode_image`] result before
+/// [`crate::TextureRegistry::register_static`].
 pub fn resize_to_fit(image: DecodedImage, max_side: u32) -> DecodedImage {
     if image.width <= max_side && image.height <= max_side {
         return image;

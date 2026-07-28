@@ -203,13 +203,21 @@ a rotated button or a rotated child is hit-testable within its true rotated foot
 larger axis-aligned box of its unrotated shape. Also fixed `scale` being ignored entirely, the same
 underlying gap for the same reason.
 
-## M11 — Resource Management *(not started)*
+## M11 — Resource Management *(complete)*
 
 Real reference counting, eviction, and a texture lifecycle that actually matches what the
-architecture specifies — identified by audit, not originally scheduled. Today there's no
-reference counting anywhere, `main_atlas` entries are never freed, and text/images/video atlases
-are managed by three disconnected mechanisms instead of one. This milestone closes that gap (or
-explicitly documents why the three-way split should stay).
+architecture specifies — identified by audit, not originally scheduled. Before this milestone
+there was no reference counting anywhere, `main_atlas` entries were never freed, and
+text/images/video atlases were managed by three disconnected mechanisms instead of one.
+
+Decided: one shared `TextureRegistry` (real `SlotMap` IDs, ref-counted via a new `TextureRef`
+component's `ComponentHooks`) sitting above per-kind low-level allocators — a new etagere-backed
+`MainAtlasAllocator` for `main_atlas`, unchanged metadata-only tracking for the video slot.
+`transition_atlas` stays separately self-managed (already correct, not this milestone's gap).
+Eviction-under-pressure is restricted to unreferenced entries only, for correctness (see
+PLANNING.md's M11 entry for why evicting referenced content would be unsafe given cached UVs on
+components) — referenced-content eviction, a restoration mechanism, and backgrounding-driven
+eviction beyond video are Post-V1. See PLANNING.md for the full DoD.
 
 ## M12 — TypeScript SDK *(critical path)*
 
@@ -268,6 +276,34 @@ Planned future work, not part of the V1 scope:
   fluid deformation
 - **Custom shader authoring** — formal support for developer-written WGSL effects
 - **Additional geometry types** — beyond textured quads; geometry atlasing or multi-buffer model
+- **Backgrounding-driven eviction (M11 follow-up)** — real OS-level triggers (window focus/
+  occlusion on native, the Page Visibility API on web) driving the registry's suspend/resume
+  path automatically. M11 shipped the callable API (generalized from video's existing
+  `suspend_video`/`resume_video`), not the OS-signal wiring itself — no real trigger for this
+  exists anywhere in either shell yet, so wiring one is a distinct cross-platform input-handling
+  problem.
+- **Evicting referenced content under severe pressure, plus a restoration mechanism (M11
+  follow-up)** — M11 deliberately restricts eviction to unreferenced entries only, since
+  `BakedText`/`BakedImage`/`BakedComposite` cache their UV coordinates directly on the component;
+  evicting a still-referenced region and letting a different texture reuse it later would make the
+  original component silently render the wrong pixels. A safe version of the harder tier needs a
+  restoration queue that regenerates evicted content transparently — explicitly the *owning
+  entity/system's* job (re-bake the text, re-fetch the image bytes, then re-register), not the
+  resource manager's, since it has no way to reproduce arbitrary content from just a `TextureId`.
+- **Multi-page `main_atlas` growth (M11 follow-up)** — today (and after M11) `main_atlas` is a
+  single fixed-size texture; exhaustion after eviction simply fails registration, matching every
+  other atlas-full path in this codebase. Real growth would mean a new backing texture when a page
+  fills, `AtlasRegion::Main` carrying a page index, and `QuadPipeline`/the shader's bind-group
+  layout handling N atlas textures instead of one — a materially larger change than a
+  registry-and-refcounting milestone.
+- **`TextureKind::Animated` — GIF/sprite-sheet playback (M11 follow-up)** — the enum variant is
+  reserved (M11) but unimplemented. Design: neither `Static` (one fixed region, baked once) nor
+  `Video` (one continuously-replaced texture slot, driven by an external decoder every tick) fits —
+  GIFs/sprite sheets have small, finite, known-up-front frames, so the efficient shape is to decode
+  every frame once at load time, pack each as its own `main_atlas` region exactly like `Static`, and
+  cycle *which region's UV* a component samples via a playhead/frame-delay clock, never re-decoding
+  on the steady-state path the way `Video` does. Needs one `TextureId` to own a `Vec` of atlas
+  regions (freed together as a unit) — a real structural difference from both existing kinds.
 - **XR shell** — WebXR / OpenXR
 - **Additional language bindings** — Python, Swift, Kotlin, others
 - **Benchmark tests** — an ongoing performance suite beyond M1's single WASM-boundary measurement

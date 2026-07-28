@@ -5,15 +5,17 @@
 //! ```text
 //! Text { content, size_px }          ← developer declares on an entity
 //!         │
-//!         │ (shell detects Text without BakedText, calls FontAtlas::bake_text)
+//!         │ (shell detects Text without BakedText, calls FontAtlas::rasterize_text)
 //!         ▼
-//! FontAtlas::bake_text → BakedRegion (CPU pixels + atlas coords)
+//! FontAtlas::rasterize_text → RasterizedGlyphs (CPU pixels, no atlas placement)
 //!         │
-//!         │ (shell calls QuadPipeline::write_to_main_atlas)
+//!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
+//!         │  then QuadPipeline::write_to_main_atlas to upload the pixels — M11)
 //!         ▼
-//! BakedText { uv_offset, uv_scale, pixel_size }  ← written back onto the entity
+//! BakedText { uv_offset, uv_scale, pixel_size } + TextureRef  ← written back onto the entity
 //!         │
-//!         │ (render loop uses these UVs in QuadInstance)
+//!         │ (render loop uses these UVs in QuadInstance; TextureRef ref-counts the
+//!         │  region against this entity's lifetime — see crate::texture_ref)
 //!         ▼
 //! GPU shader samples main_atlas sub-region → tinted text pixel
 //! ```

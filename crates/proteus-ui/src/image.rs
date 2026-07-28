@@ -11,11 +11,13 @@
 //!         ▼
 //! decode_image → DecodedImage (RGBA8 pixels + dimensions)
 //!         │
-//!         │ (shell calls FontAtlas::bake_image, then write_to_main_atlas)
+//!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
+//!         │  then write_to_main_atlas to upload the pixels — M11)
 //!         ▼
-//! BakedImage { uv_offset, uv_scale, pixel_size }  ← written back onto the entity
+//! BakedImage { uv_offset, uv_scale, pixel_size } + TextureRef  ← written back onto the entity
 //!         │
-//!         │ (collect_instances uses these UVs in the entity's background QuadInstance)
+//!         │ (collect_instances uses these UVs in the entity's background QuadInstance;
+//!         │  TextureRef ref-counts the region against this entity's lifetime)
 //!         ▼
 //! GPU shader samples main_atlas sub-region → tinted image pixel
 //! ```
