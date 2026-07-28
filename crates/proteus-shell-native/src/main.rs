@@ -40,7 +40,7 @@ use proteus_ui::{
     collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig, BakedImage,
     BakedText, Border, ChildOf, Entity, Glow, GroupTarget, Image, Interactable, InteractionEvents,
     Lifecycle, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
-    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    TextureRef, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -655,7 +655,7 @@ impl RenderState {
             surface_format,
         );
 
-        let font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
+        let font_atlas = FontAtlas::with_embedded_font();
 
         let mut ui_world = ProteusWorld::new();
         // GpuContext + QuadPipeline + FontAtlas live in the ECS world, not as
@@ -887,37 +887,53 @@ impl RenderState {
             // resource_scope — bevy's pattern for needing a specific resource
             // and general World access (for the entity_mut insert below)
             // without a borrow conflict.
-            let region =
+            let glyphs =
                 self.ui_world
                     .world
                     .resource_scope::<FontAtlas, _>(|_world, mut font_atlas| {
-                        font_atlas.bake_text(&content, size_px)
+                        font_atlas.rasterize_text(&content, size_px)
                     });
-            let Some(region) = region else {
-                log::warn!("FontAtlas: could not bake '{content}' for entity {entity:?}");
+            let Some(glyphs) = glyphs else {
+                log::warn!("FontAtlas: could not rasterize '{content}' for entity {entity:?}");
                 continue;
             };
 
-            self.ui_world
+            // M11: allocation moved from FontAtlas's old shelf packer to the
+            // real TextureRegistry — register the region, then upload.
+            let Some(texture_id) = self
+                .ui_world
                 .world
-                .resource::<QuadPipeline>()
-                .write_to_main_atlas(
-                    &self.queue,
-                    region.x,
-                    region.y,
-                    region.width,
-                    region.height,
-                    &region.rgba_pixels,
+                .resource_mut::<QuadPipeline>()
+                .texture_registry
+                .register_static(glyphs.width, glyphs.height, false)
+            else {
+                log::warn!(
+                    "bake_pending_text: main_atlas full — could not register {}x{} for entity {entity:?}",
+                    glyphs.width,
+                    glyphs.height,
                 );
+                continue;
+            };
 
-            let uv_offset = region.uv_offset(MAIN_ATLAS_SIZE);
-            let uv_scale = region.uv_scale(MAIN_ATLAS_SIZE);
+            let pipeline = self.ui_world.world.resource::<QuadPipeline>();
+            let (x, y, w, h) = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(&self.queue, x, y, w, h, &glyphs.rgba_pixels);
+            let (uv_offset, uv_scale) = pipeline
+                .texture_registry
+                .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+                .expect("just registered");
 
-            self.ui_world.world.entity_mut(entity).insert(BakedText {
-                uv_offset,
-                uv_scale,
-                pixel_size: [region.width as f32, region.height as f32],
-            });
+            self.ui_world.world.entity_mut(entity).insert((
+                BakedText {
+                    uv_offset,
+                    uv_scale,
+                    pixel_size: [glyphs.width as f32, glyphs.height as f32],
+                },
+                TextureRef(texture_id),
+            ));
         }
     }
 
@@ -955,41 +971,42 @@ impl RenderState {
             // to a size comfortably above the tiles' on-screen footprint.
             let decoded = proteus_render::resize_to_fit(decoded, MAX_TILE_IMAGE_SIDE);
 
-            let region =
-                self.ui_world
-                    .world
-                    .resource_scope::<FontAtlas, _>(|_world, mut font_atlas| {
-                        font_atlas.bake_image(&decoded.rgba_pixels, decoded.width, decoded.height)
-                    });
-            let Some(region) = region else {
+            // M11: decode_image already produced pixels — no FontAtlas
+            // involvement needed. Register the region, then upload.
+            let Some(texture_id) = self
+                .ui_world
+                .world
+                .resource_mut::<QuadPipeline>()
+                .texture_registry
+                .register_static(decoded.width, decoded.height, false)
+            else {
                 log::warn!(
-                    "bake_pending_images: atlas full — could not bake {}×{} image for entity {entity:?}",
+                    "bake_pending_images: main_atlas full — could not register {}x{} image for entity {entity:?}",
                     decoded.width,
                     decoded.height,
                 );
                 continue;
             };
 
-            self.ui_world
-                .world
-                .resource::<QuadPipeline>()
-                .write_to_main_atlas(
-                    &self.queue,
-                    region.x,
-                    region.y,
-                    region.width,
-                    region.height,
-                    &region.rgba_pixels,
-                );
+            let pipeline = self.ui_world.world.resource::<QuadPipeline>();
+            let (x, y, w, h) = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(&self.queue, x, y, w, h, &decoded.rgba_pixels);
+            let (uv_offset, uv_scale) = pipeline
+                .texture_registry
+                .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+                .expect("just registered");
 
-            let uv_offset = region.uv_offset(MAIN_ATLAS_SIZE);
-            let uv_scale = region.uv_scale(MAIN_ATLAS_SIZE);
-
-            self.ui_world.world.entity_mut(entity).insert(BakedImage {
-                uv_offset,
-                uv_scale,
-                pixel_size: [region.width as f32, region.height as f32],
-            });
+            self.ui_world.world.entity_mut(entity).insert((
+                BakedImage {
+                    uv_offset,
+                    uv_scale,
+                    pixel_size: [decoded.width as f32, decoded.height as f32],
+                },
+                TextureRef(texture_id),
+            ));
         }
     }
 

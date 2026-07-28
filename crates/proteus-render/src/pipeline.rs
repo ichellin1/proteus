@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use wgpu::util::DeviceExt;
 
 use crate::mesh::{quad_vertex_layout, QuadInstance, QUAD_INDICES, QUAD_VERTICES};
-use crate::texture_registry::{TextureId, TextureKind, TextureRegistry};
+use crate::texture_registry::{TextureId, TextureRegistry};
 
 // ---------------------------------------------------------------------------
 // Atlas sizes
@@ -478,7 +478,7 @@ impl QuadPipeline {
             atlas_layout,
             sampler,
             atlas_bind_group,
-            texture_registry: TextureRegistry::new(),
+            texture_registry: TextureRegistry::new(MAIN_ATLAS_SIZE),
             video_rx: std::sync::Mutex::new(None),
             transition_allocator: crate::transition_atlas::TransitionAtlasAllocator::new(
                 TRANSITION_ATLAS_SIZE,
@@ -539,9 +539,10 @@ impl QuadPipeline {
 
     /// Write a rectangular region of RGBA pixels into `main_atlas`.
     ///
-    /// Use this to upload a pre-baked text bitmap produced by
-    /// [`FontAtlas::bake_text`] into the GPU texture so it can be sampled by
-    /// the shader.
+    /// Use this to upload pixels produced by [`FontAtlas::rasterize_text`] or
+    /// [`crate::decode_image`], after registering their region via
+    /// [`crate::TextureRegistry::register_static`] (`x`/`y`/`width`/`height` come from
+    /// [`crate::TextureRegistry::main_atlas_region`]).
     ///
     /// `x` / `y`    — top-left pixel of the destination region (atlas coords).
     /// `width` / `height` — dimensions of the region in pixels.
@@ -551,7 +552,7 @@ impl QuadPipeline {
     ///
     /// Panics in debug builds if `rgba_data.len() != width * height * 4`.
     ///
-    /// [`FontAtlas::bake_text`]: crate::font_atlas::FontAtlas::bake_text
+    /// [`FontAtlas::rasterize_text`]: crate::font_atlas::FontAtlas::rasterize_text
     pub fn write_to_main_atlas(
         &self,
         queue: &wgpu::Queue,
@@ -833,9 +834,7 @@ impl QuadPipeline {
         self.video_atlas = Self::create_video_texture(device, width, height);
         self.video_atlas_size = (width, height);
         self.rebuild_atlas_bind_group(device);
-        let id = self
-            .texture_registry
-            .register(TextureKind::Video, width, height);
+        let id = self.texture_registry.register_video(width, height);
 
         // Bounded to 2 frames: one frame of lookahead; sender blocks when the
         // render loop is behind, providing natural backpressure.

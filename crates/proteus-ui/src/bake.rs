@@ -1,4 +1,4 @@
-//! Static component baking — M10.5.
+//! Static component baking — M10.5, freeing wired to the real registry in M11.
 //!
 //! `Baked` collapses a composite (a `Quad` parent + its children) into a
 //! single permanent textured quad: the subtree is rendered once into
@@ -16,9 +16,9 @@
 //! gather_bake_instances → Vec<QuadInstance>   (crate::topology — recursive subtree capture,
 //!         │                                     the same logic the Slice-transition crossfade uses)
 //!         │
-//!         │ FontAtlas::reserve_region + QuadPipeline::bake_instances_to_main_atlas
+//!         │ TextureRegistry::register_static + QuadPipeline::bake_instances_to_main_atlas
 //!         ▼
-//! BakedComposite { uv_offset, uv_scale, pixel_size }   ← written back onto the root entity
+//! BakedComposite { uv_offset, uv_scale, pixel_size } + TextureRef  ← written back onto the root entity
 //!         │
 //!         │ children despawned; root's own Border/Glow/DropShadow removed and
 //!         │ QuadState color/corner_radius neutralized (the bake already captured them as pixels)
@@ -28,33 +28,31 @@
 //!
 //! ## Why this is a real ECS system, not a shell method like `bake_pending_text`
 //!
-//! `main_atlas` has exactly one legitimate allocator: `FontAtlas`'s shelf
-//! packer (see its own module docs) — a second, independent allocator writing
-//! into the same atlas texture would silently overlap it. `FontAtlas` is a
-//! real bevy `Resource` (inserted into the `World` at shell startup, same as
-//! `GpuContext`/`QuadPipeline`), so `bake_system` can reach it from inside the
-//! ECS schedule the normal way, unlike before M10.5 when it was a plain
-//! shell-owned struct field.
+//! `gather_bake_instances`/the queries below need real ECS `Query` access to walk an arbitrary-
+//! depth subtree — naturally available inside a system, awkward from a shell method. `main_atlas`
+//! allocation itself goes through `QuadPipeline::texture_registry` (M11's `TextureRegistry`), which
+//! `bake_system` reaches the same way it reaches `GpuContext`/`QuadPipeline` — no `FontAtlas`
+//! involvement needed here at all: composite baking renders pixels directly via
+//! `bake_instances_to_main_atlas`, it never had text/image bytes to rasterize or decode.
 //!
-//! ## Known gap — freeing (deferred to M11)
+//! ## Freeing (M11)
 //!
-//! There is no way to free a `main_atlas` region once claimed — `FontAtlas`'s
-//! shelf packer is append-only by design (documented as a known gap since
-//! M4). A baked composite's region leaks in `main_atlas` until the app exits,
-//! exactly like every text/image region already does today. Real freeing is
-//! M11's job (unifying the three disconnected atlas allocators into one with
-//! actual reference counting) — see `PLANNING.md`'s M11 entry.
+//! `TextureRef`, inserted alongside `BakedComposite` below, ref-counts this region against the
+//! entity's lifetime via `ComponentHooks` — despawning the entity (or replacing/removing
+//! `TextureRef`) decrements the registry's ref count, making the region a reclaim candidate. See
+//! `crate::texture_ref` for the full mechanism.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
 use glam::Vec4;
 
-use proteus_render::{FontAtlas, GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
+use proteus_render::{GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
 
 use crate::component::QuadState;
 use crate::effects::{Border, DropShadow, Glow};
 use crate::hierarchy::resolve_world_position_query;
+use crate::texture_ref::TextureRef;
 use crate::topology::{gather_bake_instances, BakeVisualsQuery};
 
 // ---------------------------------------------------------------------------
@@ -126,13 +124,8 @@ pub fn bake_system(
     queries: BakeQueries,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
-    mut font_atlas: Option<ResMut<FontAtlas>>,
 ) {
-    let (Some(gpu), Some(pipeline), Some(font_atlas)) = (
-        gpu.as_deref(),
-        pipeline.as_deref_mut(),
-        font_atlas.as_deref_mut(),
-    ) else {
+    let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) else {
         return;
     };
     let BakeQueries {
@@ -154,12 +147,19 @@ pub fn bake_system(
         let width = world_qs.size.x.max(1.0).ceil() as u32;
         let height = world_qs.size.y.max(1.0).ceil() as u32;
 
-        let Some((x, y)) = font_atlas.reserve_region(width, height) else {
+        let Some(texture_id) = pipeline
+            .texture_registry
+            .register_static(width, height, false)
+        else {
             log::warn!(
                 "bake_system: main_atlas full — cannot bake entity {entity:?} ({width}x{height})"
             );
             continue;
         };
+        let (x, y, w, h) = pipeline
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .expect("just registered");
 
         let view_projection = QuadPipeline::ortho_centered(
             world_qs.position.x,
@@ -172,15 +172,21 @@ pub fn bake_system(
             &gpu.queue,
             &instances,
             view_projection,
-            (x, y, width, height),
+            (x, y, w, h),
         );
 
-        let atlas_size = MAIN_ATLAS_SIZE as f32;
-        commands.entity(entity).insert(BakedComposite {
-            uv_offset: [x as f32 / atlas_size, y as f32 / atlas_size],
-            uv_scale: [width as f32 / atlas_size, height as f32 / atlas_size],
-            pixel_size: [width as f32, height as f32],
-        });
+        let (uv_offset, uv_scale) = pipeline
+            .texture_registry
+            .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+            .expect("just registered");
+        commands.entity(entity).insert((
+            BakedComposite {
+                uv_offset,
+                uv_scale,
+                pixel_size: [width as f32, height as f32],
+            },
+            TextureRef(texture_id),
+        ));
 
         // The bake above already captured this entity's own fill/border/glow/
         // shadow as pixels in the texture — leaving them live would render

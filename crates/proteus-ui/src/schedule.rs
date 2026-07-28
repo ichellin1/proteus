@@ -27,6 +27,7 @@ use bevy_ecs::schedule::ApplyDeferred;
 use crate::bake::bake_system;
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{hit_test_system, HoveredEntity, InteractionEvents, PointerInput};
+use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
 };
@@ -113,6 +114,11 @@ impl ProteusWorld {
         world.init_resource::<InteractionEvents>();
         world.init_resource::<HoveredEntity>();
 
+        // M11: TextureRef's ref-counting hooks must be registered before any
+        // TextureRef component can exist in an archetype — bevy_ecs panics
+        // otherwise. Doing this here, at world construction, guarantees that.
+        register_texture_ref_hooks(&mut world);
+
         // --- Schedule ---
         let schedule = build_schedule();
 
@@ -183,6 +189,11 @@ pub fn build_schedule() -> Schedule {
     // before Render reads the result — otherwise it'd see last frame's stale
     // (unbaked) state.
     schedule.add_systems(bake_system.in_set(ProteusSet::Bake));
+    // M11: bumps every live TextureRef's LRU recency once per frame. No
+    // ordering dependency with bake_system — eviction only ever considers
+    // zero-ref entries, and touch only ever updates referenced ones, so the
+    // two systems never contend over the same entry.
+    schedule.add_systems(touch_texture_refs_system.in_set(ProteusSet::Bake));
     schedule.add_systems(ApplyDeferred.in_set(ProteusSet::BakeFlush));
 
     // M10: real cascade systems replace the visibility/opacity stubs. Both

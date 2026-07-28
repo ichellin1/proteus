@@ -1480,14 +1480,14 @@ contact with the actual codebase:
   until it succeeds, matching `bake_pending_text`/`bake_pending_images`'s existing
   graceful-degradation shape, so a bake that fails one frame (atlas full, GPU resources not yet
   present) isn't silently lost forever.
-- **Freeing is deferred to M11**, not implemented here. `FontAtlas`'s shelf packer is append-only by
-  design (documented as a known gap since M4) — there is no free/deallocate capability for
-  `main_atlas` for *any* consumer (text, images, or baked composites) today. Building one now would
-  mean either an ill-suited arbitrary-free API bolted onto a shelf packer, or a second allocator
-  carved out of a reserved sub-region — both preempt M11's actual charter (unifying the three
-  disconnected atlas allocators into one with real reference counting). A baked composite's region
-  leaks in `main_atlas` until the app exits, exactly like every text/image region already does
-  today. See M11's DoD below for the forward reference.
+- **Freeing was deferred to M11** (now complete), not implemented here at the time. `FontAtlas`'s
+  shelf packer was append-only by design (documented as a known gap since M4) — there was no
+  free/deallocate capability for `main_atlas` for *any* consumer (text, images, or baked composites).
+  Building one at M10.5 would have meant either an ill-suited arbitrary-free API bolted onto a
+  shelf packer, or a second allocator carved out of a reserved sub-region — both would have
+  preempted M11's actual charter (unifying the three disconnected atlas allocators into one with
+  real reference counting). M11 closed this: `BakedComposite`'s region is now ref-counted via
+  `TextureRef` and freed on despawn like any other baked content — see M11's DoD.
 
 **Definition of done:**
 - [x] `Baked` marker component; `bake_system` (replaces `stub_bake_system` in `schedule.rs`)
@@ -1498,7 +1498,8 @@ contact with the actual codebase:
   pixels (the same fix the Slice-transition crossfade needed for the identical reason)
 - [x] Works for a composite created at startup and one created dynamically at runtime (query-based
   retry handles both uniformly — no `Added<T>` one-shot-trigger gap)
-- [ ] ~~Baked texture is freed on `component.destroy()`~~ — deferred to M11 (see scope note above)
+- [x] Baked texture is freed on despawn — closed by M11's `TextureRef` ref-counting (see scope note
+  above); was deferred at M10.5 time
 - [x] Regression test: bake a `Quad` + `Text` composite, assert the child entities are gone and
   the parent renders as a single stable textured quad
   (`crates/proteus-ui/tests/static_bake.rs`)
@@ -1898,57 +1899,90 @@ hands the bytes to a new `ProteusApp::set_tile_image` entry point.
 
 ---
 
-### M11 — Resource Management *(critical path — not started)*
+### M11 — Resource Management *(critical path — complete)*
 
 Real reference counting, eviction, and a texture lifecycle that matches what Phase B's
 architecture section actually specifies. Identified by audit, not originally scheduled — see the
 critical path note above for why.
 
-**The gap, precisely:** Phase B specifies `TextureRegistry` backed by `SlotMap` (generation-safe
-IDs), `TextureEntry { atlas_region, ref_count, size, format, state, kind }`, reference counting
-auto-tracked against component lifecycle, `TextureState::{Loading,Ready,Evicted,Failed}`,
-eternal-vs-ephemeral textures with LRU eviction, a restoration queue, and backgrounding-driven
-eviction. What exists in `crates/proteus-render/src/texture_registry.rs` today:
+**The gap, precisely (as found):** Phase B specifies `TextureRegistry` backed by `SlotMap`
+(generation-safe IDs), `TextureEntry { atlas_region, ref_count, size, format, state, kind }`,
+reference counting auto-tracked against component lifecycle,
+`TextureState::{Loading,Ready,Evicted,Failed}`, eternal-vs-ephemeral textures with LRU eviction, a
+restoration queue, and backgrounding-driven eviction. What existed in
+`crates/proteus-render/src/texture_registry.rs` before this milestone:
 ```rust
 pub type TextureId = u32;                    // plain u32 — no SlotMap, no generation counter
 pub enum TextureKind { Video }                // only Video — no Static
 struct Entry { id, kind, width, height, active: bool }  // no ref_count, atlas_region, state, eternal, or last_used
 ```
-No `unregister`/`free` method exists — once registered, an entry lives in the backing `Vec`
-forever. There is no reference counting anywhere in the codebase, no LRU eviction, no restoration
-queue, no `TextureState`. Beyond that gap, there are **three independent, disconnected**
-allocation mechanisms today, none sharing the designed `TextureEntry` abstraction: `FontAtlas`'s
-own shelf packer (`main_atlas` — text and, since M9.7, static images too — **no freeing at all**,
-a fact documented in its own doc comment as a known gap since M4), `TransitionAtlasAllocator`
-(`transition_atlas` — the one piece actually built to the design: real etagere-backed
+No `unregister`/`free` method existed — once registered, an entry lived in the backing `Vec`
+forever. There was no reference counting anywhere in the codebase, no LRU eviction, no restoration
+queue, no `TextureState`. Beyond that gap, there were **three independent, disconnected**
+allocation mechanisms, none sharing the designed `TextureEntry` abstraction: `FontAtlas`'s own
+shelf packer (`main_atlas` — text and, since M9.7, static images too — **no freeing at all**, a
+fact documented in its own doc comment as a known gap since M4), `TransitionAtlasAllocator`
+(`transition_atlas` — the one piece already built to the design: real etagere-backed
 allocate/free, correctly tied to transition start/completion), and `TextureRegistry`
 (`video_atlas` — metadata-only, effectively single-slot in practice, suspend/resume driven
 entirely by explicit shell code rather than any generic policy).
 
-**Open design question, not resolved by this entry:** should `FontAtlas`, `TransitionAtlasAllocator`,
-and `TextureRegistry` actually be unified into one system, or is the current three-way split a
-reasonable simplification worth documenting as intentional rather than closing? Decide this before
-implementation begins, not during it.
+**Unification question — decided: one shared registry, separate low-level allocators.**
+`main_atlas` (permanent baked content), `transition_atlas` (ephemeral crossfade snapshots), and
+`video_atlas` (streamed frames) have genuinely different lifecycles, so forcing them into one
+physical atlas or one allocator instance would fight that. Instead: one real `TextureRegistry` —
+the single source of truth for `TextureId`/ref-counting/eviction/state — sits above whichever
+low-level allocator is appropriate per kind (`TextureKind::Static` for `main_atlas`, backed by a
+new etagere-backed `MainAtlasAllocator` copied from `TransitionAtlasAllocator`'s shape;
+`TextureKind::Video` metadata-only, as before). `transition_atlas`/`TransitionAtlasAllocator` are
+already correctly self-managed and are **not** migrated into the shared registry — not the gap this
+milestone closed, and folding them in would have been scope creep with no corresponding DoD ask.
+
+**Eviction-safety scope note.** Phase A's original design described a second eviction tier beyond
+unreferenced-oldest-first: if that's not enough room, evict still-*referenced* entries too, backed
+by a restoration queue to regenerate them transparently. This turned out to be a real correctness
+hazard given `BakedText`/`BakedImage`/`BakedComposite` cache their UV coordinates directly on the
+component for a fast render path (no per-frame registry lookup): evicting a referenced entry and
+letting a *different* texture reuse its region later would make the original component silently
+render the wrong (new occupant's) pixels — wrong content with no error, the same class of subtle
+bug this project hit with gamma/draw-order in M10. So eviction in this milestone is restricted to
+unreferenced (`ref_count == 0`), non-`eternal` entries only; if that's insufficient, registration
+simply fails (`None`, logged) — the same graceful-degradation shape every other atlas-full path in
+this codebase already uses. Evicting still-referenced content and the restoration mechanism that
+would make it safe are Post-V1 (see below), along with backgrounding-driven eviction beyond video
+(no real OS focus/occlusion/Page-Visibility wiring exists anywhere to extend, so only the callable
+suspend/resume-ephemeral API shipped, not the OS-signal wiring itself).
+
+**Also reserved, not implemented:** `TextureKind::Animated` (GIF/sprite-sheet playback) — added to
+the enum now so its public shape doesn't need to break again later, matching how `TextureKind::Video`
+itself was pre-declared before M9 built it. No decode dependency, multi-region-per-resource entry
+shape, or frame-advance system exists yet — see Post-V1 for the full design.
 
 **Definition of done:**
-- [ ] `TextureKind::Static` exists; `FontAtlas`-baked text and images (M4, M9.7) are tracked
+- [x] `TextureKind::Static` exists; `FontAtlas`-baked text and images (M4, M9.7) are tracked
   through `TextureRegistry`, closing the gap M4's scope note pointed here
-- [ ] Real reference counting: incremented when a component references a texture, decremented on
-  `free()`/`freeResources()`/`destroy()`/reassignment — GPU memory released at zero, not before
-- [ ] A working `free`/`unregister` path exists for `main_atlas` entries — today baked text/images
-  are permanent for the app's lifetime; this milestone gives them one. This includes `BakedComposite`
-  regions from M10.5 (static component baking) — deferred there explicitly for this milestone to
-  close, not a separate gap discovered independently
-- [ ] LRU eviction for ephemeral (non-`eternal`) textures when capacity is reached, per the
-  documented eviction order (unreferenced ephemeral oldest-first, then referenced ephemeral,
-  eternal never evicted)
-- [ ] `eternal`/`last_used` fields exist and are honored by the eviction policy
-- [ ] Backgrounding-driven eviction generalized beyond video — today only `suspend_video`/
-  `resume_video` exist; the same lifecycle should apply to any resource-backed texture
-- [ ] The `FontAtlas`/`TransitionAtlasAllocator`/`TextureRegistry` unification question (above) is
-  explicitly decided and the decision documented here, whichever way it goes
-- [ ] Regression tests: ref-count increment/decrement, eviction order under simulated pressure,
-  free-then-reuse of a `main_atlas` region
+- [x] Real reference counting: incremented when a component references a texture (via
+  `proteus_ui::TextureRef`'s `ComponentHooks`), decremented on reassignment, explicit removal, or
+  despawn (`on_replace`, which fires uniformly for all three, before `on_remove`) — GPU memory
+  released at zero, not before. "At zero" means the entry becomes a reclaim *candidate* — actually
+  freed only via an explicit `free()` call or eviction-under-pressure, not immediately (see the
+  eviction-safety note above for why immediate freeing would leave nothing for eviction to reclaim)
+- [x] A working `free`/`evict_unused` path exists for `main_atlas` entries — including
+  `BakedComposite` regions from M10.5 (static component baking), deferred there explicitly for this
+  milestone to close
+- [x] LRU eviction for ephemeral (non-`eternal`) textures when capacity is reached — restricted to
+  unreferenced entries only (see the eviction-safety scope note); referenced-entry eviction is
+  Post-V1
+- [x] `eternal`/`last_used` fields exist and are honored by the eviction policy
+- [ ] Backgrounding-driven eviction generalized beyond video — deferred to Post-V1 (no OS-level
+  trigger exists anywhere in either shell to extend; only the callable API shipped)
+- [x] The `FontAtlas`/`TransitionAtlasAllocator`/`TextureRegistry` unification question is decided
+  (above): one shared registry, separate low-level allocators
+- [x] Regression tests: ref-count increment/decrement, eviction order under simulated pressure
+  (unreferenced-oldest-first, never touching referenced/eternal entries), free-then-reuse of a
+  `main_atlas` region, atlas-exhaustion-fails-gracefully, multi-entry no-overlap packing, and a
+  headless-GPU integration test proving a despawn-triggered decref actually frees and reuses the
+  region (not just a ref-count number moving)
 
 ---
 

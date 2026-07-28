@@ -25,6 +25,7 @@ pub mod input;
 pub mod schedule;
 pub mod signal;
 pub mod text;
+pub mod texture_ref;
 pub mod topology;
 pub mod transition;
 pub mod video;
@@ -46,6 +47,7 @@ pub use image::{BakedImage, Image};
 pub use input::{quad_contains, Interactable, InteractionEvents, PointerInput};
 pub use schedule::ProteusWorld;
 pub use text::{BakedText, Text};
+pub use texture_ref::TextureRef;
 pub use topology::{
     ActiveGroupTransition, ChildBehaviorFn, GroupSource, GroupTarget, NToOneRequest, OneToNRequest,
     PartOfGroup, SplitStrategy,

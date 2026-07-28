@@ -7,6 +7,7 @@
 //! - The offscreen render-to-texture pipeline used by static and transition bakes
 
 pub mod font_atlas;
+pub mod main_atlas_allocator;
 pub mod material;
 pub mod mesh;
 pub mod pipeline;
@@ -15,14 +16,15 @@ pub mod static_texture;
 pub mod texture_registry;
 pub mod transition_atlas;
 
-pub use font_atlas::{BakedRegion, FontAtlas, EMBEDDED_FONT_BYTES};
+pub use font_atlas::{FontAtlas, RasterizedGlyphs, EMBEDDED_FONT_BYTES};
+pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{QuadInstance, QuadVertex, QUAD_INDICES, QUAD_VERTICES};
 pub use pipeline::{
     GpuContext, QuadPipeline, VideoFrameSender, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
     MAIN_ATLAS_SIZE, TRANSITION_ATLAS_SIZE,
 };
 pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
-pub use texture_registry::{TextureId, TextureKind, TextureRegistry};
+pub use texture_registry::{AtlasRegion, TextureId, TextureKind, TextureRegistry, TextureState};
 pub use transition_atlas::{TransitionAllocId, TransitionAtlasAllocator, TransitionRegion};
 
 /// The WGSL source for the instanced quad shader, embedded at compile time.

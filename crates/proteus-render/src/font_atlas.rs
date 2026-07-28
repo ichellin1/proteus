@@ -1,33 +1,37 @@
-//! CPU-side font atlas for pre-baked text rendering.
+//! CPU-side font rasterizer for pre-baked text rendering.
 //!
-//! [`FontAtlas`] rasterizes text strings into RGBA pixel buffers using
-//! [`fontdue`], then the caller uploads those pixels to a region in the GPU's
-//! `main_atlas` via [`QuadPipeline::write_to_main_atlas`].
+//! [`FontAtlas`] rasterizes text strings into RGBA pixel buffers using [`fontdue`]. The caller
+//! registers a `main_atlas` region for those pixels via
+//! [`crate::TextureRegistry::register_static`], then uploads them via
+//! [`crate::QuadPipeline::write_to_main_atlas`].
 //!
 //! ## Approach — text-as-texture
 //!
-//! A complete text string (e.g. "Hello World") is rasterized at its declared
-//! pixel size into a single RGBA image:
+//! A complete text string (e.g. "Hello World") is rasterized at its declared pixel size into a
+//! single RGBA image:
 //! - R=G=B=255 throughout (white — enables color tinting via `QuadInstance::color`)
 //! - A = per-pixel glyph coverage from fontdue's anti-aliased rasterizer
 //!
-//! That image is written into a region of `main_atlas` and the entity's
-//! `QuadInstance` UV fields are pointed at that region. The result is treated
-//! identically to any other textured quad — transitions, color tinting, and
-//! corner-radius rounding all work without special-casing text.
+//! That image is written into a `main_atlas` region and the entity's `QuadInstance` UV fields are
+//! pointed at that region. The result is treated identically to any other textured quad —
+//! transitions, color tinting, and corner-radius rounding all work without special-casing text.
 //!
-//! ## Atlas packing
+//! ## No allocation here (M11)
 //!
-//! A simple shelf (row) packer is used. Each call to [`FontAtlas::bake_text`]
-//! claims a new horizontal run of pixels. Rows are never freed during a session.
-//! This is sufficient for M4 (Phase 1 text). A proper LRU + etagere packer
-//! is planned for a later milestone when text changes dynamically at runtime.
+//! Before M11, `FontAtlas` owned an append-only shelf packer and allocated its own `main_atlas`
+//! regions (`bake_text`/`bake_image`/`reserve_region`) — the only reason `bake_image`, which
+//! decodes nothing itself, existed at all was to share that one packer's cursor with `bake_text`
+//! so the two never silently overlapped. M11 replaced that packer with
+//! [`crate::TextureRegistry`]'s real etagere-backed allocator, so `FontAtlas` narrows to what it's
+//! actually unique at — font rasterization — and `bake_image` is gone: a decoded image's pixels go
+//! straight from [`crate::decode_image`] to `TextureRegistry::register_static`, no `FontAtlas`
+//! involvement needed.
 //!
 //! ## Embedded font
 //!
-//! [`EMBEDDED_FONT_BYTES`] holds DejaVu Sans Regular (Bitstream Vera / public
-//! domain license) embedded at compile time. Callers can supply their own font
-//! bytes to [`FontAtlas::new`] for custom typography.
+//! [`EMBEDDED_FONT_BYTES`] holds DejaVu Sans Regular (Bitstream Vera / public domain license)
+//! embedded at compile time. Callers can supply their own font bytes to [`FontAtlas::new`] for
+//! custom typography.
 
 // ---------------------------------------------------------------------------
 // Embedded font
@@ -40,17 +44,14 @@
 pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
 
 // ---------------------------------------------------------------------------
-// BakedRegion
+// RasterizedGlyphs
 // ---------------------------------------------------------------------------
 
-/// The result of one [`FontAtlas::bake_text`] call — pixel data plus the
-/// region within `main_atlas` where those pixels should be uploaded.
+/// The result of one [`FontAtlas::rasterize_text`] call — just pixels, no atlas placement.
+/// Register a `main_atlas` region for them via [`crate::TextureRegistry::register_static`], then
+/// upload via [`crate::QuadPipeline::write_to_main_atlas`].
 #[derive(Debug, Clone)]
-pub struct BakedRegion {
-    /// X origin of this region within the atlas (pixel coordinates).
-    pub x: u32,
-    /// Y origin of this region within the atlas (pixel coordinates).
-    pub y: u32,
+pub struct RasterizedGlyphs {
     /// Width of the rasterized text image in pixels.
     pub width: u32,
     /// Height of the rasterized text image in pixels.
@@ -60,117 +61,51 @@ pub struct BakedRegion {
     pub rgba_pixels: Vec<u8>,
 }
 
-impl BakedRegion {
-    /// UV offset into `main_atlas` for the top-left corner of this region.
-    ///
-    /// Divide by the atlas size (from [`super::pipeline::QuadPipeline::MAIN_ATLAS_SIZE`])
-    /// to obtain normalised UVs suitable for `QuadInstance::uv_offset`.
-    #[inline]
-    pub fn uv_offset(&self, atlas_size: u32) -> [f32; 2] {
-        let s = atlas_size as f32;
-        [self.x as f32 / s, self.y as f32 / s]
-    }
-
-    /// UV scale that maps the unit quad's [0,1]×[0,1] UV space to this region.
-    ///
-    /// Assign to `QuadInstance::uv_scale`.
-    #[inline]
-    pub fn uv_scale(&self, atlas_size: u32) -> [f32; 2] {
-        let s = atlas_size as f32;
-        [self.width as f32 / s, self.height as f32 / s]
-    }
-}
-
 // ---------------------------------------------------------------------------
 // FontAtlas
 // ---------------------------------------------------------------------------
 
-/// CPU-side font atlas: glyph rasterizer + shelf packer.
+/// CPU-side glyph rasterizer — no atlas allocation (see the module docs).
 ///
-/// Create one per application session; share it across all text entities. A
-/// real bevy ECS `Resource` (see the impl below) — inserted into the `World`
-/// once at shell startup rather than kept as a plain shell-owned field — so
-/// `bake_system` (`crates/proteus-ui/src/bake.rs`) can reach the one shelf
-/// packer for `main_atlas` from inside the ECS schedule, the same way
-/// `GpuContext`/`QuadPipeline` already can.
+/// Create one per application session; share it across all text entities. A real bevy ECS
+/// `Resource` (see the impl below) — inserted into the `World` once at shell startup rather than
+/// kept as a plain shell-owned field — so `bake_pending_text`/`bake_system` can reach it from
+/// inside the ECS schedule the same way `GpuContext`/`QuadPipeline` already can.
 ///
-/// Call [`bake_text`] for each unique (string, size) pair, then upload the
-/// returned [`BakedRegion`] to the GPU atlas via
-/// [`QuadPipeline::write_to_main_atlas`].
+/// Call [`rasterize_text`] for each unique (string, size) pair, register a `main_atlas` region for
+/// the result via `TextureRegistry::register_static`, then upload via
+/// `QuadPipeline::write_to_main_atlas`.
 ///
-/// [`bake_text`]: FontAtlas::bake_text
+/// [`rasterize_text`]: FontAtlas::rasterize_text
 pub struct FontAtlas {
     font: fontdue::Font,
-
-    // Shelf packer state — simple row-based allocation.
-    //
-    // The atlas is logically divided into horizontal rows ("shelves"). Each
-    // new allocation is appended to the current row; when it doesn't fit the
-    // packer opens a new row.
-    //
-    // `cursor_x` / `cursor_y`: top-left corner of the next free slot.
-    // `row_height`: tallest allocation on the current row (determines where
-    //               the next row starts).
-    cursor_x: u32,
-    cursor_y: u32,
-    row_height: u32,
-
-    atlas_width: u32,
-    atlas_height: u32,
 }
 
 impl bevy_ecs::prelude::Resource for FontAtlas {}
 
 impl FontAtlas {
-    /// Pixel gap between atlas allocations to prevent linear-sampler bleed.
-    const GAP: u32 = 1;
-
     /// Create a new [`FontAtlas`] backed by the given TTF/OTF bytes.
-    ///
-    /// `atlas_width` and `atlas_height` must match the dimensions of the GPU
-    /// atlas texture this `FontAtlas` is packing into (typically
-    /// [`QuadPipeline::MAIN_ATLAS_SIZE`] × [`QuadPipeline::MAIN_ATLAS_SIZE`]).
-    ///
-    /// `y_offset` — number of rows at the top of the atlas to skip. Pass a
-    /// small value (e.g. `2`) to leave room for any sentinel pixels that were
-    /// baked into the atlas at startup (such as the white-pixel at origin used
-    /// by [`QuadPipeline`]).
     ///
     /// # Panics
     ///
     /// Panics if `font_bytes` cannot be parsed as a valid TTF or OTF file.
-    ///
-    /// [`QuadPipeline`]: super::pipeline::QuadPipeline
-    pub fn new(font_bytes: &[u8], atlas_width: u32, atlas_height: u32, y_offset: u32) -> Self {
+    pub fn new(font_bytes: &[u8]) -> Self {
         let font = fontdue::Font::from_bytes(font_bytes, fontdue::FontSettings::default())
             .expect("FontAtlas: failed to parse font bytes — ensure the data is a valid TTF/OTF");
-
-        Self {
-            font,
-            cursor_x: 0,
-            cursor_y: y_offset,
-            row_height: 0,
-            atlas_width,
-            atlas_height,
-        }
+        Self { font }
     }
 
     /// Create a [`FontAtlas`] using the [`EMBEDDED_FONT_BYTES`] (DejaVu Sans Regular).
-    pub fn with_embedded_font(atlas_width: u32, atlas_height: u32) -> Self {
-        Self::new(EMBEDDED_FONT_BYTES, atlas_width, atlas_height, 2)
+    pub fn with_embedded_font() -> Self {
+        Self::new(EMBEDDED_FONT_BYTES)
     }
 
-    /// Rasterize `text` at `size_px` and pack it into the atlas.
-    ///
-    /// Returns `Some(BakedRegion)` on success. The caller must:
-    /// 1. Upload `region.rgba_pixels` to the GPU atlas at `(region.x, region.y)`.
-    /// 2. Compute `uv_offset = region.uv_offset(ATLAS_SIZE)` and
-    ///    `uv_scale = region.uv_scale(ATLAS_SIZE)` and store them on the entity.
+    /// Rasterize `text` at `size_px` into an RGBA pixel buffer.
     ///
     /// Returns `None` if:
     /// - `text` is empty (or contains only whitespace that contributes no pixels).
-    /// - The atlas is full (no region large enough for this text at this size).
-    pub fn bake_text(&mut self, text: &str, size_px: f32) -> Option<BakedRegion> {
+    /// - The font has no usable line metrics at `size_px` (should not happen for valid fonts).
+    pub fn rasterize_text(&mut self, text: &str, size_px: f32) -> Option<RasterizedGlyphs> {
         if text.is_empty() {
             return None;
         }
@@ -212,13 +147,7 @@ impl FontAtlas {
         }
 
         // ------------------------------------------------------------------
-        // 3. Allocate a region in the atlas shelf packer.
-        // ------------------------------------------------------------------
-
-        let (atlas_x, atlas_y) = self.allocate(text_width, text_height)?;
-
-        // ------------------------------------------------------------------
-        // 4. Composite glyph bitmaps into a single RGBA pixel buffer.
+        // 3. Composite glyph bitmaps into a single RGBA pixel buffer.
         //
         //    Layout: white (R=G=B=255), coverage in alpha channel.
         //    This lets the shader tint text via `QuadInstance::color` without
@@ -267,100 +196,11 @@ impl FontAtlas {
             pen_x += metrics.advance_width.ceil() as i32;
         }
 
-        Some(BakedRegion {
-            x: atlas_x,
-            y: atlas_y,
+        Some(RasterizedGlyphs {
             width: text_width,
             height: text_height,
             rgba_pixels: rgba,
         })
-    }
-
-    /// Pack already-decoded RGBA8 pixels (e.g. from
-    /// [`crate::static_texture::decode_image`]) into the atlas.
-    ///
-    /// Shares this `FontAtlas`'s shelf-packer cursor with [`bake_text`] —
-    /// despite the type's name, it's really "the CPU-side packer for
-    /// `main_atlas`", and there is exactly one instance of it per
-    /// application session. A second, independent packer writing into the
-    /// same atlas texture would allocate without knowing about the other's
-    /// claimed regions and silently overlap.
-    ///
-    /// `rgba.len()` must equal `width * height * 4`. Returns `None` if the
-    /// atlas has no room left for a region this size.
-    ///
-    /// [`bake_text`]: FontAtlas::bake_text
-    pub fn bake_image(&mut self, rgba: &[u8], width: u32, height: u32) -> Option<BakedRegion> {
-        debug_assert_eq!(
-            rgba.len(),
-            (width * height * 4) as usize,
-            "bake_image: expected {width}×{height}×4 bytes, got {}",
-            rgba.len(),
-        );
-        let (atlas_x, atlas_y) = self.allocate(width, height)?;
-        Some(BakedRegion {
-            x: atlas_x,
-            y: atlas_y,
-            width,
-            height,
-            rgba_pixels: rgba.to_vec(),
-        })
-    }
-
-    /// Reserve a `width` × `height` region in the atlas without any CPU-side
-    /// pixel data of its own (M10.5 — static component baking).
-    ///
-    /// Unlike [`bake_text`]/[`bake_image`], the caller here already has a way
-    /// to render pixels *directly into* `main_atlas` on the GPU (see
-    /// [`crate::QuadPipeline::bake_instances_to_main_atlas`]) rather than
-    /// uploading a CPU-decoded buffer — so this returns just the claimed
-    /// `(x, y)` origin, not a full [`BakedRegion`]. Shares this `FontAtlas`'s
-    /// single shelf-packer cursor with `bake_text`/`bake_image`, for the same
-    /// reason documented on [`bake_image`]: a second, independent packer
-    /// writing into the same atlas texture would silently overlap it.
-    ///
-    /// Returns `None` if the atlas has no room left for a region this size.
-    ///
-    /// [`bake_text`]: FontAtlas::bake_text
-    /// [`bake_image`]: FontAtlas::bake_image
-    pub fn reserve_region(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
-        self.allocate(width, height)
-    }
-
-    // ---------------------------------------------------------------------------
-    // Shelf packer
-    // ---------------------------------------------------------------------------
-
-    /// Allocate a `width` × `height` region in the atlas.
-    ///
-    /// Returns the `(x, y)` top-left corner of the allocated region, or `None`
-    /// if the atlas is exhausted.
-    fn allocate(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
-        // Advance to the next row if this allocation doesn't fit horizontally.
-        if self.cursor_x + width > self.atlas_width {
-            self.cursor_y += self.row_height + Self::GAP;
-            self.cursor_x = 0;
-            self.row_height = 0;
-        }
-
-        // Fail if we've run out of vertical space.
-        if self.cursor_y + height > self.atlas_height {
-            log::warn!(
-                "FontAtlas: atlas full — cannot allocate {}×{} at y={}",
-                width,
-                height,
-                self.cursor_y,
-            );
-            return None;
-        }
-
-        let x = self.cursor_x;
-        let y = self.cursor_y;
-
-        self.cursor_x += width + Self::GAP;
-        self.row_height = self.row_height.max(height);
-
-        Some((x, y))
     }
 }
 
@@ -373,28 +213,30 @@ mod tests {
     use super::*;
 
     fn atlas() -> FontAtlas {
-        FontAtlas::with_embedded_font(2048, 2048)
+        FontAtlas::with_embedded_font()
     }
 
     #[test]
-    fn bake_text_returns_non_empty_pixels() {
+    fn rasterize_text_returns_non_empty_pixels() {
         let mut fa = atlas();
-        let region = fa
-            .bake_text("Hello", 24.0)
-            .expect("bake_text returned None");
-        assert!(!region.rgba_pixels.is_empty());
+        let glyphs = fa
+            .rasterize_text("Hello", 24.0)
+            .expect("rasterize_text returned None");
+        assert!(!glyphs.rgba_pixels.is_empty());
         assert_eq!(
-            region.rgba_pixels.len(),
-            (region.width * region.height * 4) as usize
+            glyphs.rgba_pixels.len(),
+            (glyphs.width * glyphs.height * 4) as usize
         );
     }
 
     #[test]
-    fn bake_text_pixels_are_white_with_alpha() {
+    fn rasterize_text_pixels_are_white_with_alpha() {
         let mut fa = atlas();
-        let region = fa.bake_text("A", 48.0).expect("bake expected to succeed");
+        let glyphs = fa
+            .rasterize_text("A", 48.0)
+            .expect("rasterize expected to succeed");
         // Every non-transparent pixel must have R=G=B=255.
-        for chunk in region.rgba_pixels.chunks_exact(4) {
+        for chunk in glyphs.rgba_pixels.chunks_exact(4) {
             let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
             if a > 0 {
                 assert_eq!(r, 255, "R should be 255 where alpha > 0");
@@ -405,10 +247,12 @@ mod tests {
     }
 
     #[test]
-    fn bake_text_has_some_opaque_pixels() {
+    fn rasterize_text_has_some_opaque_pixels() {
         let mut fa = atlas();
-        let region = fa.bake_text("X", 32.0).expect("bake should succeed");
-        let has_visible = region.rgba_pixels.chunks_exact(4).any(|c| c[3] > 0);
+        let glyphs = fa
+            .rasterize_text("X", 32.0)
+            .expect("rasterize should succeed");
+        let has_visible = glyphs.rgba_pixels.chunks_exact(4).any(|c| c[3] > 0);
         assert!(
             has_visible,
             "rasterized glyph should have at least one visible pixel"
@@ -416,55 +260,19 @@ mod tests {
     }
 
     #[test]
-    fn bake_text_uv_in_unit_range() {
-        const ATLAS: u32 = 2048;
+    fn rasterize_empty_text_returns_none() {
         let mut fa = atlas();
-        let r = fa.bake_text("Test", 20.0).expect("bake should succeed");
-        let [ox, oy] = r.uv_offset(ATLAS);
-        let [sx, sy] = r.uv_scale(ATLAS);
-        assert!((0.0..=1.0).contains(&ox), "uv_offset.x out of range: {ox}");
-        assert!((0.0..=1.0).contains(&oy), "uv_offset.y out of range: {oy}");
-        assert!(sx > 0.0 && sx <= 1.0, "uv_scale.x out of range: {sx}");
-        assert!(sy > 0.0 && sy <= 1.0, "uv_scale.y out of range: {sy}");
-        assert!(ox + sx <= 1.0, "UV region exceeds atlas width");
-        assert!(oy + sy <= 1.0, "UV region exceeds atlas height");
+        assert!(fa.rasterize_text("", 24.0).is_none());
     }
 
     #[test]
-    fn bake_text_successive_allocations_do_not_overlap() {
-        let mut fa = atlas();
-        let r1 = fa.bake_text("Hello", 24.0).unwrap();
-        let r2 = fa.bake_text("World", 24.0).unwrap();
-
-        // Regions must not overlap.
-        fn overlaps(a: &BakedRegion, b: &BakedRegion) -> bool {
-            let ax2 = a.x + a.width;
-            let ay2 = a.y + a.height;
-            let bx2 = b.x + b.width;
-            let by2 = b.y + b.height;
-            a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y
-        }
-
-        assert!(
-            !overlaps(&r1, &r2),
-            "successive allocations overlap: {r1:?} vs {r2:?}"
-        );
-    }
-
-    #[test]
-    fn bake_empty_text_returns_none() {
-        let mut fa = atlas();
-        assert!(fa.bake_text("", 24.0).is_none());
-    }
-
-    #[test]
-    fn bake_text_sizes_12_to_48_succeed() {
+    fn rasterize_text_sizes_12_to_48_succeed() {
         let mut fa = atlas();
         for size in [12.0_f32, 16.0, 24.0, 32.0, 48.0] {
-            let r = fa.bake_text("Ag", size);
-            assert!(r.is_some(), "bake_text failed at {size}px");
+            let r = fa.rasterize_text("Ag", size);
+            assert!(r.is_some(), "rasterize_text failed at {size}px");
             let r = r.unwrap();
-            assert!(r.width > 0 && r.height > 0, "zero-size region at {size}px");
+            assert!(r.width > 0 && r.height > 0, "zero-size glyphs at {size}px");
         }
     }
 }

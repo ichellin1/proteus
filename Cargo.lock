@@ -1987,6 +1987,7 @@ dependencies = [
  "log",
  "pollster",
  "proteus-gpu",
+ "slotmap",
  "thiserror 2.0.18",
  "wgpu",
 ]

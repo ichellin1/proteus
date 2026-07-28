@@ -18,6 +18,7 @@ fontdue = { workspace = true }
 etagere = { workspace = true }
 bevy_ecs = { workspace = true }
 image = { workspace = true }
+slotmap = { workspace = true }
 
 [dev-dependencies]
 # pollster: blocks on wgpu async init inside integration tests

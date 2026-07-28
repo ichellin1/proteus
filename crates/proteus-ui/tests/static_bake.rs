@@ -17,7 +17,7 @@ use glam::{Vec2, Vec3, Vec4};
 use proteus_render::{FontAtlas, GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
 use proteus_ui::{
     collect_instances, Baked, BakedComposite, BakedText, Border, ChildOf, ProteusWorld, QuadState,
-    Text,
+    Text, TextureRef,
 };
 
 // ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ fn bake_system_bakes_quad_and_text_composite() {
     };
 
     let pipeline = QuadPipeline::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64);
-    let mut font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
+    let mut font_atlas = FontAtlas::with_embedded_font();
 
     let mut pw = ProteusWorld::new();
     pw.world.insert_resource(GpuContext {
@@ -166,25 +166,46 @@ fn bake_system_bakes_quad_and_text_composite() {
     // Bake the child's text the same way bake_pending_text does (a shell
     // method in the reference demo, not something proteus-ui itself exposes
     // as a standalone function) — needed so gather_bake_instances captures
-    // real glyph pixels, not just an untextured background.
-    let region = font_atlas
-        .bake_text("Hi", 16.0)
-        .expect("text bake should succeed in a fresh atlas");
+    // real glyph pixels, not just an untextured background. M11: rasterize
+    // (FontAtlas) then register (TextureRegistry) are two separate steps now.
+    let glyphs = font_atlas
+        .rasterize_text("Hi", 16.0)
+        .expect("text rasterize should succeed in a fresh font atlas");
+    let text_texture_id = pw
+        .world
+        .resource_mut::<QuadPipeline>()
+        .texture_registry
+        .register_static(glyphs.width, glyphs.height, false)
+        .expect("main_atlas should have room");
+    let ((x, y, w, h), (uv_offset, uv_scale)) = {
+        let pipeline = pw.world.resource::<QuadPipeline>();
+        (
+            pipeline
+                .texture_registry
+                .main_atlas_region(text_texture_id)
+                .unwrap(),
+            pipeline
+                .texture_registry
+                .main_atlas_uv(text_texture_id, MAIN_ATLAS_SIZE)
+                .unwrap(),
+        )
+    };
     pw.world.resource::<QuadPipeline>().write_to_main_atlas(
         &queue,
-        region.x,
-        region.y,
-        region.width,
-        region.height,
-        &region.rgba_pixels,
+        x,
+        y,
+        w,
+        h,
+        &glyphs.rgba_pixels,
     );
-    pw.world.entity_mut(child).insert(BakedText {
-        uv_offset: region.uv_offset(MAIN_ATLAS_SIZE),
-        uv_scale: region.uv_scale(MAIN_ATLAS_SIZE),
-        pixel_size: [region.width as f32, region.height as f32],
-    });
-
-    pw.world.insert_resource(font_atlas);
+    pw.world.entity_mut(child).insert((
+        BakedText {
+            uv_offset,
+            uv_scale,
+            pixel_size: [glyphs.width as f32, glyphs.height as f32],
+        },
+        TextureRef(text_texture_id),
+    ));
 
     // One tick bakes it — BakeFlush's ApplyDeferred runs in the same
     // schedule.run() call, so the result is visible immediately after.
@@ -247,5 +268,94 @@ fn bake_system_bakes_quad_and_text_composite() {
     assert!(
         pw.world.get::<BakedComposite>(parent2).is_some(),
         "a composite declared after the schedule already ran should still bake"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M11 — TextureRef ref-counting and free-on-despawn
+// ---------------------------------------------------------------------------
+
+/// `bake_system` inserts `TextureRef` alongside `BakedComposite`; its
+/// `ComponentHooks` ref-count the `main_atlas` region against the baked
+/// entity's lifetime. A freshly baked entity holds the only reference (an
+/// explicit `free()` must be refused); despawning it decrements the ref count
+/// to zero (`on_replace` fires uniformly on despawn, before `on_remove`), and
+/// the region becomes genuinely reusable — not just marked absent.
+#[test]
+fn bake_ref_counts_texture_and_frees_region_on_despawn() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("static_bake: no GPU adapter available — skipping");
+        return;
+    };
+
+    let pipeline = QuadPipeline::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64);
+    let mut pw = ProteusWorld::new();
+    pw.world.insert_resource(GpuContext {
+        device: device.clone(),
+        queue: queue.clone(),
+    });
+    pw.world.insert_resource(pipeline);
+
+    let parent = pw.world.spawn((quad_at(0.0, 0.0, 50.0, 30.0), Baked)).id();
+    pw.update(0.0);
+
+    let texture_id = pw
+        .world
+        .get::<TextureRef>(parent)
+        .expect("bake_system should insert TextureRef alongside BakedComposite")
+        .0;
+    assert!(
+        pw.world
+            .resource::<QuadPipeline>()
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .is_some(),
+        "region should exist right after baking"
+    );
+
+    // The entity holds the only reference — an explicit free() must be
+    // refused, not silently succeed.
+    pw.world
+        .resource_mut::<QuadPipeline>()
+        .texture_registry
+        .free(texture_id);
+    assert!(
+        pw.world
+            .resource::<QuadPipeline>()
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .is_some(),
+        "free() must refuse a still-referenced region"
+    );
+
+    // Despawn — TextureRef's on_replace hook (fires uniformly on despawn,
+    // before on_remove) decrements the ref count to zero.
+    pw.world.despawn(parent);
+
+    pw.world
+        .resource_mut::<QuadPipeline>()
+        .texture_registry
+        .free(texture_id);
+    assert!(
+        pw.world
+            .resource::<QuadPipeline>()
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .is_none(),
+        "region should be freed once despawn decremented the ref count to zero"
+    );
+
+    // And the reclaimed space is genuinely reusable, not just marked absent.
+    let reused = pw
+        .world
+        .resource_mut::<QuadPipeline>()
+        .texture_registry
+        .register_static(50, 30, false);
+    assert!(
+        reused.is_some(),
+        "freed region's atlas space should be reusable by a new registration"
     );
 }
