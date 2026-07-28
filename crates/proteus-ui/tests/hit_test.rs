@@ -13,12 +13,15 @@
 //! | `hidden_entity_not_hit_testable` | `Visibility::HIDDEN` opt-out |
 //! | `virtual_entity_not_hit_testable` | `Virtual` opt-out |
 //! | `hover_enter_then_exit` | `hover_entered` / `hover_exited` lifecycle |
+//! | `rotated_quad_hit_tests_its_true_footprint_not_the_unrotated_box` | M10.6: oriented hit box |
+//! | `rotated_parent_rotates_interactable_childs_hit_region_too` | M10.6: applies to children too |
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_ui::{
-    Interactable, InteractionEvents, PointerInput, ProteusWorld, QuadState, Virtual, Visibility,
+    ChildOf, Interactable, InteractionEvents, PointerInput, ProteusWorld, QuadState, Virtual,
+    Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -274,4 +277,72 @@ fn hover_enter_then_exit() {
         vec![e],
         "hover_exited should fire when pointer leaves the entity"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Oriented hit-test boxes (M10.6)
+// ---------------------------------------------------------------------------
+
+/// A rotated quad's hit region must match its true (rotated) footprint, not
+/// the axis-aligned bounding box of its unrotated shape.
+///
+/// `quad_at` is a 100×100 square. Unrotated, its axis-aligned box spans
+/// [-50, 50] on each axis. Rotated 45°, its footprint becomes a diamond with
+/// vertices at distance 50√2 ≈ 70.7 along each axis — i.e. `|x| + |y| <=
+/// 70.7` — which is *smaller* than the original box in the corners. (45, 45)
+/// sits in the original box's corner (both 45 < 50) but outside the rotated
+/// diamond (45 + 45 = 90 > 70.7): exactly the point that distinguishes a
+/// correct oriented test from the old axis-aligned-only one.
+#[test]
+fn rotated_quad_hit_tests_its_true_footprint_not_the_unrotated_box() {
+    let mut world = ProteusWorld::new();
+    let rotated = QuadState {
+        rotation: std::f32::consts::FRAC_PI_4,
+        ..quad_at(0.0, 0.0)
+    };
+    world.world.spawn((rotated, Interactable));
+
+    let clicked = click_at(&mut world, Vec2::new(45.0, 45.0));
+    assert!(
+        clicked.is_empty(),
+        "a point in the unrotated box's corner but outside the rotated diamond must miss"
+    );
+
+    let clicked = click_at(&mut world, Vec2::new(20.0, 20.0));
+    assert_eq!(
+        clicked.len(),
+        1,
+        "a point well inside the rotated footprint should still hit"
+    );
+}
+
+/// A rotated parent's rotation must carry into an `Interactable` child's
+/// resolved world rotation too (`hierarchy::compose_with_parent` composes
+/// rotation additively) — the same diamond-vs-box distinction as the root
+/// case above, just via a child whose own local rotation is zero.
+#[test]
+fn rotated_parent_rotates_interactable_childs_hit_region_too() {
+    let mut world = ProteusWorld::new();
+    let parent = world
+        .world
+        .spawn(QuadState {
+            rotation: std::f32::consts::FRAC_PI_4,
+            ..quad_at(200.0, 0.0)
+        })
+        .id();
+    // Zero local offset — the child's world pivot lands exactly on the
+    // parent's, so the same 45/45 vs 20/20 offsets from that pivot apply.
+    let child = world
+        .world
+        .spawn((quad_at(0.0, 0.0), Interactable, ChildOf(parent)))
+        .id();
+
+    let clicked = click_at(&mut world, Vec2::new(245.0, 45.0));
+    assert!(
+        clicked.is_empty(),
+        "child's rotated hit region should exclude the unrotated box's corner"
+    );
+
+    let clicked = click_at(&mut world, Vec2::new(220.0, 20.0));
+    assert_eq!(clicked, vec![child]);
 }

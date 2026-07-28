@@ -193,14 +193,15 @@ free/deallocate capability for `main_atlas` at all today, for any consumer (text
 composites); building one narrowly for this milestone would preempt M11's actual unification work.
 See `PLANNING.md`'s M10.5 entry for the full reasoning.
 
-## M10.6 — Oriented Hit-Test Boxes *(off critical path — not started)*
+## M10.6 — Oriented Hit-Test Boxes *(off critical path — complete)*
 
-`quad_contains`'s hit-test box is axis-aligned and ignores `QuadState::rotation` for every entity,
-root or child — a pre-existing gap (`input.rs` has flagged it since M7: "good enough for M7; full
-convex-hull testing can land with M5.5 hierarchy" — M5.5 being this milestone's old number). Small,
-but easy to lose track of once the hierarchy work lands, so it gets its own explicit slot: a
-rotated button or a rotated child should be hit-testable within its true rotated footprint, not the
-larger axis-aligned box of its unrotated shape.
+`quad_contains`'s hit-test box was axis-aligned and ignored `QuadState::rotation` for every entity,
+root or child — a pre-existing gap (`input.rs` had flagged it since M7: "good enough for M7; full
+convex-hull testing can land with M5.5 hierarchy" — M5.5 being this milestone's old number). Now
+inverse-rotates the point into the quad's local frame (around its anchor pivot) before testing —
+a rotated button or a rotated child is hit-testable within its true rotated footprint, not the
+larger axis-aligned box of its unrotated shape. Also fixed `scale` being ignored entirely, the same
+underlying gap for the same reason.
 
 ## M11 — Resource Management *(not started)*
 
