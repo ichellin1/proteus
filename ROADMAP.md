@@ -178,16 +178,20 @@ This is the milestone where:
 (Previously numbered M5.5 and scoped as a prerequisite for M7; M7 shipped without it, so it's
 rescheduled here, immediately before the SDK, where it becomes a real blocker.)
 
-## M10.5 — Static Component Baking *(off critical path — not started)*
+## M10.5 — Static Component Baking *(off critical path — complete)*
 
 `bake: true` collapses a composite (parent + children) into a single permanent textured quad at
 spawn or on-demand, destroying the child entities and freeing the ECS/render cost of the subtree.
 Fully designed during Phase A of `PLANNING.md` ("Static baking — resolved") but never attached to
 a milestone anywhere — the same kind of gap M11 turned out to be, caught during M10 planning.
-Builds directly on M10's hierarchy work (baking a subtree needs the same children-walk M10
-introduces for the transition-bake crossfade), and `QuadPipeline::bake_instances_to_main_atlas`
-already exists in `proteus-render`, unused — the primitive is there, just never wired to an ECS
-component/system.
+Built on M10's hierarchy work (baking a subtree reuses the same children-walk M10 introduced for
+the transition-bake crossfade) and `QuadPipeline::bake_instances_to_main_atlas`, which already
+existed in `proteus-render`, unused, before this milestone wired it to a real `bake_system`.
+
+**Scope note:** freeing a baked composite's `main_atlas` region is deferred to M11 — there is no
+free/deallocate capability for `main_atlas` at all today, for any consumer (text, images, or baked
+composites); building one narrowly for this milestone would preempt M11's actual unification work.
+See `PLANNING.md`'s M10.5 entry for the full reasoning.
 
 ## M10.6 — Oriented Hit-Test Boxes *(off critical path — not started)*
 

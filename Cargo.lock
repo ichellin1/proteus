@@ -2034,9 +2034,11 @@ dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
  "log",
+ "pollster",
  "proteus-render",
  "serde",
  "thiserror 2.0.18",
+ "wgpu",
 ]
 
 [[package]]

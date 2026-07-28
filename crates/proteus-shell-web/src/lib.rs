@@ -371,12 +371,12 @@ mod inner {
         surface_config: wgpu::SurfaceConfiguration,
         device: wgpu::Device,
         queue: wgpu::Queue,
-        // `QuadPipeline`/`GpuContext` live inside `ui_world.world` as ECS
-        // resources, not as fields here — see proteus-shell-native's
-        // RenderState doc comment for why (lets transition-setup systems
-        // bake Slice transitions automatically).
+        // `QuadPipeline`/`GpuContext`/`FontAtlas` live inside `ui_world.world`
+        // as ECS resources, not as fields here — see proteus-shell-native's
+        // RenderState doc comment for why (lets transition-setup systems bake
+        // Slice transitions automatically, and (M10.5) lets bake::bake_system
+        // reach FontAtlas to bake `Baked` composites).
         ui_world: ProteusWorld,
-        font_atlas: FontAtlas,
 
         button: Entity,
         /// The button's "START" label — a `Text` child entity (M10), not a
@@ -535,6 +535,7 @@ mod inner {
                 queue: queue.clone(),
             });
             ui_world.world.insert_resource(pipeline);
+            ui_world.world.insert_resource(font_atlas);
 
             let button = ui_world
                 .world
@@ -663,7 +664,6 @@ mod inner {
                 device,
                 queue,
                 ui_world,
-                font_atlas,
                 button,
                 button_label,
                 tiles,
@@ -925,7 +925,17 @@ mod inner {
                 .collect();
 
             for (entity, content, size_px) in pending {
-                let Some(region) = self.font_atlas.bake_text(&content, size_px) else {
+                // FontAtlas is a real ECS resource (M10.5), reached here via
+                // resource_scope — bevy's pattern for needing a specific
+                // resource and general World access (for the entity_mut
+                // insert below) without a borrow conflict.
+                let region =
+                    self.ui_world
+                        .world
+                        .resource_scope::<FontAtlas, _>(|_world, mut font_atlas| {
+                            font_atlas.bake_text(&content, size_px)
+                        });
+                let Some(region) = region else {
                     log::warn!("FontAtlas: could not bake '{content}'");
                     continue;
                 };
@@ -981,10 +991,17 @@ mod inner {
                 // to a size comfortably above the tiles' on-screen footprint.
                 let decoded = proteus_render::resize_to_fit(decoded, MAX_TILE_IMAGE_SIDE);
 
-                let Some(region) =
-                    self.font_atlas
-                        .bake_image(&decoded.rgba_pixels, decoded.width, decoded.height)
-                else {
+                let region =
+                    self.ui_world
+                        .world
+                        .resource_scope::<FontAtlas, _>(|_world, mut font_atlas| {
+                            font_atlas.bake_image(
+                                &decoded.rgba_pixels,
+                                decoded.width,
+                                decoded.height,
+                            )
+                        });
+                let Some(region) = region else {
                     log::warn!(
                         "bake_pending_images: atlas full — could not bake {}×{} image",
                         decoded.width,

@@ -1456,7 +1456,7 @@ special-casing needed); children can also transition independently.
 
 ---
 
-### M10.5 — Static Component Baking *(off critical path — not started)*
+### M10.5 — Static Component Baking *(off critical path — complete)*
 
 `bake: true` collapses a composite (parent + children) into a single permanent textured quad at
 spawn or on-demand, destroying the child entities and freeing the ECS/render cost of the subtree.
@@ -1465,17 +1465,43 @@ resolved this design ("Static baking — resolved," above) but it was never atta
 milestone in this document or `ROADMAP.md`. Scheduled right after M10 because it builds directly
 on M10's hierarchy work — baking a subtree needs the same children-walk M10 introduces for the
 transition-bake crossfade (`gather_bake_instances`) — and because the underlying primitive,
-`QuadPipeline::bake_instances_to_main_atlas` (`proteus-render`), already exists and is unused,
+`QuadPipeline::bake_instances_to_main_atlas` (`proteus-render`), already existed and was unused,
 unlike M11 which had nothing built yet when it was caught.
 
+**Scope note (revised during implementation):** the original DoD described `bake_system` as
+detecting `Added<Baked>` and freeing the baked texture on `component.destroy()`. Neither survived
+contact with the actual codebase:
+- `main_atlas` has exactly one legitimate allocator — `FontAtlas`'s shelf packer — and it's
+  shell-owned, not reachable from an ECS system. Rather than either bolting a second allocator onto
+  `main_atlas` (risking silent overlap with text/image regions) or leaving `bake_system` unable to
+  allocate at all, `FontAtlas` became a real ECS `Resource` (`world.insert_resource`, same as
+  `GpuContext`/`QuadPipeline`), unblocking a genuine `bake_system` in `ProteusSet::Bake`.
+- The query is `(With<Baked>, Without<BakedComposite>)`, not `Added<Baked>` — retried every frame
+  until it succeeds, matching `bake_pending_text`/`bake_pending_images`'s existing
+  graceful-degradation shape, so a bake that fails one frame (atlas full, GPU resources not yet
+  present) isn't silently lost forever.
+- **Freeing is deferred to M11**, not implemented here. `FontAtlas`'s shelf packer is append-only by
+  design (documented as a known gap since M4) — there is no free/deallocate capability for
+  `main_atlas` for *any* consumer (text, images, or baked composites) today. Building one now would
+  mean either an ill-suited arbitrary-free API bolted onto a shelf packer, or a second allocator
+  carved out of a reserved sub-region — both preempt M11's actual charter (unifying the three
+  disconnected atlas allocators into one with real reference counting). A baked composite's region
+  leaks in `main_atlas` until the app exits, exactly like every text/image region already does
+  today. See M11's DoD below for the forward reference.
+
 **Definition of done:**
-- [ ] `Baked` marker component; `bake_system` (currently `stub_bake_system` in `schedule.rs`)
-  detects `Added<Baked>`, renders the subtree via `QuadPipeline::bake_instances_to_main_atlas`,
-  despawns the child entities, and replaces the parent's texture reference
-- [ ] Works for a composite created at startup and one created dynamically at runtime
-- [ ] Baked texture is freed on `component.destroy()`
-- [ ] Regression test: bake a `Quad` + `Text` composite, assert the child entities are gone and
-  the parent renders identically to before baking
+- [x] `Baked` marker component; `bake_system` (replaces `stub_bake_system` in `schedule.rs`)
+  detects entities with `Baked` and no `BakedComposite` yet, renders the subtree via
+  `QuadPipeline::bake_instances_to_main_atlas`, despawns the child entities, and replaces the
+  parent's texture reference (`BakedComposite`) — plus neutralizes the parent's own
+  `color`/`corner_radius`/`Border`/`Glow`/`DropShadow`, since the bake already captured them as
+  pixels (the same fix the Slice-transition crossfade needed for the identical reason)
+- [x] Works for a composite created at startup and one created dynamically at runtime (query-based
+  retry handles both uniformly — no `Added<T>` one-shot-trigger gap)
+- [ ] ~~Baked texture is freed on `component.destroy()`~~ — deferred to M11 (see scope note above)
+- [x] Regression test: bake a `Quad` + `Text` composite, assert the child entities are gone and
+  the parent renders as a single stable textured quad
+  (`crates/proteus-ui/tests/static_bake.rs`)
 
 ---
 
@@ -1903,7 +1929,9 @@ implementation begins, not during it.
 - [ ] Real reference counting: incremented when a component references a texture, decremented on
   `free()`/`freeResources()`/`destroy()`/reassignment — GPU memory released at zero, not before
 - [ ] A working `free`/`unregister` path exists for `main_atlas` entries — today baked text/images
-  are permanent for the app's lifetime; this milestone gives them one
+  are permanent for the app's lifetime; this milestone gives them one. This includes `BakedComposite`
+  regions from M10.5 (static component baking) — deferred there explicitly for this milestone to
+  close, not a separate gap discovered independently
 - [ ] LRU eviction for ephemeral (non-`eternal`) textures when capacity is reached, per the
   documented eviction order (unreferenced ephemeral oldest-first, then referenced ephemeral,
   eternal never evicted)

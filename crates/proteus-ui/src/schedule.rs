@@ -13,7 +13,8 @@
 //! visibility           cascade Visibility → EffectiveVisibility  [real since M10]
 //! opacity              cascade Opacity → EffectiveOpacity        [real since M10]
 //! cascade_flush        ApplyDeferred so Bake/Render see this frame's cascades [M10]
-//! bake                 offscreen texture composites       [stub M2]
+//! bake                 static composite baking (M10.5) / offscreen texture composites
+//! bake_flush           ApplyDeferred so Render sees this frame's bake [M10.5]
 //! render               build instance buffer, draw        [stub M2]
 //! ```
 //!
@@ -23,6 +24,7 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ApplyDeferred;
 
+use crate::bake::bake_system;
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{hit_test_system, HoveredEntity, InteractionEvents, PointerInput};
 use crate::topology::{
@@ -65,8 +67,14 @@ pub enum ProteusSet {
     /// this frame, so `Bake`/`Render` read fresh (not last-frame-stale)
     /// `EffectiveVisibility`/`EffectiveOpacity`.
     CascadeFlush,
-    /// Offscreen texture bake composites.
+    /// Static composite baking (M10.5) — collapses a `Baked` subtree into a
+    /// single textured quad.
     Bake,
+    /// Apply the deferred `Commands` `bake_system` queued this frame (insert
+    /// `BakedComposite`, despawn baked children, neutralize the root's own
+    /// visual-effect components), so `Render` sees this frame's bake instead
+    /// of last frame's — same reasoning as `CascadeFlush`.
+    BakeFlush,
     /// Build the GPU instance buffer and submit the draw call.
     Render,
 }
@@ -78,7 +86,6 @@ pub enum ProteusSet {
 // in place before the real implementations land in later milestones.
 
 fn stub_navigation_system() {}
-fn stub_bake_system() {}
 fn stub_render_system() {}
 
 // ---------------------------------------------------------------------------
@@ -155,6 +162,7 @@ pub fn build_schedule() -> Schedule {
             ProteusSet::Opacity,
             ProteusSet::CascadeFlush,
             ProteusSet::Bake,
+            ProteusSet::BakeFlush,
             ProteusSet::Render,
         )
             .chain(),
@@ -167,8 +175,15 @@ pub fn build_schedule() -> Schedule {
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     // Stub systems — hold their slot until real implementations land.
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
-    schedule.add_systems(stub_bake_system.in_set(ProteusSet::Bake));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
+
+    // M10.5: real bake system replaces the stub. Writes via Commands
+    // (insert BakedComposite, despawn baked children, neutralize the root's
+    // own visual-effect components), so BakeFlush's ApplyDeferred must run
+    // before Render reads the result — otherwise it'd see last frame's stale
+    // (unbaked) state.
+    schedule.add_systems(bake_system.in_set(ProteusSet::Bake));
+    schedule.add_systems(ApplyDeferred.in_set(ProteusSet::BakeFlush));
 
     // M10: real cascade systems replace the visibility/opacity stubs. Both
     // write via `Commands` (deferred), so `CascadeFlush`'s `ApplyDeferred`

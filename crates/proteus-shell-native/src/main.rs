@@ -458,11 +458,13 @@ impl ApplicationHandler for ProteusApp {
 
 /// All GPU resources, ECS world, and demo state for one window.
 ///
-/// `QuadPipeline` and `GpuContext` live *inside* `ui_world.world` as ECS
-/// resources, not as fields here — `topology::one_to_n_setup_system` /
-/// `n_to_one_setup_system` need to reach them to bake Slice transitions
-/// automatically. `device`/`queue` stay as fields too (cheap clones) for the
-/// swapchain/surface work below, which the ECS has no business touching.
+/// `QuadPipeline`, `GpuContext`, and `FontAtlas` live *inside* `ui_world.world`
+/// as ECS resources, not as fields here — `topology::one_to_n_setup_system` /
+/// `n_to_one_setup_system` need to reach the first two to bake Slice
+/// transitions automatically, and (M10.5) `bake::bake_system` needs
+/// `FontAtlas` to bake `Baked` composites. `device`/`queue` stay as fields too
+/// (cheap clones) for the swapchain/surface work below, which the ECS has no
+/// business touching.
 struct RenderState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -471,7 +473,6 @@ struct RenderState {
     queue: wgpu::Queue,
 
     ui_world: ProteusWorld,
-    font_atlas: FontAtlas,
 
     button: Entity,
     /// The button's "START" label — a `Text` child entity (M10), not a
@@ -657,14 +658,17 @@ impl RenderState {
         let font_atlas = FontAtlas::with_embedded_font(MAIN_ATLAS_SIZE, MAIN_ATLAS_SIZE);
 
         let mut ui_world = ProteusWorld::new();
-        // GpuContext + QuadPipeline live in the ECS world, not as RenderState
-        // fields — this is what lets transition-setup systems bake Slice
-        // transitions automatically (see topology::one_to_n_setup_system).
+        // GpuContext + QuadPipeline + FontAtlas live in the ECS world, not as
+        // RenderState fields — this is what lets transition-setup systems
+        // bake Slice transitions automatically (see
+        // topology::one_to_n_setup_system), and (M10.5) lets bake_system
+        // reach the one shelf packer for main_atlas to bake Baked composites.
         ui_world.world.insert_resource(GpuContext {
             device: device.clone(),
             queue: queue.clone(),
         });
         ui_world.world.insert_resource(pipeline);
+        ui_world.world.insert_resource(font_atlas);
 
         let button = ui_world
             .world
@@ -814,7 +818,6 @@ impl RenderState {
             device,
             queue,
             ui_world,
-            font_atlas,
             button,
             button_label,
             tiles,
@@ -880,7 +883,17 @@ impl RenderState {
             .collect();
 
         for (entity, content, size_px) in pending {
-            let Some(region) = self.font_atlas.bake_text(&content, size_px) else {
+            // FontAtlas is a real ECS resource (M10.5), reached here via
+            // resource_scope — bevy's pattern for needing a specific resource
+            // and general World access (for the entity_mut insert below)
+            // without a borrow conflict.
+            let region =
+                self.ui_world
+                    .world
+                    .resource_scope::<FontAtlas, _>(|_world, mut font_atlas| {
+                        font_atlas.bake_text(&content, size_px)
+                    });
+            let Some(region) = region else {
                 log::warn!("FontAtlas: could not bake '{content}' for entity {entity:?}");
                 continue;
             };
@@ -942,10 +955,13 @@ impl RenderState {
             // to a size comfortably above the tiles' on-screen footprint.
             let decoded = proteus_render::resize_to_fit(decoded, MAX_TILE_IMAGE_SIDE);
 
-            let Some(region) =
-                self.font_atlas
-                    .bake_image(&decoded.rgba_pixels, decoded.width, decoded.height)
-            else {
+            let region =
+                self.ui_world
+                    .world
+                    .resource_scope::<FontAtlas, _>(|_world, mut font_atlas| {
+                        font_atlas.bake_image(&decoded.rgba_pixels, decoded.width, decoded.height)
+                    });
+            let Some(region) = region else {
                 log::warn!(
                     "bake_pending_images: atlas full — could not bake {}×{} image for entity {entity:?}",
                     decoded.width,

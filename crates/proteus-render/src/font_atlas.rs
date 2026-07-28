@@ -87,7 +87,13 @@ impl BakedRegion {
 
 /// CPU-side font atlas: glyph rasterizer + shelf packer.
 ///
-/// Create one per application session; share it across all text entities.
+/// Create one per application session; share it across all text entities. A
+/// real bevy ECS `Resource` (see the impl below) — inserted into the `World`
+/// once at shell startup rather than kept as a plain shell-owned field — so
+/// `bake_system` (`crates/proteus-ui/src/bake.rs`) can reach the one shelf
+/// packer for `main_atlas` from inside the ECS schedule, the same way
+/// `GpuContext`/`QuadPipeline` already can.
+///
 /// Call [`bake_text`] for each unique (string, size) pair, then upload the
 /// returned [`BakedRegion`] to the GPU atlas via
 /// [`QuadPipeline::write_to_main_atlas`].
@@ -112,6 +118,8 @@ pub struct FontAtlas {
     atlas_width: u32,
     atlas_height: u32,
 }
+
+impl bevy_ecs::prelude::Resource for FontAtlas {}
 
 impl FontAtlas {
     /// Pixel gap between atlas allocations to prevent linear-sampler bleed.
@@ -297,6 +305,26 @@ impl FontAtlas {
             height,
             rgba_pixels: rgba.to_vec(),
         })
+    }
+
+    /// Reserve a `width` × `height` region in the atlas without any CPU-side
+    /// pixel data of its own (M10.5 — static component baking).
+    ///
+    /// Unlike [`bake_text`]/[`bake_image`], the caller here already has a way
+    /// to render pixels *directly into* `main_atlas` on the GPU (see
+    /// [`crate::QuadPipeline::bake_instances_to_main_atlas`]) rather than
+    /// uploading a CPU-decoded buffer — so this returns just the claimed
+    /// `(x, y)` origin, not a full [`BakedRegion`]. Shares this `FontAtlas`'s
+    /// single shelf-packer cursor with `bake_text`/`bake_image`, for the same
+    /// reason documented on [`bake_image`]: a second, independent packer
+    /// writing into the same atlas texture would silently overlap it.
+    ///
+    /// Returns `None` if the atlas has no room left for a region this size.
+    ///
+    /// [`bake_text`]: FontAtlas::bake_text
+    /// [`bake_image`]: FontAtlas::bake_image
+    pub fn reserve_region(&mut self, width: u32, height: u32) -> Option<(u32, u32)> {
+        self.allocate(width, height)
     }
 
     // ---------------------------------------------------------------------------

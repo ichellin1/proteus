@@ -79,6 +79,16 @@
 //! effect: the video texture gets sampled through a UV window sized for the
 //! image, showing a small, blown-up fragment instead of the full frame.
 //!
+//! ## Static component baking (M10.5)
+//!
+//! When a [`crate::bake::BakedComposite`] component is present, its `uv_offset`/`uv_scale`
+//! (into `main_atlas`) replace the background instance's UV, same handling as
+//! `BakedImage` — a one-time static mapping written once by `bake_system`
+//! when the entity's `Baked` subtree was rendered into the atlas. Unlike
+//! `BakedImage`, `bake_system` also neutralizes the entity's own
+//! `color`/`corner_radius`/`Border`/`Glow`/`DropShadow` at bake time, so there
+//! is no double-render risk here the way there could be for video+image.
+//!
 //! ## Visibility
 //!
 //! Entities with [`Visibility::HIDDEN`] are excluded from the output. Entities with
@@ -91,6 +101,7 @@ use glam::Vec4;
 use proteus_render::{QuadInstance, QuadPipeline};
 
 use crate::{
+    bake::BakedComposite,
     effects::{Border, DropShadow, Glow},
     hierarchy::{
         compose_with_parent, resolve_world_position, EffectiveOpacity, EffectiveVisibility, Opacity,
@@ -308,6 +319,15 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
             bg_inst.uv_scale = image.uv_scale;
         }
         (false, None) => {}
+    }
+    // A BakedComposite (M10.5 — static component baking) is a one-time UV
+    // mapping into main_atlas, same handling as BakedImage — the entity's
+    // subtree was rendered into this region once by bake_system, which also
+    // neutralized the entity's own color/corner_radius/Border/Glow/DropShadow
+    // so nothing here double-renders on top of the baked pixels.
+    if let Some(bc) = world.get::<BakedComposite>(e) {
+        bg_inst.uv_offset = bc.uv_offset;
+        bg_inst.uv_scale = bc.uv_scale;
     }
     // A BakedTexture drives a two-sided crossfade: base_uv/scale point at the
     // source's baked snapshot, uv/scale (atlas_page 1) point at the target's
