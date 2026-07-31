@@ -41,6 +41,7 @@ M13 Developer Release
 - **M11.1 — Update Demo, Part 1** — after M11 (complete, ready to commit)
 - **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1
 - **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2
+- **M11.4 — Host Demo on GitHub Pages** — conceptually after M11.3, no hard dependency
 
 **Cross-shell parity is a standing requirement, not a milestone.** Every milestone's definition of
 done is implicitly "works identically on the native and web shells" unless stated otherwise —
@@ -251,6 +252,17 @@ experience" tractable, not the page count alone. See PLANNING.md for the full Do
 Closes the two gaps M11.1 deferred, once M11.2 provides real atlas headroom: the gallery drops
 its aggressive per-image downscale and gets a working "Fetch New Images" refetch, and the
 "Examples & Tests" nav button (currently an unbuilt placeholder) gets real content.
+
+## M11.4 — Host Demo on GitHub Pages *(off critical path)*
+
+Building and running the demo locally is fine for a developer already comfortable with the
+Rust/wasm toolchain — it shuts out anyone else visiting the project. Goal: a fully working,
+publicly reachable, browser-hosted build of the web shell demo, nothing needed but a browser.
+Proposed shape: a separate public repo (not a branch of this one, to keep binary demo assets out
+of the framework's own history), referencing the framework crates as git dependencies, with the
+demo's images/videos/wasm output actually committed there (unlike this repo, where `images/`/
+`www/pkg/` are gitignored on purpose) and GitHub Pages serving it. See PLANNING.md for the full
+DoD and open decisions.
 
 ## M12 — TypeScript SDK *(critical path)*
 

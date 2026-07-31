@@ -2100,6 +2100,46 @@ Closes the two gaps M11.1 explicitly deferred, once M11.2's capacity work is ava
 
 ---
 
+### M11.4 — Host Demo on GitHub Pages *(off critical path — not started)*
+
+Building and running the demo locally (`cargo run`, or `wasm-pack build` plus a local server) is
+fine for a developer already comfortable with the Rust/wasm toolchain — it shuts out anyone else
+visiting the project: a casual browser, someone deciding whether to invest time evaluating the
+framework at all, anyone who just wants to see it work before reading a line of code. Goal: a
+fully working, publicly reachable, browser-hosted build of the web shell demo — nothing needed but
+a browser.
+
+**Decisions, defaults proposed here, open to revisit when this milestone actually starts:**
+- **A separate public repo, not a branch of the main `proteus` repo** — per the explicit ask. Keeps
+  the framework repo's own history free of the demo's binary assets (images, videos, design packs),
+  and keeps "the framework" and "the showcase" visibly separate to anyone browsing GitHub.
+- The demo repo references `proteus-render`/`proteus-ui`/`proteus-gpu` as git dependencies against
+  the main repo (nothing is published to crates.io — no milestone currently plans that), so it can
+  `wasm-pack build` on its own.
+- `images/`/`videos/`/`www/pkg/` are deliberately gitignored in the *main* repo (a local asset
+  cache, not framework history) — the demo repo is where these need to actually be committed for
+  real, since GitHub Pages serves files that exist, not a build step that reaches back into the
+  main repo's gitignored local copies.
+- A manual build-and-publish script (build wasm, copy the built output plus `www/` assets, commit,
+  push) is enough to satisfy this milestone's "fully working" bar. An automated CI pipeline that
+  redeploys on every relevant change to the main repo is a natural fast-follow, not required here.
+- Conceptually follows M11.3 — hosting a demo whose gallery is still capacity-limited and whose
+  Examples section is an empty placeholder undersells the framework — but the repo/pipeline
+  groundwork itself has no hard dependency on M11.3 landing first.
+
+**Definition of done:**
+- [ ] New public repo created and populated: the web shell source needed to build it (or prebuilt
+  wasm artifacts directly — decide which approach when this milestone starts), `www/index.html`,
+  and the real, committed (not gitignored) image/video/logo assets the demo depends on
+- [ ] GitHub Pages configured and serving the demo at a real, public URL
+- [ ] A documented, scripted (not memorized) process for publishing an update
+- [ ] The hosted build verified end to end in a real browser with no local setup — every nav
+  button's flow works, including the picsum.photos network fetch from a real HTTPS origin (should
+  behave identically to local testing; worth a real check rather than an assumption)
+- [ ] Linked from the main repo's README (or wherever's appropriate) so a visitor can actually find it
+
+---
+
 ### M12 — TypeScript SDK *(critical path)*
 
 A developer builds the full interactive reference demo in TypeScript without touching Rust.
