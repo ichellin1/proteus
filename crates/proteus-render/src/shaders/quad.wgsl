@@ -213,6 +213,27 @@ fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// All three atlases store premultiplied-alpha pixels (main_atlas: premultiplied
+// at CPU upload time in `QuadPipeline::write_to_main_atlas`; transition_atlas:
+// premultiplied by this same shader's premultiplied `fs_main` output, since it's
+// only ever populated by baking through this pipeline; video_atlas: always
+// alpha=1, so premultiplied/straight are identical there). This is what makes
+// `atlas_sampler`'s hardware bilinear filtering correct at partial-alpha texels
+// (e.g. antialiased edges in a decoded PNG with real per-pixel transparency) —
+// filtering straight (non-premultiplied) RGBA linearly is undefined/incorrect
+// wherever alpha varies between neighboring texels, producing dark or light
+// fringing depending on what "don't care" RGB a source image happened to store
+// at fully-transparent pixels. Un-premultiply immediately after sampling so
+// every existing straight-alpha calculation below (tint, crossfade mix, border,
+// shadow) is unaffected — this is a no-op for alpha ∈ {0, 1}, which is all any
+// content used before real per-pixel-transparent images existed.
+fn unpremultiply(c: vec4<f32>) -> vec4<f32> {
+    if c.a <= 0.0001 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(c.rgb / c.a, c.a);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
@@ -241,6 +262,23 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let dist       = sdf_rounded_rect(in.local_pos, in.half_size, in.corner_radius);
     // 1-pixel antialiased edge. edge_alpha → 0 as dist → +1 (outside the shape).
     let edge_alpha = 1.0 - smoothstep(-1.0, 1.0, dist);
+
+    // Shadow/glow is meant to bleed outward past the main shape's edge (the
+    // halo for Glow, the offset/spread blob for DropShadow) — never as a
+    // solid backing filling the shape's own interior. `shadow_alpha`'s
+    // smoothstep only tapers *near* shadow_dist == 0; deep inside (shadow_dist
+    // very negative — true for the entire interior whenever Glow's spread is
+    // 0, since its shadow shape then coincides with the main one) it plateaus
+    // at a roughly-constant value instead of fading with depth. That plateau
+    // was always there but never visible: it sat *underneath* fully-opaque
+    // main content on every component before real per-pixel-transparent
+    // images existed. A textured quad with genuine holes (e.g. the animated
+    // logo's hatch gaps) exposes it — without this mask, a transparent gap
+    // deep inside the shape shows the shadow/glow color instead of whatever
+    // is actually behind the component. Masking with the same 1px
+    // antialiasing width as `edge_alpha` leaves the exterior bleed-out
+    // (dist > 1) completely unaffected.
+    shadow_alpha *= smoothstep(-1.0, 1.0, dist);
 
     // Discard fragments where neither the shadow nor the main shape contribute.
     if edge_alpha <= 0.0 && shadow_alpha <= 0.0 {
@@ -298,6 +336,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             // atlas_page == 2: streaming video texture (M9)
             tex_color = textureSampleLevel(video_atlas,      atlas_sampler, atlas_uv, 0.0);
         }
+        tex_color = unpremultiply(tex_color);
 
         // Crossfade: blend from-state into to-state. base_atlas_page selects
         // which atlas the from-state samples from — independent of the
@@ -316,6 +355,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             } else {
                 base_color = textureSampleLevel(video_atlas, atlas_sampler, base_atlas_uv, 0.0);
             }
+            base_color = unpremultiply(base_color);
             tex_color = mix(base_color, tex_color, in.crossfade_t);
         }
 
@@ -366,5 +406,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         out_rgb = (main_color.rgb * src_a + in.shadow_color.rgb * dst_a * (1.0 - src_a)) / out_a;
     }
 
-    return vec4(out_rgb, out_a);
+    // Output premultiplied — the pipeline's color target blend state is
+    // `PREMULTIPLIED_ALPHA_BLENDING` (see `pipeline.rs::build_render_pipeline`),
+    // matching the premultiplied convention every atlas is stored in (see
+    // `unpremultiply`'s doc comment above). For any fully-opaque fragment
+    // (out_a == 1, true of every draw before per-pixel-transparent images
+    // existed) this is numerically identical to the old straight-alpha output.
+    return vec4(out_rgb * out_a, out_a);
 }

@@ -53,24 +53,6 @@ fn headless_quad_renders_to_expected_color() {
         return;
     };
 
-    // --- Offscreen render target ---
-    let render_target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("headless_rt"),
-        size: wgpu::Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        // RENDER_ATTACHMENT to draw into it; COPY_SRC to read it back.
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let render_view = render_target.create_view(&Default::default());
-
     // --- Pipeline ---
     let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16);
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
@@ -80,103 +62,35 @@ fn headless_quad_renders_to_expected_color() {
     // With ortho(64, 64) the quad covers NDC [-0.5, 0.5]×[-0.5, 0.5],
     // which maps to texture rows [16, 48] and cols [16, 48].
     // The center pixel (row=32, col=32) is well inside.
-    pipeline.upload_instances(
-        &queue,
-        &[QuadInstance {
-            position: [0.0, 0.0, 0.5],
-            size: [32.0, 32.0],
-            rotation: 0.0,
-            scale: 1.0,
-            anchor: [0.5, 0.5],
-            color: [1.0, 0.0, 0.0, 1.0], // red
-            opacity: 1.0,
-            corner_radius: 0.0, // sharp corners — no SDF rounding at edges
-            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
-            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
-            atlas_page: 0,
-            base_uv_offset: [0.0, 0.0],
-            base_uv_scale: [0.0, 0.0],
-            crossfade_t: 0.0,
-            border_width: 0.0,
-            border_color: [0.0, 0.0, 0.0, 0.0],
-            border_offset: 0.0,
-            shadow_params: [0.0, 0.0, 0.0, 0.0],
-            shadow_color: [0.0, 0.0, 0.0, 0.0],
-            base_atlas_page: 1,
-        }],
-    );
-
-    // --- CPU-side readback buffer ---
-    let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("headless_readback"),
-        size: (BYTES_PER_ROW * HEIGHT) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-
-    // --- Encode: render pass → copy texture → buffer ---
-    let mut encoder = device.create_command_encoder(&Default::default());
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("headless_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &render_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pipeline.draw(&mut pass);
-    }
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &render_target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback_buf,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(BYTES_PER_ROW),
-                rows_per_image: Some(HEIGHT),
-            },
-        },
-        wgpu::Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit([encoder.finish()]);
-
-    // --- Map buffer and read pixels ---
-    let slice = readback_buf.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("device poll failed");
-    rx.recv().unwrap().expect("readback buffer map failed");
-
-    // Scope the BufferView so it's unmapped (dropped) before assertions can panic.
-    let pixels: Vec<u8> = {
-        let view = slice.get_mapped_range();
-        view.to_vec()
+    let instances = [QuadInstance {
+        position: [0.0, 0.0, 0.5],
+        size: [32.0, 32.0],
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: [0.5, 0.5],
+        color: [1.0, 0.0, 0.0, 1.0], // red
+        opacity: 1.0,
+        corner_radius: 0.0, // sharp corners — no SDF rounding at edges
+        uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+        uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+        atlas_page: 0,
+        base_uv_offset: [0.0, 0.0],
+        base_uv_scale: [0.0, 0.0],
+        crossfade_t: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_offset: 0.0,
+        shadow_params: [0.0, 0.0, 0.0, 0.0],
+        shadow_color: [0.0, 0.0, 0.0, 0.0],
+        base_atlas_page: 1,
+    }];
+    let black = wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
     };
+    let pixels = render_and_read_back(&device, &queue, &mut pipeline, &instances, black);
 
     // --- Pixel assertions ---
     let pixel = |row: u32, col: u32| -> [u8; 4] {
@@ -212,9 +126,204 @@ fn headless_quad_renders_to_expected_color() {
     assert!(br[2] < 10, "bottom-right.B expected ~0, got {}", br[2]);
 }
 
+/// A component with a `Glow` and a texture that has a genuine transparent
+/// hole in it (e.g. the reference demo's animated-logo mark, hatch gaps
+/// rendered as real alpha) must let whatever is *behind* the component show
+/// through that hole — not the glow's own color.
+///
+/// This was a latent bug in the shadow/glow SDF math: `shadow_alpha` plateaus
+/// at a roughly-constant value across the component's entire interior (not
+/// just near the edge), invisible for every component before this one because
+/// it always sat underneath fully-opaque main content. Regression test for
+/// the `shadow_alpha *= smoothstep(-1.0, 1.0, dist)` interior mask in
+/// `quad.wgsl`.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn glow_does_not_leak_through_transparent_texture_holes() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("headless_render: no GPU adapter available — skipping");
+        return;
+    };
+
+    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16);
+    pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+
+    // A 4×4 fully-transparent region — every texel is (0,0,0,0), so bilinear
+    // sampling anywhere within it (no neighboring non-transparent texel to
+    // blend against) reads back exactly transparent, keeping this test
+    // focused on the shadow/glow masking bug rather than the separate
+    // premultiplied-alpha filtering fix.
+    let texture_id = pipeline
+        .texture_registry
+        .register_static(4, 4, false)
+        .expect("main_atlas has room for a 4x4 region");
+    pipeline.write_to_main_atlas(&queue, 0, 0, 4, 4, &[0u8; 4 * 4 * 4]);
+    let (uv_offset, uv_scale) = pipeline
+        .texture_registry
+        .main_atlas_uv(texture_id, proteus_render::MAIN_ATLAS_SIZE)
+        .expect("just registered");
+
+    // Same 32×32 quad footprint as the test above (rows/cols [16,48]), fully
+    // untinted so the transparent texture drives main_color's alpha, with a
+    // `Glow`-shaped shadow: navy at 0.8 effective alpha, softness 10 (matches
+    // `proteus-shell-native`'s `hover_glow()`), zero offset/spread.
+    let instances = [QuadInstance {
+        position: [0.0, 0.0, 0.5],
+        size: [32.0, 32.0],
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: [0.5, 0.5],
+        color: [1.0, 1.0, 1.0, 1.0], // untinted
+        opacity: 1.0,
+        corner_radius: 0.0,
+        uv_offset,
+        uv_scale,
+        atlas_page: 0,
+        base_uv_offset: [0.0, 0.0],
+        base_uv_scale: [0.0, 0.0],
+        crossfade_t: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_offset: 0.0,
+        shadow_params: [0.0, 0.0, 10.0, 0.0], // offset 0, softness 10, spread 0
+        shadow_color: [0.0, 0.0, 0.502, 0.8], // navy @ 0.8 — proteus-shell-native's hover_glow()
+        base_atlas_page: 1,
+    }];
+
+    // Clear to a color nothing else in this scene produces, so "the clear
+    // color shows through" is unambiguous in the assertions below.
+    let green = wgpu::Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let pixels = render_and_read_back(&device, &queue, &mut pipeline, &instances, green);
+    let pixel = |row: u32, col: u32| -> [u8; 4] {
+        let off = (row * BYTES_PER_ROW + col * 4) as usize;
+        pixels[off..off + 4].try_into().unwrap()
+    };
+
+    // Center (32, 32) — deep inside the quad, sampling the transparent hole.
+    // Must be the green clear color, not the navy glow.
+    let center = pixel(HEIGHT / 2, WIDTH / 2);
+    assert!(
+        center[1] > 200,
+        "center.G expected bright green (>200) — background should show through \
+         the transparent hole, got {center:?}"
+    );
+    assert!(
+        center[2] < 50,
+        "center.B expected ~0 (no navy glow bleeding through the hole), got {center:?}"
+    );
+
+    // A couple of pixels beyond the quad's right edge (col 48), still well
+    // within the softness-10 halo range — the glow should still visibly
+    // bleed outward here, i.e. NOT pure green.
+    let halo = pixel(HEIGHT / 2, 50);
+    assert!(
+        halo[2] > 20,
+        "halo pixel just outside the shape should show glow bleed (elevated B \
+         channel from navy), got {halo:?} — the interior mask must not have \
+         suppressed the exterior halo too"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Render `instances` into a fresh `WIDTH × HEIGHT` offscreen texture cleared
+/// to `clear_color`, and read the result back as a flat RGBA8 byte buffer.
+fn render_and_read_back(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipeline: &mut QuadPipeline,
+    instances: &[QuadInstance],
+    clear_color: wgpu::Color,
+) -> Vec<u8> {
+    let render_target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("headless_rt"),
+        size: wgpu::Extent3d {
+            width: WIDTH,
+            height: HEIGHT,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let render_view = render_target.create_view(&Default::default());
+
+    pipeline.upload_instances(queue, instances);
+
+    let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("headless_readback"),
+        size: (BYTES_PER_ROW * HEIGHT) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("headless_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &render_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear_color),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pipeline.draw(&mut pass);
+    }
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &render_target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback_buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(BYTES_PER_ROW),
+                rows_per_image: Some(HEIGHT),
+            },
+        },
+        wgpu::Extent3d {
+            width: WIDTH,
+            height: HEIGHT,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([encoder.finish()]);
+
+    let slice = readback_buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("device poll failed");
+    rx.recv().unwrap().expect("readback buffer map failed");
+
+    let view = slice.get_mapped_range();
+    view.to_vec()
+}
 
 /// Try to get a wgpu device suitable for headless rendering.
 /// Returns `None` if no adapter is available so the test can skip gracefully.

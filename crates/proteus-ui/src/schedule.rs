@@ -100,6 +100,9 @@ fn stub_render_system() {}
 pub struct ProteusWorld {
     pub world: World,
     pub schedule: Schedule,
+    /// Just the Visibility/Opacity cascade (+ its deferred-command flush),
+    /// see [`ProteusWorld::refresh_cascades`].
+    cascade_schedule: Schedule,
 }
 
 impl ProteusWorld {
@@ -121,8 +124,13 @@ impl ProteusWorld {
 
         // --- Schedule ---
         let schedule = build_schedule();
+        let cascade_schedule = build_cascade_schedule();
 
-        Self { world, schedule }
+        Self {
+            world,
+            schedule,
+            cascade_schedule,
+        }
     }
 
     /// Advance one frame by `delta_secs` wall-clock seconds.
@@ -133,6 +141,23 @@ impl ProteusWorld {
         // Inject the frame delta before running systems.
         self.world.resource_mut::<FrameTime>().delta_secs = delta_secs;
         self.schedule.run(&mut self.world);
+    }
+
+    /// Re-runs just the Visibility → `EffectiveVisibility` and Opacity →
+    /// `EffectiveOpacity` cascades (plus their deferred-command flush) — not
+    /// the full per-frame `schedule` (no input/transition/bake re-run).
+    ///
+    /// `update()`'s own cascade pass reflects `Visibility`/`Opacity` as they
+    /// stood *before* this frame's game logic ran. A shell's post-`update()`
+    /// code (e.g. a state machine's `settle()` step) routinely mutates
+    /// `Visibility` directly afterward — without a second cascade pass,
+    /// `collect_instances` (which prefers the cascaded `EffectiveVisibility`
+    /// over raw `Visibility`, see its module doc) would render that mutation
+    /// one frame late, showing whatever was cascaded before it. Call this
+    /// after all such per-frame mutations, immediately before
+    /// `collect_instances`.
+    pub fn refresh_cascades(&mut self) {
+        self.cascade_schedule.run(&mut self.world);
     }
 }
 
@@ -217,5 +242,15 @@ pub fn build_schedule() -> Schedule {
     schedule
         .add_systems(group_transition_complete_system.in_set(ProteusSet::GroupTransitionComplete));
 
+    schedule
+}
+
+/// Build the standalone Visibility/Opacity cascade schedule used by
+/// [`ProteusWorld::refresh_cascades`] — the same two systems `build_schedule`
+/// runs in its `Visibility`/`Opacity` sets, plus their `ApplyDeferred` flush,
+/// with no input/transition/bake stages around them.
+fn build_cascade_schedule() -> Schedule {
+    let mut schedule = Schedule::default();
+    schedule.add_systems((visibility_system, opacity_system, ApplyDeferred).chain());
     schedule
 }

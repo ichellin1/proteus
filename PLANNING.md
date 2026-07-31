@@ -1986,6 +1986,120 @@ shape, or frame-advance system exists yet — see Post-V1 for the full design.
 
 ---
 
+### M11.1 — Update Demo, Part 1 *(off critical path — complete, ready to commit)*
+
+Dogfooding pass: push the reference demo hard enough, as a real user of the framework rather than
+its author, to actually exercise M11's resource management and the three transition topologies
+under a more demanding, more dynamic workload than the original M5 demo ever put on them —
+and, alongside that, bring the demo's look and feel from "topology test harness" toward a
+professional showcase of what Proteus can do. Identified as its own milestone after the fact,
+same as M10.5/M10.6 were for M10: the work was done, then named.
+
+**What shipped:**
+- A full light/dark theme toggle — sun/moon icons, whole-app color/corner-radius/asset crossfade
+  across every themed component, not just a scene-to-scene morph. The flagship demonstration of
+  how far this framework's metamorphic model can be pushed.
+- A photo gallery feature, built end to end: a themed Loading state (the existing 19-frame
+  animated logo, now also theme-crossfaded), a network fetch from picsum.photos on both shells, a
+  4×3 image grid, and — notably — the framework's **first real use of `NToOneRequest`** (every
+  prior "many→one-looking" transition in the demo was actually N independent 1→1s in a loop), plus
+  three simultaneous `NToOneRequest`s composed together to approximate an M→N effect from the
+  framework's 1↔N primitives.
+- Several real bugs found and fixed purely by dogfooding, not by inspection: a `transition_atlas`
+  corner-transparency bleed (zero-gutter region packing), a stale-bake corner-radius "snap" on
+  Slice-transition targets whose bake didn't track live theme state, a stale hover-state bug on
+  the theme toggle icons (hover flag not re-derived when the "active" icon's identity changed
+  mid-hover), and — the direct motivation for M11.2 below — a hard `main_atlas` capacity ceiling
+  hit under a moderate real workload (12 concurrently-fetched images), reproducing the exact
+  no-backoff retry-loop CPU hang class M11 itself was meant to guard against.
+- General visual/interaction polish (nav button copy, icon compositing order, hover-suppression
+  correctness) — the professional-showcase half of this milestone's goal, not just bug fixes.
+
+**Known incomplete, explicitly not this milestone's job:**
+- The gallery is feature-complete but not yet production-quality at real scale — images are
+  aggressively downscaled (`GALLERY_IMAGE_MAX_SIDE`) purely to fit the single fixed atlas, and the
+  "Fetch New Images" button is a visual placeholder, not wired up. Both deferred to M11.3, blocked
+  on M11.2's capacity work.
+- The "Examples & Tests" section (the demo's third nav button) does not exist yet beyond a
+  no-op placeholder — deferred to M11.3.
+
+**Definition of done:**
+- [x] Light/dark theme toggle shipped across the whole demo
+- [x] Photo gallery feature shipped end to end (Loading state, network fetch on both shells, 4×3
+  grid, `NToOneRequest` in real use for the first time)
+- [x] Bugs surfaced by this dogfooding pass fixed: transition_atlas corner bleed, stale-bake
+  corner-radius snap, theme-icon stale hover state
+- [x] The `main_atlas` capacity ceiling this dogfooding pass exposed is diagnosed and understood
+  (root cause, not just patched around) — full fix scoped out as M11.2
+- [x] General visual/interaction polish pass landed, moving the demo toward a professional showcase
+- [x] Verified on both shells: `cargo build/test/clippy --workspace`, `cargo fmt`,
+  `wasm-pack build`, plus manual exercise of every new demo path
+- [ ] Gallery at real scale (no aggressive per-image downscaling) — deferred to M11.3, blocked on
+  M11.2
+- [ ] "Fetch New Images" wired up to actually refetch — deferred to M11.3
+- [ ] Examples & Tests section built — deferred to M11.3
+
+---
+
+### M11.2 — Multi-Page Atlas & Bounded Working Set *(off critical path — not started)*
+
+Closes the capacity gap M11.1's dogfooding pass exposed: one fixed-size `main_atlas`
+(2048×2048, capped there to preserve WebGL2 `downlevel_webgl2_defaults()` parity with the web
+shell) cannot hold enough simultaneous content once a real dynamic-content feature is layered on
+top of the demo's existing baked text, icons, backgrounds, and animated-logo frames. This is a
+capacity ceiling, not a correctness bug — M11's reference counting and eviction behave exactly as
+designed; there simply isn't room. The stated goal (a framework that can practically display
+"thousands of different good quality images... not all at the same time, but within the app
+experience") needs a real architectural answer, not another constant tuned down.
+
+**Two complementary fixes, decided together:**
+
+1. **Multi-page atlas.** The shader/pipeline already thread an `atlas_page` index per instance,
+   but today it's three hardcoded special cases (`0` = `main_atlas`, `1` = `transition_atlas`,
+   `2` = the streaming video texture) — not a general pool. Generalize `main_atlas` into a real
+   `D2Array` texture with N layers, each layer still capped at the same safe per-layer dimension
+   (preserving WebGL2 parity — no shell-specific atlas-size divergence, ruled out during design
+   discussion as cutting against this project's standing cross-shell-parity requirement), so total
+   capacity scales with page count instead of being fixed to one texture's worth of room.
+2. **Bounded working set.** Raising capacity alone isn't the actual goal — "thousands of images"
+   only needs to mean thousands *available*, not thousands *resident*. Extend `TextureRegistry`'s
+   existing (M11) LRU eviction to operate across the multi-page pool, so the resident set stays
+   bounded to roughly what's visible/near-visible regardless of how much content the app could
+   theoretically show — this is what actually makes unbounded content tractable, not the page count
+   by itself.
+
+**Definition of done:**
+- [ ] `main_atlas` is a `D2Array` (or equivalent multi-texture pool) with N layers, each ≤2048 to
+  preserve WebGL2 parity
+- [ ] `atlas_page`/`base_atlas_page` in `quad.wgsl` generalize from three hardcoded branches to a
+  real dynamic layer index
+- [ ] `MainAtlasAllocator`/`TextureRegistry` support page selection at allocation time and eviction
+  scoped correctly across pages — not just "fail once page 0 is full"
+- [ ] Eviction policy demonstrably bounds total resident texture memory under a sustained
+  "many images over time" workload (e.g. repeated gallery re-fetches) rather than growing
+  unboundedly
+- [ ] Regression tests: multi-page allocation/eviction correctness (page selection, no cross-page
+  corruption, eviction order still unreferenced-oldest-first per M11's existing safety rule — see
+  M11's eviction-safety scope note for why), plus a real-workload test proving the gallery's 12
+  images no longer need `GALLERY_IMAGE_MAX_SIDE`'s aggressive downscale to fit
+- [ ] Verified identically on both shells — no native/web divergence in atlas capacity
+
+---
+
+### M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path — not started)*
+
+Closes the two gaps M11.1 explicitly deferred, once M11.2's capacity work is available to build on.
+
+**Definition of done:**
+- [ ] Gallery images render at real quality — `GALLERY_IMAGE_MAX_SIDE`'s aggressive downscale
+  removed/relaxed now that M11.2 provides real headroom
+- [ ] "Fetch New Images" wired up to actually refetch a new batch, in place, without leaving the
+  Gallery state
+- [ ] "Examples & Tests" section built with real content (currently an unbuilt placeholder button)
+- [ ] Full demo re-verified end to end on both shells once both pieces land
+
+---
+
 ### M12 — TypeScript SDK *(critical path)*
 
 A developer builds the full interactive reference demo in TypeScript without touching Rust.

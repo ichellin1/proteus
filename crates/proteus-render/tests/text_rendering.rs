@@ -12,7 +12,7 @@ use proteus_render::{FontAtlas, EMBEDDED_FONT_BYTES, MAIN_ATLAS_SIZE};
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Create a `FontAtlas` backed by the embedded DejaVu Sans font.
+/// Create a `FontAtlas` backed by the embedded Inter Bold font.
 fn atlas() -> FontAtlas {
     FontAtlas::with_embedded_font()
 }

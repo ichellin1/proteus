@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>doc-page:not(:defined){visibility:hidden}
+body{margin:0}
+h1,h2,h3{font-family:'Inter',Helvetica,sans-serif}
+p,li,td,th{font-family:'Inter',Helvetica,sans-serif}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></link>
+<script src="./doc-page.js"></script>
+</helmet>
+<doc-page margin="0.85in">
+
+<h1 style="font-size:30px; font-weight:800; color:oklch(0.22 0.01 260); margin-bottom:4px;">Proteus — Logo Spec</h1>
+<p style="font-size:13px; color:oklch(0.5 0.01 90); margin-top:0; margin-bottom:32px;">Construction, color, and typography reference for the Proteus mark.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:36px;">Concept</h2>
+<p style="font-size:14px; line-height:1.6; color:oklch(0.3 0.01 260);">The mark is a portrait quad split into its two constituent triangles — the base primitive of a GPU render pipeline. One triangle renders solid; the other carries a diagonal hatch, reading as a textured / in-progress surface. The pairing nods to Proteus's core idea: components that are rendered, and metamorphic — never static.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Geometry</h2>
+<p style="font-size:14px; line-height:1.6; color:oklch(0.3 0.01 260);">Drawn on a 104 &times; 144 unit grid (aspect ratio 13:18, portrait). Two triangles split by the diagonal from the top-left corner (0,0) to the bottom-right corner (104,144):</p>
+<ul style="font-size:13.5px; line-height:1.7; color:oklch(0.3 0.01 260);">
+  <li><b>Triangle A</b> (solid) — points (0,0), (0,144), (104,144): the bottom-left half.</li>
+  <li><b>Triangle B</b> (hatched) — points (0,0), (104,0), (104,144): the top-right half.</li>
+  <li>No stroke or fill is drawn along the shared diagonal — the mark is rendered on a fully transparent canvas, so the seam and every hatch gap are true alpha transparency, not a color match to an assumed background. This is what makes the SVG/PNG assets safe to drop on any surface.</li>
+</ul>
+<p style="font-size:14px; line-height:1.6; color:oklch(0.3 0.01 260);">Minimum clear space around the mark: half the mark's width on all sides. Minimum size: 20px tall in digital use (favicon/app-icon exceptions aside).</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">The hatch fill</h2>
+<p style="font-size:14px; line-height:1.6; color:oklch(0.3 0.01 260);">Drawn as a set of parallel diagonal strokes, all in the triangle's own color, clipped to triangle B. Each stroke is 8 units wide; strokes repeat on a 10.5-unit pitch (perpendicular spacing), leaving a 2.5-unit fully transparent gap between them &mdash; no background-colored line is ever drawn.</p>
+<pre style="background:oklch(0.96 0.004 90); border:1px solid oklch(0.88 0.006 90); border-radius:4px; padding:14px 16px; font-size:12px; line-height:1.55; overflow-wrap:break-word; white-space:pre-wrap; color:oklch(0.25 0.01 260);">// stroke pitch = 10.5 units, stroke-width = 8 units, at 45°
+for each k: draw a line through point (5.25k, 5.25k)
+  perpendicular to the diagonal, stroke="{triangleColor}"
+  stroke-width="8", clipped to the triangle-B polygon</pre>
+<p style="font-size:13.5px; line-height:1.6; color:oklch(0.4 0.01 260);">{triangleColor} is the only color in the mark — deep violet on light, light violet on dark (see below). Every gap, on every treatment, is real alpha transparency, never a solid background color. (Note: an SVG <code>&lt;pattern&gt;</code> tiling approach was tried first but rendered incorrectly once exported as an image/PNG — explicit strokes render reliably everywhere.)</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Color</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px;">
+  <thead><tr style="text-align:left; color:oklch(0.5 0.01 90); font-size:11px; letter-spacing:0.04em; text-transform:uppercase;">
+    <th style="padding:6px 8px 6px 0; border-bottom:1px solid oklch(0.85 0.006 90);">Swatch</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Name</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Value (OKLCH)</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Use</th>
+  </tr></thead>
+  <tbody>
+    <tr><td style="padding:10px 8px 10px 0;"><div style="width:22px;height:22px;border-radius:3px;background:oklch(0.55 0.17 290);"></div></td><td style="padding:10px 8px;">Deep Violet</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.55 0.17 290)</td><td style="padding:10px 8px;">Mark &amp; wordmark, on light</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;"><div style="width:22px;height:22px;border-radius:3px;background:oklch(0.78 0.13 290);"></div></td><td style="padding:10px 8px;">Light Violet</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.78 0.13 290)</td><td style="padding:10px 8px;">Mark &amp; wordmark, on dark</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;"><div style="width:22px;height:22px;border-radius:3px;background:oklch(0.98 0.004 90); border:1px solid oklch(0.85 0.006 90);"></div></td><td style="padding:10px 8px;">Off-white</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.98 0.004 90)</td><td style="padding:10px 8px;">Light surface / hatch line on light</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;"><div style="width:22px;height:22px;border-radius:3px;background:oklch(0.19 0.012 260);"></div></td><td style="padding:10px 8px;">Near-black</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.19 0.012 260)</td><td style="padding:10px 8px;">Dark surface / hatch line on dark</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;"><div style="width:22px;height:22px;border-radius:3px;background:oklch(0.22 0.01 260);"></div></td><td style="padding:10px 8px;">Ink</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.22 0.01 260)</td><td style="padding:10px 8px;">Monochrome mark, on white</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;"><div style="width:22px;height:22px;border-radius:3px;background:oklch(0.08 0 0);"></div></td><td style="padding:10px 8px;">Pure black</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.08 0 0)</td><td style="padding:10px 8px;">Monochrome background, on black</td></tr>
+  </tbody>
+</table>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Typography</h2>
+<p style="font-size:14px; line-height:1.6; color:oklch(0.3 0.01 260);">Wordmark: <b>Inter</b>, weight 700, all caps, letter-spacing 0.06em, set in the same color as the mark. Minimum companion mark height: keep the mark's cap-height roughly equal to the wordmark's cap-height, gap of 12&ndash;16px between mark and wordmark at logo-lockup scale.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Variants &amp; usage</h2>
+<ul style="font-size:13.5px; line-height:1.8; color:oklch(0.3 0.01 260);">
+  <li><b>Color / light</b> — Deep Violet mark, transparent background, for light surfaces.</li>
+  <li><b>Color / dark</b> — Light Violet mark, transparent background, for dark surfaces.</li>
+  <li><b>Monochrome / on white</b> — Ink mark, transparent background, for single-color contexts on light surfaces.</li>
+  <li><b>Monochrome / on black</b> — Off-white mark, transparent background, for single-color contexts on dark surfaces.</li>
+</ul>
+<p style="font-size:13.5px; line-height:1.6; color:oklch(0.4 0.01 260);">All four are exported with a fully transparent background — the "light"/"dark" in the name refers to the mark's own color, chosen for contrast against that kind of surface, not a painted backdrop. Don't recolor the mark outside this set, don't separate the two triangles, don't add drop shadows or outlines, don't stretch off the 13:18 aspect ratio.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Files in this pack</h2>
+<p style="font-size:13.5px; line-height:1.7; color:oklch(0.3 0.01 260); font-family:monospace;">assets/mark-*.svg &amp; .png — icon-only mark, 4 variants<br/>assets/lockup-*.svg &amp; .png — mark + wordmark, 4 variants<br/>SVGs are the source of truth (fully scalable); PNGs are pre-rendered @4x for quick use.</p>
+
+</doc-page>
+
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>body { margin: 0; }</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet"></link>
+</helmet>
+<div style="min-height:100vh; background:oklch(0.96 0.004 90); font-family:'Inter',Helvetica,sans-serif; padding:72px 48px; box-sizing:border-box;">
+  <div style="max-width:960px; margin:0 auto;">
+    <div style="font-size:13px; font-weight:600; letter-spacing:0.1em; color:oklch(0.5 0.01 90); text-transform:uppercase; margin-bottom:6px;">Proteus</div>
+    <div style="font-size:28px; font-weight:700; color:oklch(0.22 0.01 260); margin-bottom:48px;">Logo pack</div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px;">
+
+      <div style="background:oklch(0.98 0.004 90); border:1px solid oklch(0.88 0.006 90); border-radius:6px; padding:40px; display:flex; flex-direction:column; align-items:center; gap:32px;">
+        <div style="font-size:12px; font-weight:600; letter-spacing:0.06em; color:oklch(0.5 0.01 90); text-transform:uppercase; align-self:flex-start;">Color &mdash; light</div>
+        <svg id="export-mark-color-light" width="88" height="122" viewbox="0 0 104 144">
+          <defs>
+            <pattern id="pkHatchLight" patternunits="userSpaceOnUse" width="10.5" height="10.5" patterntransform="rotate(45)">
+              <rect width="10.5" height="10.5" fill="oklch(0.55 0.17 290)"></rect>
+              <line x1="0" y1="0" x2="0" y2="10.5" stroke="oklch(0.98 0.004 90)" stroke-width="5"></line>
+            </pattern>
+          </defs>
+          <polygon points="0,0 0,144 104,144" fill="oklch(0.55 0.17 290)"></polygon>
+          <polygon points="0,0 104,0 104,144" fill="url(#pkHatchLight)"></polygon>
+          <line x1="0" y1="0" x2="104" y2="144" stroke="oklch(0.98 0.004 90)" stroke-width="2"></line>
+        </svg>
+        <div id="export-lockup-color-light" style="display:flex; align-items:center; gap:14px;">
+          <svg width="24" height="33" viewbox="0 0 104 144">
+            <polygon points="0,0 0,144 104,144" fill="oklch(0.55 0.17 290)"></polygon>
+            <polygon points="0,0 104,0 104,144" fill="url(#pkHatchLight)"></polygon>
+          </svg>
+          <div style="font-size:22px; font-weight:700; letter-spacing:0.06em; color:oklch(0.55 0.17 290);">PROTEUS</div>
+        </div>
+      </div>
+
+      <div style="background:oklch(0.19 0.012 260); border-radius:6px; padding:40px; display:flex; flex-direction:column; align-items:center; gap:32px;">
+        <div style="font-size:12px; font-weight:600; letter-spacing:0.06em; color:oklch(0.65 0.01 90); text-transform:uppercase; align-self:flex-start;">Color &mdash; dark</div>
+        <svg id="export-mark-color-dark" width="88" height="122" viewbox="0 0 104 144">
+          <defs>
+            <pattern id="pkHatchDark" patternunits="userSpaceOnUse" width="10.5" height="10.5" patterntransform="rotate(45)">
+              <rect width="10.5" height="10.5" fill="oklch(0.78 0.13 290)"></rect>
+              <line x1="0" y1="0" x2="0" y2="10.5" stroke="oklch(0.19 0.012 260)" stroke-width="5"></line>
+            </pattern>
+          </defs>
+          <polygon points="0,0 0,144 104,144" fill="oklch(0.78 0.13 290)"></polygon>
+          <polygon points="0,0 104,0 104,144" fill="url(#pkHatchDark)"></polygon>
+          <line x1="0" y1="0" x2="104" y2="144" stroke="oklch(0.19 0.012 260)" stroke-width="2"></line>
+        </svg>
+        <div id="export-lockup-color-dark" style="display:flex; align-items:center; gap:14px;">
+          <svg width="24" height="33" viewbox="0 0 104 144">
+            <polygon points="0,0 0,144 104,144" fill="oklch(0.78 0.13 290)"></polygon>
+            <polygon points="0,0 104,0 104,144" fill="url(#pkHatchDark)"></polygon>
+          </svg>
+          <div style="font-size:22px; font-weight:700; letter-spacing:0.06em; color:oklch(0.78 0.13 290);">PROTEUS</div>
+        </div>
+      </div>
+
+      <div style="background:oklch(0.98 0.004 90); border:1px solid oklch(0.88 0.006 90); border-radius:6px; padding:40px; display:flex; flex-direction:column; align-items:center; gap:32px;">
+        <div style="font-size:12px; font-weight:600; letter-spacing:0.06em; color:oklch(0.5 0.01 90); text-transform:uppercase; align-self:flex-start;">Monochrome &mdash; on white</div>
+        <svg id="export-mark-mono-light" width="88" height="122" viewbox="0 0 104 144">
+          <defs>
+            <pattern id="pkHatchMonoLight" patternunits="userSpaceOnUse" width="10.5" height="10.5" patterntransform="rotate(45)">
+              <rect width="10.5" height="10.5" fill="oklch(0.22 0.01 260)"></rect>
+              <line x1="0" y1="0" x2="0" y2="10.5" stroke="oklch(0.98 0.004 90)" stroke-width="5"></line>
+            </pattern>
+          </defs>
+          <polygon points="0,0 0,144 104,144" fill="oklch(0.22 0.01 260)"></polygon>
+          <polygon points="0,0 104,0 104,144" fill="url(#pkHatchMonoLight)"></polygon>
+          <line x1="0" y1="0" x2="104" y2="144" stroke="oklch(0.98 0.004 90)" stroke-width="2"></line>
+        </svg>
+        <div id="export-lockup-mono-light" style="display:flex; align-items:center; gap:14px;">
+          <svg width="24" height="33" viewbox="0 0 104 144">
+            <polygon points="0,0 0,144 104,144" fill="oklch(0.22 0.01 260)"></polygon>
+            <polygon points="0,0 104,0 104,144" fill="url(#pkHatchMonoLight)"></polygon>
+          </svg>
+          <div style="font-size:22px; font-weight:700; letter-spacing:0.06em; color:oklch(0.22 0.01 260);">PROTEUS</div>
+        </div>
+      </div>
+
+      <div style="background:oklch(0.08 0 0); border-radius:6px; padding:40px; display:flex; flex-direction:column; align-items:center; gap:32px;">
+        <div style="font-size:12px; font-weight:600; letter-spacing:0.06em; color:oklch(0.6 0 0); text-transform:uppercase; align-self:flex-start;">Monochrome &mdash; on black</div>
+        <svg id="export-mark-mono-dark" width="88" height="122" viewbox="0 0 104 144">
+          <defs>
+            <pattern id="pkHatchMonoDark" patternunits="userSpaceOnUse" width="10.5" height="10.5" patterntransform="rotate(45)">
+              <rect width="10.5" height="10.5" fill="oklch(0.98 0.004 90)"></rect>
+              <line x1="0" y1="0" x2="0" y2="10.5" stroke="oklch(0.08 0 0)" stroke-width="5"></line>
+            </pattern>
+          </defs>
+          <polygon points="0,0 0,144 104,144" fill="oklch(0.98 0.004 90)"></polygon>
+          <polygon points="0,0 104,0 104,144" fill="url(#pkHatchMonoDark)"></polygon>
+          <line x1="0" y1="0" x2="104" y2="144" stroke="oklch(0.08 0 0)" stroke-width="2"></line>
+        </svg>
+        <div id="export-lockup-mono-dark" style="display:flex; align-items:center; gap:14px;">
+          <svg width="24" height="33" viewbox="0 0 104 144">
+            <polygon points="0,0 0,144 104,144" fill="oklch(0.98 0.004 90)"></polygon>
+            <polygon points="0,0 104,0 104,144" fill="url(#pkHatchMonoDark)"></polygon>
+          </svg>
+          <div style="font-size:22px; font-weight:700; letter-spacing:0.06em; color:oklch(0.98 0.004 90);">PROTEUS</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</x-dc>
+</body>
+</html>

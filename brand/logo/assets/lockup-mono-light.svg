@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="92" viewBox="0 0 210 46">
+  <defs>
+    <pattern id="h3nr47e" patternUnits="userSpaceOnUse" width="10.5" height="10.5" patternTransform="rotate(45)">
+      <rect width="10.5" height="8" fill="#181b1f"></rect>
+    </pattern>
+  </defs>
+  <g transform="translate(0,1) scale(0.305)">
+    <polygon points="0,0 0,144 104,144" fill="#181b1f"></polygon>
+    <polygon points="0,0 104,0 104,144" fill="url(#h3nr47e)"></polygon>
+  </g>
+  <text x="46" y="31" font-family="Inter, Helvetica, Arial, sans-serif" font-weight="700" font-size="20" letter-spacing="1.2" fill="#181b1f">PROTEUS</text>
+</svg>

@@ -88,6 +88,29 @@
         canvas.addEventListener('mousedown',  e => { if (e.button === 0) app.on_mouse_down(); });
         canvas.addEventListener('mouseup',    e => { if (e.button === 0) app.on_mouse_up(); });
 
+        // ── Full-window background image ───────────────────────────────────
+        //
+        // Same fetch-then-hand-to-wasm pattern as box-cover art below —
+        // bake_pending_images() decodes, downsamples, and uploads it.
+        // Fire-and-forget: a failed fetch just leaves BG_COLOR showing.
+        fetch('images/bg/ocean-blur.jpg')
+          .then(res => {
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.arrayBuffer();
+          })
+          .then(buf => app.set_background_image(new Uint8Array(buf)))
+          .catch(err => console.warn('background: could not load:', err));
+
+        // Color-dark counterpart, cross-faded over the light background via
+        // `theme_progress` — see the light/dark theme toggle section below.
+        fetch('images/bg/ocean-blur-dark.jpg')
+          .then(res => {
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.arrayBuffer();
+          })
+          .then(buf => app.set_background_dark_image(new Uint8Array(buf)))
+          .catch(err => console.warn('background dark: could not load:', err));
+
         // ── Box-cover images (M9.7) ────────────────────────────────────────
         //
         // No fetch on the Rust side — bytes are pulled over HTTP here and
@@ -110,6 +133,174 @@
             .then(buf => app.set_tile_image(tileIdx, new Uint8Array(buf)))
             .catch(err => console.warn(`tile ${tileIdx}: could not load ${src}:`, err));
         });
+
+        // ── Home/back nav icons ──────────────────────────────────────────
+        //
+        // Border+glyph are baked into the PNGs themselves (Color-light
+        // treatment) — same fetch-then-hand-to-wasm pattern as box-cover art.
+        const NAV_ICON_SRCS = ['images/icons/home-idle.png', 'images/icons/back-idle.png'];
+        NAV_ICON_SRCS.forEach((src, iconIdx) => {
+          fetch(src)
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => app.set_nav_icon_image(iconIdx, new Uint8Array(buf)))
+            .catch(err => console.warn(`nav icon ${iconIdx}: could not load ${src}:`, err));
+        });
+
+        // "Selected" home icon art, cross-faded over the idle art above —
+        // same fetch-then-hand-to-wasm pattern.
+        fetch('images/icons/home-selected.png')
+          .then(res => {
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.arrayBuffer();
+          })
+          .then(buf => app.set_home_icon_selected_image(new Uint8Array(buf)))
+          .catch(err => console.warn('home icon selected: could not load:', err));
+
+        // Color-dark counterparts of the two icons above + the "selected"
+        // art, each cross-faded in via `theme_progress`/`home_selected_fade`
+        // — see the light/dark theme toggle section below.
+        const NAV_ICON_DARK_SRCS = [
+          ['images/icons/home-idle-dark.png', bytes => app.set_home_icon_dark_image(bytes)],
+          ['images/icons/back-idle-dark.png', bytes => app.set_back_icon_dark_image(bytes)],
+          ['images/icons/home-selected-dark.png', bytes => app.set_home_icon_selected_dark_image(bytes)],
+        ];
+        NAV_ICON_DARK_SRCS.forEach(([src, setter]) => {
+          fetch(src)
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => setter(new Uint8Array(buf)))
+            .catch(err => console.warn(`${src}: could not load:`, err));
+        });
+
+        // ── Persistent brand lockup (mark + "PROTEUS" wordmark) ────────────
+        //
+        // Top-left, appears once the splash finishes morphing into Home and
+        // stays up through every other state — same fetch-then-hand-to-wasm
+        // pattern as the icons above.
+        fetch('images/logo/lockup.png')
+          .then(res => {
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.arrayBuffer();
+          })
+          .then(buf => app.set_logo_lockup_image(new Uint8Array(buf)))
+          .catch(err => console.warn('logo lockup: could not load:', err));
+
+        // Color-dark counterpart, cross-faded over the light lockup via
+        // `theme_progress`.
+        fetch('images/logo/lockup-dark.png')
+          .then(res => {
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.arrayBuffer();
+          })
+          .then(buf => app.set_logo_lockup_dark_image(new Uint8Array(buf)))
+          .catch(err => console.warn('logo lockup dark: could not load:', err));
+
+        // ── Light/dark theme toggle — sun/moon icons, top-right ────────────
+        //
+        // Each icon is only ever a 2-layer crossfade between its own
+        // permanent light-theme and dark-theme look (see
+        // proteus-shell-native's SUN_ICON_PATH/MOON_ICON_PATH doc comments
+        // for why "selected vs. idle" is fully determined by which theme is
+        // current for these two, unlike the home icon's independent
+        // page-selected state) — same fetch-then-hand-to-wasm pattern.
+        //
+        // Sun's mapping looks backwards on purpose: `set_sun_icon_image`
+        // takes the *dark*-theme ring art and `set_sun_icon_dark_image`
+        // takes the *light*-theme solid disc — see that method's doc
+        // comment in lib.rs for why (alpha-over compositing needs the solid
+        // art in the overlay slot to actually occlude anything). Moon's
+        // mapping matches its name as usual.
+        const THEME_ICON_SRCS = [
+          ['images/icons/sun-idle-dark.png', bytes => app.set_sun_icon_image(bytes)],
+          ['images/icons/sun-selected.png', bytes => app.set_sun_icon_dark_image(bytes)],
+          ['images/icons/moon-idle.png', bytes => app.set_moon_icon_image(bytes)],
+          ['images/icons/moon-selected-dark.png', bytes => app.set_moon_icon_dark_image(bytes)],
+        ];
+        THEME_ICON_SRCS.forEach(([src, setter]) => {
+          fetch(src)
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => setter(new Uint8Array(buf)))
+            .catch(err => console.warn(`${src}: could not load:`, err));
+        });
+
+        // ── Animated logo (replaces the old "START" text label) ────────────
+        //
+        // 19-frame hatch-sweep loop (brand/animated-logo, color-light
+        // treatment) standing in for the button's old navy circle. No fetch
+        // on the Rust side — bytes are pulled over HTTP here and handed to
+        // add_logo_frame(), which bakes each one into main_atlas immediately
+        // (eternal, unlike box-cover art). Fire-and-forget, same as the tile
+        // images: a failed fetch just leaves that frame out of the loop.
+        for (let i = 0; i < 19; i++) {
+          const frameIdx = i;
+          const src = `images/logo/frame-${String(frameIdx + 1).padStart(2, '0')}.png`;
+          fetch(src)
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => app.add_logo_frame(frameIdx, new Uint8Array(buf)))
+            .catch(err => console.warn(`logo frame ${frameIdx}: could not load ${src}:`, err));
+        }
+
+        // Color-dark counterpart of the same 19-frame animation — used only
+        // by the Loading screen's theme-crossfaded logo (the splash-only
+        // animation above never has to theme-crossfade).
+        for (let i = 0; i < 19; i++) {
+          const frameIdx = i;
+          const src = `images/logo/frame-${String(frameIdx + 1).padStart(2, '0')}-dark.png`;
+          fetch(src)
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => app.add_logo_frame_dark(frameIdx, new Uint8Array(buf)))
+            .catch(err => console.warn(`logo frame dark ${frameIdx}: could not load ${src}:`, err));
+        }
+
+        // ── Photo gallery (M12) ─────────────────────────────────────────────
+        //
+        // Rust signals *when* to fetch (on entering the Loading state) via
+        // take_gallery_fetch_request(), polled once per tick() below — same
+        // shape as take_video_start_tile(). This function does the actual
+        // picsum.photos calls: the list endpoint first (falling back to
+        // seed-based URLs, which need no list lookup at all, if it fails or
+        // returns too few entries), then one fetch per image, each with its
+        // own .catch() so one bad image doesn't block the rest — the
+        // Rust-side fetch timeout is what ultimately decides "give up".
+        async function fetchGallery(sidePx) {
+          let ids;
+          try {
+            const res = await fetch('https://picsum.photos/v2/list?page=1&limit=12');
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            const list = await res.json();
+            if (list.length < 12) throw new Error(`list returned only ${list.length} entries`);
+            ids = list.slice(0, 12).map(entry => entry.id);
+          } catch (err) {
+            console.warn('gallery: list endpoint unavailable, falling back to seed URLs:', err);
+            ids = Array.from({ length: 12 }, (_, i) => `seed-${i}`);
+          }
+          ids.forEach((id, idx) => {
+            const url = id.startsWith('seed-')
+              ? `https://picsum.photos/${id.replace('seed-', 'seed/')}/${sidePx}/${sidePx}`
+              : `https://picsum.photos/id/${id}/${sidePx}/${sidePx}`;
+            fetch(url)
+              .then(res => {
+                if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+                return res.arrayBuffer();
+              })
+              .then(buf => app.set_gallery_image(idx, new Uint8Array(buf)))
+              .catch(err => console.warn(`gallery tile ${idx}: could not load ${url}:`, err));
+          });
+        }
 
         // ── MP4 playback (M9.5) ────────────────────────────────────────────
         //
@@ -190,6 +381,9 @@
           const startTile = app.take_video_start_tile();
           if (startTile !== undefined) startVideo(startTile);
           if (app.take_video_stop()) stopVideo();
+
+          const gallerySidePx = app.take_gallery_fetch_request();
+          if (gallerySidePx !== undefined) fetchGallery(gallerySidePx);
 
           requestAnimationFrame(frame);
         }

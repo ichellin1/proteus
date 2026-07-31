@@ -28,6 +28,35 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, String> {
     })
 }
 
+/// Premultiplies RGB by alpha in place, in a straight-alpha RGBA8 buffer
+/// (`len` a multiple of 4). `main_atlas` is stored premultiplied (see
+/// `unpremultiply`'s doc comment in `quad.wgsl`) so hardware bilinear
+/// filtering interpolates correctly at partial-alpha texels — filtering
+/// straight alpha linearly blends whatever "don't care" RGB a source image
+/// happened to store at fully-transparent pixels, which produces dark or
+/// light fringing depending on that value. Called by
+/// [`crate::QuadPipeline::write_to_main_atlas`] on every upload, so callers
+/// (glyph rasterization, decoded images) hand it straight alpha as produced.
+/// A no-op wherever alpha is 0 or 255 — i.e. every image before
+/// per-pixel-transparent PNGs existed (opaque photos, `main_atlas`'s white
+/// sentinel).
+pub fn premultiply_alpha(rgba: &mut [u8]) {
+    debug_assert_eq!(
+        rgba.len() % 4,
+        0,
+        "premultiply_alpha: len must be a multiple of 4"
+    );
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        if a == 255 {
+            continue;
+        }
+        px[0] = ((px[0] as u16 * a + 127) / 255) as u8;
+        px[1] = ((px[1] as u16 * a + 127) / 255) as u8;
+        px[2] = ((px[2] as u16 * a + 127) / 255) as u8;
+    }
+}
+
 /// Downscale `image` (aspect-preserved) so neither dimension exceeds
 /// `max_side`. A no-op if it already fits.
 ///
@@ -152,5 +181,46 @@ mod tests {
             "width should shrink to preserve aspect ratio, got {}",
             img.width
         );
+    }
+
+    #[test]
+    fn premultiply_alpha_is_noop_at_full_opacity() {
+        let mut px = [10u8, 20, 200, 255];
+        premultiply_alpha(&mut px);
+        assert_eq!(px, [10, 20, 200, 255]);
+    }
+
+    #[test]
+    fn premultiply_alpha_zeroes_rgb_at_zero_alpha_regardless_of_source_color() {
+        // This is the whole point: a source PNG can store *any* "don't care"
+        // RGB at a fully-transparent pixel (black, white, anything) — after
+        // premultiplying, it's always (0,0,0,0), so hardware bilinear
+        // filtering against a neighboring opaque texel can't fringe dark or
+        // light depending on what that don't-care value happened to be.
+        let mut black_transparent = [0u8, 0, 0, 0];
+        let mut white_transparent = [255u8, 255, 255, 0];
+        premultiply_alpha(&mut black_transparent);
+        premultiply_alpha(&mut white_transparent);
+        assert_eq!(black_transparent, [0, 0, 0, 0]);
+        assert_eq!(white_transparent, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn premultiply_alpha_scales_rgb_by_alpha_fraction() {
+        let mut px = [200u8, 100, 50, 128]; // alpha ≈ 0.502
+        premultiply_alpha(&mut px);
+        assert_eq!(px[3], 128, "alpha channel itself is untouched");
+        // 200 * 128 / 255 ≈ 100, within rounding.
+        assert!((px[0] as i16 - 100).abs() <= 1, "R got {}", px[0]);
+        assert!((px[1] as i16 - 50).abs() <= 1, "G got {}", px[1]);
+        assert!((px[2] as i16 - 25).abs() <= 1, "B got {}", px[2]);
+    }
+
+    #[test]
+    fn premultiply_alpha_handles_multiple_pixels() {
+        let mut buf = [255u8, 255, 255, 0, 10, 20, 30, 255];
+        premultiply_alpha(&mut buf);
+        assert_eq!(&buf[0..4], &[0, 0, 0, 0]);
+        assert_eq!(&buf[4..8], &[10, 20, 30, 255]);
     }
 }

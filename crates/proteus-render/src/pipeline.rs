@@ -24,6 +24,14 @@ use crate::texture_registry::{TextureId, TextureRegistry};
 // ---------------------------------------------------------------------------
 
 /// Default `main_atlas` dimensions. Must fit within `device.limits().max_texture_dimension_2d`.
+/// Can't be raised to buy more room — the web shell deliberately requests
+/// `wgpu::Limits::downlevel_webgl2_defaults()` for real WebGL2
+/// compatibility, which caps `max_texture_dimension_2d` at 2048; anything
+/// larger would fail `create_texture` there (see `headless_render.rs`'s
+/// tests, which request the same downlevel limits specifically to catch
+/// this class of regression). If atlas pressure becomes a problem again,
+/// the fix is to shrink what's baked into it (e.g. `MAX_TILE_IMAGE_SIDE` in
+/// the shells), not to grow this constant.
 const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 /// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
 const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
@@ -546,7 +554,11 @@ impl QuadPipeline {
     ///
     /// `x` / `y`    — top-left pixel of the destination region (atlas coords).
     /// `width` / `height` — dimensions of the region in pixels.
-    /// `rgba_data`  — raw RGBA bytes; must have exactly `width * height * 4` bytes.
+    /// `rgba_data`  — raw, straight-alpha RGBA bytes; must have exactly
+    /// `width * height * 4` bytes. Premultiplied in place (a local copy) before
+    /// upload — see [`crate::static_texture::premultiply_alpha`]'s doc comment
+    /// for why `main_atlas` is stored premultiplied. Callers hand this straight
+    /// alpha exactly as `rasterize_text`/`decode_image` produce it.
     ///
     /// # Panics
     ///
@@ -572,6 +584,9 @@ impl QuadPipeline {
             width * height * 4,
         );
 
+        let mut premultiplied = rgba_data.to_vec();
+        crate::static_texture::premultiply_alpha(&mut premultiplied);
+
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self._main_atlas,
@@ -579,7 +594,7 @@ impl QuadPipeline {
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba_data,
+            &premultiplied,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
@@ -645,7 +660,12 @@ impl QuadPipeline {
         region: (u32, u32, u32, u32),
     ) {
         let dest = self._main_atlas.clone();
-        self.bake_instances_to_atlas(device, queue, instances, view_projection, region, &dest);
+        // No gutter here (`pad: 0`) — unlike `transition_allocator`,
+        // `MainAtlasAllocator` packs regions with zero reserved margin, so
+        // painting a transparent ring beyond the requested region would
+        // overwrite a few edge pixels of whatever neighboring allocation
+        // happens to be packed adjacent to it.
+        self.bake_instances_to_atlas(device, queue, instances, view_projection, region, &dest, 0);
     }
 
     /// Render `instances` into a `width × height` sub-region of
@@ -696,9 +716,29 @@ impl QuadPipeline {
         region: (u32, u32, u32, u32),
     ) {
         let dest = self._transition_atlas.clone();
-        self.bake_instances_to_atlas(device, queue, instances, view_projection, region, &dest);
+        // `pad`: the allocator (`TransitionAtlasAllocator`) reserved an extra
+        // `TRANSITION_BAKE_PAD`-pixel gutter around `region` in the atlas —
+        // see `bake_instances_to_atlas`'s `pad` doc for why this bake must be
+        // the one to paint it transparent.
+        self.bake_instances_to_atlas(
+            device,
+            queue,
+            instances,
+            view_projection,
+            region,
+            &dest,
+            crate::transition_atlas::TRANSITION_BAKE_PAD,
+        );
     }
 
+    /// `pad`: extra transparent gutter (atlas pixels) to reserve and paint
+    /// around `region` on every side, beyond the `region` itself — the
+    /// caller's allocator must already have reserved this space (e.g.
+    /// `TransitionAtlasAllocator` builds it into every allocation); passing a
+    /// nonzero `pad` when the allocator didn't reserve it would overwrite a
+    /// neighboring allocation's edge pixels. `0` for callers (like
+    /// `MainAtlasAllocator`) that pack with no reserved margin.
+    #[allow(clippy::too_many_arguments)]
     fn bake_instances_to_atlas(
         &mut self,
         device: &wgpu::Device,
@@ -707,14 +747,27 @@ impl QuadPipeline {
         view_projection: glam::Mat4,
         region: (u32, u32, u32, u32),
         dest_texture: &wgpu::Texture,
+        pad: u32,
     ) {
         let (x, y, w, h) = region;
+
+        // Without a gutter, `region`'s edge pixels in the atlas would be
+        // whatever the allocator's packing left there — for `pad > 0`
+        // callers, a rounded corner's near-edge bilinear sample could then
+        // blend with an adjacent allocation's opaque content instead of
+        // reliably fading to transparent. The scratch texture is sized to
+        // cover content + gutter, cleared transparent, and the draw is
+        // confined to the centered `w×h` viewport so the gutter ring is
+        // never touched by rasterization — then the *whole* padded scratch
+        // (content + guaranteed-transparent ring) is copied into the atlas.
+        let padded_w = w + 2 * pad;
+        let padded_h = h + 2 * pad;
 
         let scratch = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("bake_scratch"),
             size: wgpu::Extent3d {
-                width: w,
-                height: h,
+                width: padded_w,
+                height: padded_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -782,6 +835,13 @@ impl QuadPipeline {
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, self.bake_instance_buffer.slice(..));
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                // `view_projection` maps the entity's geometry to fill NDC
+                // ±1 for a `w×h` viewport — confining the viewport to the
+                // centered `w×h` sub-rect (rather than the full padded
+                // scratch) reuses that same projection unchanged while
+                // leaving the `pad`-pixel ring around it untouched by
+                // rasterization, so it stays at the clear color set above.
+                pass.set_viewport(pad as f32, pad as f32, w as f32, h as f32, 0.0, 1.0);
                 pass.draw_indexed(0..6, 0, 0..bake_instance_count as u32);
             }
         }
@@ -795,12 +855,16 @@ impl QuadPipeline {
             wgpu::TexelCopyTextureInfo {
                 texture: dest_texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                origin: wgpu::Origin3d {
+                    x: x.saturating_sub(pad),
+                    y: y.saturating_sub(pad),
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: w,
-                height: h,
+                width: padded_w,
+                height: padded_h,
                 depth_or_array_layers: 1,
             },
         );
@@ -1025,8 +1089,13 @@ impl QuadPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    // Standard alpha blending: src_alpha * src + (1 - src_alpha) * dst
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Premultiplied alpha blending: 1 * src + (1 - src_alpha) * dst.
+                    // `fs_main` outputs premultiplied color (see its final `return`
+                    // and the `unpremultiply` doc comment in quad.wgsl) — this must
+                    // match, or a fully-opaque fragment would render correctly but
+                    // any partial-alpha fragment would blend wrong. Numerically
+                    // identical to the old `ALPHA_BLENDING` for opaque content.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
