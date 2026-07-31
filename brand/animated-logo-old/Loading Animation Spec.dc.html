@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>doc-page:not(:defined){visibility:hidden}
+body{margin:0}
+h1,h2,p,li,td,th{font-family:'Inter',Helvetica,sans-serif}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></link>
+<script src="./doc-page.js"></script>
+</helmet>
+<doc-page margin="0.85in">
+
+<h1 style="font-size:28px; font-weight:800; color:oklch(0.22 0.01 260); margin-bottom:4px;">Proteus &mdash; Loading Animation</h1>
+<p style="font-size:13px; color:oklch(0.5 0.01 90); margin-top:0; margin-bottom:28px;">Frame sequence spec, derived from the base logo mark.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:28px;">Concept</h2>
+<p style="font-size:14px; line-height:1.6; color:oklch(0.3 0.01 260);">The hatched triangle of the mark is made of 19 parallel diagonal bands. In the loading animation, exactly one band at a time fades to 60% opacity while the rest stay solid, sweeping continuously from one corner to the other &mdash; the surface reads as if it's still being rendered.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:28px;">Frame parameters</h2>
+<ul style="font-size:13.5px; line-height:1.8; color:oklch(0.3 0.01 260);">
+  <li><b>Frame count:</b> 19 (one per band, looping).</li>
+  <li><b>Canvas:</b> 104 &times; 144 units (13:18 portrait), exported at 208 &times; 288px (2x).</li>
+  <li><b>Band width:</b> 8 units; band pitch (spacing): 10.5&nbsp;&times;&nbsp;&radic;2 &asymp; 14.85 units, laid on the 45&deg; diagonal.</li>
+  <li><b>Active-frame opacity:</b> the single active band drops to 0.6 opacity; all other bands stay at 1.0.</li>
+  <li><b>Suggested playback:</b> 90ms per frame (&asymp;11fps), looping forward continuously. At 19 frames that's a ~1.7s loop.</li>
+</ul>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:28px;">Treatments</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px;">
+  <thead><tr style="text-align:left; color:oklch(0.5 0.01 90); font-size:11px; letter-spacing:0.04em; text-transform:uppercase;">
+    <th style="padding:6px 8px 6px 0; border-bottom:1px solid oklch(0.85 0.006 90);">Folder</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Band color</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Background</th>
+  </tr></thead>
+  <tbody>
+    <tr><td style="padding:10px 8px 10px 0; font-family:monospace;">color-light/</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.55 0.17 290)</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.98 0.004 90)</td></tr>
+    <tr><td style="padding:10px 8px 10px 0; font-family:monospace;">color-dark/</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.78 0.13 290)</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.19 0.012 260)</td></tr>
+    <tr><td style="padding:10px 8px 10px 0; font-family:monospace;">mono-light/</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.22 0.01 260)</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.98 0.004 90)</td></tr>
+    <tr><td style="padding:10px 8px 10px 0; font-family:monospace;">mono-dark/</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.98 0.004 90)</td><td style="padding:10px 8px; font-family:monospace;">oklch(0.08 0 0)</td></tr>
+  </tbody>
+</table>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:28px;">Files</h2>
+<p style="font-size:13.5px; line-height:1.7; color:oklch(0.3 0.01 260); font-family:monospace;">{treatment}/frame-01.svg &hellip; frame-19.svg &mdash; vector, source of truth<br/>{treatment}/frame-01.png &hellip; frame-19.png &mdash; pre-rendered @2x, ready to drop into a &lt;video&gt;-less GIF/sprite pipeline or an image-sequence player</p>
+<p style="font-size:13.5px; line-height:1.6; color:oklch(0.4 0.01 260);">To build a GIF or video from the sequence, feed frame-01 through frame-19 in order at the frame timing above, then loop.</p>
+
+</doc-page>
+
+</x-dc>
+</body>
+</html>

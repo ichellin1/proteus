@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>doc-page:not(:defined){visibility:hidden}
+body{margin:0}
+h1,h2,h3,p,li,td,th{font-family:'Inter',Helvetica,sans-serif}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></link>
+<script src="./doc-page.js"></script>
+</helmet>
+<doc-page margin="0.85in">
+
+<h1 style="font-size:30px; font-weight:800; color:oklch(0.22 0.01 260); margin-bottom:4px;">Proteus &mdash; UI Design System</h1>
+<p style="font-size:13px; color:oklch(0.5 0.01 90); margin-top:0; margin-bottom:32px;">Buttons, image tiles, and icons across 4 color treatments.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Treatments</h2>
+<table style="width:100%; border-collapse:collapse; font-size:13px;">
+  <thead><tr style="text-align:left; color:oklch(0.5 0.01 90); font-size:11px; letter-spacing:0.04em; text-transform:uppercase;">
+    <th style="padding:6px 8px 6px 0; border-bottom:1px solid oklch(0.85 0.006 90);">Treatment</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Primary</th>
+    <th style="padding:6px 8px; border-bottom:1px solid oklch(0.85 0.006 90);">Corner radius</th>
+  </tr></thead>
+  <tbody>
+    <tr><td style="padding:10px 8px 10px 0;">Color &mdash; light</td><td style="padding:10px 8px; font-family:monospace;">#735acc</td><td style="padding:10px 8px;">20px</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;">Color &mdash; dark</td><td style="padding:10px 8px; font-family:monospace;">#b6a8ff</td><td style="padding:10px 8px;">30px</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;">Monochrome &mdash; on white</td><td style="padding:10px 8px; font-family:monospace;">#181b1f</td><td style="padding:10px 8px;">20px</td></tr>
+    <tr><td style="padding:10px 8px 10px 0;">Monochrome &mdash; on black</td><td style="padding:10px 8px; font-family:monospace;">#f9f8f5</td><td style="padding:10px 8px;">30px</td></tr>
+  </tbody>
+</table>
+<p style="font-size:13px; line-height:1.6; color:oklch(0.4 0.01 260); margin-top:10px;">"Light" treatments use 20px corners; "dark" treatments use 30px. Every component below draws its border, glow, and idle text/icon color from the treatment's primary color &mdash; there are no separate per-component colors.</p>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Button</h2>
+<img src="assets/example-buttons.png" style="width:100%; border-radius:6px; margin:12px 0;"/>
+<ul style="font-size:13.5px; line-height:1.8; color:oklch(0.3 0.01 260);">
+  <li><b>Border:</b> 5px solid, treatment primary. <b>Corner radius:</b> per treatment (20/30px).</li>
+  <li><b>Padding:</b> 15px around the label, centered horizontally and vertically.</li>
+  <li><b>Idle:</b> transparent background, label in the primary color.</li>
+  <li><b>Hover/focus:</b> 15px glow (box-shadow, 0 blur-offset, 15px blur, primary color) + 5% scale-up. No fill or text-color change.</li>
+  <li><b>Font:</b> Inter, weight 700, 16px, letter-spacing 0.02em.</li>
+</ul>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Image tile</h2>
+<ul style="font-size:13.5px; line-height:1.8; color:oklch(0.3 0.01 260);">
+  <li>Same border, radius, glow, and scale as the button. No padding between image and border, no text.</li>
+  <li><b>With label:</b> on hover/focus, a 60%-black scrim and a centered label (padding 15px) fade in over the image. Label color is the <i>corresponding opposite treatment's</i> primary &mdash; Color-light's label uses Color-dark's primary, and vice versa; monochrome labels use the opposite of their own primary.</li>
+  <li><b>Label font:</b> Inter, weight 700, 16px, letter-spacing 0.02em (matches the button).</li>
+</ul>
+<img src="assets/example-tile-label.png" style="width:100%; border-radius:6px; margin:12px 0;"/>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Icon button</h2>
+<ul style="font-size:13.5px; line-height:1.8; color:oklch(0.3 0.01 260);">
+  <li><b>Shape:</b> 56px circle, 3px border in the primary color, transparent idle background, glyph in the primary color.</li>
+  <li><b>Hover/focus:</b> 15px glow + 5% scale, same as button/tile.</li>
+  <li><b>Selected</b> (sun, play, pause only): background fills solid with the primary color; glyph switches to a fixed contrast color so it stays legible against its own primary &mdash; off-white for Color-light, Color-dark and Monochrome-on-white; ink for Monochrome-on-black.</li>
+</ul>
+
+<h3 style="font-size:14px; font-weight:700; color:oklch(0.3 0.01 260); margin-top:20px;">Light / dark mode &mdash; sun &amp; moon</h3>
+<p style="font-size:13px; line-height:1.6; color:oklch(0.4 0.01 260);">Sun: idle, hover, and selected (persistent fill, marks the active mode). Moon: idle and hover only (no selected state built yet).</p>
+<img src="assets/example-icons-mode.png" style="width:100%; border-radius:6px; margin:12px 0;"/>
+
+<h3 style="font-size:14px; font-weight:700; color:oklch(0.3 0.01 260); margin-top:20px;">Navigation &amp; media &mdash; back, home, play, pause</h3>
+<p style="font-size:13px; line-height:1.6; color:oklch(0.4 0.01 260);">Back and home: idle and hover only, no selected state (non-toggling actions). Play and pause: idle, hover, and selected, for marking the active transport state.</p>
+<img src="assets/example-icons-nav.png" style="width:100%; border-radius:6px; margin:12px 0;"/>
+
+<h2 style="font-size:16px; font-weight:700; color:oklch(0.22 0.01 260); border-bottom:1px solid oklch(0.85 0.006 90); padding-bottom:6px; margin-top:32px;">Files in this pack</h2>
+<p style="font-size:13.5px; line-height:1.7; color:oklch(0.3 0.01 260); font-family:monospace;">icons/{treatment}/{icon}-idle.svg &amp; .png<br/>icons/{treatment}/{sun,play,pause}-selected.svg &amp; .png<br/>4 treatments &times; 6 icons, idle + selected where applicable.</p>
+
+</doc-page>
+
+</x-dc>
+</body>
+</html>

@@ -29,19 +29,27 @@
 //!
 //! ## Embedded font
 //!
-//! [`EMBEDDED_FONT_BYTES`] holds DejaVu Sans Regular (Bitstream Vera / public domain license)
-//! embedded at compile time. Callers can supply their own font bytes to [`FontAtlas::new`] for
-//! custom typography.
+//! [`EMBEDDED_FONT_BYTES`] holds Inter Bold (SIL Open Font License 1.1) embedded at compile time —
+//! the same family and weight the Brand Spec calls for on the "PROTEUS" wordmark, used as the
+//! app's one and only font rather than maintaining a separate brand font alongside a generic one.
+//! Callers can supply their own font bytes to [`FontAtlas::new`] for custom typography.
+//!
+//! Google Fonts only distributes Inter as a variable font (`wght`/`opsz` axes) — `fontdue` has no
+//! OpenType Font Variations (`fvar`/`gvar`) support, so it would always rasterize the font's
+//! default instance (Regular), never a requested weight. `assets/Inter-Bold.ttf` is a static `wght
+//! 700, opsz 14` instance produced from Google Fonts' `Inter[opsz,wght].ttf` via `fonttools`
+//! (`fonttools varLib.instancer --update-name-table Inter-Variable.ttf wght=700 opsz=14`) — a
+//! standard, lossless way to derive a static weight from a variable font, not a redraw.
 
 // ---------------------------------------------------------------------------
 // Embedded font
 // ---------------------------------------------------------------------------
 
-/// DejaVu Sans Regular TTF, embedded at compile time.
+/// Inter Bold TTF (static instance, see the module docs), embedded at compile time.
 ///
-/// License: Bitstream Vera (permissive, bundling allowed) + public domain
-/// additions. See `assets/LICENSE-DejaVuSans.txt`.
-pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
+/// License: SIL Open Font License 1.1 (permissive, bundling allowed). See
+/// `assets/LICENSE-Inter.txt`.
+pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/Inter-Bold.ttf");
 
 // ---------------------------------------------------------------------------
 // RasterizedGlyphs
@@ -95,7 +103,7 @@ impl FontAtlas {
         Self { font }
     }
 
-    /// Create a [`FontAtlas`] using the [`EMBEDDED_FONT_BYTES`] (DejaVu Sans Regular).
+    /// Create a [`FontAtlas`] using the [`EMBEDDED_FONT_BYTES`] (Inter Bold).
     pub fn with_embedded_font() -> Self {
         Self::new(EMBEDDED_FONT_BYTES)
     }
@@ -106,6 +114,20 @@ impl FontAtlas {
     /// - `text` is empty (or contains only whitespace that contributes no pixels).
     /// - The font has no usable line metrics at `size_px` (should not happen for valid fonts).
     pub fn rasterize_text(&mut self, text: &str, size_px: f32) -> Option<RasterizedGlyphs> {
+        self.rasterize_text_tracked(text, size_px, 0.0)
+    }
+
+    /// Same as [`rasterize_text`](Self::rasterize_text), with `letter_spacing_px` of extra
+    /// tracking inserted *between* glyphs (not after the last one, so the bounding box doesn't
+    /// include trailing padding). `0.0` behaves identically to `rasterize_text` — used for the
+    /// Brand Spec's "letter-spacing 0.06em" wordmark requirement, which `rasterize_text` alone
+    /// has no way to express.
+    pub fn rasterize_text_tracked(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        letter_spacing_px: f32,
+    ) -> Option<RasterizedGlyphs> {
         if text.is_empty() {
             return None;
         }
@@ -126,7 +148,10 @@ impl FontAtlas {
         //    Height: font ascent + |descent| (in pixels). We query
         //    `horizontal_line_metrics` for the current px size.
         //
-        //    Width: sum of all glyph advance widths (integer ceiling).
+        //    Width: sum of all glyph advance widths (integer ceiling), plus
+        //    `letter_spacing_px` between each pair of glyphs — (n - 1) gaps
+        //    for n glyphs, not n, so a single trailing gap doesn't pad the
+        //    bounding box past the last glyph's own ink.
         // ------------------------------------------------------------------
 
         let line_metrics = self.font.horizontal_line_metrics(size_px)?;
@@ -138,10 +163,10 @@ impl FontAtlas {
             return None;
         }
 
-        let text_width: u32 = rasterized
-            .iter()
-            .map(|(m, _)| m.advance_width.ceil() as u32)
-            .sum();
+        let glyph_count = rasterized.len();
+        let advance_sum: f32 = rasterized.iter().map(|(m, _)| m.advance_width).sum();
+        let tracking_total = letter_spacing_px * glyph_count.saturating_sub(1) as f32;
+        let text_width = (advance_sum + tracking_total).ceil().max(0.0) as u32;
         if text_width == 0 {
             return None;
         }
@@ -158,7 +183,7 @@ impl FontAtlas {
 
         let mut pen_x: i32 = 0;
 
-        for (metrics, bitmap) in &rasterized {
+        for (i, (metrics, bitmap)) in rasterized.iter().enumerate() {
             // glyph_left: horizontal offset of the glyph's left edge from pen_x.
             // metrics.xmin is the bearing from pen position to the left edge of the
             // visible glyph pixels. For most Latin characters this is ≥ 0.
@@ -194,6 +219,9 @@ impl FontAtlas {
             }
 
             pen_x += metrics.advance_width.ceil() as i32;
+            if i + 1 < glyph_count {
+                pen_x += letter_spacing_px.round() as i32;
+            }
         }
 
         Some(RasterizedGlyphs {
@@ -274,5 +302,44 @@ mod tests {
             let r = r.unwrap();
             assert!(r.width > 0 && r.height > 0, "zero-size glyphs at {size}px");
         }
+    }
+
+    #[test]
+    fn rasterize_text_tracked_zero_spacing_matches_rasterize_text() {
+        let mut fa = atlas();
+        let tracked = fa.rasterize_text_tracked("PROTEUS", 40.0, 0.0).unwrap();
+        let plain = fa.rasterize_text("PROTEUS", 40.0).unwrap();
+        assert_eq!(tracked.width, plain.width);
+        assert_eq!(tracked.height, plain.height);
+        assert_eq!(tracked.rgba_pixels, plain.rgba_pixels);
+    }
+
+    #[test]
+    fn rasterize_text_tracked_wider_spacing_widens_bounding_box() {
+        let mut fa = atlas();
+        let tight = fa.rasterize_text_tracked("PROTEUS", 40.0, 0.0).unwrap();
+        let tracked = fa.rasterize_text_tracked("PROTEUS", 40.0, 10.0).unwrap();
+        // 7 glyphs → 6 gaps of ~10px extra.
+        assert!(
+            tracked.width > tight.width + 50,
+            "expected meaningfully wider run: tight={} tracked={}",
+            tight.width,
+            tracked.width
+        );
+        assert_eq!(
+            tracked.height, tight.height,
+            "letter spacing must not affect line height"
+        );
+    }
+
+    #[test]
+    fn rasterize_text_tracked_single_glyph_has_no_trailing_gap() {
+        let mut fa = atlas();
+        let no_spacing = fa.rasterize_text_tracked("A", 40.0, 0.0).unwrap();
+        let with_spacing = fa.rasterize_text_tracked("A", 40.0, 20.0).unwrap();
+        assert_eq!(
+            no_spacing.width, with_spacing.width,
+            "a single glyph has no gap to insert tracking into"
+        );
     }
 }

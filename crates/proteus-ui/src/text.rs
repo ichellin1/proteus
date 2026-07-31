@@ -77,15 +77,24 @@ pub struct Text {
     /// The alpha channel is multiplied by the entity's whole-component opacity
     /// in the shader, so partially-transparent text is supported.
     pub color: Vec4,
+    /// Extra tracking inserted between glyphs, in pixels. `0.0` (the
+    /// default) is normal glyph-to-glyph advance with no extra gap; negative
+    /// values tighten it. See [`FontAtlas::rasterize_text_tracked`] — this is
+    /// the only reason that method exists rather than just `rasterize_text`.
+    ///
+    /// [`FontAtlas::rasterize_text_tracked`]: proteus_render::FontAtlas::rasterize_text_tracked
+    pub letter_spacing_px: f32,
 }
 
 impl Text {
-    /// Convenience constructor. Glyph color defaults to opaque white.
+    /// Convenience constructor. Glyph color defaults to opaque white; letter
+    /// spacing defaults to `0.0` (no extra tracking).
     pub fn new(content: impl Into<String>, size_px: f32) -> Self {
         Self {
             content: content.into(),
             size_px,
             color: Vec4::ONE,
+            letter_spacing_px: 0.0,
         }
     }
 
@@ -96,6 +105,18 @@ impl Text {
     /// ```
     pub fn with_color(mut self, color: Vec4) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Override letter spacing (extra tracking between glyphs, in pixels).
+    /// Builder-style so it chains with `Text::new`/`with_color`.
+    ///
+    /// ```rust,ignore
+    /// // Brand Spec: "letter-spacing 0.06em" — 0.06 * size_px.
+    /// Text::new("PROTEUS", 90.0).with_letter_spacing(90.0 * 0.06)
+    /// ```
+    pub fn with_letter_spacing(mut self, letter_spacing_px: f32) -> Self {
+        self.letter_spacing_px = letter_spacing_px;
         self
     }
 }

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="208" height="288" viewBox="0 0 104 144">
+  <defs>
+    <pattern id="h4" patternUnits="userSpaceOnUse" width="10.5" height="10.5" patternTransform="rotate(45)">
+      <rect width="10.5" height="10.5" fill="oklch(0.98 0.004 90)"></rect>
+      <line x1="0" y1="0" x2="0" y2="10.5" stroke="oklch(0.08 0 0)" stroke-width="5"></line>
+    </pattern>
+  </defs>
+  <polygon points="0,0 0,144 104,144" fill="oklch(0.98 0.004 90)"></polygon>
+  <polygon points="0,0 104,0 104,144" fill="url(#h4)"></polygon>
+  <line x1="0" y1="0" x2="104" y2="144" stroke="oklch(0.08 0 0)" stroke-width="2"></line>
+</svg>

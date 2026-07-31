@@ -38,6 +38,9 @@ M13 Developer Release
 - **M9 — Video** (and its sub-milestones M9.5–M9.8) — can begin after M7
 - **M10.5 — Static Component Baking** — can begin after M10
 - **M10.6 — Oriented Hit-Test Boxes** — can begin after M10
+- **M11.1 — Update Demo, Part 1** — after M11 (complete, ready to commit)
+- **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1
+- **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2
 
 **Cross-shell parity is a standing requirement, not a milestone.** Every milestone's definition of
 done is implicitly "works identically on the native and web shells" unless stated otherwise —
@@ -218,6 +221,36 @@ Eviction-under-pressure is restricted to unreferenced entries only, for correctn
 PLANNING.md's M11 entry for why evicting referenced content would be unsafe given cached UVs on
 components) — referenced-content eviction, a restoration mechanism, and backgrounding-driven
 eviction beyond video are Post-V1. See PLANNING.md for the full DoD.
+
+## M11.1 — Update Demo, Part 1 *(off critical path — complete, ready to commit)*
+
+A dogfooding pass on the reference demo — using the framework as a real user rather than its
+author, to actually exercise M11's resource management and the transition topologies under a
+more demanding workload, and to bring the demo's look and feel toward a professional showcase
+rather than a bare topology test harness. Shipped: a full light/dark theme toggle (whole-app
+color/corner-radius/asset crossfade), a photo-gallery feature built end to end (network fetch on
+both shells, themed loading state, 4×3 grid, the framework's first real use of `NToOneRequest`),
+and several real bugs this dogfooding surfaced and fixed (a transition-atlas corner bleed, a
+stale-bake corner-radius snap, a stale hover-state bug, and — the reason for M11.2 — a hard
+`main_atlas` capacity ceiling under a moderate real workload). Gallery-at-scale and the
+"Examples & Tests" section are explicitly deferred to M11.3. See PLANNING.md for the full DoD.
+
+## M11.2 — Multi-Page Atlas & Bounded Working Set *(off critical path)*
+
+Closes the capacity gap M11.1 exposed: one fixed 2048×2048 `main_atlas` (capped there for WebGL2
+parity) can't hold enough simultaneous content for a real dynamic-content feature layered on top
+of everything else the demo already bakes into it. Two complementary fixes: generalize the
+shader/pipeline's currently-hardcoded 3-way `atlas_page` branch into a real N-layer texture array
+(each layer still WebGL2-safe, so capacity scales with page count, no native/web divergence), and
+extend M11's existing LRU eviction to operate across that pool so the resident set stays bounded
+to roughly what's visible — the actual mechanism that makes "thousands of images across the app
+experience" tractable, not the page count alone. See PLANNING.md for the full DoD.
+
+## M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path)*
+
+Closes the two gaps M11.1 deferred, once M11.2 provides real atlas headroom: the gallery drops
+its aggressive per-image downscale and gets a working "Fetch New Images" refetch, and the
+"Examples & Tests" nav button (currently an unbuilt placeholder) gets real content.
 
 ## M12 — TypeScript SDK *(critical path)*
 

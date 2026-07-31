@@ -44,7 +44,7 @@ pub use hierarchy::{
     EffectiveOpacity, EffectiveVisibility, Opacity,
 };
 pub use image::{BakedImage, Image};
-pub use input::{quad_contains, Interactable, InteractionEvents, PointerInput};
+pub use input::{quad_contains, HoveredEntity, Interactable, InteractionEvents, PointerInput};
 pub use schedule::ProteusWorld;
 pub use text::{BakedText, Text};
 pub use texture_ref::TextureRef;
