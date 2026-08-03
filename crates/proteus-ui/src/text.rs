@@ -12,7 +12,7 @@
 //!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
 //!         │  then QuadPipeline::write_to_main_atlas to upload the pixels — M11)
 //!         ▼
-//! BakedText { uv_offset, uv_scale, pixel_size } + TextureRef  ← written back onto the entity
+//! BakedText { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the entity
 //!         │
 //!         │ (render loop uses these UVs in QuadInstance; TextureRef ref-counts the
 //!         │  region against this entity's lifetime — see crate::texture_ref)
@@ -142,6 +142,9 @@ pub struct BakedText {
     /// Normalised UV extent of the text region.
     /// `uv_offset + uv_scale` gives the bottom-right UV corner.
     pub uv_scale: [f32; 2],
+    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — see
+    /// `proteus_ui::image::BakedImage::page`'s doc for why this exists.
+    pub page: u32,
     /// The baked glyph run's actual size in pixels (`BakedRegion::width`/`height`).
     /// The text overlay instance uses this as its quad size — centered on the
     /// parent entity — instead of the parent's own size, so text renders at
@@ -191,6 +194,7 @@ mod tests {
         let baked = BakedText {
             uv_offset: [0.1, 0.2],
             uv_scale: [0.3, 0.05],
+            page: 1,
             pixel_size: [60.0, 24.0],
         };
         let mut world = World::new();
@@ -198,6 +202,7 @@ mod tests {
         let b = world.get::<BakedText>(e).unwrap();
         assert_eq!(b.uv_offset, [0.1, 0.2]);
         assert_eq!(b.uv_scale, [0.3, 0.05]);
+        assert_eq!(b.page, 1);
     }
 
     #[test]
@@ -209,6 +214,7 @@ mod tests {
                 BakedText {
                     uv_offset: [0.0, 0.0],
                     uv_scale: [0.1, 0.02],
+                    page: 0,
                     pixel_size: [40.0, 16.0],
                 },
             ))

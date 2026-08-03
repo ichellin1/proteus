@@ -39,8 +39,8 @@ use bevy_ecs::prelude::*;
 use glam::Vec4;
 
 use proteus_render::{
-    GpuContext, QuadInstance, QuadPipeline, TransitionAllocId, TransitionRegion,
-    TRANSITION_ATLAS_SIZE,
+    pack_atlas_page, GpuContext, QuadInstance, QuadPipeline, TransitionAllocId, TransitionRegion,
+    ATLAS_SELECTOR_MAIN, TRANSITION_ATLAS_SIZE,
 };
 
 use crate::collect::{quad_state_to_instance, BakedTexture};
@@ -334,13 +334,19 @@ pub(crate) fn gather_bake_instances(
 
     let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
     // A static image (M9.7 box-cover art) is a one-time UV mapping into
-    // main_atlas (atlas_page 0, already the default) — same handling as the
-    // per-frame path in collect.rs's push_entity_instances. Without this, a
-    // Slice-transition target with BakedImage would bake as its flat
-    // placeholder color instead of the actual box art it shows once revealed.
+    // main_atlas — same handling as the per-frame path in collect.rs's
+    // push_entity_instances. Without this, a Slice-transition target with
+    // BakedImage would bake as its flat placeholder color instead of the
+    // actual box art it shows once revealed.
+    //
+    // atlas_page must be set explicitly here (M11.2) — main_atlas is a
+    // multi-page pool now, so a target whose box art landed on page ≥1
+    // would otherwise bake a garbage sample from whatever's on the default
+    // page 0 instead of its own image.
     if let Some(image) = baked_image {
         bg_inst.uv_offset = image.uv_offset;
         bg_inst.uv_scale = image.uv_scale;
+        bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, image.page);
     }
     let mut out = vec![bg_inst];
 
@@ -992,6 +998,7 @@ mod tests {
                 BakedImage {
                     uv_offset: [0.4, 0.5],
                     uv_scale: [0.2, 0.3],
+                    page: 0,
                     pixel_size: [400.0, 600.0],
                 },
             ))
@@ -1006,6 +1013,39 @@ mod tests {
         assert_eq!(instances.len(), 1, "no BakedText — just the background");
         assert_eq!(instances[0].uv_offset, [0.4, 0.5]);
         assert_eq!(instances[0].uv_scale, [0.2, 0.3]);
+    }
+
+    /// Regression test (M11.2): `gather_bake_instances` must carry a
+    /// `BakedImage`'s `page` into the baked instance's `atlas_page`, not just
+    /// its UVs — otherwise a target whose box art landed on a non-zero
+    /// `main_atlas` page bakes a garbage sample from whatever's on page 0.
+    #[test]
+    fn gather_bake_instances_carries_the_baked_images_page() {
+        use crate::image::BakedImage;
+        use bevy_ecs::system::SystemState;
+
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                source(),
+                BakedImage {
+                    uv_offset: [0.4, 0.5],
+                    uv_scale: [0.2, 0.3],
+                    page: 3,
+                    pixel_size: [400.0, 600.0],
+                },
+            ))
+            .id();
+
+        let mut state: SystemState<(BakeVisualsQuery, Query<&Children>, Query<&QuadState>)> =
+            SystemState::new(&mut world);
+        let (visuals, children_q, quad_states) = state.get(&world);
+
+        let instances =
+            gather_bake_instances(&visuals, &children_q, &quad_states, entity, &source());
+        let (selector, page) = proteus_render::unpack_atlas_page(instances[0].atlas_page);
+        assert_eq!(selector, ATLAS_SELECTOR_MAIN);
+        assert_eq!(page, 3);
     }
 
     /// Regression test (M10): `gather_bake_instances` must walk *every*
@@ -1031,6 +1071,7 @@ mod tests {
                 BakedText {
                     uv_offset: [0.1, 0.1],
                     uv_scale: [0.2, 0.2],
+                    page: 0,
                     pixel_size: [50.0, 20.0],
                 },
                 Text::new("child", 16.0),
@@ -1046,6 +1087,7 @@ mod tests {
                 BakedImage {
                     uv_offset: [0.6, 0.6],
                     uv_scale: [0.1, 0.1],
+                    page: 0,
                     pixel_size: [10.0, 10.0],
                 },
                 ChildOf(child),

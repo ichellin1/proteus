@@ -8,7 +8,10 @@
 //! test is skipped with a warning rather than failing. On Linux CI the test
 //! requires `mesa-vulkan-drivers` (lavapipe) — see `.github/workflows/ci.yml`.
 
-use proteus_render::{QuadInstance, QuadPipeline};
+use proteus_render::{
+    pack_atlas_page, AtlasConfig, MainAtlasPlacement, QuadInstance, QuadPipeline,
+    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,7 +57,7 @@ fn headless_quad_renders_to_expected_color() {
     };
 
     // --- Pipeline ---
-    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16);
+    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16, AtlasConfig::default());
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
     // --- Instance: 32×32 red quad centered at world origin, no corner radius ---
@@ -73,7 +76,7 @@ fn headless_quad_renders_to_expected_color() {
         corner_radius: 0.0, // sharp corners — no SDF rounding at edges
         uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
         uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
-        atlas_page: 0,
+        atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
         crossfade_t: 0.0,
@@ -82,7 +85,7 @@ fn headless_quad_renders_to_expected_color() {
         border_offset: 0.0,
         shadow_params: [0.0, 0.0, 0.0, 0.0],
         shadow_color: [0.0, 0.0, 0.0, 0.0],
-        base_atlas_page: 1,
+        base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
     }];
     let black = wgpu::Color {
         r: 0.0,
@@ -148,7 +151,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         return;
     };
 
-    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16);
+    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16, AtlasConfig::default());
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
     // A 4×4 fully-transparent region — every texel is (0,0,0,0), so bilinear
@@ -160,11 +163,19 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         .texture_registry
         .register_static(4, 4, false)
         .expect("main_atlas has room for a 4x4 region");
-    pipeline.write_to_main_atlas(&queue, 0, 0, 4, 4, &[0u8; 4 * 4 * 4]);
-    let (uv_offset, uv_scale) = pipeline
+    let placement = pipeline
         .texture_registry
-        .main_atlas_uv(texture_id, proteus_render::MAIN_ATLAS_SIZE)
+        .main_atlas_region(texture_id)
         .expect("just registered");
+    // Write to the region actually registered above, not a hardcoded (0, 0) — writing to
+    // (0, 0) would clobber the white-pixel sentinel every other component's untextured fill
+    // relies on, and wouldn't even be the region this test goes on to sample.
+    pipeline.write_to_main_atlas(&queue, placement, &[0u8; 4 * 4 * 4]);
+    let uv = pipeline
+        .texture_registry
+        .main_atlas_uv(texture_id)
+        .expect("just registered");
+    let (uv_offset, uv_scale) = (uv.uv_offset, uv.uv_scale);
 
     // Same 32×32 quad footprint as the test above (rows/cols [16,48]), fully
     // untinted so the transparent texture drives main_color's alpha, with a
@@ -181,7 +192,9 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         corner_radius: 0.0,
         uv_offset,
         uv_scale,
-        atlas_page: 0,
+        // Use the real page this region landed on rather than assuming 0 — the whole point
+        // of pack_atlas_page/uv.page is that a static image's page isn't always 0 (M11.2).
+        atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, uv.page),
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
         crossfade_t: 0.0,
@@ -190,7 +203,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         border_offset: 0.0,
         shadow_params: [0.0, 0.0, 10.0, 0.0], // offset 0, softness 10, spread 0
         shadow_color: [0.0, 0.0, 0.502, 0.8], // navy @ 0.8 — proteus-shell-native's hover_glow()
-        base_atlas_page: 1,
+        base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
     }];
 
     // Clear to a color nothing else in this scene produces, so "the clear
@@ -229,6 +242,112 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         "halo pixel just outside the shape should show glow bleed (elevated B \
          channel from navy), got {halo:?} — the interior mask must not have \
          suppressed the exterior halo too"
+    );
+}
+
+/// End-to-end proof that `main_atlas`'s array-layer index (M11.2) is actually load-bearing
+/// through the whole pipeline — `write_to_main_atlas`'s `origin.z`, the `D2Array` bind group,
+/// and `quad.wgsl`'s `textureSampleLevel(main_atlas, ..., layer, 0.0)` — not silently ignored
+/// anywhere along the way.
+///
+/// Writes solid red into page 1 at (8, 8), leaving page 0 at that same (x, y) untouched (still
+/// zero-initialized, i.e. transparent). Renders two quads with *identical* UVs side by side —
+/// one sampling page 1, one sampling page 0 — against a green clear. Both assertions matter:
+/// the positive one (page 1 shows red) proves the layer index reaches the GPU at all; the
+/// negative one (page 0 does *not* show red, despite identical UVs) is what actually rules out
+/// "the shader ignores the layer and always samples layer 0" — without it, a shader that
+/// dropped the layer argument entirely would still pass the positive half by coincidence.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("headless_render: no GPU adapter available — skipping");
+        return;
+    };
+
+    let page_size = 64u32;
+    let mut pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        FORMAT,
+        16,
+        AtlasConfig {
+            page_size,
+            page_count: 2,
+        },
+    );
+    pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+
+    // Bypass the allocator deliberately — this test targets the GPU layer/index plumbing
+    // itself, not allocation policy (that's texture_registry.rs's job).
+    let placement = MainAtlasPlacement {
+        page: 1,
+        x: 8,
+        y: 8,
+        width: 8,
+        height: 8,
+    };
+    pipeline.write_to_main_atlas(&queue, placement, &[255u8; 8 * 8 * 4]); // opaque red-capable (white; tinted red below)
+    let s = page_size as f32;
+    let uv_offset = [placement.x as f32 / s, placement.y as f32 / s];
+    let uv_scale = [placement.width as f32 / s, placement.height as f32 / s];
+
+    let quad = |x: f32, page: u32| QuadInstance {
+        position: [x, 0.0, 0.5],
+        size: [16.0, 16.0],
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: [0.5, 0.5],
+        color: [1.0, 0.0, 0.0, 1.0], // red tint — visible only where the sampled alpha is opaque
+        opacity: 1.0,
+        corner_radius: 0.0,
+        uv_offset,
+        uv_scale,
+        atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, page),
+        base_uv_offset: [0.0, 0.0],
+        base_uv_scale: [0.0, 0.0],
+        crossfade_t: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_offset: 0.0,
+        shadow_params: [0.0, 0.0, 0.0, 0.0],
+        shadow_color: [0.0, 0.0, 0.0, 0.0],
+        base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+    };
+    // Side by side: left quad samples page 1 (written), right quad samples page 0
+    // (untouched) — identical UVs otherwise.
+    let instances = [quad(-16.0, 1), quad(16.0, 0)];
+
+    let green = wgpu::Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let pixels = render_and_read_back(&device, &queue, &mut pipeline, &instances, green);
+    let pixel = |row: u32, col: u32| -> [u8; 4] {
+        let off = (row * BYTES_PER_ROW + col * 4) as usize;
+        pixels[off..off + 4].try_into().unwrap()
+    };
+
+    // Left quad (col 16, page 1) — should show the opaque red content that was written there.
+    let page1 = pixel(HEIGHT / 2, 16);
+    assert!(
+        page1[0] > 200 && page1[1] < 10,
+        "page 1 should render the red content written to it, got {page1:?}"
+    );
+
+    // Right quad (col 48, page 0, identical UVs) — page 0 was never written at (8, 8), so this
+    // must show the green clear color, not red — the negative control proving the layer index
+    // is genuinely selecting a different physical layer, not being ignored by the shader.
+    let page0 = pixel(HEIGHT / 2, 48);
+    assert!(
+        page0[1] > 200 && page0[0] < 50,
+        "page 0 at the same (x, y) must NOT show the content written to page 1 — got \
+         {page0:?}. If this is red, the shader is ignoring the array-layer index."
     );
 }
 

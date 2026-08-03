@@ -14,7 +14,9 @@
 
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_render::{FontAtlas, GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
+use proteus_render::{
+    unpack_atlas_page, AtlasConfig, FontAtlas, GpuContext, QuadPipeline, ATLAS_SELECTOR_MAIN,
+};
 use proteus_ui::{
     collect_instances, Baked, BakedComposite, BakedText, Border, ChildOf, ProteusWorld, QuadState,
     Text, TextureRef,
@@ -131,7 +133,13 @@ fn bake_system_bakes_quad_and_text_composite() {
         return;
     };
 
-    let pipeline = QuadPipeline::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64);
+    let pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        64,
+        AtlasConfig::default(),
+    );
     let mut font_atlas = FontAtlas::with_embedded_font();
 
     let mut pw = ProteusWorld::new();
@@ -177,7 +185,7 @@ fn bake_system_bakes_quad_and_text_composite() {
         .texture_registry
         .register_static(glyphs.width, glyphs.height, false)
         .expect("main_atlas should have room");
-    let ((x, y, w, h), (uv_offset, uv_scale)) = {
+    let (placement, uv) = {
         let pipeline = pw.world.resource::<QuadPipeline>();
         (
             pipeline
@@ -186,22 +194,18 @@ fn bake_system_bakes_quad_and_text_composite() {
                 .unwrap(),
             pipeline
                 .texture_registry
-                .main_atlas_uv(text_texture_id, MAIN_ATLAS_SIZE)
+                .main_atlas_uv(text_texture_id)
                 .unwrap(),
         )
     };
-    pw.world.resource::<QuadPipeline>().write_to_main_atlas(
-        &queue,
-        x,
-        y,
-        w,
-        h,
-        &glyphs.rgba_pixels,
-    );
+    pw.world
+        .resource::<QuadPipeline>()
+        .write_to_main_atlas(&queue, placement, &glyphs.rgba_pixels);
     pw.world.entity_mut(child).insert((
         BakedText {
-            uv_offset,
-            uv_scale,
+            uv_offset: uv.uv_offset,
+            uv_scale: uv.uv_scale,
+            page: uv.page,
             pixel_size: [glyphs.width as f32, glyphs.height as f32],
         },
         TextureRef(text_texture_id),
@@ -250,9 +254,14 @@ fn bake_system_bakes_quad_and_text_composite() {
         "baked parent (no children left) should render as exactly one instance, got {}",
         instances.len()
     );
+    let (selector, page) = unpack_atlas_page(instances[0].atlas_page);
     assert_eq!(
-        instances[0].atlas_page, 0,
+        selector, ATLAS_SELECTOR_MAIN,
         "BakedComposite lives in main_atlas"
+    );
+    assert_eq!(
+        page, baked.page,
+        "instance must sample the page BakedComposite baked to"
     );
     assert_eq!(instances[0].uv_offset, baked.uv_offset);
     assert_eq!(instances[0].uv_scale, baked.uv_scale);
@@ -291,7 +300,13 @@ fn bake_ref_counts_texture_and_frees_region_on_despawn() {
         return;
     };
 
-    let pipeline = QuadPipeline::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm, 64);
+    let pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        64,
+        AtlasConfig::default(),
+    );
     let mut pw = ProteusWorld::new();
     pw.world.insert_resource(GpuContext {
         device: device.clone(),

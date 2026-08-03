@@ -31,7 +31,9 @@
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_render::{QuadPipeline, TransitionAtlasAllocator};
+use proteus_render::{
+    unpack_atlas_page, QuadPipeline, TransitionAtlasAllocator, ATLAS_SELECTOR_MAIN,
+};
 use proteus_ui::{
     collect_instances, linear, transition::TransitionConfig, ActiveTransition, BakedImage,
     BakedText, BakedTexture, Border, DropShadow, Glow, ProteusWorld, QuadState, Text,
@@ -149,6 +151,7 @@ fn text_entity_produces_two_instances() {
     let baked = BakedText {
         uv_offset: [0.10, 0.20],
         uv_scale: [0.05, 0.01],
+        page: 0,
         pixel_size: [60.0, 24.0],
     };
 
@@ -201,6 +204,7 @@ fn text_color_applied_to_overlay() {
     let baked = BakedText {
         uv_offset: [0.0, 0.0],
         uv_scale: [0.1, 0.02],
+        page: 0,
         pixel_size: [60.0, 24.0],
     };
 
@@ -293,6 +297,7 @@ fn shadow_not_on_text_overlay() {
     let baked = BakedText {
         uv_offset: [0.1, 0.2],
         uv_scale: [0.05, 0.01],
+        page: 0,
         pixel_size: [60.0, 24.0],
     };
 
@@ -507,6 +512,7 @@ fn video_player_takes_priority_over_baked_image() {
     let baked_image = BakedImage {
         uv_offset: [0.4, 0.5],
         uv_scale: [0.2, 0.3],
+        page: 0,
         pixel_size: [400.0, 600.0],
     };
 
@@ -540,6 +546,7 @@ fn crossfade_baked_image() -> BakedImage {
     BakedImage {
         uv_offset: [0.4, 0.5],
         uv_scale: [0.2, 0.3],
+        page: 0,
         pixel_size: [400.0, 600.0],
     }
 }
@@ -769,6 +776,7 @@ fn border_not_on_text_overlay() {
     let baked = BakedText {
         uv_offset: [0.1, 0.2],
         uv_scale: [0.05, 0.01],
+        page: 0,
         pixel_size: [60.0, 24.0],
     };
 
@@ -903,6 +911,7 @@ fn baked_texture_not_on_text_overlay() {
     let baked_text = BakedText {
         uv_offset: [0.1, 0.2],
         uv_scale: [0.05, 0.01],
+        page: 0,
         pixel_size: [60.0, 24.0],
     };
 
@@ -931,6 +940,7 @@ fn baked_image() -> BakedImage {
     BakedImage {
         uv_offset: [0.4, 0.5],
         uv_scale: [0.2, 0.3],
+        page: 0,
         pixel_size: [400.0, 600.0],
     }
 }
@@ -948,6 +958,34 @@ fn baked_image_populates_uv() {
     assert_eq!(instances[0].atlas_page, 0, "must sample main_atlas");
     assert_f32_slice_approx(&instances[0].uv_offset, &[0.4, 0.5], "uv_offset");
     assert_f32_slice_approx(&instances[0].uv_scale, &[0.2, 0.3], "uv_scale");
+}
+
+/// M11.2: a `BakedImage` whose region landed on a non-zero `main_atlas` page
+/// must have that page packed into `atlas_page`, not silently default to 0 —
+/// `main_atlas` is a multi-page pool now, so page 0 is no longer the only
+/// possible destination.
+#[test]
+fn baked_image_on_a_nonzero_page_packs_the_page_into_atlas_page() {
+    let mut world = World::new();
+    world.spawn((
+        sky_blue_button(),
+        BakedImage {
+            uv_offset: [0.4, 0.5],
+            uv_scale: [0.2, 0.3],
+            page: 3,
+            pixel_size: [400.0, 600.0],
+        },
+    ));
+
+    let instances = collect_instances(&mut world);
+
+    assert_eq!(instances.len(), 1);
+    let (selector, page) = unpack_atlas_page(instances[0].atlas_page);
+    assert_eq!(
+        selector, ATLAS_SELECTOR_MAIN,
+        "must still sample main_atlas"
+    );
+    assert_eq!(page, 3, "must sample the page the image actually lives on");
 }
 
 /// Unlike `BakedText`'s overlay, `BakedImage` maps directly onto the
@@ -996,6 +1034,7 @@ fn baked_image_coexists_with_text_overlay() {
     let baked_text = BakedText {
         uv_offset: [0.1, 0.2],
         uv_scale: [0.05, 0.01],
+        page: 0,
         pixel_size: [60.0, 24.0],
     };
 

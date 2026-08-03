@@ -111,7 +111,16 @@ pub struct QuadInstance {
     pub uv_offset: [f32; 2], // offset  60, size  8
     /// Sub-region size within the active atlas.
     pub uv_scale: [f32; 2], // offset  68, size  8
-    /// Which atlas this instance samples. 0 = main_atlas, 1 = transition_atlas.
+    /// Packed atlas selector + `main_atlas` page index (M11.2). Bits 0–7 select the atlas
+    /// (`ATLAS_SELECTOR_MAIN` = 0, `ATLAS_SELECTOR_TRANSITION` = 1, `ATLAS_SELECTOR_VIDEO` = 2);
+    /// bits 8–31 are the `main_atlas` array layer, meaningful only when the selector is
+    /// `ATLAS_SELECTOR_MAIN` (the other two atlases are single-layer). Build with
+    /// [`pack_atlas_page`], read with [`unpack_atlas_page`] — `shaders/quad.wgsl` unpacks the
+    /// identical bit layout.
+    ///
+    /// Packed rather than given its own field because the vertex-attribute budget is exhausted
+    /// (see [`QuadInstance::buffer_layout`]). `pack_atlas_page(selector, 0) == selector`, so every
+    /// pre-M11.2 value (0/1/2) means exactly what it always meant.
     pub atlas_page: u32, // offset  76, size  4
 
     // --- Crossfade (from-state during a baked transition) ---
@@ -139,13 +148,15 @@ pub struct QuadInstance {
 
     // --- Crossfade base atlas (M9.8 — live video crossfade) ---
     /// Which atlas `base_uv_offset`/`base_uv_scale` sample from during a
-    /// crossfade. 0 = main_atlas, 1 = transition_atlas (default — matches
-    /// every crossfade user before this field existed), 2 = video_atlas.
-    /// Lets the "from" side of a crossfade be a *different* atlas than the
-    /// "to" side's `atlas_page` — e.g. a tile's baked box-cover art
-    /// (main_atlas) crossfading into its still-live, still-updating video
-    /// feed (video_atlas) during the tile↔screen morph, without ever
-    /// snapshotting the video into a static bake (which would freeze it).
+    /// crossfade — same packed selector-plus-`main_atlas`-page layout as
+    /// [`Self::atlas_page`] (see [`pack_atlas_page`]/[`unpack_atlas_page`]).
+    /// Selector `ATLAS_SELECTOR_TRANSITION` is the default (matches every
+    /// crossfade user before this field existed). Lets the "from" side of a
+    /// crossfade be a *different* atlas than the "to" side's `atlas_page` —
+    /// e.g. a tile's baked box-cover art (main_atlas) crossfading into its
+    /// still-live, still-updating video feed (video_atlas) during the
+    /// tile↔screen morph, without ever snapshotting the video into a static
+    /// bake (which would freeze it).
     pub base_atlas_page: u32, // offset 156, size 4
 } // total       160 bytes
 
@@ -278,6 +289,45 @@ impl QuadInstance {
 // Compile-time size guard. If QuadInstance changes, this fails immediately
 // and forces the developer to audit buffer_layout() offsets.
 const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 160);
+
+// ---------------------------------------------------------------------------
+// atlas_page bit packing (M11.2)
+//
+// These four constants and the two functions below are mirrored verbatim in
+// `shaders/quad.wgsl`. `wgsl_atlas_page_bit_layout_matches_rust` (below) fails the build if the
+// two ever drift.
+// ---------------------------------------------------------------------------
+
+/// [`QuadInstance::atlas_page`]/[`QuadInstance::base_atlas_page`] selector: sample `main_atlas`
+/// (the multi-page `D2Array` pool).
+pub const ATLAS_SELECTOR_MAIN: u32 = 0;
+/// Selector: sample `transition_atlas` (single layer — page bits ignored).
+pub const ATLAS_SELECTOR_TRANSITION: u32 = 1;
+/// Selector: sample `video_atlas` (single layer — page bits ignored).
+pub const ATLAS_SELECTOR_VIDEO: u32 = 2;
+
+/// Mask isolating the atlas selector in a packed `atlas_page`/`base_atlas_page`.
+pub const ATLAS_SELECTOR_MASK: u32 = 0xFF;
+/// Bit position of the `main_atlas` page index in a packed `atlas_page`/`base_atlas_page`. A
+/// full byte of selector space leaves 24 bits of page index — far beyond the hardware ceiling of
+/// 256 array layers.
+pub const ATLAS_PAGE_SHIFT: u32 = 8;
+
+/// Pack an atlas selector and a `main_atlas` page index into one
+/// [`QuadInstance::atlas_page`]/[`QuadInstance::base_atlas_page`] value.
+///
+/// `page` is ignored by the shader for the `ATLAS_SELECTOR_TRANSITION`/`ATLAS_SELECTOR_VIDEO`
+/// selectors; pass 0 there.
+#[inline]
+pub const fn pack_atlas_page(selector: u32, page: u32) -> u32 {
+    (selector & ATLAS_SELECTOR_MASK) | (page << ATLAS_PAGE_SHIFT)
+}
+
+/// Inverse of [`pack_atlas_page`] — returns `(selector, page)`.
+#[inline]
+pub const fn unpack_atlas_page(packed: u32) -> (u32, u32) {
+    (packed & ATLAS_SELECTOR_MASK, packed >> ATLAS_PAGE_SHIFT)
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -589,5 +639,52 @@ mod tests {
         // world = [640,400]; ortho maps [640,400] → NDC [1,1]
         assert!(approx_eq(clip.x, 1.0), "x: {}", clip.x);
         assert!(approx_eq(clip.y, 1.0), "y: {}", clip.y);
+    }
+
+    // -----------------------------------------------------------------------
+    // atlas_page bit packing (M11.2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pack_atlas_page_round_trips_selector_and_page() {
+        for selector in [
+            ATLAS_SELECTOR_MAIN,
+            ATLAS_SELECTOR_TRANSITION,
+            ATLAS_SELECTOR_VIDEO,
+        ] {
+            for page in [0, 1, 3, 255] {
+                assert_eq!(
+                    unpack_atlas_page(pack_atlas_page(selector, page)),
+                    (selector, page)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pack_atlas_page_is_bit_identical_to_the_legacy_encoding_for_page_zero() {
+        // Pins the compatibility property every pre-M11.2 hardcoded `atlas_page`/
+        // `base_atlas_page` value (0/1/2) relies on: packing page 0 must be a no-op.
+        assert_eq!(pack_atlas_page(ATLAS_SELECTOR_MAIN, 0), 0);
+        assert_eq!(pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0), 1);
+        assert_eq!(pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0), 2);
+    }
+
+    #[test]
+    fn wgsl_atlas_page_bit_layout_matches_rust() {
+        // Drift guard: quad.wgsl hand-mirrors these constants (WGSL can't `include!` Rust
+        // consts) — if either side changes without the other, main_atlas sampling silently
+        // reads the wrong layer. Fails the build instead of failing at render time.
+        let src = crate::QUAD_SHADER_SRC;
+        let mask_line = format!("ATLAS_SELECTOR_MASK: u32 = {ATLAS_SELECTOR_MASK:#04X}u");
+        let shift_line = format!("ATLAS_PAGE_SHIFT:    u32 = {ATLAS_PAGE_SHIFT}u");
+        assert!(
+            src.contains(&mask_line),
+            "quad.wgsl's atlas_page bit layout drifted from mesh.rs's — expected to find {mask_line:?} in quad.wgsl"
+        );
+        assert!(
+            src.contains(&shift_line),
+            "quad.wgsl's atlas_page bit layout drifted from mesh.rs's — expected to find {shift_line:?} in quad.wgsl"
+        );
     }
 }

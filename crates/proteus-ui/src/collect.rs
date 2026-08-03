@@ -45,8 +45,10 @@
 //!
 //! When a [`BakedTexture`] component is present, its `from_*` fields become
 //! the background instance's `base_uv_offset`/`base_uv_scale` and its `to_*`
-//! fields become `uv_offset`/`uv_scale` (with `atlas_page` forced to `1` —
-//! `transition_atlas` holds both sides). `crossfade_t` is driven from the
+//! fields become `uv_offset`/`uv_scale` (with `atlas_page` set to the
+//! `transition_atlas` selector via `pack_atlas_page` — `transition_atlas` is a
+//! single-layer atlas holding both sides, so its packed page is always `0`).
+//! `crossfade_t` is driven from the
 //! entity's own [`ActiveTransition`] progress each frame. Used by
 //! transition-bake virtual slices (see `topology`) so a slice crossfades
 //! texel-for-texel from an actual cropped snapshot of the source entity's
@@ -57,16 +59,20 @@
 //! ## Video (M9)
 //!
 //! When a [`crate::VideoPlayer`] component is present the background instance's
-//! `atlas_page` is set to `2` and the UV is set to cover the full `video_atlas`
-//! texture.  The entity's `QuadState::color` acts as a tint; use `Vec4::ONE`
+//! `atlas_page` is set to the `video_atlas` selector (via `pack_atlas_page` —
+//! `video_atlas` is single-layer, so its packed page is always `0`) and the UV
+//! is set to cover the full `video_atlas` texture.  The entity's
+//! `QuadState::color` acts as a tint; use `Vec4::ONE`
 //! (white) for unfiltered video.  Any `BakedText` overlay is still emitted on
 //! top as a second instance so labels can float above the video.
 //!
 //! ## Static image (M9.7)
 //!
 //! When a [`crate::BakedImage`] component is present, its `uv_offset`/`uv_scale`
-//! (into `main_atlas`, `atlas_page` 0 — the default, so no page switch needed)
-//! replace the background instance's white-pixel-sentinel UV. Unlike video/
+//! (into `main_atlas`, on whichever page `BakedImage::page` names — `main_atlas`
+//! is a multi-page pool (M11.2), so this is packed via `pack_atlas_page` rather
+//! than assumed to be page 0) replace the background instance's
+//! white-pixel-sentinel UV. Unlike video/
 //! baked-texture, this is a one-time static mapping — no per-frame recompute.
 //! `QuadState::color` still tints the image; use `Vec4::ONE` for unfiltered.
 //!
@@ -82,7 +88,8 @@
 //! ## Static component baking (M10.5)
 //!
 //! When a [`crate::bake::BakedComposite`] component is present, its `uv_offset`/`uv_scale`
-//! (into `main_atlas`) replace the background instance's UV, same handling as
+//! (into `main_atlas`, on whichever page `BakedComposite::page` names) replace
+//! the background instance's UV, same handling as
 //! `BakedImage` — a one-time static mapping written once by `bake_system`
 //! when the entity's `Baked` subtree was rendered into the atlas. Unlike
 //! `BakedImage`, `bake_system` also neutralizes the entity's own
@@ -98,7 +105,10 @@ use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use glam::Vec4;
 
-use proteus_render::{QuadInstance, QuadPipeline};
+use proteus_render::{
+    pack_atlas_page, QuadInstance, QuadPipeline, ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION,
+    ATLAS_SELECTOR_VIDEO,
+};
 
 use crate::{
     bake::BakedComposite,
@@ -178,11 +188,18 @@ pub fn quad_state_to_instance(
     glow: Option<&Glow>,
     border: Option<&Border>,
 ) -> QuadInstance {
-    let (uv_offset, uv_scale) = match baked {
-        Some(b) => (b.uv_offset, b.uv_scale),
+    let (uv_offset, uv_scale, atlas_page) = match baked {
+        Some(b) => (
+            b.uv_offset,
+            b.uv_scale,
+            pack_atlas_page(ATLAS_SELECTOR_MAIN, b.page),
+        ),
         None => (
             QuadPipeline::WHITE_PIXEL_UV_OFFSET,
             QuadPipeline::WHITE_PIXEL_UV_SCALE,
+            // The 1×1 white-pixel sentinel is written once at init to main_atlas
+            // layer 0 only.
+            pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
         ),
     };
 
@@ -223,7 +240,7 @@ pub fn quad_state_to_instance(
         corner_radius: qs.corner_radius,
         uv_offset,
         uv_scale,
-        atlas_page: 0,
+        atlas_page,
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
         crossfade_t: 0.0,
@@ -232,7 +249,7 @@ pub fn quad_state_to_instance(
         // transition_atlas. push_entity_instances overrides this for the
         // video+image live-crossfade case (see its VideoPlayer/BakedImage
         // handling below).
-        base_atlas_page: 1,
+        base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
         border_width,
         border_color,
         border_offset,
@@ -289,32 +306,35 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
                 .map(|c| c.video_t.clamp(0.0, 1.0))
                 .unwrap_or(1.0); // no VideoCrossfade — show video fully, as before M9.8
             if video_t >= 0.9999 {
-                bg_inst.atlas_page = 2;
+                bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0);
                 bg_inst.uv_offset = [0.0, 0.0];
                 bg_inst.uv_scale = [1.0, 1.0];
             } else if video_t <= 0.0001 {
+                bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, image.page);
                 bg_inst.uv_offset = image.uv_offset;
                 bg_inst.uv_scale = image.uv_scale;
             } else {
                 // to-side: video (video_atlas); from-side: box art (main_atlas).
-                bg_inst.atlas_page = 2;
+                bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0);
                 bg_inst.uv_offset = [0.0, 0.0];
                 bg_inst.uv_scale = [1.0, 1.0];
-                bg_inst.base_atlas_page = 0;
+                bg_inst.base_atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, image.page);
                 bg_inst.base_uv_offset = image.uv_offset;
                 bg_inst.base_uv_scale = image.uv_scale;
                 bg_inst.crossfade_t = video_t;
             }
         }
         (true, None) => {
-            bg_inst.atlas_page = 2;
+            bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0);
             bg_inst.uv_offset = [0.0, 0.0];
             bg_inst.uv_scale = [1.0, 1.0];
         }
         (false, Some(image)) => {
-            // A static image is a one-time UV mapping into main_atlas
-            // (atlas_page 0, already the default) — no per-frame recompute,
-            // unlike video.
+            // A static image is a one-time UV mapping into main_atlas — no
+            // per-frame recompute, unlike video. atlas_page must be set
+            // explicitly (M11.2): main_atlas is a multi-page pool, so this
+            // image's page isn't always the default 0.
+            bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, image.page);
             bg_inst.uv_offset = image.uv_offset;
             bg_inst.uv_scale = image.uv_scale;
         }
@@ -326,11 +346,12 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
     // neutralized the entity's own color/corner_radius/Border/Glow/DropShadow
     // so nothing here double-renders on top of the baked pixels.
     if let Some(bc) = world.get::<BakedComposite>(e) {
+        bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, bc.page);
         bg_inst.uv_offset = bc.uv_offset;
         bg_inst.uv_scale = bc.uv_scale;
     }
     // A BakedTexture drives a two-sided crossfade: base_uv/scale point at the
-    // source's baked snapshot, uv/scale (atlas_page 1) point at the target's
+    // source's baked snapshot, uv/scale (transition_atlas) point at the target's
     // own baked snapshot, and crossfade_t tracks this entity's own
     // ActiveTransition progress (mirrors the eased-t computation used for the
     // text-overlay fade below). Clamped to a tiny epsilon above zero rather
@@ -339,7 +360,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
     // bake is in play), which would otherwise show the to-side for one frame
     // before any elapsed time has accumulated.
     if let Some(bt) = world.get::<BakedTexture>(e) {
-        bg_inst.atlas_page = 1; // transition_atlas — holds both baked snapshots
+        bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0); // transition_atlas — holds both baked snapshots
         bg_inst.uv_offset = bt.to_uv_offset;
         bg_inst.uv_scale = bt.to_uv_scale;
         bg_inst.base_uv_offset = bt.from_uv_offset;

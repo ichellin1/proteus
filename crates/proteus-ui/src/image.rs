@@ -14,7 +14,7 @@
 //!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
 //!         │  then write_to_main_atlas to upload the pixels — M11)
 //!         ▼
-//! BakedImage { uv_offset, uv_scale, pixel_size } + TextureRef  ← written back onto the entity
+//! BakedImage { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the entity
 //!         │
 //!         │ (collect_instances uses these UVs in the entity's background QuadInstance;
 //!         │  TextureRef ref-counts the region against this entity's lifetime)
@@ -99,6 +99,11 @@ pub struct BakedImage {
     /// Normalised UV extent of the image region.
     /// `uv_offset + uv_scale` gives the bottom-right UV corner.
     pub uv_scale: [f32; 2],
+    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — `main_atlas` is a
+    /// multi-page pool, so the UVs alone are ambiguous without it. Comes straight from
+    /// `TextureRegistry::main_atlas_uv`'s `MainAtlasUv::page` and is encoded into
+    /// `QuadInstance::atlas_page` by `proteus_render::pack_atlas_page`.
+    pub page: u32,
     /// The decoded image's native size in pixels (`DecodedImage::width`/`height`).
     /// Not used to resize the entity's quad — see the [module docs](self).
     pub pixel_size: [f32; 2],
@@ -138,6 +143,7 @@ mod tests {
         let baked = BakedImage {
             uv_offset: [0.1, 0.2],
             uv_scale: [0.3, 0.4],
+            page: 2,
             pixel_size: [200.0, 300.0],
         };
         let mut world = World::new();
@@ -145,6 +151,7 @@ mod tests {
         let b = world.get::<BakedImage>(e).unwrap();
         assert_eq!(b.uv_offset, [0.1, 0.2]);
         assert_eq!(b.uv_scale, [0.3, 0.4]);
+        assert_eq!(b.page, 2);
         assert_eq!(b.pixel_size, [200.0, 300.0]);
     }
 
@@ -157,6 +164,7 @@ mod tests {
                 BakedImage {
                     uv_offset: [0.0, 0.0],
                     uv_scale: [0.1, 0.1],
+                    page: 0,
                     pixel_size: [64.0, 64.0],
                 },
             ))

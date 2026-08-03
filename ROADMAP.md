@@ -39,7 +39,7 @@ M13 Developer Release
 - **M10.5 — Static Component Baking** — can begin after M10
 - **M10.6 — Oriented Hit-Test Boxes** — can begin after M10
 - **M11.1 — Update Demo, Part 1** — after M11 (complete, ready to commit)
-- **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1
+- **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1 (complete)
 - **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2
 - **M11.4 — Host Demo on GitHub Pages** — conceptually after M11.3, no hard dependency
 
@@ -236,16 +236,19 @@ stale-bake corner-radius snap, a stale hover-state bug, and — the reason for M
 `main_atlas` capacity ceiling under a moderate real workload). Gallery-at-scale and the
 "Examples & Tests" section are explicitly deferred to M11.3. See PLANNING.md for the full DoD.
 
-## M11.2 — Multi-Page Atlas & Bounded Working Set *(off critical path)*
+## M11.2 — Multi-Page Atlas & Bounded Working Set *(off critical path — complete)*
 
-Closes the capacity gap M11.1 exposed: one fixed 2048×2048 `main_atlas` (capped there for WebGL2
-parity) can't hold enough simultaneous content for a real dynamic-content feature layered on top
-of everything else the demo already bakes into it. Two complementary fixes: generalize the
-shader/pipeline's currently-hardcoded 3-way `atlas_page` branch into a real N-layer texture array
+Closed the capacity gap M11.1 exposed: one fixed 2048×2048 `main_atlas` (capped there for WebGL2
+parity) couldn't hold enough simultaneous content for a real dynamic-content feature layered on
+top of everything else the demo already bakes into it. Two complementary fixes: generalized the
+shader/pipeline's previously-hardcoded 3-way `atlas_page` branch into a real N-layer texture array
 (each layer still WebGL2-safe, so capacity scales with page count, no native/web divergence), and
-extend M11's existing LRU eviction to operate across that pool so the resident set stays bounded
+extended M11's existing LRU eviction to operate across that pool so the resident set stays bounded
 to roughly what's visible — the actual mechanism that makes "thousands of images across the app
-experience" tractable, not the page count alone. See PLANNING.md for the full DoD.
+experience" tractable, not the page count alone. Page size/count are developer-configurable
+(`AtlasConfig`, validated at startup against the real device's limits), not hardcoded. See
+PLANNING.md for the full DoD, including the documented UHD-on-web limitation and the fragmentation
+investigation's findings.
 
 ## M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path)*
 
@@ -335,12 +338,33 @@ Planned future work, not part of the V1 scope:
   restoration queue that regenerates evicted content transparently — explicitly the *owning
   entity/system's* job (re-bake the text, re-fetch the image bytes, then re-register), not the
   resource manager's, since it has no way to reproduce arbitrary content from just a `TextureId`.
-- **Multi-page `main_atlas` growth (M11 follow-up)** — today (and after M11) `main_atlas` is a
-  single fixed-size texture; exhaustion after eviction simply fails registration, matching every
-  other atlas-full path in this codebase. Real growth would mean a new backing texture when a page
-  fills, `AtlasRegion::Main` carrying a page index, and `QuadPipeline`/the shader's bind-group
-  layout handling N atlas textures instead of one — a materially larger change than a
-  registry-and-refcounting milestone.
+- **General atlas repacking/compaction for still-referenced content (M11.2 follow-up)** —
+  M11.2 investigated a "repack a partially-empty page to reclaim scattered free space" idea and
+  found it blocked on the same hazard as the eviction-restoration item above: `BakedText`/
+  `BakedImage`/`BakedComposite` cache `uv_offset`/`uv_scale`/`page` directly on the component, so
+  moving a still-*referenced* region's pixels to consolidate space leaves some component pointing
+  at stale coordinates with no error, silently rendering the wrong content. Repacking referenced
+  content is the eviction-restoration problem wearing a different name — once that restoration
+  mechanism exists, strategic (e.g. async, background-event-triggered) repacking becomes buildable
+  on top of it, and is worth revisiting then. (Note: repacking a page whose content is *entirely
+  unreferenced* is not a real problem — M11.2 confirmed `etagere` already fully reclaims a page's
+  space once everything on it frees, with zero measurable fragmentation left over; see
+  PLANNING.md's M11.2 section.)
+- **UHD (3840×2160+) image support on the web shell (M11.2 follow-up)** — `AtlasConfig`'s
+  `page_size` is still bounded by the real device's `max_texture_dimension_2d`, a hard 2048 ceiling
+  under WebGL2's `downlevel_webgl2_defaults()` regardless of page count, so a single baked region
+  can never exceed 2048×2048 on web today. Sketched (not built) path: tile a source image wider or
+  taller than `page_size` into a grid of ≤`page_size` tiles at decode time, register each as its
+  own independent atlas region, and render the logical "one image" as a small grid of adjacent
+  quads with individually addressed UVs instead of one quad sampling one region. Needs new
+  decode-time tiling logic and a new "this `BakedImage` is actually N regions" representation.
+  Native is unaffected (8192 under plain `Limits::default()`).
+- **`bake_pending_images`/`bake_system` give up after persistent failure (M11.2 follow-up)** —
+  both retry every frame on failure (atlas full, decode error) with no backoff or give-up
+  threshold, so a persistently-failing entity burns a decode/registration attempt indefinitely
+  every single frame rather than failing once and staying failed. Real, but separate from any
+  currently-scoped milestone — worth its own small follow-up (e.g. a "give up after N attempts"
+  marker per entity) rather than folding into a capacity-focused milestone.
 - **`TextureKind::Animated` — GIF/sprite-sheet playback (M11 follow-up)** — the enum variant is
   reserved (M11) but unimplemented. Design: neither `Static` (one fixed region, baked once) nor
   `Video` (one continuously-replaced texture slot, driven by an external decoder every tick) fits —

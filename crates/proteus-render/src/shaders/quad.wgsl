@@ -4,7 +4,8 @@
 // Renders every visible component in one instanced draw call.
 //
 // Bind group 0:  uniform buffer   — view/projection matrix (one upload per frame)
-// Bind group 1:  main_atlas       — long-lived textures (images, static bakes)
+// Bind group 1:  main_atlas       — long-lived textures (images, static bakes); a multi-page
+//                                   D2Array pool since M11.2 (see ATLAS_PAGE_SHIFT below)
 //                transition_atlas — ephemeral bakes for in-flight transitions
 //                atlas_sampler    — shared linear sampler
 //                video_atlas      — streaming per-frame video texture (M9)
@@ -23,10 +24,26 @@ struct Uniforms {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(1) @binding(0) var main_atlas:       texture_2d<f32>;
+@group(1) @binding(0) var main_atlas:       texture_2d_array<f32>;
 @group(1) @binding(1) var transition_atlas: texture_2d<f32>;
 @group(1) @binding(2) var atlas_sampler:    sampler;
 @group(1) @binding(3) var video_atlas:      texture_2d<f32>;
+
+// ---------------------------------------------------------------------------
+// atlas_page / base_atlas_page bit layout — mirrored verbatim from mesh.rs's
+// `pack_atlas_page`/`unpack_atlas_page`. `wgsl_atlas_page_bit_layout_matches_rust`
+// (mesh.rs) fails the build if these two definitions ever drift apart.
+//
+//   bits  0..7  — which atlas: 0 = main_atlas, 1 = transition_atlas, 2 = video_atlas
+//   bits  8..31 — which main_atlas array layer ("page"). Meaningful only when the selector
+//                 is 0; transition_atlas and video_atlas are single-layer textures.
+//
+// Packing rather than a 17th vertex attribute: the instance layout is already at 16 of 16
+// locations (see mesh.rs's QuadInstance::buffer_layout). pack(selector, 0) == selector, so
+// every pre-M11.2 instance value is bit-identical.
+// ---------------------------------------------------------------------------
+const ATLAS_SELECTOR_MASK: u32 = 0xFFu;
+const ATLAS_PAGE_SHIFT:    u32 = 8u;
 
 
 // ---------------------------------------------------------------------------
@@ -52,7 +69,7 @@ struct VertexIn {
     @location(6)  inst_opacity_radius: vec2<f32>,
     // .xy = uv_offset, .zw = uv_scale
     @location(7)  inst_uv:             vec4<f32>,
-    @location(8)  inst_atlas_page:     u32,        // 0 = main_atlas, 1 = transition_atlas
+    @location(8)  inst_atlas_page:     u32,        // packed: selector | (main_atlas page << ATLAS_PAGE_SHIFT)
     // .xy = base_uv_offset, .zw = base_uv_scale
     @location(9)  inst_base_uv:        vec4<f32>,
     // .x = crossfade_t, .y = border_width (0.0 = no border)
@@ -63,8 +80,8 @@ struct VertexIn {
     @location(13) inst_shadow_params:  vec4<f32>,
     @location(14) inst_shadow_color:   vec4<f32>,  // RGBA; alpha == 0.0 disables shadow
     // Which atlas base_uv samples from during crossfade — independent of
-    // inst_atlas_page (the "to" side). 0 = main_atlas, 1 = transition_atlas
-    // (default), 2 = video_atlas. See mesh.rs's QuadInstance::base_atlas_page.
+    // inst_atlas_page (the "to" side). Same packed selector/page layout as
+    // inst_atlas_page above. See mesh.rs's QuadInstance::base_atlas_page.
     @location(15) inst_base_atlas_page: u32,
 }
 
@@ -319,21 +336,25 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let base_atlas_uv = in.base_uv_params.xy + norm_uv * in.base_uv_params.zw;
 
         // Texture sampling.
-        // Primary texture: atlas_page selects which atlas to sample.
+        // Primary texture: the low bits of atlas_page select which atlas; for main_atlas the
+        // high bits additionally select which array layer of the multi-page pool (M11.2).
         // Components without a texture point at a 1×1 white pixel baked into main_atlas
-        // at init, so the color tint alone determines their appearance with no branching.
+        // layer 0 at init, so the color tint alone determines their appearance with no branching.
         // textureSampleLevel (LOD 0) is used instead of textureSample because both
         // branches vary per-instance (non-uniform control flow). textureSample requires
         // implicit derivatives, which are undefined in non-uniform control flow per the
         // WGSL spec and fail on strict backends. Level 0 is always correct here: our
         // atlases have exactly one mip level.
+        let atlas_selector = in.atlas_page & ATLAS_SELECTOR_MASK;
+        let atlas_layer    = in.atlas_page >> ATLAS_PAGE_SHIFT;
+
         var tex_color: vec4<f32>;
-        if in.atlas_page == 0u {
-            tex_color = textureSampleLevel(main_atlas,       atlas_sampler, atlas_uv, 0.0);
-        } else if in.atlas_page == 1u {
+        if atlas_selector == 0u {
+            tex_color = textureSampleLevel(main_atlas,       atlas_sampler, atlas_uv, atlas_layer, 0.0);
+        } else if atlas_selector == 1u {
             tex_color = textureSampleLevel(transition_atlas, atlas_sampler, atlas_uv, 0.0);
         } else {
-            // atlas_page == 2: streaming video texture (M9)
+            // selector == 2: streaming video texture (M9)
             tex_color = textureSampleLevel(video_atlas,      atlas_sampler, atlas_uv, 0.0);
         }
         tex_color = unpremultiply(tex_color);
@@ -347,10 +368,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // video into a static bake would freeze it mid-transition.
         // When crossfade_t == 0.0 this branch is skipped entirely.
         if in.crossfade_t > 0.0 {
+            let base_selector = in.base_atlas_page & ATLAS_SELECTOR_MASK;
+            let base_layer    = in.base_atlas_page >> ATLAS_PAGE_SHIFT;
+
             var base_color: vec4<f32>;
-            if in.base_atlas_page == 0u {
-                base_color = textureSampleLevel(main_atlas, atlas_sampler, base_atlas_uv, 0.0);
-            } else if in.base_atlas_page == 1u {
+            if base_selector == 0u {
+                base_color = textureSampleLevel(main_atlas, atlas_sampler, base_atlas_uv, base_layer, 0.0);
+            } else if base_selector == 1u {
                 base_color = textureSampleLevel(transition_atlas, atlas_sampler, base_atlas_uv, 0.0);
             } else {
                 base_color = textureSampleLevel(video_atlas, atlas_sampler, base_atlas_uv, 0.0);
