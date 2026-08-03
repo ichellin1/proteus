@@ -79,7 +79,9 @@ mod inner {
 
     use glam::{Vec2, Vec3, Vec4};
 
-    use proteus_render::{FontAtlas, GpuContext, QuadPipeline, TextureId, MAIN_ATLAS_SIZE};
+    use proteus_render::{
+        validate_atlas_config, AtlasConfig, FontAtlas, GpuContext, QuadPipeline, TextureId,
+    };
     use proteus_ui::{
         collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig,
         BakedImage, BakedText, Border, ChildOf, Entity, Glow, GroupSource, GroupTarget,
@@ -976,7 +978,10 @@ mod inner {
             surface.configure(&device, &surface_config);
 
             // Render pipeline.
-            let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096);
+            let atlas_config = AtlasConfig::default();
+            validate_atlas_config(&device, &atlas_config)
+                .map_err(|e| JsValue::from_str(&format!("AtlasConfig: {e}")))?;
+            let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096, atlas_config);
             pipeline.set_view_projection(&queue, QuadPipeline::ortho(width as f32, height as f32));
 
             log::info!(
@@ -2100,18 +2105,19 @@ mod inner {
                 return;
             };
             let pipeline = self.ui_world.world.resource::<QuadPipeline>();
-            let (x, y, w, h) = pipeline
+            let placement = pipeline
                 .texture_registry
                 .main_atlas_region(texture_id)
                 .expect("just registered");
-            pipeline.write_to_main_atlas(&self.queue, x, y, w, h, &decoded.rgba_pixels);
-            let (uv_offset, uv_scale) = pipeline
+            pipeline.write_to_main_atlas(&self.queue, placement, &decoded.rgba_pixels);
+            let uv = pipeline
                 .texture_registry
-                .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+                .main_atlas_uv(texture_id)
                 .expect("just registered");
             let baked = BakedImage {
-                uv_offset,
-                uv_scale,
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
                 pixel_size: [decoded.width as f32, decoded.height as f32],
             };
 
@@ -2156,18 +2162,19 @@ mod inner {
                 return;
             };
             let pipeline = self.ui_world.world.resource::<QuadPipeline>();
-            let (x, y, w, h) = pipeline
+            let placement = pipeline
                 .texture_registry
                 .main_atlas_region(texture_id)
                 .expect("just registered");
-            pipeline.write_to_main_atlas(&self.queue, x, y, w, h, &decoded.rgba_pixels);
-            let (uv_offset, uv_scale) = pipeline
+            pipeline.write_to_main_atlas(&self.queue, placement, &decoded.rgba_pixels);
+            let uv = pipeline
                 .texture_registry
-                .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+                .main_atlas_uv(texture_id)
                 .expect("just registered");
             let baked = BakedImage {
-                uv_offset,
-                uv_scale,
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
                 pixel_size: [decoded.width as f32, decoded.height as f32],
             };
             if let Some(slot) = self.loading_logo_frames_dark.get_mut(frame_idx) {
@@ -2227,20 +2234,21 @@ mod inner {
                 };
 
                 let pipeline = self.ui_world.world.resource::<QuadPipeline>();
-                let (x, y, w, h) = pipeline
+                let placement = pipeline
                     .texture_registry
                     .main_atlas_region(texture_id)
                     .expect("just registered");
-                pipeline.write_to_main_atlas(&self.queue, x, y, w, h, &glyphs.rgba_pixels);
-                let (uv_offset, uv_scale) = pipeline
+                pipeline.write_to_main_atlas(&self.queue, placement, &glyphs.rgba_pixels);
+                let uv = pipeline
                     .texture_registry
-                    .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+                    .main_atlas_uv(texture_id)
                     .expect("just registered");
 
                 self.ui_world.world.entity_mut(entity).insert((
                     BakedText {
-                        uv_offset,
-                        uv_scale,
+                        uv_offset: uv.uv_offset,
+                        uv_scale: uv.uv_scale,
+                        page: uv.page,
                         pixel_size: [glyphs.width as f32, glyphs.height as f32],
                     },
                     TextureRef(texture_id),
@@ -2297,20 +2305,21 @@ mod inner {
                 };
 
                 let pipeline = self.ui_world.world.resource::<QuadPipeline>();
-                let (x, y, w, h) = pipeline
+                let placement = pipeline
                     .texture_registry
                     .main_atlas_region(texture_id)
                     .expect("just registered");
-                pipeline.write_to_main_atlas(&self.queue, x, y, w, h, &decoded.rgba_pixels);
-                let (uv_offset, uv_scale) = pipeline
+                pipeline.write_to_main_atlas(&self.queue, placement, &decoded.rgba_pixels);
+                let uv = pipeline
                     .texture_registry
-                    .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+                    .main_atlas_uv(texture_id)
                     .expect("just registered");
 
                 self.ui_world.world.entity_mut(entity).insert((
                     BakedImage {
-                        uv_offset,
-                        uv_scale,
+                        uv_offset: uv.uv_offset,
+                        uv_scale: uv.uv_scale,
+                        page: uv.page,
                         pixel_size: [decoded.width as f32, decoded.height as f32],
                     },
                     TextureRef(texture_id),

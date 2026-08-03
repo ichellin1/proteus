@@ -13,7 +13,31 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use wgpu::util::DeviceExt;
 
 use crate::mesh::{quad_vertex_layout, QuadInstance, QUAD_INDICES, QUAD_VERTICES};
-use crate::texture_registry::{TextureId, TextureRegistry};
+use crate::texture_registry::{AtlasConfig, TextureId, TextureRegistry};
+
+/// Runtime self-check ("BIT" — validate before you build, not after a wgpu validation panic deep
+/// inside `create_texture`): does `config` actually fit *this* device's real limits, not just the
+/// `wgpu::Limits` preset that was requested? Call once, right after `request_device`, before
+/// constructing [`QuadPipeline`].
+pub fn validate_atlas_config(device: &wgpu::Device, config: &AtlasConfig) -> Result<(), String> {
+    let limits = device.limits();
+    if config.page_size > limits.max_texture_dimension_2d {
+        return Err(format!(
+            "AtlasConfig.page_size={} exceeds this device's max_texture_dimension_2d={}",
+            config.page_size, limits.max_texture_dimension_2d
+        ));
+    }
+    if config.page_count == 0 {
+        return Err("AtlasConfig.page_count must be at least 1".to_string());
+    }
+    if config.page_count > limits.max_texture_array_layers {
+        return Err(format!(
+            "AtlasConfig.page_count={} exceeds this device's max_texture_array_layers={}",
+            config.page_count, limits.max_texture_array_layers
+        ));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Atlas sizes
@@ -23,16 +47,44 @@ use crate::texture_registry::{TextureId, TextureRegistry};
 // is wired up in M2+.
 // ---------------------------------------------------------------------------
 
-/// Default `main_atlas` dimensions. Must fit within `device.limits().max_texture_dimension_2d`.
-/// Can't be raised to buy more room — the web shell deliberately requests
-/// `wgpu::Limits::downlevel_webgl2_defaults()` for real WebGL2
-/// compatibility, which caps `max_texture_dimension_2d` at 2048; anything
-/// larger would fail `create_texture` there (see `headless_render.rs`'s
-/// tests, which request the same downlevel limits specifically to catch
-/// this class of regression). If atlas pressure becomes a problem again,
-/// the fix is to shrink what's baked into it (e.g. `MAX_TILE_IMAGE_SIDE` in
-/// the shells), not to grow this constant.
+/// Default per-*page* `main_atlas` dimensions. Must fit within
+/// `device.limits().max_texture_dimension_2d`. Can't be raised to buy more room on the web shell
+/// specifically — it deliberately requests `wgpu::Limits::downlevel_webgl2_defaults()` for real
+/// WebGL2 compatibility, which caps `max_texture_dimension_2d` at 2048; anything larger would
+/// fail `create_texture` there (see `headless_render.rs`'s tests, which request the same downlevel
+/// limits specifically to catch this class of regression).
+///
+/// (M11.2) Atlas pressure is no longer answered by shrinking page size — `main_atlas` is a
+/// multi-page pool (see [`MAIN_ATLAS_PAGE_COUNT`], [`crate::texture_registry::AtlasConfig`]), and
+/// per-page size/page count are now a configurable, validated input
+/// ([`crate::validate_atlas_config`]) rather than a hard ceiling. This constant and
+/// [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`] together are only `AtlasConfig::default()`'s values — the
+/// safe out-of-box defaults, not a limit on what a consumer can configure.
 const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
+
+/// Number of array layers ("pages") in the default `main_atlas` pool (M11.2).
+///
+/// Total capacity at the defaults is `MAIN_ATLAS_SIZE² × MAIN_ATLAS_PAGE_COUNT` texels — 4 ×
+/// 2048² × 4 bytes = 64 MiB of VRAM, eagerly committed at texture creation (wgpu cannot lazily
+/// back array layers).
+///
+/// Fixed at creation by design: a `D2Array`'s layer count cannot grow without recreating the
+/// texture and re-uploading everything resident. Capacity is bounded here and *held* bounded by
+/// [`crate::texture_registry::TextureRegistry`]'s cross-page LRU eviction — "thousands of images
+/// available, not thousands resident" is what makes unbounded content tractable, not the page
+/// count alone.
+///
+/// Safe on every backend this project targets: `max_texture_array_layers` is 256 under
+/// `Limits::default()` (native), `downlevel_defaults()` (headless tests), and
+/// `downlevel_webgl2_defaults()` (web shell) alike — unlike `max_texture_dimension_2d`, which is
+/// what caps [`DEFAULT_MAIN_ATLAS_SIZE`]. Page count is an orthogonal axis to page size, so
+/// raising it costs no WebGL2 parity.
+const DEFAULT_MAIN_ATLAS_PAGE_COUNT: u32 = 4;
+
+/// Public alias for the default `main_atlas` page count — see [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`].
+/// Only meaningful as `AtlasConfig::default()`'s value; a consumer building a custom
+/// [`crate::texture_registry::AtlasConfig`] chooses its own page count directly.
+pub const MAIN_ATLAS_PAGE_COUNT: u32 = DEFAULT_MAIN_ATLAS_PAGE_COUNT;
 /// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
 const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
 /// Public alias for the main atlas size.
@@ -249,11 +301,16 @@ impl QuadPipeline {
     /// `surface_format` must match the swap-chain texture format of the target surface.
     /// `max_instances` sets the capacity of the instance buffer — the pipeline silently
     /// clamps submissions that exceed it. 4096 is a reasonable default for most UIs.
+    /// `atlas_config` sizes `main_atlas` (see [`crate::texture_registry::AtlasConfig`]) —
+    /// validate it against this device's real limits with [`crate::validate_atlas_config`]
+    /// *before* calling this, since a bad config otherwise fails deep inside `create_texture`
+    /// with an opaque wgpu validation panic instead of a clear error.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         max_instances: u32,
+        atlas_config: AtlasConfig,
     ) -> Self {
         // --- Shader ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -282,13 +339,13 @@ impl QuadPipeline {
         let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("atlas_bgl"),
             entries: &[
-                // binding 0: main_atlas
+                // binding 0: main_atlas — a D2Array pool since M11.2 (see MAIN_ATLAS_PAGE_COUNT)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -423,13 +480,13 @@ impl QuadPipeline {
         });
 
         // --- Atlas textures ---
-        let (main_atlas, transition_atlas) = Self::create_atlases(device, queue);
+        let (main_atlas, transition_atlas) = Self::create_atlases(device, queue, &atlas_config);
 
         // Video atlas starts as a 1×1 black placeholder.  Call init_video() to
         // allocate a real resolution before uploading frames.
         let video_atlas = Self::create_video_texture(device, 1, 1);
 
-        let main_atlas_view = main_atlas.create_view(&Default::default());
+        let main_atlas_view = Self::create_main_atlas_view(&main_atlas);
         let transition_atlas_view = transition_atlas.create_view(&Default::default());
         let video_atlas_view = video_atlas.create_view(&Default::default());
 
@@ -486,7 +543,7 @@ impl QuadPipeline {
             atlas_layout,
             sampler,
             atlas_bind_group,
-            texture_registry: TextureRegistry::new(MAIN_ATLAS_SIZE),
+            texture_registry: TextureRegistry::new(atlas_config),
             video_rx: std::sync::Mutex::new(None),
             transition_allocator: crate::transition_atlas::TransitionAtlasAllocator::new(
                 TRANSITION_ATLAS_SIZE,
@@ -545,16 +602,15 @@ impl QuadPipeline {
     // Atlas write API (M4 text pipeline)
     // ---------------------------------------------------------------------------
 
-    /// Write a rectangular region of RGBA pixels into `main_atlas`.
+    /// Write a rectangular region of RGBA pixels into one page of `main_atlas`.
     ///
     /// Use this to upload pixels produced by [`FontAtlas::rasterize_text`] or
     /// [`crate::decode_image`], after registering their region via
-    /// [`crate::TextureRegistry::register_static`] (`x`/`y`/`width`/`height` come from
-    /// [`crate::TextureRegistry::main_atlas_region`]).
+    /// [`crate::TextureRegistry::register_static`] — pass the [`crate::MainAtlasPlacement`]
+    /// [`crate::TextureRegistry::main_atlas_region`] returns straight through, so the page and
+    /// rect can never drift apart.
     ///
-    /// `x` / `y`    — top-left pixel of the destination region (atlas coords).
-    /// `width` / `height` — dimensions of the region in pixels.
-    /// `rgba_data`  — raw, straight-alpha RGBA bytes; must have exactly
+    /// `rgba_data` — raw, straight-alpha RGBA bytes; must have exactly
     /// `width * height * 4` bytes. Premultiplied in place (a local copy) before
     /// upload — see [`crate::static_texture::premultiply_alpha`]'s doc comment
     /// for why `main_atlas` is stored premultiplied. Callers hand this straight
@@ -568,12 +624,16 @@ impl QuadPipeline {
     pub fn write_to_main_atlas(
         &self,
         queue: &wgpu::Queue,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
+        placement: crate::MainAtlasPlacement,
         rgba_data: &[u8],
     ) {
+        let crate::MainAtlasPlacement {
+            page,
+            x,
+            y,
+            width,
+            height,
+        } = placement;
         debug_assert_eq!(
             rgba_data.len(),
             (width * height * 4) as usize,
@@ -591,7 +651,9 @@ impl QuadPipeline {
             wgpu::TexelCopyTextureInfo {
                 texture: &self._main_atlas,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                // `main_atlas` is a D2Array (M11.2) — origin.z is the array-layer index, not a
+                // depth slice.
+                origin: wgpu::Origin3d { x, y, z: page },
                 aspect: wgpu::TextureAspect::All,
             },
             &premultiplied,
@@ -657,7 +719,7 @@ impl QuadPipeline {
         queue: &wgpu::Queue,
         instances: &[QuadInstance],
         view_projection: glam::Mat4,
-        region: (u32, u32, u32, u32),
+        placement: crate::MainAtlasPlacement,
     ) {
         let dest = self._main_atlas.clone();
         // No gutter here (`pad: 0`) — unlike `transition_allocator`,
@@ -665,7 +727,16 @@ impl QuadPipeline {
         // painting a transparent ring beyond the requested region would
         // overwrite a few edge pixels of whatever neighboring allocation
         // happens to be packed adjacent to it.
-        self.bake_instances_to_atlas(device, queue, instances, view_projection, region, &dest, 0);
+        self.bake_instances_to_atlas(
+            device,
+            queue,
+            instances,
+            view_projection,
+            (placement.x, placement.y, placement.width, placement.height),
+            &dest,
+            placement.page,
+            0,
+        );
     }
 
     /// Render `instances` into a `width × height` sub-region of
@@ -719,7 +790,8 @@ impl QuadPipeline {
         // `pad`: the allocator (`TransitionAtlasAllocator`) reserved an extra
         // `TRANSITION_BAKE_PAD`-pixel gutter around `region` in the atlas —
         // see `bake_instances_to_atlas`'s `pad` doc for why this bake must be
-        // the one to paint it transparent.
+        // the one to paint it transparent. `dest_layer: 0` — `transition_atlas`
+        // is single-layer, unlike `main_atlas`'s multi-page pool (M11.2).
         self.bake_instances_to_atlas(
             device,
             queue,
@@ -727,10 +799,16 @@ impl QuadPipeline {
             view_projection,
             region,
             &dest,
+            0,
             crate::transition_atlas::TRANSITION_BAKE_PAD,
         );
     }
 
+    /// `dest_layer`: destination array layer of `dest_texture`. `main_atlas` is a `D2Array`
+    /// pool (M11.2), so this is its page index; `transition_atlas` is single-layer, so that
+    /// caller always passes 0. Only the `copy_texture_to_texture` destination reads it — the
+    /// scratch render target is always a plain single-layer `D2` texture.
+    ///
     /// `pad`: extra transparent gutter (atlas pixels) to reserve and paint
     /// around `region` on every side, beyond the `region` itself — the
     /// caller's allocator must already have reserved this space (e.g.
@@ -747,6 +825,7 @@ impl QuadPipeline {
         view_projection: glam::Mat4,
         region: (u32, u32, u32, u32),
         dest_texture: &wgpu::Texture,
+        dest_layer: u32,
         pad: u32,
     ) {
         let (x, y, w, h) = region;
@@ -858,7 +937,7 @@ impl QuadPipeline {
                 origin: wgpu::Origin3d {
                     x: x.saturating_sub(pad),
                     y: y.saturating_sub(pad),
-                    z: 0,
+                    z: dest_layer,
                 },
                 aspect: wgpu::TextureAspect::All,
             },
@@ -1116,6 +1195,19 @@ impl QuadPipeline {
         })
     }
 
+    /// The `main_atlas` view used by every `atlas_bind_group` build. Explicit `D2Array` rather
+    /// than `Default::default()`: wgpu only infers `D2Array` while the texture has more than one
+    /// layer, so an inferred view would silently become plain `D2` — mismatching this bind
+    /// group's `D2Array` layout entry — if `AtlasConfig::page_count` were ever configured to 1
+    /// (e.g. for debugging). Being explicit keeps a one-page pool valid too.
+    fn create_main_atlas_view(main_atlas: &wgpu::Texture) -> wgpu::TextureView {
+        main_atlas.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("main_atlas_view"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        })
+    }
+
     /// Create a blank RGBA video texture of the given dimensions.
     fn create_video_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -1141,7 +1233,7 @@ impl QuadPipeline {
     /// This is called by [`init_video`], [`suspend_video`], and [`resume_video`]
     /// whenever the video texture is swapped for a different allocation.
     fn rebuild_atlas_bind_group(&mut self, device: &wgpu::Device) {
-        let main_view = self._main_atlas.create_view(&Default::default());
+        let main_view = Self::create_main_atlas_view(&self._main_atlas);
         let transition_view = self._transition_atlas.create_view(&Default::default());
         let video_view = self.video_atlas.create_view(&Default::default());
 
@@ -1169,19 +1261,24 @@ impl QuadPipeline {
         });
     }
 
-    /// Create `main_atlas` and `transition_atlas` and bake a 1×1 white pixel at
-    /// the origin of `main_atlas`. Components with no texture point at this pixel
-    /// so their `color` field alone determines their appearance with no shader branching.
+    /// Create `main_atlas` (a `config.page_count`-layer `D2Array` pool, M11.2) and
+    /// `transition_atlas`, and bake a 1×1 white pixel at the origin of `main_atlas`'s
+    /// **layer 0 only** — `QuadState::WHITE_PIXEL_UV_OFFSET` and the default `atlas_page`
+    /// (`pack_atlas_page(ATLAS_SELECTOR_MAIN, 0)`, i.e. plain `0`) both hard-code that fixed
+    /// location, so it must never move even though `main_atlas` now has more than one layer.
+    /// Components with no texture point at this pixel so their `color` field alone determines
+    /// their appearance with no shader branching.
     fn create_atlases(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        config: &AtlasConfig,
     ) -> (wgpu::Texture, wgpu::Texture) {
         let main_atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("main_atlas"),
             size: wgpu::Extent3d {
-                width: DEFAULT_MAIN_ATLAS_SIZE,
-                height: DEFAULT_MAIN_ATLAS_SIZE,
-                depth_or_array_layers: 1,
+                width: config.page_size,
+                height: config.page_size,
+                depth_or_array_layers: config.page_count.max(1),
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -1193,7 +1290,8 @@ impl QuadPipeline {
             view_formats: &[],
         });
 
-        // Write a 1×1 white pixel at (0, 0) in main_atlas.
+        // Write a 1×1 white pixel at (0, 0) of layer 0 only — origin.z = 0 and
+        // depth_or_array_layers: 1 below already mean exactly that.
         // Components with no texture use uv_offset=[0,0], uv_scale=[1/atlas_size].
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {

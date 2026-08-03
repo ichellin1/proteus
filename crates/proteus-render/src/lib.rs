@@ -18,13 +18,20 @@ pub mod transition_atlas;
 
 pub use font_atlas::{FontAtlas, RasterizedGlyphs, EMBEDDED_FONT_BYTES};
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
-pub use mesh::{QuadInstance, QuadVertex, QUAD_INDICES, QUAD_VERTICES};
+pub use mesh::{
+    pack_atlas_page, unpack_atlas_page, QuadInstance, QuadVertex, ATLAS_PAGE_SHIFT,
+    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_MASK, ATLAS_SELECTOR_TRANSITION, ATLAS_SELECTOR_VIDEO,
+    QUAD_INDICES, QUAD_VERTICES,
+};
 pub use pipeline::{
-    GpuContext, QuadPipeline, VideoFrameSender, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
-    MAIN_ATLAS_SIZE, TRANSITION_ATLAS_SIZE,
+    validate_atlas_config, GpuContext, QuadPipeline, VideoFrameSender, DEFAULT_VIDEO_HEIGHT,
+    DEFAULT_VIDEO_WIDTH, MAIN_ATLAS_PAGE_COUNT, MAIN_ATLAS_SIZE, TRANSITION_ATLAS_SIZE,
 };
 pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
-pub use texture_registry::{AtlasRegion, TextureId, TextureKind, TextureRegistry, TextureState};
+pub use texture_registry::{
+    AtlasConfig, AtlasRegion, MainAtlasPlacement, MainAtlasUv, TextureId, TextureKind,
+    TextureRegistry, TextureState,
+};
 pub use transition_atlas::{TransitionAllocId, TransitionAtlasAllocator, TransitionRegion};
 
 /// The WGSL source for the instanced quad shader, embedded at compile time.

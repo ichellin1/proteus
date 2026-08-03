@@ -18,7 +18,7 @@
 //!         │
 //!         │ TextureRegistry::register_static + QuadPipeline::bake_instances_to_main_atlas
 //!         ▼
-//! BakedComposite { uv_offset, uv_scale, pixel_size } + TextureRef  ← written back onto the root entity
+//! BakedComposite { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the root entity
 //!         │
 //!         │ children despawned; root's own Border/Glow/DropShadow removed and
 //!         │ QuadState color/corner_radius neutralized (the bake already captured them as pixels)
@@ -47,7 +47,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::system::SystemParam;
 use glam::Vec4;
 
-use proteus_render::{GpuContext, QuadPipeline, MAIN_ATLAS_SIZE};
+use proteus_render::{GpuContext, QuadPipeline};
 
 use crate::component::QuadState;
 use crate::effects::{Border, DropShadow, Glow};
@@ -83,6 +83,9 @@ pub struct BakedComposite {
     pub uv_offset: [f32; 2],
     /// Normalised UV extent within `main_atlas`.
     pub uv_scale: [f32; 2],
+    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — see
+    /// `proteus_ui::image::BakedImage::page`'s doc for why this exists.
+    pub page: u32,
     /// The baked region's size in pixels.
     pub pixel_size: [f32; 2],
 }
@@ -156,7 +159,7 @@ pub fn bake_system(
             );
             continue;
         };
-        let (x, y, w, h) = pipeline
+        let placement = pipeline
             .texture_registry
             .main_atlas_region(texture_id)
             .expect("just registered");
@@ -172,17 +175,18 @@ pub fn bake_system(
             &gpu.queue,
             &instances,
             view_projection,
-            (x, y, w, h),
+            placement,
         );
 
-        let (uv_offset, uv_scale) = pipeline
+        let uv = pipeline
             .texture_registry
-            .main_atlas_uv(texture_id, MAIN_ATLAS_SIZE)
+            .main_atlas_uv(texture_id)
             .expect("just registered");
         commands.entity(entity).insert((
             BakedComposite {
-                uv_offset,
-                uv_scale,
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
                 pixel_size: [width as f32, height as f32],
             },
             TextureRef(texture_id),

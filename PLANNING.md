@@ -2041,7 +2041,7 @@ same as M10.5/M10.6 were for M10: the work was done, then named.
 
 ---
 
-### M11.2 — Multi-Page Atlas & Bounded Working Set *(off critical path — not started)*
+### M11.2 — Multi-Page Atlas & Bounded Working Set *(off critical path — complete)*
 
 Closes the capacity gap M11.1's dogfooding pass exposed: one fixed-size `main_atlas`
 (2048×2048, capped there to preserve WebGL2 `downlevel_webgl2_defaults()` parity with the web
@@ -2055,34 +2055,68 @@ experience") needs a real architectural answer, not another constant tuned down.
 **Two complementary fixes, decided together:**
 
 1. **Multi-page atlas.** The shader/pipeline already thread an `atlas_page` index per instance,
-   but today it's three hardcoded special cases (`0` = `main_atlas`, `1` = `transition_atlas`,
-   `2` = the streaming video texture) — not a general pool. Generalize `main_atlas` into a real
+   but it started as three hardcoded special cases (`0` = `main_atlas`, `1` = `transition_atlas`,
+   `2` = the streaming video texture) — not a general pool. `main_atlas` became a real
    `D2Array` texture with N layers, each layer still capped at the same safe per-layer dimension
    (preserving WebGL2 parity — no shell-specific atlas-size divergence, ruled out during design
    discussion as cutting against this project's standing cross-shell-parity requirement), so total
    capacity scales with page count instead of being fixed to one texture's worth of room.
 2. **Bounded working set.** Raising capacity alone isn't the actual goal — "thousands of images"
-   only needs to mean thousands *available*, not thousands *resident*. Extend `TextureRegistry`'s
-   existing (M11) LRU eviction to operate across the multi-page pool, so the resident set stays
+   only needs to mean thousands *available*, not thousands *resident*. `TextureRegistry`'s
+   existing (M11) LRU eviction now operates across the multi-page pool, so the resident set stays
    bounded to roughly what's visible/near-visible regardless of how much content the app could
    theoretically show — this is what actually makes unbounded content tractable, not the page count
    by itself.
 
+**Configurability, added after design review.** Page size and page count are not hardcoded —
+they're a public `AtlasConfig { page_size, page_count }` (default `2048`×4 pages, today's
+WebGL2-safe values), threaded through `QuadPipeline::new`/`TextureRegistry::new`. A native-only
+build targeting a desktop/TV GPU can raise `page_size` well past 2048 (native's plain
+`Limits::default()` guarantees 8192); a memory-constrained or video-free target can lower
+`page_count` (each page is `page_size² × 4` bytes, eagerly committed at texture creation — wgpu
+cannot lazily back array layers). A runtime self-check, `validate_atlas_config(&device, &config)`
+— the "BIT test" — checks the chosen config against the *real* device's reported
+`max_texture_dimension_2d`/`max_texture_array_layers` right after `request_device`, so a bad
+configuration fails loudly at startup rather than deep inside a `create_texture` panic. Both shells
+call it with `AtlasConfig::default()`.
+
+**Known limitation, documented rather than silently accepted:** even with `AtlasConfig`, the web
+shell can never bake a single region larger than 2048×2048 — `max_texture_dimension_2d` under
+`downlevel_webgl2_defaults()` is a hard per-page ceiling independent of page count. A genuinely
+UHD-resolution (3840×2160+) source image cannot be baked as one contiguous region on web today.
+Native has real headroom (8192). A sketched (not built) path past this — tiling a large source
+image into a grid of ≤`page_size` regions at decode time, rendered as adjacent quads — is captured
+as a Post-V1 idea below rather than designed further now.
+
+**Fragmentation, investigated rather than assumed.** A "repack an atlas page's contents to reclaim
+scattered free space" idea was raised during design. Two findings: (1) repacking *referenced,
+live* content is blocked on the same cached-UV hazard M11 already deferred to Post-V1 — moving a
+region invalidates every component's cached `uv_offset`/`page` with no restoration mechanism, so
+it's the same problem wearing a different name, not new work; (2) an "empty-page reset" mitigation
+(reset a page's allocator once every region on it frees) was implemented, tested against `etagere`
+directly with both uniform and heterogeneous scatter-freed content, and found to make *zero*
+difference to the next allocation's placement — `etagere` already fully reclaims a page's space on
+its own once everything on it is freed. Removed rather than kept as unneeded complexity; pinned by
+a regression test instead (`emptying_a_page_of_many_small_tiles_fully_reclaims_its_space`).
+
 **Definition of done:**
-- [ ] `main_atlas` is a `D2Array` (or equivalent multi-texture pool) with N layers, each ≤2048 to
+- [x] `main_atlas` is a `D2Array` (or equivalent multi-texture pool) with N layers, each ≤2048 to
   preserve WebGL2 parity
-- [ ] `atlas_page`/`base_atlas_page` in `quad.wgsl` generalize from three hardcoded branches to a
-  real dynamic layer index
-- [ ] `MainAtlasAllocator`/`TextureRegistry` support page selection at allocation time and eviction
+- [x] `atlas_page`/`base_atlas_page` in `quad.wgsl` generalize from three hardcoded branches to a
+  real dynamic layer index (bit-packed: low byte = atlas selector, remaining bits = page)
+- [x] `MainAtlasAllocator`/`TextureRegistry` support page selection at allocation time and eviction
   scoped correctly across pages — not just "fail once page 0 is full"
-- [ ] Eviction policy demonstrably bounds total resident texture memory under a sustained
+- [x] Eviction policy demonstrably bounds total resident texture memory under a sustained
   "many images over time" workload (e.g. repeated gallery re-fetches) rather than growing
   unboundedly
-- [ ] Regression tests: multi-page allocation/eviction correctness (page selection, no cross-page
+- [x] Regression tests: multi-page allocation/eviction correctness (page selection, no cross-page
   corruption, eviction order still unreferenced-oldest-first per M11's existing safety rule — see
   M11's eviction-safety scope note for why), plus a real-workload test proving the gallery's 12
   images no longer need `GALLERY_IMAGE_MAX_SIDE`'s aggressive downscale to fit
-- [ ] Verified identically on both shells — no native/web divergence in atlas capacity
+  (`the_gallery_workload_fits_in_the_default_page_pool`)
+- [x] Verified identically on both shells — no native/web divergence in atlas capacity
+- [x] Page size and page count are developer-configurable (`AtlasConfig`), not hardcoded, with a
+  startup validation check (`validate_atlas_config`) against the real device's reported limits
 
 ---
 
