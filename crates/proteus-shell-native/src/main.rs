@@ -55,9 +55,9 @@ use proteus_render::{
 use proteus_ui::{
     collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig, BakedImage,
     BakedText, Border, ChildOf, Entity, Glow, GroupSource, GroupTarget, HoveredEntity, Image,
-    Interactable, InteractionEvents, Lifecycle, NToOneRequest, OneToNRequest, PointerInput,
-    ProteusWorld, QuadState, SplitStrategy, Text, TextureRef, TransitionRequest, VideoCrossfade,
-    VideoPlayer, Visibility,
+    Interactable, InteractionEvents, Lifecycle, MergeLayout, NToOneRequest, OneToNRequest,
+    PointerInput, ProteusWorld, QuadState, SplitStrategy, Text, TextureRef, TransitionRequest,
+    VideoCrossfade, VideoPlayer, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -304,7 +304,7 @@ const TILE_OVERLAY_MAX_ALPHA: f32 = 0.5;
 const MAX_TILE_IMAGE_SIDE: u32 = 400;
 
 // ---------------------------------------------------------------------------
-// Photo gallery — fetched from picsum.photos, shown as a 4x3 grid
+// Photo gallery — nature-themed images fetched from loremflickr.com, shown as a 4x3 grid
 // ---------------------------------------------------------------------------
 
 const GALLERY_COLS: usize = 4;
@@ -312,12 +312,18 @@ const GALLERY_ROWS: usize = 3;
 const GALLERY_MARGIN_LEFT: f32 = 40.0;
 const GALLERY_MARGIN_RIGHT: f32 = 40.0;
 const GALLERY_MARGIN_TOP: f32 = 40.0;
-/// Extra room below the grid for the "Fetch New Images" button.
 const GALLERY_MARGIN_BOTTOM: f32 = 100.0;
 /// Fixed, not "at least" — the spec's "at least 20px" is satisfied as a
 /// floor by always using exactly this value; cell size is derived from
 /// whatever space remains after margins + these fixed gaps.
 const GALLERY_GAP_PX: f32 = 20.0;
+/// Applied on top of the margin/gap-derived cell size so the grid reads a
+/// touch less cramped against the window edges.
+const GALLERY_CELL_SCALE: f32 = 0.9;
+/// The grid block is bottom-anchored (see `gallery_cell_quad`): its bottom
+/// edge sits exactly this many px above the window's bottom edge, regardless
+/// of window size.
+const GALLERY_GRID_BOTTOM_MARGIN_PX: f32 = 40.0;
 const GALLERY_CORNER_RADIUS: f32 = 12.0;
 const GALLERY_CORNER_RADIUS_DARK: f32 = 18.0;
 /// A touch slower than `BUTTON_TILES_MORPH_DURATION` — a bigger, more
@@ -327,18 +333,13 @@ const GALLERY_GRID_MORPH_DURATION: f32 = 0.6;
 /// giving up and showing `LOADING_LOGO_ERROR_TEXT` instead.
 const GALLERY_FETCH_TIMEOUT: f32 = 10.0;
 const GALLERY_FETCH_BUTTON_LABEL: &str = "Fetch New Images";
+/// Top-anchored, same as the grid is bottom-anchored: this many px between
+/// the window's top edge and the button's top edge.
+const GALLERY_FETCH_BUTTON_TOP_MARGIN_PX: f32 = 65.0;
+/// Used only until `gallery_fetch_button_label`'s `BakedText` is ready — same
+/// fallback pattern as `NAV_BUTTON_FALLBACK_SIZE`.
+const GALLERY_FETCH_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(220.0, 46.0);
 const LOADING_LOGO_ERROR_TEXT: &str = "Couldn't load images";
-/// Separate, much smaller cap than `MAX_TILE_IMAGE_SIDE` — that constant's
-/// budget was sized for a handful of images resident at once (2 backgrounds
-/// plus 3 tiles); 12 gallery images all need to be simultaneously resident
-/// too, and requesting them at 400px each (confirmed empirically: the
-/// on-screen cell size at typical/retina window sizes clamps to exactly
-/// 400) filled `main_atlas` before even the first one could register — the
-/// same no-backoff retry-every-frame failure mode `MAX_TILE_IMAGE_SIDE`'s
-/// own doc describes, reproduced via a temporary auto-trigger and `ps` CPU
-/// sampling (pegged at ~100%, matching the earlier session's hang bug
-/// signature).
-const GALLERY_IMAGE_MAX_SIDE: u32 = 150;
 
 // ---------------------------------------------------------------------------
 // Nav buttons — splash morphs into these; clicking "Video Demo" morphs into tiles
@@ -570,13 +571,16 @@ fn gallery_cell_size(window_width: f32, window_height: f32) -> f32 {
         - GALLERY_MARGIN_BOTTOM
         - (GALLERY_ROWS - 1) as f32 * GALLERY_GAP_PX)
         .max(0.0);
-    (usable_w / GALLERY_COLS as f32).min(usable_h / GALLERY_ROWS as f32)
+    (usable_w / GALLERY_COLS as f32).min(usable_h / GALLERY_ROWS as f32) * GALLERY_CELL_SCALE
 }
 
 /// One of the 12 photo gallery tiles. `idx` 0..12, row-major (row = idx/4,
-/// col = idx%4; row 0 = top). The whole grid block is centered on the
-/// window (same centering convention as `tile_quad`/`layout_nav_buttons`),
-/// so the margins act as a floor on cell size, not a literal offset.
+/// col = idx%4; row 0 = top). Horizontally centered on the window (same
+/// centering convention as `tile_quad`/`layout_nav_buttons`), but vertically
+/// bottom-anchored — the grid's bottom edge always sits
+/// `GALLERY_GRID_BOTTOM_MARGIN_PX` above the window's bottom edge, growing
+/// upward from there, so it holds a fixed distance from the bottom
+/// regardless of window size or cell size.
 fn gallery_cell_quad(
     idx: usize,
     window_width: f32,
@@ -586,9 +590,10 @@ fn gallery_cell_quad(
     let cell = gallery_cell_size(window_width, window_height);
     let (row, col) = (idx / GALLERY_COLS, idx % GALLERY_COLS);
     let grid_w = GALLERY_COLS as f32 * cell + (GALLERY_COLS - 1) as f32 * GALLERY_GAP_PX;
-    let grid_h = GALLERY_ROWS as f32 * cell + (GALLERY_ROWS - 1) as f32 * GALLERY_GAP_PX;
     let x = -grid_w / 2.0 + cell / 2.0 + col as f32 * (cell + GALLERY_GAP_PX);
-    let y = grid_h / 2.0 - cell / 2.0 - row as f32 * (cell + GALLERY_GAP_PX);
+    let rows_from_bottom = (GALLERY_ROWS - 1 - row) as f32;
+    let grid_bottom_y = -window_height / 2.0 + GALLERY_GRID_BOTTOM_MARGIN_PX;
+    let y = grid_bottom_y + cell / 2.0 + rows_from_bottom * (cell + GALLERY_GAP_PX);
     QuadState {
         position: Vec3::new(x, y, 0.5),
         size: Vec2::splat(cell),
@@ -737,7 +742,7 @@ enum AppState {
     /// Video screen visible (as `tiles[screen_idx]`) — no longer interactive
     /// itself; the home/back icons drive navigation from here.
     VideoScreen(usize),
-    /// Fetching 12 picsum.photos images in the background — the animated
+    /// Fetching 12 nature-themed loremflickr.com images in the background — the animated
     /// logo (light/dark theme-crossfaded) loops on `loading_logo` while
     /// waiting. Auto-advances to `Gallery` once every gallery tile has a
     /// `BakedImage`, or shows an inline error after `GALLERY_FETCH_TIMEOUT`
@@ -956,10 +961,13 @@ struct RenderState {
     moon_icon_dark: Entity,
 
     // ── Photo gallery (M12) ─────────────────────────────────────────────────
-    /// 4×3 grid, row-major (idx = row*4 + col; row 0 = top row, mapping 1:1
-    /// to `nav_buttons[0..3]` for the Gallery→Home row-grouped merge).
+    /// 4×3 grid, row-major (idx = row*4 + col; row 0 = top row) — see
+    /// `start_gallery_to_home`'s column groups for how these map onto
+    /// `nav_buttons[0..3]`.
     gallery_tiles: [Entity; 12],
-    /// Visual placeholder only this pass — see `advance_gallery_button_fade`.
+    /// Triggers a `Gallery -> Loading` refetch on click — see
+    /// `advance_gallery_button_fade` (fade in/out) and
+    /// `advance_gallery_fetch_button_hover` (hover glow).
     gallery_fetch_button: Entity,
     gallery_fetch_button_label: Entity,
     /// Shown only if the fetch times out — see `advance_gallery_fetch`.
@@ -987,6 +995,10 @@ struct RenderState {
     /// Fade-in (after the grid morph settles) / fade-out (in sync with the
     /// Gallery→Home morph) progress for `gallery_fetch_button`.
     gallery_button_fade: f32,
+    /// Hover glow/scale progress (0..1) for `gallery_fetch_button` — same
+    /// pattern as `nav_hover_progress`/`gallery_tile_hover_progress`.
+    gallery_fetch_button_hover_progress: f32,
+    gallery_fetch_button_is_hovering: bool,
     /// Draining side of `gallery_fetch::spawn`'s channel — `None` when no
     /// fetch is in flight (including right after the user bails via the
     /// error escape hatch, which drops this to abandon the background
@@ -1635,7 +1647,7 @@ impl RenderState {
         // no overlay-tint/title-label children, unlike the video tiles
         // above). Placeholder geometry; `layout_gallery_tiles` overwrites it
         // once the window size is known/on each Home→Loading entry. Images
-        // are attached later, as each picsum fetch completes (native:
+        // are attached later, as each loremflickr fetch completes (native:
         // `drain_gallery_fetch`; web: `set_gallery_image`).
         let gallery_tiles: [Entity; 12] = std::array::from_fn(|i| {
             ui_world
@@ -2085,6 +2097,8 @@ impl RenderState {
             gallery_tile_hover_progress: [0.0; 12],
             gallery_tile_is_hovering: [false; 12],
             gallery_button_fade: 0.0,
+            gallery_fetch_button_hover_progress: 0.0,
+            gallery_fetch_button_is_hovering: false,
             gallery_fetch_rx: None,
             state: AppState::Splash,
             transition: None,
@@ -3152,6 +3166,8 @@ impl RenderState {
             AppState::Gallery => {
                 if clicked.contains(&self.nav_icons[0]) {
                     self.begin_transition(AppState::Gallery, AppState::Home);
+                } else if clicked.contains(&self.gallery_fetch_button) {
+                    self.begin_transition(AppState::Gallery, AppState::Loading);
                 }
             }
         }
@@ -3185,6 +3201,7 @@ impl RenderState {
             (AppState::Loading, AppState::Gallery) => self.start_loading_to_gallery(),
             (AppState::Loading, AppState::Home) => self.start_loading_to_home(),
             (AppState::Gallery, AppState::Home) => self.start_gallery_to_home(),
+            (AppState::Gallery, AppState::Loading) => self.start_gallery_to_loading(),
             (from, to) => unreachable!("no transition defined for {from:?} -> {to:?}"),
         }
         self.transition = Some(Transition {
@@ -3230,7 +3247,7 @@ impl RenderState {
                 .tiles
                 .iter()
                 .all(|&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible)),
-            (AppState::Home, AppState::Loading) => {
+            (AppState::Home, AppState::Loading) | (AppState::Gallery, AppState::Loading) => {
                 matches!(self.ui_world.world.get::<Visibility>(self.loading_logo), Some(v) if v.visible)
             }
             (AppState::Loading, AppState::Gallery) => self
@@ -3289,6 +3306,18 @@ impl RenderState {
 
             AppState::Loading => {
                 self.set_nav_buttons_visible(false);
+                // Clear any bake left over from whatever fetch preceded this
+                // one — from here on, a tile with a `BakedImage` is this
+                // fetch's own image, not a stale one (see
+                // `start_gallery_to_loading`'s doc for why this can't happen
+                // any earlier: the collapse into `loading_logo` needs each
+                // tile's *current* bake intact when it runs).
+                for &tile in &self.gallery_tiles {
+                    self.ui_world
+                        .world
+                        .entity_mut(tile)
+                        .remove::<(BakedImage, TextureRef, Image)>();
+                }
                 for i in 0..12 {
                     self.settle_gallery_tile(i, false);
                 }
@@ -3816,21 +3845,35 @@ impl RenderState {
                 *qs = state.clone();
             }
         }
+        let button_size = self
+            .ui_world
+            .world
+            .get::<BakedText>(self.gallery_fetch_button_label)
+            .map(|b| {
+                Vec2::new(b.pixel_size[0], b.pixel_size[1])
+                    + Vec2::splat(2.0 * NAV_BUTTON_PADDING_PX)
+            })
+            .unwrap_or(GALLERY_FETCH_BUTTON_FALLBACK_SIZE);
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.gallery_fetch_button)
+        {
+            qs.size = button_size;
+            qs.position.x = 0.0;
+            qs.position.y =
+                window_height / 2.0 - GALLERY_FETCH_BUTTON_TOP_MARGIN_PX - button_size.y / 2.0;
+        }
         states
     }
 
-    /// N→1 Slice: the 3 nav buttons merge into `loading_logo`. Also clears
-    /// any stale bake from a previous gallery visit (so a second visit
-    /// doesn't read last time's images as "already loaded") and kicks off a
-    /// fresh fetch — every Home→Loading entry re-fetches, since the "Fetch
-    /// New Images" button is a no-op placeholder this pass.
+    /// N→1 Slice: the 3 nav buttons merge into `loading_logo` and kicks off
+    /// a fresh fetch — every Home→Loading entry re-fetches. Any stale bake
+    /// from a previous gallery visit is cleared once
+    /// `settle(AppState::Loading)` runs, not here — this path's source is
+    /// the nav buttons, not the gallery tiles, so there's no bake-timing
+    /// reason to clear them early.
     fn start_home_to_loading(&mut self) {
-        for &tile in &self.gallery_tiles {
-            self.ui_world
-                .world
-                .entity_mut(tile)
-                .remove::<(BakedImage, TextureRef, Image)>();
-        }
         self.gallery_fetch_elapsed = 0.0;
         self.gallery_error_shown = false;
         self.hide_gallery_error();
@@ -3859,17 +3902,75 @@ impl RenderState {
                     easing: ease_in_out_quad,
                 },
                 child_behavior: None,
+                layout: MergeLayout::Horizontal,
             });
 
         let scale_factor = self.window.scale_factor() as f32;
         let window_width = self.surface_config.width as f32 / scale_factor;
         let window_height = self.surface_config.height as f32 / scale_factor;
         let side_px = (gallery_cell_size(window_width, window_height) * scale_factor)
-            .min(GALLERY_IMAGE_MAX_SIDE as f32) as u32;
+            .min(MAX_TILE_IMAGE_SIDE as f32) as u32;
         self.gallery_fetch_rx = Some(gallery_fetch::spawn(12, side_px));
     }
 
-    /// 1→N Slice: `loading_logo` splits into all 12 gallery tiles.
+    /// N→1 GridSlice: the "Fetch New Images" button's click handler — the 12
+    /// gallery tiles collapse into `loading_logo` (mirroring
+    /// `start_home_to_loading`, sourced from the grid instead of the nav
+    /// buttons) before a fresh fetch replaces them. Deliberately does *not*
+    /// clear the tiles' current bake first — the collapse should show
+    /// today's actual photos shrinking into the logo, and
+    /// `n_to_one_setup_system` bakes each source's live appearance at setup
+    /// time, so clearing here would make it collapse from a blank
+    /// placeholder instead. `settle(AppState::Loading)` clears the stale
+    /// bake once the collapse itself has already captured it.
+    fn start_gallery_to_loading(&mut self) {
+        self.gallery_fetch_elapsed = 0.0;
+        self.gallery_error_shown = false;
+        self.hide_gallery_error();
+        self.loading_logo_frame_elapsed = 0.0;
+        self.loading_logo_frame_index = 0;
+
+        let sources: Vec<GroupSource> = (0..12)
+            .map(|i| GroupSource {
+                entity: self.gallery_tiles[i],
+                state: self
+                    .ui_world
+                    .world
+                    .get::<QuadState>(self.gallery_tiles[i])
+                    .cloned()
+                    .unwrap_or_default(),
+            })
+            .collect();
+        self.ui_world
+            .world
+            .entity_mut(self.loading_logo)
+            .insert(NToOneRequest {
+                sources,
+                default_config: TransitionConfig {
+                    duration: GALLERY_GRID_MORPH_DURATION,
+                    delay: 0.0,
+                    easing: ease_in_out_quad,
+                },
+                child_behavior: None,
+                layout: MergeLayout::Grid {
+                    cols: GALLERY_COLS,
+                    rows: GALLERY_ROWS,
+                },
+            });
+
+        let scale_factor = self.window.scale_factor() as f32;
+        let window_width = self.surface_config.width as f32 / scale_factor;
+        let window_height = self.surface_config.height as f32 / scale_factor;
+        let side_px = (gallery_cell_size(window_width, window_height) * scale_factor)
+            .min(MAX_TILE_IMAGE_SIDE as f32) as u32;
+        self.gallery_fetch_rx = Some(gallery_fetch::spawn(12, side_px));
+    }
+
+    /// 1→N GridSlice: `loading_logo` splits into all 12 gallery tiles,
+    /// grid-paired (not `Slice`'s flat 12-wide strip) so each tile's virtual
+    /// radiates outward from its own quadrant of the logo — see
+    /// `SplitStrategy::GridSlice`'s doc for why `Slice` looked like a zigzag
+    /// here instead of a starburst.
     fn start_loading_to_gallery(&mut self) {
         let states = self.layout_gallery_tiles();
         let targets = (0..12)
@@ -3889,7 +3990,10 @@ impl RenderState {
                     easing: ease_in_out_quad,
                 },
                 child_behavior: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::GridSlice {
+                    cols: GALLERY_COLS,
+                    rows: GALLERY_ROWS,
+                },
             });
     }
 
@@ -3931,18 +4035,25 @@ impl RenderState {
             });
     }
 
-    /// Three independent N→1 Slice merges, fired in the same frame: each
-    /// row's 4 gallery tiles converge into their corresponding nav button
-    /// (row 0 → button 0, and so on) — the way to compose an "M sources → N
-    /// destinations" effect from the framework's 1↔N primitives (confirmed
-    /// during planning: multiple `NToOneRequest`s with different
-    /// destinations coexist correctly in the same frame, no framework
-    /// changes needed).
+    /// Three independent N→1 GridSlice merges, fired in the same frame: each
+    /// column *group* of gallery tiles converges into its corresponding nav
+    /// button — column 0 → button 0, columns 1 and 2 → button 1, column 3 →
+    /// button 2 — the way to compose an "M sources → N destinations" effect
+    /// from the framework's 1↔N primitives (confirmed during planning:
+    /// multiple `NToOneRequest`s with different destinations coexist
+    /// correctly in the same frame, no framework changes needed). Each group
+    /// uses `MergeLayout::Grid` (not `Horizontal`) so a group's tiles —
+    /// stacked by row, one or two columns wide — converge onto the matching
+    /// row/col cell of their button instead of onto `n` flat horizontal
+    /// strips of it; see `SplitStrategy::GridSlice`'s doc for why that
+    /// avoids the zigzag the old row-based split had.
     fn start_gallery_to_home(&mut self) {
-        for row in 0..GALLERY_ROWS {
-            let sources: Vec<GroupSource> = (0..GALLERY_COLS)
-                .map(|col| {
-                    let entity = self.gallery_tiles[row * GALLERY_COLS + col];
+        const COLUMN_GROUPS: [(&[usize], usize); 3] = [(&[0], 0), (&[1, 2], 1), (&[3], 2)];
+        for (cols, button_idx) in COLUMN_GROUPS {
+            let sources: Vec<GroupSource> = (0..GALLERY_ROWS)
+                .flat_map(|row| cols.iter().map(move |&col| row * GALLERY_COLS + col))
+                .map(|tile_idx| {
+                    let entity = self.gallery_tiles[tile_idx];
                     let state = self
                         .ui_world
                         .world
@@ -3954,7 +4065,7 @@ impl RenderState {
                 .collect();
             self.ui_world
                 .world
-                .entity_mut(self.nav_buttons[row])
+                .entity_mut(self.nav_buttons[button_idx])
                 .insert(NToOneRequest {
                     sources,
                     default_config: TransitionConfig {
@@ -3963,6 +4074,10 @@ impl RenderState {
                         easing: ease_in_out_quad,
                     },
                     child_behavior: None,
+                    layout: MergeLayout::Grid {
+                        cols: cols.len(),
+                        rows: GALLERY_ROWS,
+                    },
                 });
         }
     }
@@ -4131,6 +4246,47 @@ impl RenderState {
         }
     }
 
+    /// Hover glow/scale for `gallery_fetch_button` — same
+    /// `hover_entered`/`hover_exited` → progress → `glow.radius`/`scale`
+    /// pattern as `advance_nav_hover`/`advance_gallery_tile_hover`. Only
+    /// touches `radius`/`scale`, never `color.w` — that axis is
+    /// `advance_gallery_button_fade`'s job (fade in/out), and the two don't
+    /// conflict since they're orthogonal components of the same
+    /// `Glow`/`QuadState`.
+    fn advance_gallery_fetch_button_hover(&mut self, dt: f32) {
+        let entity = self.gallery_fetch_button;
+        {
+            let events = self.ui_world.world.resource::<InteractionEvents>();
+            if events.hover_entered.contains(&entity) {
+                self.gallery_fetch_button_is_hovering = true;
+            } else if events.hover_exited.contains(&entity) {
+                self.gallery_fetch_button_is_hovering = false;
+            }
+        }
+        let suppressed = self.transition.is_some() || self.state != AppState::Gallery;
+        let target = if suppressed {
+            0.0
+        } else if self.gallery_fetch_button_is_hovering {
+            1.0
+        } else {
+            0.0
+        };
+        let step = dt / GLOW_DURATION;
+        if self.gallery_fetch_button_hover_progress < target {
+            self.gallery_fetch_button_hover_progress =
+                (self.gallery_fetch_button_hover_progress + step).min(target);
+        } else if self.gallery_fetch_button_hover_progress > target {
+            self.gallery_fetch_button_hover_progress =
+                (self.gallery_fetch_button_hover_progress - step).max(target);
+        }
+        if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
+            glow.radius = self.gallery_fetch_button_hover_progress * GLOW_MAX_RADIUS;
+        }
+        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(entity) {
+            qs.scale = 1.0 + self.gallery_fetch_button_hover_progress * HOVER_SCALE_BOOST;
+        }
+    }
+
     /// Starts MP4 playback for `tiles[clicked_idx]` (M9.5): probes the file's
     /// dimensions, sizes the pipeline's video texture to match, attaches
     /// `VideoPlayer` so `collect_instances` samples from it, and spawns the
@@ -4273,6 +4429,7 @@ impl RenderState {
         self.advance_tile_hover(dt);
         self.advance_gallery_tile_hover(dt);
         self.advance_gallery_button_fade(dt);
+        self.advance_gallery_fetch_button_hover(dt);
         self.advance_demo(dt);
         self.advance_nav_icons(dt);
         self.advance_theme(dt);

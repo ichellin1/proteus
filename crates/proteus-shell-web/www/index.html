@@ -271,27 +271,27 @@
         // Rust signals *when* to fetch (on entering the Loading state) via
         // take_gallery_fetch_request(), polled once per tick() below — same
         // shape as take_video_start_tile(). This function does the actual
-        // picsum.photos calls: the list endpoint first (falling back to
-        // seed-based URLs, which need no list lookup at all, if it fails or
-        // returns too few entries), then one fetch per image, each with its
-        // own .catch() so one bad image doesn't block the rest — the
-        // Rust-side fetch timeout is what ultimately decides "give up".
-        async function fetchGallery(sidePx) {
-          let ids;
-          try {
-            const res = await fetch('https://picsum.photos/v2/list?page=1&limit=12');
-            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-            const list = await res.json();
-            if (list.length < 12) throw new Error(`list returned only ${list.length} entries`);
-            ids = list.slice(0, 12).map(entry => entry.id);
-          } catch (err) {
-            console.warn('gallery: list endpoint unavailable, falling back to seed URLs:', err);
-            ids = Array.from({ length: 12 }, (_, i) => `seed-${i}`);
-          }
-          ids.forEach((id, idx) => {
-            const url = id.startsWith('seed-')
-              ? `https://picsum.photos/${id.replace('seed-', 'seed/')}/${sidePx}/${sidePx}`
-              : `https://picsum.photos/id/${id}/${sidePx}/${sidePx}`;
+        // network calls: one fetch per image, each with its own .catch() so
+        // one bad image doesn't block the rest — the Rust-side fetch
+        // timeout is what ultimately decides "give up".
+        //
+        // loremflickr.com (not picsum.photos, used before this feature) is
+        // the source specifically because it supports keyword-filtered
+        // results with no API key — picsum has no content filtering at all,
+        // just arbitrary stock photos by id/seed. Its `lock` query parameter
+        // deterministically selects a specific match for a given
+        // keyword+size+lock combination, which doubles as the "get 12
+        // different photos, and a different 12 on the next fetch"
+        // mechanism: each tile gets a distinct lock value, and every
+        // fetch's values are offset by the current time so a re-fetch
+        // doesn't reproduce the same batch.
+        const GALLERY_KEYWORD = 'nature';
+
+        function fetchGallery(sidePx) {
+          const nonce = Date.now();
+          for (let idx = 0; idx < 12; idx++) {
+            const lock = nonce + idx;
+            const url = `https://loremflickr.com/${sidePx}/${sidePx}/${GALLERY_KEYWORD}?lock=${lock}`;
             fetch(url)
               .then(res => {
                 if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -299,7 +299,7 @@
               })
               .then(buf => app.set_gallery_image(idx, new Uint8Array(buf)))
               .catch(err => console.warn(`gallery tile ${idx}: could not load ${url}:`, err));
-          });
+          }
         }
 
         // ── MP4 playback (M9.5) ────────────────────────────────────────────
