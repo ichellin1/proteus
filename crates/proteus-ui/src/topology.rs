@@ -98,6 +98,20 @@ pub enum SplitStrategy {
     ///
     /// Visual: the source "splits apart" into N pieces that each morph to a target.
     Slice,
+
+    /// **GridSlice** — like `Slice`, but divides the source into a `cols`×`rows`
+    /// grid (row-major: target 0 pairs with the top-left cell, target 1 the
+    /// next cell to its right, wrapping to the next row after `cols` targets)
+    /// instead of `Slice`'s single row of `n` flat horizontal strips.
+    ///
+    /// Matters once targets themselves form a same-shaped grid (e.g. a photo
+    /// gallery): `Slice`'s flat strip order only varies left-to-right, so a
+    /// target on row 2 can pair with a strip that started near a target on
+    /// row 0 — their straight-line paths cross, reading as a zigzag rather
+    /// than a fan. `GridSlice` starts each slice at the position within the
+    /// source that already corresponds to its own row/col, so every path
+    /// radiates outward toward its own quadrant — a starburst, not a zigzag.
+    GridSlice { cols: usize, rows: usize },
 }
 
 // ---------------------------------------------------------------------------
@@ -146,9 +160,11 @@ pub struct GroupTarget {
 /// The destination entity is hidden during the transition and revealed on
 /// group completion. N source entities go invisible immediately.
 /// N virtual entities are created (one per source), each animating from the
-/// corresponding source's geometry to a horizontal slice of the destination.
+/// corresponding source's geometry to its assigned slice of the destination
+/// — see [`MergeLayout`] for how the destination is divided into slices.
 ///
-/// Only the [`SplitStrategy::Slice`] strategy is implemented for N→1 in M3.
+/// Bake N→1 is deferred to M4 (requires tracking multiple non-virtual
+/// completions) — every `NToOneRequest` uses a Slice-family strategy.
 #[derive(Component, Debug, Clone)]
 pub struct NToOneRequest {
     /// Source entities and their current geometric states.
@@ -161,8 +177,27 @@ pub struct NToOneRequest {
     pub default_config: TransitionConfig,
     /// Optional per-source config override.
     pub child_behavior: Option<ChildBehaviorFn>,
-    // Bake N→1 is deferred to M4 (requires tracking multiple non-virtual
-    // completions). Strategy field reserved here for API symmetry.
+    /// How the destination is divided into per-source slices.
+    pub layout: MergeLayout,
+}
+
+/// How [`n_to_one_setup_system`] divides the destination into per-source
+/// slices.
+#[derive(Debug, Clone, Copy)]
+pub enum MergeLayout {
+    /// `n` equal left-to-right horizontal strips of the destination, source
+    /// `i` pairing with strip `i` — the original (and, until `Grid`, only)
+    /// N→1 behavior.
+    Horizontal,
+
+    /// A `cols`×`rows` grid of the destination (row-major: source 0 pairs
+    /// with the top-left cell, source 1 the next cell to its right, wrapping
+    /// after `cols` sources), the N→1 counterpart of
+    /// [`SplitStrategy::GridSlice`] — use when the sources themselves form a
+    /// same-shaped grid (or sub-grid), so each one converges toward the
+    /// destination cell that matches its own relative position instead of
+    /// every source converging along one shared axis.
+    Grid { cols: usize, rows: usize },
 }
 
 /// One source entry in an N→1 group transition.
@@ -277,6 +312,42 @@ pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
                 size: glam::Vec2::new(source.size.x, slice_h),
                 ..source.clone()
             }
+        })
+        .collect()
+}
+
+/// Divide `source` into an equal `cols`×`rows` grid, row-major (index =
+/// `row * cols + col`; row 0 is the top, same convention as `vertical_slices`).
+/// The two-axis counterpart of `horizontal_slices`/`vertical_slices` — used
+/// when pairing with a same-shaped grid of targets, so each cell starts at
+/// the position within `source` that already corresponds to its own row/col
+/// rather than every cell starting along one shared axis (see
+/// [`SplitStrategy::GridSlice`] and [`MergeLayout::Grid`]).
+///
+/// # Panics
+/// Panics if `cols == 0` or `rows == 0`.
+pub fn grid_slices(source: &QuadState, cols: usize, rows: usize) -> Vec<QuadState> {
+    assert!(
+        cols > 0 && rows > 0,
+        "grid_slices: cols and rows must be > 0"
+    );
+    let cell_w = source.size.x / cols as f32;
+    let cell_h = source.size.y / rows as f32;
+    let leftmost_center = source.position.x - source.size.x * 0.5 + cell_w * 0.5;
+    let topmost_center = source.position.y + source.size.y * 0.5 - cell_h * 0.5;
+    let corner_radius = source.corner_radius.min(cell_w * 0.5).min(cell_h * 0.5);
+    (0..rows)
+        .flat_map(move |row| {
+            let y = topmost_center - cell_h * row as f32;
+            (0..cols).map(move |col| {
+                let x = leftmost_center + cell_w * col as f32;
+                QuadState {
+                    position: glam::Vec3::new(x, y, source.position.z),
+                    size: glam::Vec2::new(cell_w, cell_h),
+                    corner_radius,
+                    ..source.clone()
+                }
+            })
         })
         .collect()
 }
@@ -407,6 +478,31 @@ fn region_uv_slices(region: &TransitionRegion, n: usize) -> Vec<([f32; 2], [f32;
         .collect()
 }
 
+/// Divide a baked region into a `cols`×`rows` UV grid, row-major (row 0 =
+/// smallest pixel Y = the top of the bake, matching `grid_slices`' world-Y
+/// convention — a bake's row 0 texel is always the top of the source
+/// geometry, since `bake_instances_to_atlas` copies the scratch render
+/// straight in with no vertical flip) — the UV-space counterpart of
+/// `grid_slices`.
+fn region_uv_grid_slices(
+    region: &TransitionRegion,
+    cols: usize,
+    rows: usize,
+) -> Vec<([f32; 2], [f32; 2])> {
+    let atlas = TRANSITION_ATLAS_SIZE as f32;
+    let cell_w = region.width as f32 / cols as f32;
+    let cell_h = region.height as f32 / rows as f32;
+    (0..rows)
+        .flat_map(|row| {
+            let y = region.y as f32 + cell_h * row as f32;
+            (0..cols).map(move |col| {
+                let x = region.x as f32 + cell_w * col as f32;
+                ([x / atlas, y / atlas], [cell_w / atlas, cell_h / atlas])
+            })
+        })
+        .collect()
+}
+
 /// Bake `entity`'s rendered appearance (per `qs`) into a freshly allocated
 /// `transition_atlas` region. Returns `None` if there's nothing to bake or
 /// the atlas is full — callers treat that as "fall back to flat-color
@@ -519,7 +615,7 @@ pub fn one_to_n_setup_system(
                 commands.entity(source_entity).insert(Lifecycle::Idle);
             }
 
-            SplitStrategy::Slice => {
+            SplitStrategy::Slice | SplitStrategy::GridSlice { .. } => {
                 // Hide all target entities until the transition completes.
                 for target in &request.targets {
                     commands.entity(target.entity).insert(Visibility::HIDDEN);
@@ -547,7 +643,12 @@ pub fn one_to_n_setup_system(
                         source_state,
                     ) {
                         shared_alloc = Some(src_id);
-                        from_uv_slices = region_uv_slices(&src_region, n);
+                        from_uv_slices = match request.strategy {
+                            SplitStrategy::GridSlice { cols, rows } => {
+                                region_uv_grid_slices(&src_region, cols, rows)
+                            }
+                            _ => region_uv_slices(&src_region, n),
+                        };
                         target_bakes = request
                             .targets
                             .iter()
@@ -582,7 +683,12 @@ pub fn one_to_n_setup_system(
                     .ok()
                     .and_then(|(_, _, _, b, _, _)| b.cloned());
 
-                let slices = horizontal_slices(source_state, n);
+                let slices = match request.strategy {
+                    SplitStrategy::GridSlice { cols, rows } => {
+                        grid_slices(source_state, cols, rows)
+                    }
+                    _ => horizontal_slices(source_state, n),
+                };
 
                 // Spawn one virtual entity per slice.
                 for (i, (slice_state, target)) in
@@ -714,7 +820,10 @@ pub fn n_to_one_setup_system(
         }
 
         // Compute target slices — one per source.
-        let target_slices = horizontal_slices(dest_state, n);
+        let target_slices = match request.layout {
+            MergeLayout::Grid { cols, rows } => grid_slices(dest_state, cols, rows),
+            MergeLayout::Horizontal => horizontal_slices(dest_state, n),
+        };
 
         // Try the baked, two-sided crossfade path: bake the destination once
         // (shared across every virtual), then each source once (one bake per
@@ -734,7 +843,12 @@ pub fn n_to_one_setup_system(
                 dest_state,
             ) {
                 shared_alloc = Some(dest_id);
-                to_uv_slices = region_uv_slices(&dest_region, n);
+                to_uv_slices = match request.layout {
+                    MergeLayout::Grid { cols, rows } => {
+                        region_uv_grid_slices(&dest_region, cols, rows)
+                    }
+                    MergeLayout::Horizontal => region_uv_slices(&dest_region, n),
+                };
                 source_bakes = request
                     .sources
                     .iter()
@@ -1163,5 +1277,54 @@ mod tests {
                 "each slice should be 25px tall"
             );
         }
+    }
+
+    #[test]
+    fn grid_slices_count_and_size() {
+        // 300x100 source divided into a 3x2 grid: each cell 100x50.
+        let slices = grid_slices(&source(), 3, 2);
+        assert_eq!(slices.len(), 6);
+        for s in &slices {
+            assert!((s.size.x - 100.0).abs() < 1e-4, "cell width {}", s.size.x);
+            assert!((s.size.y - 50.0).abs() < 1e-4, "cell height {}", s.size.y);
+        }
+    }
+
+    #[test]
+    fn grid_slices_row_major_order() {
+        // Row 0 (top, highest Y) comes first, left-to-right, then row 1.
+        let slices = grid_slices(&source(), 3, 2);
+        let xs: Vec<f32> = slices.iter().map(|s| s.position.x).collect();
+        let ys: Vec<f32> = slices.iter().map(|s| s.position.y).collect();
+        assert!(
+            (xs[0] - (-100.0)).abs() < 1e-3,
+            "index 0 (top-left) x={}",
+            xs[0]
+        );
+        assert!(
+            (xs[2] - 100.0).abs() < 1e-3,
+            "index 2 (top-right) x={}",
+            xs[2]
+        );
+        assert!(
+            (xs[3] - (-100.0)).abs() < 1e-3,
+            "index 3 (row 1, leftmost) x={}",
+            xs[3]
+        );
+        assert!(ys[0] > ys[3], "row 0 should be above row 1 (Y-up)");
+        assert_eq!(ys[0], ys[1], "row 0 is at one shared Y");
+        assert_eq!(ys[3], ys[4], "row 1 is at one shared Y");
+    }
+
+    #[test]
+    #[should_panic(expected = "cols and rows must be > 0")]
+    fn grid_slices_rejects_zero_cols() {
+        grid_slices(&source(), 0, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "cols and rows must be > 0")]
+    fn grid_slices_rejects_zero_rows() {
+        grid_slices(&source(), 3, 0);
     }
 }

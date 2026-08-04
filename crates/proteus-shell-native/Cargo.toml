@@ -21,15 +21,13 @@ pollster = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-# Photo gallery demo (M12) — fetches picsum.photos over HTTP on a background
-# thread (see src/gallery_fetch.rs). `ureq` is blocking/sync, so it needs no
-# async runtime — this app otherwise has none. Pinned to major version 2:
-# the 3.x line reworked the API around a different agent/builder shape, and
-# 2.x is confirmed (checked during planning) to follow redirects by default,
-# which picsum's `/id/.../...` endpoint relies on (it 302s to a CDN host).
-ureq = { version = "2", features = ["json"] }
+# Photo gallery demo (M12) — fetches loremflickr.com over HTTP on a
+# background thread (see src/gallery_fetch.rs). `ureq` is blocking/sync, so
+# it needs no async runtime — this app otherwise has none. Pinned to major
+# version 2: the 3.x line reworked the API around a different agent/builder
+# shape, and 2.x is confirmed (checked during planning) to follow redirects
+# by default, which loremflickr relies on (it 302s to a CDN host).
+ureq = { version = "2" }
 # MP4 playback (M9.5) — a reference "bring-your-own-player" example that
 # shells out to `ffmpeg`/`ffprobe` (must be on PATH). Only this shell crate
 # knows about MP4/ffmpeg; proteus-render/proteus-ui only see the generic

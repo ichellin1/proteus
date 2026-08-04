@@ -12,8 +12,8 @@ use proteus_ui::{
     component::{Lifecycle, TransitionRequest, Virtual, Visibility},
     topology::{
         group_transition_complete_system, horizontal_slices, n_to_one_setup_system,
-        one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, NToOneRequest,
-        OneToNRequest, SplitStrategy,
+        one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout,
+        NToOneRequest, OneToNRequest, SplitStrategy,
     },
     transition::{
         linear, transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
@@ -589,6 +589,7 @@ fn n_to_one_hides_sources_and_dest() {
                 sources,
                 default_config: default_cfg(),
                 child_behavior: None,
+                layout: MergeLayout::Horizontal,
             },
         ))
         .id();
@@ -634,6 +635,7 @@ fn n_to_one_creates_n_virtual_entities() {
             sources,
             default_config: default_cfg(),
             child_behavior: None,
+            layout: MergeLayout::Horizontal,
         },
     ));
 
@@ -670,6 +672,7 @@ fn n_to_one_complete_reveals_dest() {
                 sources,
                 default_config: default_cfg(),
                 child_behavior: None,
+                layout: MergeLayout::Horizontal,
             },
         ))
         .id();
@@ -813,6 +816,7 @@ fn round_trip_button_list_button() {
             easing: linear,
         },
         child_behavior: None,
+        layout: MergeLayout::Horizontal,
     });
 
     run(&mut world, n_to_one_setup_system);
