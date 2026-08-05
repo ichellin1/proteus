@@ -204,7 +204,8 @@ fn fetch_all(count: usize, side_px: u32, tx: Sender<FetchResult>) {
             .name(format!("gallery-fetch-{idx}"))
             .spawn(move || {
                 let offset = nonce.wrapping_add(idx as u32);
-                let (photo_id, real_w, real_h) = NATURE_PHOTOS[(offset as usize) % NATURE_PHOTOS.len()];
+                let (photo_id, real_w, real_h) =
+                    NATURE_PHOTOS[(offset as usize) % NATURE_PHOTOS.len()];
                 let aspect = (real_w as f32, real_h as f32);
                 let (fw, fh) = fetch_dimensions(aspect, side_px);
                 let url = format!("https://picsum.photos/id/{photo_id}/{fw}/{fh}");

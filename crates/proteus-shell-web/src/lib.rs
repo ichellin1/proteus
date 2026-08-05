@@ -2671,15 +2671,14 @@ mod inner {
                 // would itself look like a reframe/zoom — the very bug this
                 // fixes) and `settle_gallery_tile` re-crops from it once
                 // back in the grid.
-                let baked_image = if let Some(idx) =
-                    self.gallery_tiles.iter().position(|&e| e == entity)
-                {
-                    let cropped = center_crop_to_square(full_baked_image.clone());
-                    self.gallery_tile_full_baked[idx] = Some(full_baked_image);
-                    cropped
-                } else {
-                    full_baked_image
-                };
+                let baked_image =
+                    if let Some(idx) = self.gallery_tiles.iter().position(|&e| e == entity) {
+                        let cropped = center_crop_to_square(full_baked_image.clone());
+                        self.gallery_tile_full_baked[idx] = Some(full_baked_image);
+                        cropped
+                    } else {
+                        full_baked_image
+                    };
                 self.ui_world
                     .world
                     .entity_mut(entity)
@@ -5094,7 +5093,10 @@ mod inner {
                 }
             }
             if let Some(g) = base_glow {
-                if let Some(mut og) = self.ui_world.world.get_mut::<Glow>(self.gallery_hires_overlay)
+                if let Some(mut og) = self
+                    .ui_world
+                    .world
+                    .get_mut::<Glow>(self.gallery_hires_overlay)
                 {
                     *og = g;
                 }
@@ -5401,7 +5403,6 @@ mod inner {
                 }
             }
         }
-
     }
 } // mod inner
 
