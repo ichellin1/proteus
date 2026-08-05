@@ -705,9 +705,32 @@ pub fn one_to_n_setup_system(
                             let (from_off, from_scale) = from_uv_slices[i];
                             let (to_off, to_scale) = region_uv(&own_region);
                             // Both ends flattened to a plain white pass-through
-                            // quad — the baked pixels carry the real shape,
-                            // color, and text, so the QuadState wrapping them
-                            // shouldn't also tint or re-round on top.
+                            // quad (no tint) — the baked pixels carry the real
+                            // color/text, so the QuadState wrapping them
+                            // shouldn't also tint on top.
+                            //
+                            // Corner radius is *not* symmetric between the two
+                            // ends, though. `from_state` (`slice_state`) is one
+                            // of `n` equal crops of a *single shared* source
+                            // bake — every slice gets the same clamped radius
+                            // from `horizontal_slices`/`grid_slices`, which is
+                            // only correct for the slice(s) that actually sit
+                            // at the source's real corners; asserting it as
+                            // this container's own SDF radius on *every*
+                            // slice (including interior ones with no real
+                            // corner at all) would carve a rounded notch out
+                            // of every interior seam. That radius must stay
+                            // baked-alpha-only, left at 0 here as before.
+                            // `to_state` (`target.state`) has no such sharing:
+                            // it's one whole, independent target's own real
+                            // shape, so reasserting its own real corner_radius
+                            // here is always safe — and, since our atlases
+                            // have no mip levels (see quad.wgsl), it also
+                            // backstops the arriving shape with a resolution-
+                            // independent analytic round-rect clip, rather
+                            // than relying solely on a fixed-resolution baked
+                            // alpha edge that can visibly lose its rounding to
+                            // minification aliasing while still small/mid-morph.
                             let from_state = QuadState {
                                 color: Vec4::ONE,
                                 corner_radius: 0.0,
@@ -715,7 +738,6 @@ pub fn one_to_n_setup_system(
                             };
                             let to_state = QuadState {
                                 color: Vec4::ONE,
-                                corner_radius: 0.0,
                                 ..target.state.clone()
                             };
                             let baked_texture = BakedTexture {
@@ -881,9 +903,22 @@ pub fn n_to_one_setup_system(
                 (Some(_), Some((own_id, own_region))) => {
                     let (to_off, to_scale) = to_uv_slices[i];
                     let (from_off, from_scale) = region_uv(&own_region);
+                    // Mirror of `one_to_n_setup_system`'s asymmetric corner
+                    // radius handling above, roles swapped: `from_state`
+                    // (`source.state`) is one whole, independent source's own
+                    // real shape — safe to reassert its own corner_radius, both
+                    // for correctness and as a resolution-independent SDF
+                    // backstop against baked-texture minification aliasing
+                    // (no mip levels — see quad.wgsl). `to_state`
+                    // (`target_slice`) is one of `n` equal crops of the
+                    // single shared *destination* bake, all given the same
+                    // clamped radius by `horizontal_slices`/`grid_slices` —
+                    // asserting that on every slice's own container would
+                    // carve a rounded notch out of interior seams that have
+                    // no real corner at all, so it stays baked-alpha-only,
+                    // left at 0 here as before.
                     let from_state = QuadState {
                         color: Vec4::ONE,
-                        corner_radius: 0.0,
                         ..source.state.clone()
                     };
                     let to_state = QuadState {

@@ -275,31 +275,91 @@
         // one bad image doesn't block the rest — the Rust-side fetch
         // timeout is what ultimately decides "give up".
         //
-        // loremflickr.com (not picsum.photos, used before this feature) is
-        // the source specifically because it supports keyword-filtered
-        // results with no API key — picsum has no content filtering at all,
-        // just arbitrary stock photos by id/seed. Its `lock` query parameter
-        // deterministically selects a specific match for a given
-        // keyword+size+lock combination, which doubles as the "get 12
-        // different photos, and a different 12 on the next fetch"
-        // mechanism: each tile gets a distinct lock value, and every
-        // fetch's values are offset by the current time so a re-fetch
-        // doesn't reproduce the same batch.
-        const GALLERY_KEYWORD = 'nature';
+        // picsum.photos, addressed by a *specific photo id*
+        // (https://picsum.photos/id/{id}/{w}/{h}), not loremflickr.com (used
+        // before this feature) — loremflickr has no stable notion of "the
+        // same photo, bigger": its crop for a given keyword+lock genuinely
+        // shifts with the requested pixel size, confirmed empirically.
+        // picsum's id-based endpoint is a plain crop of one fixed photo, but
+        // a *requested* aspect ratio that doesn't match the photo's own
+        // still means picsum has to decide what to crop away —
+        // NATURE_PHOTOS sidesteps that decision entirely by pairing each
+        // curated id with its own real [width, height] from picsum's
+        // /id/{id}/info endpoint, so every fetch (low-res *and* hires)
+        // requests exactly that photo's native ratio: a plain resize, never
+        // a crop, which is trivially consistent at any output size. picsum
+        // has no keyword search at all, so "nature" is enforced by this
+        // hand-picked, hand-verified list rather than a live query.
+        const NATURE_PHOTOS = [
+          [12, 2500, 1667], [18, 2500, 1667], [54, 3264, 2176], [66, 3264, 2448],
+          [108, 2000, 1333], [114, 3264, 2448], [132, 1600, 1066], [162, 1500, 998],
+          [168, 1920, 1280], [174, 1600, 589], [198, 3456, 2304], [216, 2500, 1667],
+          [222, 1800, 977], [228, 4608, 3456], [282, 5000, 3333], [294, 3753, 2309],
+          [300, 4272, 2848], [324, 3888, 2592], [330, 4272, 2848], [378, 5000, 3333],
+          [384, 5000, 3333], [426, 4272, 2848], [432, 5000, 3333], [450, 4288, 2848],
+          [456, 3823, 2549], [468, 5000, 3337], [474, 4288, 2848], [480, 3888, 2592],
+          [492, 5000, 3324], [498, 5000, 3333], [516, 3008, 2000], [558, 4928, 3264],
+          [564, 2000, 1333], [570, 2509, 1673], [582, 2509, 1673], [588, 2509, 1673],
+          [600, 2509, 1673], [606, 2513, 1670], [612, 2731, 1536], [630, 2517, 1667],
+          [648, 2517, 1667], [654, 2509, 1673], [666, 5000, 3333], [678, 4896, 3264],
+          [684, 3872, 2178], [702, 5000, 3333], [732, 5000, 3333], [738, 2005, 3000],
+          [774, 5000, 3333], [780, 3264, 1830], [798, 4592, 3448], [810, 5000, 3333],
+          [846, 4000, 3000], [852, 3212, 2409], [876, 5000, 3338], [888, 5000, 2813],
+          [894, 5000, 3333], [906, 3840, 2880], [912, 5000, 3333], [918, 3747, 2489],
+          [924, 3000, 2250], [930, 3264, 4912], [960, 3264, 1832], [966, 5000, 3333],
+          [984, 4000, 2248], [990, 5000, 3334], [1002, 4312, 2868], [1020, 4288, 2848],
+          [1044, 4032, 2268], [1050, 5000, 3333], [1056, 3988, 2720], [1074, 5000, 3333],
+        ];
 
         function fetchGallery(sidePx) {
-          const nonce = Date.now();
+          const nonce = Date.now() >>> 0;
           for (let idx = 0; idx < 12; idx++) {
-            const lock = nonce + idx;
-            const url = `https://loremflickr.com/${sidePx}/${sidePx}/${GALLERY_KEYWORD}?lock=${lock}`;
+            const offset = (nonce + idx) >>> 0;
+            const [photoId, aspectW, aspectH] = NATURE_PHOTOS[offset % NATURE_PHOTOS.length];
+            const fetchW = aspectW >= aspectH ? sidePx : Math.round(sidePx * aspectW / aspectH);
+            const fetchH = aspectH >= aspectW ? sidePx : Math.round(sidePx * aspectH / aspectW);
+            const url = `https://picsum.photos/id/${photoId}/${fetchW}/${fetchH}`;
             fetch(url)
               .then(res => {
                 if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
                 return res.arrayBuffer();
               })
-              .then(buf => app.set_gallery_image(idx, new Uint8Array(buf)))
+              .then(buf => app.set_gallery_image(idx, new Uint8Array(buf), photoId, aspectW, aspectH))
               .catch(err => console.warn(`gallery tile ${idx}: could not load ${url}:`, err));
           }
+        }
+
+        // ── Enlarged gallery image hires fetch ──────────────────────────────
+        //
+        // Rust signals *when* to fetch (on entering GalleryImage) via
+        // take_gallery_hires_fetch_request(), polled once per tick() below —
+        // same "polled take" shape as fetchGallery's own trigger. Requests
+        // the *same* photo (same picsum id) at the actual on-screen fitted
+        // size Rust computed, not the grid's forced square crop — picsum's
+        // id-based endpoint proved pixel-consistent across sizes, so this
+        // crossfades in as a straightforward sharpening, never a reframe.
+        // Kept cancellable via AbortController: take_gallery_hires_cancel()
+        // polled the same way tells us the user backed out before this
+        // resolved, so the in-flight network request itself gets cut off,
+        // not just its result discarded.
+        let galleryHiresController = null;
+
+        function fetchGalleryHires(request) {
+          galleryHiresController?.abort();
+          const controller = new AbortController();
+          galleryHiresController = controller;
+          const url = `https://picsum.photos/id/${request.photo_id}/${request.width}/${request.height}`;
+          fetch(url, { signal: controller.signal })
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => app.set_gallery_hires_image(request.tile_idx, new Uint8Array(buf)))
+            .catch(err => {
+              if (err.name !== 'AbortError') {
+                console.warn(`gallery hires tile ${request.tile_idx}: could not load ${url}:`, err);
+              }
+            });
         }
 
         // ── MP4 playback (M9.5) ────────────────────────────────────────────
@@ -384,6 +444,10 @@
 
           const gallerySidePx = app.take_gallery_fetch_request();
           if (gallerySidePx !== undefined) fetchGallery(gallerySidePx);
+
+          const hiresRequest = app.take_gallery_hires_fetch_request();
+          if (hiresRequest !== undefined) fetchGalleryHires(hiresRequest);
+          if (app.take_gallery_hires_cancel()) galleryHiresController?.abort();
 
           requestAnimationFrame(frame);
         }
