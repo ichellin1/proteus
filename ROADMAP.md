@@ -307,6 +307,45 @@ The following are in scope for V1 and will be complete at M13:
 
 Planned future work, not part of the V1 scope:
 
+- **(HIGH PRIORITY) Rounded corners lose their rounding on the shared/sliced side of a baked
+  group-transition crossfade** — every baked-crossfade virtual's container forces `corner_radius`
+  to `0.0` on the theory that the baked texture's own alpha already carries the rounding; a
+  same-session fix reasserted the real radius on whichever side is one independent shape's own
+  geometry (safe — see `one_to_n_setup_system`/`n_to_one_setup_system` in `topology.rs`), but the
+  side that's one of `n` equal crops of a single *shared* bake (the big enlarged photo mid-split,
+  the loading logo mid-starburst, a nav-button-group mid-merge) still relies entirely on the
+  baked texture's own antialiased alpha edge — and our atlases have no mip levels (`quad.wgsl`
+  samples LOD 0 always), so that edge visibly aliases toward square under minification once a
+  virtual renders much smaller than its bake, which is routine mid-morph. Confirmed still
+  reproducing after the same-session fix, across both the video-tile morphs and the photo
+  gallery's grid transitions. Demo workaround in the meantime: reduce corner radius so the
+  aliasing is less noticeable. Candidate real fix (not yet built): dynamically generate a
+  rounded-rect alpha mask on the fly, sized to each shared bake, and composite/sample it
+  alongside the bake instead of relying on the bake's own baked-in rounding — would need a new
+  mask atlas (or a reusable region within an existing one) and a way to address it per-instance
+  in the shader.
+- **Native renders at physical/device-pixel resolution; web renders 1:1 CSS pixels — not
+  unified, and native pays for it most visibly during the gallery grid → large-image
+  transition.** Native's swapchain is sized from `window.inner_size()` (physical pixels —
+  `main.rs`'s `RenderState::new`), so on a 2x/3x HiDPI display it composites 4x/9x the pixel
+  count of web's canvas, which is pinned to `canvas.clientWidth`/`clientHeight` with no
+  `devicePixelRatio` scaling at all (`www/index.html`'s resize handler — the file's own comment
+  claiming "pixel density handled by devicePixelRatio" is stale). Invisible on ordinary screens
+  (few simple quads, CPU/vsync-bound either way), but `start_gallery_to_image` fills nearly the
+  whole window with 12 simultaneously crossfading quads, each paying the fragment shader's
+  rounded-rect SDF + border + crossfade-blend math per pixel (`quad.wgsl`) — exactly where
+  fragment throughput becomes the bottleneck, and exactly where native is paying several times
+  more of it than web for the identical scene. Compounding factor specific to this same
+  transition: native's hires-image fetch size is *also* scaled by `scale_factor` before capping
+  to `GALLERY_LARGE_IMAGE_MAX_SIDE` (900px), while web caps the unscaled logical size — so native
+  routinely fetches/decodes/uploads a bigger JPEG (near the 900px cap) than web does (often well
+  under it) for the same on-screen result, and that decode runs synchronously on the main thread
+  right as the transition is playing. Neither side is simply "wrong" — native rendering at true
+  display resolution is a legitimate choice (sharper on Retina), it's just not free, and this
+  demo never exposed a way to trade that off. Deliberately not fixed now — surfacing a
+  resolution/DPI tradeoff as an explicit developer choice (e.g. a capped or configurable render
+  scale, independent of the hires-fetch sizing) belongs to whoever tunes the app for production,
+  not baked into the framework's default.
 - **Text Phase 2** — multi-line layout (line breaking, alignment, line height)
 - **Text Phase 3** — bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - **Text Phase 4** — inline styles (mixed bold, italic, size, color within a text run)

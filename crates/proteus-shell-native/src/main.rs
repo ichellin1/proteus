@@ -114,10 +114,10 @@ const INTRO_DURATION: f32 = 0.6;
 /// Seconds the splash holds, fully settled, before auto-advancing to tiles.
 const SPLASH_HOLD_DURATION: f32 = 1.5;
 /// Seconds for a full 0 → 30 px (or 30 → 0 px) hover glow sweep.
-const GLOW_DURATION: f32 = 0.33;
+const GLOW_DURATION: f32 = 0.25;
 const GLOW_MAX_RADIUS: f32 = 15.0;
 /// Design System: "5% scale-up" on hover/focus for buttons, tiles, and icon buttons.
-const HOVER_SCALE_BOOST: f32 = 0.05;
+const HOVER_SCALE_BOOST: f32 = 0.07;
 
 /// Seconds for the button ↔ tiles morph, either direction.
 const BUTTON_TILES_MORPH_DURATION: f32 = 0.4;
@@ -224,7 +224,7 @@ const TILE_HEIGHT: f32 = TILE_WIDTH * 1.5;
 const TILE_GAP: f32 = 100.0;
 const TILE_CORNER_RADIUS: f32 = 20.0;
 /// Design System — Color-dark treatment corner radius. See `advance_theme`.
-const TILE_CORNER_RADIUS_DARK: f32 = 30.0;
+const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
 
 const TILE_COLORS: [Vec4; 3] = [
     Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck Bunny
@@ -324,8 +324,8 @@ const GALLERY_CELL_SCALE: f32 = 0.9;
 /// edge sits exactly this many px above the window's bottom edge, regardless
 /// of window size.
 const GALLERY_GRID_BOTTOM_MARGIN_PX: f32 = 40.0;
-const GALLERY_CORNER_RADIUS: f32 = 12.0;
-const GALLERY_CORNER_RADIUS_DARK: f32 = 18.0;
+const GALLERY_CORNER_RADIUS: f32 = 20.0;
+const GALLERY_CORNER_RADIUS_DARK: f32 = 20.0;
 /// A touch slower than `BUTTON_TILES_MORPH_DURATION` — a bigger, more
 /// deliberate fan-out (1↔12 vs 1↔3).
 const GALLERY_GRID_MORPH_DURATION: f32 = 0.6;
@@ -340,6 +340,21 @@ const GALLERY_FETCH_BUTTON_TOP_MARGIN_PX: f32 = 65.0;
 /// fallback pattern as `NAV_BUTTON_FALLBACK_SIZE`.
 const GALLERY_FETCH_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(220.0, 46.0);
 const LOADING_LOGO_ERROR_TEXT: &str = "Couldn't load images";
+
+// ---------------------------------------------------------------------------
+// Enlarged gallery image — click a tile to morph it into a centered,
+// aspect-fit view; see `start_gallery_to_image`.
+// ---------------------------------------------------------------------------
+
+/// Cap for the enlarged image's hires fetch — distinct from
+/// `MAX_TILE_IMAGE_SIDE` (the 12 simultaneous grid tiles' shared cap): only
+/// one hires image is ever resident at a time, so it can afford to be
+/// bigger without threatening the atlas budget the M11.2 regression test
+/// proves for the grid's own working set. See `bake_gallery_hires_image`.
+const GALLERY_LARGE_IMAGE_MAX_SIDE: u32 = 900;
+/// Crossfade duration for swapping the enlarged image from its low-res
+/// (grid-tile) stand-in to the fetched hires version, once it arrives.
+const GALLERY_HIRES_CROSSFADE_DURATION: f32 = 0.25;
 
 // ---------------------------------------------------------------------------
 // Nav buttons — splash morphs into these; clicking "Video Demo" morphs into tiles
@@ -589,7 +604,7 @@ fn gallery_cell_quad(
 ) -> QuadState {
     let cell = gallery_cell_size(window_width, window_height);
     let (row, col) = (idx / GALLERY_COLS, idx % GALLERY_COLS);
-    let grid_w = GALLERY_COLS as f32 * cell + (GALLERY_COLS - 1) as f32 * GALLERY_GAP_PX;
+    let (grid_w, _) = gallery_grid_content_size(window_width, window_height);
     let x = -grid_w / 2.0 + cell / 2.0 + col as f32 * (cell + GALLERY_GAP_PX);
     let rows_from_bottom = (GALLERY_ROWS - 1 - row) as f32;
     let grid_bottom_y = -window_height / 2.0 + GALLERY_GRID_BOTTOM_MARGIN_PX;
@@ -603,6 +618,71 @@ fn gallery_cell_quad(
         color: Vec4::ONE,
         corner_radius: GALLERY_CORNER_RADIUS
             + (GALLERY_CORNER_RADIUS_DARK - GALLERY_CORNER_RADIUS) * theme_progress,
+    }
+}
+
+/// Full width/height of the gallery grid's content block (all 12 cells +
+/// gaps, no margins) — the bounding box `gallery_large_image_quad` fits an
+/// enlarged image within.
+fn gallery_grid_content_size(window_width: f32, window_height: f32) -> (f32, f32) {
+    let cell = gallery_cell_size(window_width, window_height);
+    let w = GALLERY_COLS as f32 * cell + (GALLERY_COLS - 1) as f32 * GALLERY_GAP_PX;
+    let h = GALLERY_ROWS as f32 * cell + (GALLERY_ROWS - 1) as f32 * GALLERY_GAP_PX;
+    (w, h)
+}
+
+/// The enlarged gallery image's target geometry — dead center of the
+/// window, `aspect` (width, height ratio) fit within the grid's own content
+/// bounding box without distorting it. A portrait image (taller than the
+/// box's own aspect ratio) ends up height-constrained; a square one is
+/// height-constrained the same way; a landscape image (wider than the
+/// box's aspect ratio) ends up width-constrained — all three are just the
+/// one `min()` "contain" fit below, not special cases.
+fn gallery_large_image_quad(
+    aspect: (f32, f32),
+    window_width: f32,
+    window_height: f32,
+    theme_progress: f32,
+) -> QuadState {
+    let (box_w, box_h) = gallery_grid_content_size(window_width, window_height);
+    let (aspect_w, aspect_h) = aspect;
+    let scale = (box_w / aspect_w).min(box_h / aspect_h);
+    QuadState {
+        position: Vec3::new(0.0, 0.0, 0.5),
+        size: Vec2::new(aspect_w * scale, aspect_h * scale),
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: Vec2::new(0.5, 0.5),
+        color: Vec4::ONE,
+        corner_radius: GALLERY_CORNER_RADIUS
+            + (GALLERY_CORNER_RADIUS_DARK - GALLERY_CORNER_RADIUS) * theme_progress,
+    }
+}
+
+/// Returns `baked` with its UV cropped to a centered square, based on
+/// `baked.pixel_size`'s aspect ratio — portrait crops the height, landscape
+/// crops the width, square is returned unchanged. Used when baking a
+/// gallery tile's own (usually non-square, since real photos rarely are —
+/// see `gallery_fetch::NATURE_PHOTOS`) fetched image, so it fills the
+/// grid's square cell instead of stretching.
+fn center_crop_to_square(baked: BakedImage) -> BakedImage {
+    let (pw, ph) = (baked.pixel_size[0], baked.pixel_size[1]);
+    let mut uv_offset = baked.uv_offset;
+    let mut uv_scale = baked.uv_scale;
+    if pw > ph {
+        let frac = ph / pw;
+        uv_offset[0] += uv_scale[0] * (1.0 - frac) / 2.0;
+        uv_scale[0] *= frac;
+    } else if ph > pw {
+        let frac = pw / ph;
+        uv_offset[1] += uv_scale[1] * (1.0 - frac) / 2.0;
+        uv_scale[1] *= frac;
+    }
+    BakedImage {
+        uv_offset,
+        uv_scale,
+        page: baked.page,
+        pixel_size: baked.pixel_size,
     }
 }
 
@@ -749,8 +829,14 @@ enum AppState {
     /// if they don't all arrive in time — see `advance_gallery_fetch`.
     Loading,
     /// 4×3 grid of fetched images visible — click home to converge back to
-    /// the nav buttons (three row-grouped `NToOneRequest`s at once).
+    /// the nav buttons (three column-grouped `NToOneRequest`s at once),
+    /// click any tile to enlarge it (`GalleryImage`).
     Gallery,
+    /// `gallery_tiles[image_idx]` enlarged to a centered, aspect-correct
+    /// size — the other 11 tiles and the fetch button are faded out. Click
+    /// the image to return to `Gallery`, or home to converge straight to
+    /// the nav buttons (skipping back through the grid).
+    GalleryImage(usize),
 }
 
 /// An in-flight move between two resting `AppState`s, keyed by the
@@ -990,6 +1076,83 @@ struct RenderState {
     /// `true` once the timeout has fired this Loading visit — latched so the
     /// error stays visible rather than re-triggering every frame.
     gallery_error_shown: bool,
+    /// `loading_logo`/`loading_logo_dark` alpha multiplier — fades to 0 once
+    /// `gallery_error_shown` fires, back to 1 immediately on the next fetch
+    /// (`start_home_to_loading`/`start_gallery_to_loading`).
+    gallery_logo_error_fade: f32,
+    /// Bumped once per fetch kicked off (`start_home_to_loading`/
+    /// `start_gallery_to_loading`). Paired with
+    /// `gallery_tile_fetch_generation` so a re-fetch's "all tiles loaded"
+    /// check can't be satisfied by the *previous* fetch's images still
+    /// sitting on the tiles — see `drain_gallery_fetch`.
+    gallery_fetch_generation: u32,
+    /// Which `gallery_fetch_generation` each tile's current `Image` was
+    /// stamped with when it arrived — `u32::MAX` (never matches a real
+    /// generation) until the tile's first ever image lands.
+    gallery_tile_fetch_generation: [u32; 12],
+    /// The picsum.photos id each tile's low-res image was fetched with —
+    /// reused to request the *same* photo, just bigger, when it's enlarged
+    /// (`start_gallery_to_image`).
+    gallery_tile_photo_id: [u32; 12],
+    /// The (width, height) ratio each tile's assigned photo actually is —
+    /// see `gallery_fetch::NATURE_PHOTOS`, whose entries carry each curated
+    /// photo's real dimensions so every fetch of it (low-res and hires
+    /// alike) requests exactly that ratio: picsum then only ever resizes,
+    /// never crops, which is what makes the hires crossfade never reframe.
+    /// Drives the enlarged view's contain-fit sizing
+    /// (`gallery_large_image_quad`) and the hires fetch's requested
+    /// dimensions.
+    gallery_tile_aspect: [(f32, f32); 12],
+    /// Each tile's *full* (uncropped) bake, stashed by `bake_pending_images`
+    /// before it center-crops the tile's own live `BakedImage` down to a
+    /// square for grid display. Copied onto `gallery_enlarged_base`
+    /// whenever that tile is enlarged
+    /// (`start_gallery_to_image`/`settle_gallery_enlarged_base`) — the
+    /// low-res stand-in shown until hires arrives must show the same full
+    /// frame hires will, or swapping to hires would itself read as a
+    /// reframe/zoom. The tile's own `BakedImage` is never touched — it
+    /// stays cropped the whole time, see `gallery_enlarged_base`'s doc for
+    /// why.
+    gallery_tile_full_baked: [Option<BakedImage>; 12],
+    /// Dedicated coordinator/display entity for the enlarged image —
+    /// distinct from all 12 `gallery_tiles`. `start_gallery_to_image`/
+    /// `start_image_to_gallery`/`start_image_to_home` use this as the
+    /// `NToOneRequest` destination / `OneToNRequest` source instead of
+    /// reusing whichever `gallery_tiles[idx]` was clicked, because that
+    /// tile is *also* one of the 12 targets a return-to-grid split reveals
+    /// into: a single entity can't simultaneously bake as "the enlarged
+    /// photo" (for the coordinator's own crossfade) and "the grid's cropped
+    /// square" (for its own target slot) — `bake_one` reads whatever
+    /// `BakedImage` currently sits on the entity, once, so those two roles
+    /// need two different components at the same instant. Keeping the
+    /// coordinator on its own entity means the 12 real tiles are never
+    /// touched/re-cropped at all — they just stay hidden and cropped for
+    /// the entire `GalleryImage` visit, exactly like the other 11 always
+    /// were.
+    gallery_enlarged_base: Entity,
+    /// Glow-only hover progress for `gallery_enlarged_base` — see
+    /// `advance_gallery_enlarged_hover`.
+    gallery_enlarged_hover_progress: f32,
+    gallery_enlarged_is_hovering: bool,
+    /// Overlay quad for the enlarged image's hires crossfade — glued to
+    /// `gallery_enlarged_base` (`advance_gallery_hires_overlay` copies
+    /// its position/size/scale/corner_radius every frame, scale included so
+    /// a hover scale-boost on the base doesn't leave the (unscaled) overlay
+    /// poking out around it), alpha ramping 0→1 once the hires fetch has
+    /// baked (`bake_gallery_hires_image`). Hidden/cleared whenever nothing
+    /// is enlarged.
+    gallery_hires_overlay: Entity,
+    /// Crossfade progress (0..1) for `gallery_hires_overlay`'s alpha.
+    gallery_hires_fade: f32,
+    /// Which tile's hires fetch is currently authoritative — `None` once
+    /// cancelled (backed out of `GalleryImage` before it arrived), which is
+    /// also when `gallery_hires_rx` is dropped.
+    gallery_hires_for_tile: Option<usize>,
+    /// Draining side of `gallery_fetch::spawn_hires`'s channel — `None`
+    /// when no hires fetch is in flight, including right after
+    /// `cancel_gallery_hires_fetch` drops it to abandon the background
+    /// thread's eventual send.
+    gallery_hires_rx: Option<std::sync::mpsc::Receiver<Result<Vec<u8>, String>>>,
     gallery_tile_hover_progress: [f32; 12],
     gallery_tile_is_hovering: [bool; 12],
     /// Fade-in (after the grid morph settles) / fade-out (in sync with the
@@ -1702,18 +1865,72 @@ impl RenderState {
             .id();
 
         // Inline error text shown only if the fetch times out (see
-        // advance_gallery_fetch) — positioned just below the looping logo.
+        // advance_gallery_fetch) — dead center of the window (the looping
+        // logo fades out to make room for it; see
+        // advance_gallery_error_fade).
         let gallery_error_text = ui_world
             .world
             .spawn((
                 QuadState {
-                    position: Vec3::new(0.0, -LOGO_MARK_HEIGHT / 2.0 - 40.0, 0.5),
+                    position: Vec3::new(0.0, 0.0, 0.5),
                     color: Vec4::new(1.0, 1.0, 1.0, 0.0),
                     ..Default::default()
                 },
                 Lifecycle::Idle,
                 Visibility::HIDDEN,
                 Text::new(LOADING_LOGO_ERROR_TEXT, 18.0).with_color(white()),
+            ))
+            .id();
+
+        // Dedicated enlarged-image entity — see `gallery_enlarged_base`'s doc
+        // for why this can't just be whichever `gallery_tiles[idx]` was
+        // clicked. Same component recipe as a gallery tile (it *is* one,
+        // visually) minus being part of the `gallery_tiles` array.
+        let gallery_enlarged_base = ui_world
+            .world
+            .spawn((
+                QuadState {
+                    position: Vec3::new(0.0, 0.0, 0.5),
+                    size: Vec2::ONE,
+                    rotation: 0.0,
+                    scale: 1.0,
+                    anchor: Vec2::new(0.5, 0.5),
+                    color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                    corner_radius: 0.0,
+                },
+                Lifecycle::Idle,
+                Visibility::HIDDEN,
+                Interactable,
+                tile_border(),
+                tile_hover_glow(),
+            ))
+            .id();
+
+        // Enlarged gallery image's hires crossfade overlay — position/
+        // size/corner_radius kept glued to `gallery_enlarged_base` by
+        // `advance_gallery_hires_overlay`; a fixed z slightly ahead of that
+        // entity's own 0.5 so it renders on top once its alpha ramps up
+        // (same "child z = parent z + offset" stacking convention as
+        // `loading_logo_dark`/`background_dark`, just without an actual
+        // `ChildOf` — this entity's position isn't a fixed offset from a
+        // parent, it has to track wherever the enlarged image currently is,
+        // including mid-morph).
+        let gallery_hires_overlay = ui_world
+            .world
+            .spawn((
+                QuadState {
+                    position: Vec3::new(0.0, 0.0, 0.6),
+                    size: Vec2::ONE,
+                    rotation: 0.0,
+                    scale: 1.0,
+                    anchor: Vec2::new(0.5, 0.5),
+                    color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                    corner_radius: 0.0,
+                },
+                Lifecycle::Idle,
+                Visibility::HIDDEN,
+                tile_border(),
+                tile_hover_glow(),
             ))
             .id();
 
@@ -2087,6 +2304,10 @@ impl RenderState {
             gallery_fetch_button,
             gallery_fetch_button_label,
             gallery_error_text,
+            gallery_enlarged_base,
+            gallery_enlarged_hover_progress: 0.0,
+            gallery_enlarged_is_hovering: false,
+            gallery_hires_overlay,
             loading_logo,
             loading_logo_dark,
             loading_logo_frames_dark,
@@ -2094,6 +2315,15 @@ impl RenderState {
             loading_logo_frame_elapsed: 0.0,
             gallery_fetch_elapsed: 0.0,
             gallery_error_shown: false,
+            gallery_logo_error_fade: 1.0,
+            gallery_fetch_generation: 0,
+            gallery_tile_fetch_generation: [u32::MAX; 12],
+            gallery_tile_photo_id: [0; 12],
+            gallery_tile_aspect: [(1.0, 1.0); 12],
+            gallery_tile_full_baked: std::array::from_fn(|_| None),
+            gallery_hires_fade: 0.0,
+            gallery_hires_for_tile: None,
+            gallery_hires_rx: None,
             gallery_tile_hover_progress: [0.0; 12],
             gallery_tile_is_hovering: [false; 12],
             gallery_button_fade: 0.0,
@@ -2292,16 +2522,103 @@ impl RenderState {
                 .main_atlas_uv(texture_id)
                 .expect("just registered");
 
-            self.ui_world.world.entity_mut(entity).insert((
-                BakedImage {
-                    uv_offset: uv.uv_offset,
-                    uv_scale: uv.uv_scale,
-                    page: uv.page,
-                    pixel_size: [decoded.width as f32, decoded.height as f32],
-                },
-                TextureRef(texture_id),
-            ));
+            let full_baked_image = BakedImage {
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
+                pixel_size: [decoded.width as f32, decoded.height as f32],
+            };
+            // Gallery tiles display in square grid cells, but a fetched
+            // photo's own real aspect ratio (see gallery_fetch::NATURE_PHOTOS)
+            // is essentially never square — center-crop the UV here, once,
+            // at bake time, so it fills the cell instead of
+            // stretching/distorting. The *full* (uncropped) bake is
+            // separately stashed in `gallery_tile_full_baked`:
+            // `start_gallery_to_image` swaps it back in while enlarged (the
+            // low-res stand-in shown until hires arrives must show the same
+            // full frame hires will, or swapping to hires would itself look
+            // like a reframe/zoom — the very bug this fixes) and
+            // `settle_gallery_tile` re-crops from it once back in the grid.
+            let baked_image = if let Some(idx) = self.gallery_tiles.iter().position(|&e| e == entity)
+            {
+                let cropped = center_crop_to_square(full_baked_image.clone());
+                self.gallery_tile_full_baked[idx] = Some(full_baked_image);
+                cropped
+            } else {
+                full_baked_image
+            };
+            self.ui_world
+                .world
+                .entity_mut(entity)
+                .insert((baked_image, TextureRef(texture_id)));
         }
+    }
+
+    /// Dedicated bake step for `gallery_hires_overlay`, mirroring
+    /// `bake_pending_images` but resizing to `GALLERY_LARGE_IMAGE_MAX_SIDE`
+    /// instead of `MAX_TILE_IMAGE_SIDE` — the shared 400px cap is sized for
+    /// 12 simultaneous tiles; only one hires image is ever resident at a
+    /// time, so it can be bigger. Must run before `bake_pending_images` each
+    /// tick: once this bakes the overlay's `Image`, that generic pass's own
+    /// "no `BakedImage` yet" filter skips it, instead of re-baking it at the
+    /// wrong (smaller) cap.
+    fn bake_gallery_hires_image(&mut self) {
+        let entity = self.gallery_hires_overlay;
+        if self.ui_world.world.get::<BakedImage>(entity).is_some() {
+            return;
+        }
+        let Some(bytes) = self
+            .ui_world
+            .world
+            .get::<Image>(entity)
+            .map(|img| img.bytes.clone())
+        else {
+            return;
+        };
+        let decoded = match proteus_render::decode_image(&bytes) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                log::warn!("bake_gallery_hires_image: {e}");
+                return;
+            }
+        };
+        let decoded = proteus_render::resize_to_fit(decoded, GALLERY_LARGE_IMAGE_MAX_SIDE);
+
+        let Some(texture_id) = self
+            .ui_world
+            .world
+            .resource_mut::<QuadPipeline>()
+            .texture_registry
+            .register_static(decoded.width, decoded.height, false)
+        else {
+            log::warn!(
+                "bake_gallery_hires_image: main_atlas full — could not register {}x{} image",
+                decoded.width,
+                decoded.height,
+            );
+            return;
+        };
+
+        let pipeline = self.ui_world.world.resource::<QuadPipeline>();
+        let placement = pipeline
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .expect("just registered");
+        pipeline.write_to_main_atlas(&self.queue, placement, &decoded.rgba_pixels);
+        let uv = pipeline
+            .texture_registry
+            .main_atlas_uv(texture_id)
+            .expect("just registered");
+
+        self.ui_world.world.entity_mut(entity).insert((
+            BakedImage {
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
+                pixel_size: [decoded.width as f32, decoded.height as f32],
+            },
+            TextureRef(texture_id),
+        ));
     }
 
     // -------------------------------------------------------------------------
@@ -2864,6 +3181,35 @@ impl RenderState {
             }
         }
 
+        // Gallery tiles and the fetch button — same continuous theme-driven
+        // corner radius as nav_buttons above (no "actively morphing" concern
+        // like the video tiles' dual-shape reuse: a gallery tile is always a
+        // single square-cell shape). Real tiles stay hidden/static during a
+        // Loading<->Gallery GridSlice transition (only the virtuals
+        // animate), so it's always safe to reassert this.
+        for &tile in &self.gallery_tiles {
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(tile) {
+                qs.corner_radius = GALLERY_CORNER_RADIUS
+                    + (GALLERY_CORNER_RADIUS_DARK - GALLERY_CORNER_RADIUS) * p;
+            }
+        }
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.gallery_enlarged_base)
+        {
+            qs.corner_radius =
+                GALLERY_CORNER_RADIUS + (GALLERY_CORNER_RADIUS_DARK - GALLERY_CORNER_RADIUS) * p;
+        }
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.gallery_fetch_button)
+        {
+            qs.corner_radius = NAV_BUTTON_CORNER_RADIUS
+                + (NAV_BUTTON_CORNER_RADIUS_DARK - NAV_BUTTON_CORNER_RADIUS) * p;
+        }
+
         // 5. Border/Glow RGB lerp — alpha stays independently owned by
         // existing hover/fade code, never touched here.
         let primary = violet().lerp(violet_dark(), p);
@@ -2896,6 +3242,63 @@ impl RenderState {
                 g.color.y = primary.y;
                 g.color.z = primary.z;
             }
+        }
+        for &tile in &self.gallery_tiles {
+            if let Some(mut b) = self.ui_world.world.get_mut::<Border>(tile) {
+                b.color.x = primary.x;
+                b.color.y = primary.y;
+                b.color.z = primary.z;
+            }
+            if let Some(mut g) = self.ui_world.world.get_mut::<Glow>(tile) {
+                g.color.x = primary.x;
+                g.color.y = primary.y;
+                g.color.z = primary.z;
+            }
+        }
+        if let Some(mut b) = self
+            .ui_world
+            .world
+            .get_mut::<Border>(self.gallery_enlarged_base)
+        {
+            b.color.x = primary.x;
+            b.color.y = primary.y;
+            b.color.z = primary.z;
+        }
+        if let Some(mut g) = self
+            .ui_world
+            .world
+            .get_mut::<Glow>(self.gallery_enlarged_base)
+        {
+            g.color.x = primary.x;
+            g.color.y = primary.y;
+            g.color.z = primary.z;
+        }
+        if let Some(mut b) = self
+            .ui_world
+            .world
+            .get_mut::<Border>(self.gallery_fetch_button)
+        {
+            b.color.x = primary.x;
+            b.color.y = primary.y;
+            b.color.z = primary.z;
+        }
+        if let Some(mut g) = self
+            .ui_world
+            .world
+            .get_mut::<Glow>(self.gallery_fetch_button)
+        {
+            g.color.x = primary.x;
+            g.color.y = primary.y;
+            g.color.z = primary.z;
+        }
+        if let Some(mut t) = self
+            .ui_world
+            .world
+            .get_mut::<Text>(self.gallery_fetch_button_label)
+        {
+            t.color.x = primary.x;
+            t.color.y = primary.y;
+            t.color.z = primary.z;
         }
         for i in 0..2 {
             let icon = self.nav_icons[i];
@@ -3150,14 +3553,26 @@ impl RenderState {
             }
 
             // Home icon is the escape hatch if the fetch is slow/erroring;
-            // otherwise auto-advance to Gallery once every tile has baked.
+            // otherwise auto-advance to Gallery once every tile has baked
+            // *this* fetch's image (checking generation as well as
+            // `BakedImage` presence, since a tile whose own fetch hasn't
+            // resolved yet still carries the previous fetch's `BakedImage`
+            // — see `drain_gallery_fetch`) *and* the loading animation has
+            // played through every frame at least once — a fast fetch
+            // (typical, well under one loop) would otherwise cut the
+            // spinner off mid-cycle, reading as a glitch rather than a
+            // deliberate loading beat. `logo_frames.len()` (not a
+            // hardcoded frame count) so this stays correct if the frame
+            // set ever changes size.
             AppState::Loading => {
                 if clicked.contains(&self.nav_icons[0]) {
                     self.begin_transition(AppState::Loading, AppState::Home);
-                } else if self
-                    .gallery_tiles
-                    .iter()
-                    .all(|&e| self.ui_world.world.get::<BakedImage>(e).is_some())
+                } else if self.gallery_fetch_elapsed
+                    >= self.logo_frames.len() as f32 * LOGO_FRAME_DURATION
+                    && self.gallery_tiles.iter().enumerate().all(|(i, &e)| {
+                        self.gallery_tile_fetch_generation[i] == self.gallery_fetch_generation
+                            && self.ui_world.world.get::<BakedImage>(e).is_some()
+                    })
                 {
                     self.begin_transition(AppState::Loading, AppState::Gallery);
                 }
@@ -3168,6 +3583,18 @@ impl RenderState {
                     self.begin_transition(AppState::Gallery, AppState::Home);
                 } else if clicked.contains(&self.gallery_fetch_button) {
                     self.begin_transition(AppState::Gallery, AppState::Loading);
+                } else if let Some(idx) =
+                    (0..12).find(|&i| clicked.contains(&self.gallery_tiles[i]))
+                {
+                    self.begin_transition(AppState::Gallery, AppState::GalleryImage(idx));
+                }
+            }
+
+            AppState::GalleryImage(idx) => {
+                if clicked.contains(&self.nav_icons[0]) {
+                    self.begin_transition(AppState::GalleryImage(idx), AppState::Home);
+                } else if clicked.contains(&self.gallery_enlarged_base) {
+                    self.begin_transition(AppState::GalleryImage(idx), AppState::Gallery);
                 }
             }
         }
@@ -3202,6 +3629,9 @@ impl RenderState {
             (AppState::Loading, AppState::Home) => self.start_loading_to_home(),
             (AppState::Gallery, AppState::Home) => self.start_gallery_to_home(),
             (AppState::Gallery, AppState::Loading) => self.start_gallery_to_loading(),
+            (AppState::Gallery, AppState::GalleryImage(idx)) => self.start_gallery_to_image(idx),
+            (AppState::GalleryImage(_), AppState::Gallery) => self.start_image_to_gallery(),
+            (AppState::GalleryImage(_), AppState::Home) => self.start_image_to_home(),
             (from, to) => unreachable!("no transition defined for {from:?} -> {to:?}"),
         }
         self.transition = Some(Transition {
@@ -3254,10 +3684,17 @@ impl RenderState {
                 .gallery_tiles
                 .iter()
                 .all(|&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible)),
-            (AppState::Loading, AppState::Home) | (AppState::Gallery, AppState::Home) => self
-                .nav_buttons
-                .iter()
-                .all(|&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible)),
+            (AppState::Loading, AppState::Home)
+            | (AppState::Gallery, AppState::Home)
+            | (AppState::GalleryImage(_), AppState::Home) => self.nav_buttons.iter().all(
+                |&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible),
+            ),
+            (AppState::Gallery, AppState::GalleryImage(_)) => {
+                matches!(self.ui_world.world.get::<Visibility>(self.gallery_enlarged_base), Some(v) if v.visible)
+            }
+            (AppState::GalleryImage(_), AppState::Gallery) => self.gallery_tiles.iter().all(
+                |&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible),
+            ),
             (from, to) => unreachable!("no transition defined for {from:?} -> {to:?}"),
         }
     }
@@ -3306,18 +3743,13 @@ impl RenderState {
 
             AppState::Loading => {
                 self.set_nav_buttons_visible(false);
-                // Clear any bake left over from whatever fetch preceded this
-                // one — from here on, a tile with a `BakedImage` is this
-                // fetch's own image, not a stale one (see
-                // `start_gallery_to_loading`'s doc for why this can't happen
-                // any earlier: the collapse into `loading_logo` needs each
-                // tile's *current* bake intact when it runs).
-                for &tile in &self.gallery_tiles {
-                    self.ui_world
-                        .world
-                        .entity_mut(tile)
-                        .remove::<(BakedImage, TextureRef, Image)>();
-                }
+                // No bulk bake-clear here — a stale tile's `BakedImage`/
+                // `TextureRef` is cleared individually, right as its own new
+                // image arrives (`drain_gallery_fetch`), not as a batch when
+                // this state settles. Clearing all 12 up front here used to
+                // race the fetch: a fast response could land, bake, and get
+                // immediately wiped out again the moment this arm next ran,
+                // before the "all 12 loaded" check ever saw it.
                 for i in 0..12 {
                     self.settle_gallery_tile(i, false);
                 }
@@ -3337,6 +3769,14 @@ impl RenderState {
                 for i in 0..12 {
                     self.settle_gallery_tile(i, true);
                 }
+            }
+
+            AppState::GalleryImage(image_idx) => {
+                self.set_nav_buttons_visible(false);
+                for i in 0..12 {
+                    self.settle_gallery_tile(i, false);
+                }
+                self.settle_gallery_enlarged_base(image_idx);
             }
         }
     }
@@ -3769,7 +4209,11 @@ impl RenderState {
 
     /// Forces `gallery_tiles[i]` back to its resting grid shape, either
     /// hidden (`AppState::Home`/`Loading`) or visible (`AppState::Gallery`)
-    /// — hover reset to idle either way, mirroring `settle_tile_idle`.
+    /// — hover reset to idle either way, mirroring `settle_tile_idle`. The 12
+    /// real tiles are never swapped away from their cropped `BakedImage`
+    /// (see `gallery_enlarged_base`'s doc for why the enlarged view uses a
+    /// separate entity instead), so unlike `settle_gallery_enlarged_base`
+    /// there's no bake to restore here.
     fn settle_gallery_tile(&mut self, i: usize, visible: bool) {
         let tile = self.gallery_tiles[i];
         if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(tile) {
@@ -3793,6 +4237,48 @@ impl RenderState {
             glow.color.w = 1.0;
         }
         self.gallery_tile_hover_progress[i] = 0.0;
+    }
+
+    /// Unconditionally forces `gallery_enlarged_base` into its resting
+    /// enlarged geometry, showing photo `idx`'s full frame — the
+    /// `GalleryImage` counterpart of `settle_tile_screen`. Doesn't touch
+    /// `gallery_hires_overlay`; that's `advance_gallery_hires_overlay`'s
+    /// job, every frame, for as long as `gallery_hires_for_tile ==
+    /// Some(idx)`.
+    fn settle_gallery_enlarged_base(&mut self, idx: usize) {
+        let entity = self.gallery_enlarged_base;
+        if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(entity) {
+            vis.visible = true;
+        }
+        // The low-res stand-in must show the same full frame hires will —
+        // see `gallery_tile_full_baked`'s doc.
+        if let Some(full) = self.gallery_tile_full_baked[idx].clone() {
+            self.ui_world.world.entity_mut(entity).insert(full);
+        }
+        let scale_factor = self.window.scale_factor() as f32;
+        let window_width = self.surface_config.width as f32 / scale_factor;
+        let window_height = self.surface_config.height as f32 / scale_factor;
+        let target = gallery_large_image_quad(
+            self.gallery_tile_aspect[idx],
+            window_width,
+            window_height,
+            self.theme_progress,
+        );
+        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(entity) {
+            qs.position = target.position;
+            qs.size = target.size;
+            qs.corner_radius = target.corner_radius;
+            qs.scale = 1.0;
+            qs.color = white();
+        }
+        if let Some(mut border) = self.ui_world.world.get_mut::<Border>(entity) {
+            border.color.w = 1.0;
+        }
+        if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
+            glow.radius = 0.0;
+            glow.color.w = 1.0;
+        }
+        self.gallery_enlarged_hover_progress = 0.0;
     }
 
     fn hide_gallery_error(&mut self) {
@@ -3868,17 +4354,23 @@ impl RenderState {
     }
 
     /// N→1 Slice: the 3 nav buttons merge into `loading_logo` and kicks off
-    /// a fresh fetch — every Home→Loading entry re-fetches. Any stale bake
-    /// from a previous gallery visit is cleared once
-    /// `settle(AppState::Loading)` runs, not here — this path's source is
-    /// the nav buttons, not the gallery tiles, so there's no bake-timing
-    /// reason to clear them early.
+    /// a fresh fetch — every Home→Loading entry re-fetches. Bumps
+    /// `gallery_fetch_generation` so the "all 12 tiles loaded" check
+    /// (`advance_demo`'s `Loading` arm) can't be satisfied by a previous
+    /// fetch's images still sitting on the tiles — each tile's own
+    /// `BakedImage`/`TextureRef` is cleared individually, right as its
+    /// *own* new image arrives (`drain_gallery_fetch`), not here; see that
+    /// function's doc for why clearing eagerly for all 12 up front is what
+    /// caused stale/lost images before.
     fn start_home_to_loading(&mut self) {
         self.gallery_fetch_elapsed = 0.0;
         self.gallery_error_shown = false;
+        self.gallery_logo_error_fade = 1.0;
+        self.gallery_fetch_generation = self.gallery_fetch_generation.wrapping_add(1);
         self.hide_gallery_error();
         self.loading_logo_frame_elapsed = 0.0;
         self.loading_logo_frame_index = 0;
+        self.apply_loading_logo_frame();
 
         let sources: Vec<GroupSource> = (0..3)
             .map(|i| GroupSource {
@@ -3921,14 +4413,22 @@ impl RenderState {
     /// today's actual photos shrinking into the logo, and
     /// `n_to_one_setup_system` bakes each source's live appearance at setup
     /// time, so clearing here would make it collapse from a blank
-    /// placeholder instead. `settle(AppState::Loading)` clears the stale
-    /// bake once the collapse itself has already captured it.
+    /// placeholder instead. Bumping `gallery_fetch_generation` (rather than
+    /// clearing the tiles' bake right away) is what keeps the "all 12
+    /// loaded" check from being satisfied by the *outgoing* batch still
+    /// sitting on the (now hidden, mid-collapse) tiles — each tile's own
+    /// stale `BakedImage`/`TextureRef` is cleared individually once its own
+    /// new image actually arrives (see `drain_gallery_fetch`), whenever
+    /// that happens to land relative to the collapse animation.
     fn start_gallery_to_loading(&mut self) {
         self.gallery_fetch_elapsed = 0.0;
         self.gallery_error_shown = false;
+        self.gallery_logo_error_fade = 1.0;
+        self.gallery_fetch_generation = self.gallery_fetch_generation.wrapping_add(1);
         self.hide_gallery_error();
         self.loading_logo_frame_elapsed = 0.0;
         self.loading_logo_frame_index = 0;
+        self.apply_loading_logo_frame();
 
         let sources: Vec<GroupSource> = (0..12)
             .map(|i| GroupSource {
@@ -4082,6 +4582,214 @@ impl RenderState {
         }
     }
 
+    /// N→1 GridSlice: all 12 gallery tiles converge into
+    /// `gallery_enlarged_base`, which becomes the enlarged image — the same
+    /// starburst mechanic `start_gallery_to_loading` uses for the
+    /// grid↔loading-logo morph, just converging onto a dedicated entity
+    /// instead of `loading_logo`. Uses `gallery_enlarged_base` rather than
+    /// `gallery_tiles[idx]` itself — see that field's doc for why reusing
+    /// the clicked tile as the coordinator breaks the *reverse* trip. Its
+    /// current `QuadState` doesn't matter (unlike a plain `OneToNRequest`
+    /// source, whose *current* state is already exactly what should be
+    /// sliced from) because `n_to_one_setup_system` reads the destination's
+    /// *current* `QuadState` next tick to compute slice geometry — so it's
+    /// overwritten to the enlarged target before inserting the request.
+    ///
+    /// Kicks off the hires fetch for this tile's already-assigned
+    /// photo_id/aspect (stamped when the low-res batch fetch landed — see
+    /// `drain_gallery_fetch`), sized to the actual on-screen fitted
+    /// dimensions this morph is heading toward.
+    fn start_gallery_to_image(&mut self, idx: usize) {
+        self.gallery_hires_for_tile = Some(idx);
+        self.gallery_hires_fade = 0.0;
+        let scale_factor = self.window.scale_factor() as f32;
+        let window_width = self.surface_config.width as f32 / scale_factor;
+        let window_height = self.surface_config.height as f32 / scale_factor;
+
+        let sources: Vec<GroupSource> = (0..12)
+            .map(|i| {
+                let state = self
+                    .ui_world
+                    .world
+                    .get::<QuadState>(self.gallery_tiles[i])
+                    .cloned()
+                    .unwrap_or_default();
+                GroupSource {
+                    entity: self.gallery_tiles[i],
+                    state,
+                }
+            })
+            .collect();
+
+        let to = gallery_large_image_quad(
+            self.gallery_tile_aspect[idx],
+            window_width,
+            window_height,
+            self.theme_progress,
+        );
+        // Cap proportionally (the *larger* axis against the cap, both
+        // scaled by the same factor) rather than clamping each axis
+        // independently — independent clamping only ever changes a square
+        // request's aspect ratio by construction (both axes equal), but
+        // silently distorts a portrait/landscape one whenever just one axis
+        // crosses the cap: loremflickr then crops the underlying photo to a
+        // *different* ratio than the low-res fetch used, showing up as a
+        // shift/"different crop" the moment hires swaps in.
+        let physical_w = to.size.x * scale_factor;
+        let physical_h = to.size.y * scale_factor;
+        let uncapped = physical_w.max(physical_h);
+        let cap_scale = (GALLERY_LARGE_IMAGE_MAX_SIDE as f32 / uncapped).min(1.0);
+        let width = (physical_w * cap_scale).round() as u32;
+        let height = (physical_h * cap_scale).round() as u32;
+
+        // `gallery_enlarged_base` (not `gallery_tiles[idx]`) is the
+        // destination — see its doc for why. Show the full frame, not the
+        // grid's center-cropped square — see `gallery_tile_full_baked`'s
+        // doc for why the low-res stand-in must already match what hires
+        // will eventually show.
+        let dest = self.gallery_enlarged_base;
+        if let Some(full) = self.gallery_tile_full_baked[idx].clone() {
+            self.ui_world.world.entity_mut(dest).insert(full);
+        }
+        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(dest) {
+            *qs = to;
+        }
+        if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dest) {
+            vis.visible = false;
+        }
+
+        self.ui_world.world.entity_mut(dest).insert(NToOneRequest {
+            sources,
+            default_config: TransitionConfig {
+                duration: GALLERY_GRID_MORPH_DURATION,
+                delay: 0.0,
+                easing: ease_in_out_quad,
+            },
+            child_behavior: None,
+            layout: MergeLayout::Grid {
+                cols: GALLERY_COLS,
+                rows: GALLERY_ROWS,
+            },
+        });
+
+        self.gallery_hires_rx = Some(gallery_fetch::spawn_hires(
+            width,
+            height,
+            self.gallery_tile_photo_id[idx],
+        ));
+    }
+
+    /// 1→N GridSlice: reverses `start_gallery_to_image` — `gallery_enlarged_base`
+    /// splits into all 12 grid cells. Unlike before this used a dedicated
+    /// coordinator entity, the source here is *never* also one of the 12
+    /// targets, so each target's own bake (its live, permanently-cropped
+    /// `BakedImage`) is always correct — no more racing the source's own
+    /// "show the full frame" state. Doesn't pre-write anything to the real
+    /// entities: a `OneToNRequest` source's own *current* `QuadState` (still
+    /// the enlarged size — exactly what should be sliced from) is read
+    /// directly, and `settle(Gallery)` already unconditionally fixes up all
+    /// 12 tiles' resting geometry once this completes.
+    fn start_image_to_gallery(&mut self) {
+        self.cancel_gallery_hires_fetch();
+        let scale_factor = self.window.scale_factor() as f32;
+        let window_width = self.surface_config.width as f32 / scale_factor;
+        let window_height = self.surface_config.height as f32 / scale_factor;
+        let targets = (0..12)
+            .map(|i| {
+                let mut state =
+                    gallery_cell_quad(i, window_width, window_height, self.theme_progress);
+                if self
+                    .ui_world
+                    .world
+                    .get::<BakedImage>(self.gallery_tiles[i])
+                    .is_some()
+                {
+                    state.color = white();
+                }
+                GroupTarget {
+                    entity: self.gallery_tiles[i],
+                    state,
+                }
+            })
+            .collect();
+        self.ui_world
+            .world
+            .entity_mut(self.gallery_enlarged_base)
+            .insert(OneToNRequest {
+                targets,
+                default_config: TransitionConfig {
+                    duration: GALLERY_GRID_MORPH_DURATION,
+                    delay: 0.0,
+                    easing: ease_in_out_quad,
+                },
+                child_behavior: None,
+                strategy: SplitStrategy::GridSlice {
+                    cols: GALLERY_COLS,
+                    rows: GALLERY_ROWS,
+                },
+            });
+    }
+
+    /// 1→N Slice: the enlarged image splits directly into the 3 nav
+    /// buttons — mirrors `start_screen_to_nav`, skipping back through the
+    /// grid. Cancels any in-flight hires fetch first, same as
+    /// `start_image_to_gallery`.
+    fn start_image_to_home(&mut self) {
+        self.cancel_gallery_hires_fetch();
+        let targets = (0..3)
+            .map(|i| {
+                let state = self
+                    .ui_world
+                    .world
+                    .get::<QuadState>(self.nav_buttons[i])
+                    .cloned()
+                    .unwrap_or_default();
+                GroupTarget {
+                    entity: self.nav_buttons[i],
+                    state,
+                }
+            })
+            .collect();
+        self.ui_world
+            .world
+            .entity_mut(self.gallery_enlarged_base)
+            .insert(OneToNRequest {
+                targets,
+                default_config: TransitionConfig {
+                    duration: BUTTON_TILES_MORPH_DURATION,
+                    delay: 0.0,
+                    easing: ease_in_out_quad,
+                },
+                child_behavior: None,
+                strategy: SplitStrategy::Slice,
+            });
+    }
+
+    /// Cancels any in-flight hires fetch and hides/clears the overlay —
+    /// called whenever leaving `GalleryImage` before (or after) the hires
+    /// image arrives. Dropping `gallery_hires_rx` is what actually
+    /// "cancels" the background thread's fetch — it can't be interrupted
+    /// mid-flight (a blocking `ureq` call), so this just makes its eventual
+    /// `tx.send(..)` fail silently instead of mattering; `gallery_hires_for_tile
+    /// = None` is a second guard against a result that already made it into
+    /// the channel before the drop.
+    fn cancel_gallery_hires_fetch(&mut self) {
+        self.gallery_hires_for_tile = None;
+        self.gallery_hires_rx = None;
+        self.gallery_hires_fade = 0.0;
+        self.ui_world
+            .world
+            .entity_mut(self.gallery_hires_overlay)
+            .remove::<(BakedImage, TextureRef, Image)>();
+        if let Some(mut vis) = self
+            .ui_world
+            .world
+            .get_mut::<Visibility>(self.gallery_hires_overlay)
+        {
+            vis.visible = false;
+        }
+    }
+
     /// Drains completed fetch results and, while resting in `Loading`,
     /// accumulates the fetch timeout. The "all 12 baked → go to Gallery"
     /// decision itself lives in `advance_demo`'s `Loading` arm (keeping this
@@ -4101,26 +4809,194 @@ impl RenderState {
         }
     }
 
+    /// Fades `loading_logo`/`loading_logo_dark` out once
+    /// `gallery_error_shown` fires — the spinner otherwise keeps looping
+    /// forever behind the error text, which now sits dead center where the
+    /// logo would otherwise show through. Runs after `advance_theme` so
+    /// it's the last write to `loading_logo_dark`'s alpha this frame,
+    /// combining with (rather than fighting) `advance_theme`'s own
+    /// `theme_progress` crossfade on that layer — `loading_logo`'s own
+    /// alpha has no other owner, so this is a plain overwrite there.
+    fn advance_gallery_error_fade(&mut self, dt: f32) {
+        let target = if self.gallery_error_shown { 0.0 } else { 1.0 };
+        let step = dt / NAV_ICON_FADE_DURATION;
+        if self.gallery_logo_error_fade < target {
+            self.gallery_logo_error_fade = (self.gallery_logo_error_fade + step).min(target);
+        } else if self.gallery_logo_error_fade > target {
+            self.gallery_logo_error_fade = (self.gallery_logo_error_fade - step).max(target);
+        }
+        let fade = self.gallery_logo_error_fade;
+        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.loading_logo) {
+            qs.color.w = fade;
+        }
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.loading_logo_dark)
+        {
+            qs.color.w = self.theme_progress * fade;
+        }
+    }
+
     /// Drains `gallery_fetch_rx`, attaching each successful fetch's bytes —
     /// `bake_pending_images` (already generic over any `Image`-bearing
     /// entity) decodes/atlas-packs it on the next tick, same as any other
-    /// image. A failed fetch just leaves that tile without `BakedImage`,
-    /// contributing to `advance_gallery_fetch`'s "not all loaded yet"
-    /// timeout — no separate failure tracking needed.
+    /// image. A failed fetch just leaves that tile without a
+    /// current-generation `BakedImage`, contributing to
+    /// `advance_gallery_fetch`'s "not all loaded yet" timeout — no separate
+    /// failure tracking needed.
+    ///
+    /// Clears the tile's *own* previous `BakedImage`/`TextureRef` right
+    /// here, before inserting the new `Image` — `bake_pending_images` only
+    /// bakes entities that don't already have a `BakedImage`, so on a
+    /// re-fetch (the tile already showing last batch's photo) this is
+    /// required, not just tidy: without it, the new bytes would sit on the
+    /// entity forever, silently never baked. Stamping
+    /// `gallery_tile_fetch_generation` here (rather than clearing every
+    /// tile up front when the fetch starts) is what lets each tile update
+    /// independently, whenever its own fetch actually resolves, without
+    /// racing the collapse-into-`loading_logo` animation that needs the
+    /// *outgoing* tiles' bake intact when it starts — see
+    /// `start_gallery_to_loading`. Also stashes the fetch's
+    /// `photo_id`/`aspect` (`gallery_tile_photo_id`/`gallery_tile_aspect`)
+    /// for later reuse if this tile gets enlarged — see
+    /// `start_gallery_to_image`.
     fn drain_gallery_fetch(&mut self) {
         let Some(rx) = &self.gallery_fetch_rx else {
             return;
         };
         while let Ok((idx, result)) = rx.try_recv() {
             match result {
-                Ok(bytes) => {
+                Ok(fetched) => {
+                    let tile = self.gallery_tiles[idx];
                     self.ui_world
                         .world
-                        .entity_mut(self.gallery_tiles[idx])
-                        .insert(Image::new(bytes));
+                        .entity_mut(tile)
+                        .remove::<(BakedImage, TextureRef, Image)>()
+                        .insert(Image::new(fetched.bytes));
+                    self.gallery_tile_fetch_generation[idx] = self.gallery_fetch_generation;
+                    self.gallery_tile_photo_id[idx] = fetched.photo_id;
+                    self.gallery_tile_aspect[idx] = fetched.aspect;
                 }
                 Err(e) => log::warn!("gallery tile {idx}: fetch failed: {e}"),
             }
+        }
+    }
+
+    /// Drains `gallery_hires_rx`, attaching the fetched bytes to
+    /// `gallery_hires_overlay` once they arrive — mirrors
+    /// `drain_gallery_fetch`, but there's only ever one result to drain
+    /// (`gallery_fetch::spawn_hires` fetches a single image, not a batch),
+    /// so this clears the receiver itself once resolved (successfully or
+    /// not) rather than looping.
+    fn drain_gallery_hires_fetch(&mut self) {
+        let Some(rx) = &self.gallery_hires_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(bytes)) => {
+                self.ui_world
+                    .world
+                    .entity_mut(self.gallery_hires_overlay)
+                    .remove::<(BakedImage, TextureRef, Image)>()
+                    .insert(Image::new(bytes));
+                self.gallery_hires_rx = None;
+            }
+            Ok(Err(e)) => {
+                log::warn!("gallery hires fetch failed: {e}");
+                self.gallery_hires_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.gallery_hires_rx = None;
+            }
+        }
+    }
+
+    /// Keeps `gallery_hires_overlay` glued to `gallery_enlarged_base` —
+    /// position/size/scale/corner_radius copied every frame, since that
+    /// entity's own geometry is still animating during the
+    /// `Gallery`↔`GalleryImage` morph (and `scale` alone still changes at
+    /// rest, via hover — `QuadState::scale` is a separate multiplier the
+    /// shader applies at render time, not baked into `size`, so skipping it
+    /// here left the overlay a fixed size while the base scaled on hover
+    /// underneath, reading as a second, non-scaling image ghosting behind
+    /// the real one) — and crossfades its alpha in once the hires fetch has
+    /// actually baked (`bake_gallery_hires_image`) *and* the `Gallery` →
+    /// `GalleryImage` morph has fully settled. Gating on `self.state` (not
+    /// just `has_bake`) matters because a hires fetch routinely resolves
+    /// before the ~0.6s morph animation finishes, and crossfading in
+    /// mid-morph reads as the sharp image popping in before the tile has
+    /// finished growing into place; the low-res stand-in should hold until
+    /// the morph is done, then crossfade. A no-op whenever nothing is
+    /// enlarged (`gallery_hires_for_tile` is `None`, e.g. after
+    /// `cancel_gallery_hires_fetch`), leaving the overlay wherever
+    /// `cancel_gallery_hires_fetch` last hid it.
+    fn advance_gallery_hires_overlay(&mut self, dt: f32) {
+        self.drain_gallery_hires_fetch();
+        let Some(idx) = self.gallery_hires_for_tile else {
+            return;
+        };
+        let base = self.gallery_enlarged_base;
+        let base_qs = self
+            .ui_world
+            .world
+            .get::<QuadState>(base)
+            .cloned()
+            .unwrap_or_default();
+        // Mirrored (not just position/size) so the border/hover-glow ring
+        // stays visible once the overlay's alpha reaches 1 and would
+        // otherwise occlude the base's own — `advance_gallery_enlarged_hover`
+        // and `advance_theme` already drive these on `base` earlier this
+        // same tick; this just copies their result across.
+        let base_border = self.ui_world.world.get::<Border>(base).cloned();
+        let base_glow = self.ui_world.world.get::<Glow>(base).cloned();
+        let has_bake = self
+            .ui_world
+            .world
+            .get::<BakedImage>(self.gallery_hires_overlay)
+            .is_some();
+        let settled = self.state == AppState::GalleryImage(idx);
+        let target = if has_bake && settled { 1.0 } else { 0.0 };
+        let step = dt / GALLERY_HIRES_CROSSFADE_DURATION;
+        if self.gallery_hires_fade < target {
+            self.gallery_hires_fade = (self.gallery_hires_fade + step).min(target);
+        }
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.gallery_hires_overlay)
+        {
+            qs.position.x = base_qs.position.x;
+            qs.position.y = base_qs.position.y;
+            qs.size = base_qs.size;
+            qs.scale = base_qs.scale;
+            qs.corner_radius = base_qs.corner_radius;
+            qs.color.w = self.gallery_hires_fade;
+        }
+        if let Some(b) = base_border {
+            if let Some(mut ob) = self.ui_world.world.get_mut::<Border>(self.gallery_hires_overlay)
+            {
+                *ob = b;
+            }
+        }
+        if let Some(g) = base_glow {
+            if let Some(mut og) = self.ui_world.world.get_mut::<Glow>(self.gallery_hires_overlay) {
+                *og = g;
+            }
+        }
+        if let Some(mut vis) = self
+            .ui_world
+            .world
+            .get_mut::<Visibility>(self.gallery_hires_overlay)
+        {
+            // Gated on `settled`, not just `has_bake` — `Border`'s alpha is
+            // independent of the quad's own `color.w`, so revealing the
+            // overlay while only the fill is faded to 0 would still pop its
+            // full-alpha border in at the overlay's (static, already-final)
+            // position/size, ahead of the morph animation actually arriving
+            // there.
+            vis.visible = has_bake && settled;
         }
     }
 
@@ -4140,27 +5016,46 @@ impl RenderState {
             self.loading_logo_frame_elapsed -= LOGO_FRAME_DURATION;
             self.loading_logo_frame_index =
                 (self.loading_logo_frame_index + 1) % self.logo_frames.len();
-            let (texture_id, baked) = self.logo_frames[self.loading_logo_frame_index].clone();
+            self.apply_loading_logo_frame();
+        }
+    }
+
+    /// Pushes `loading_logo_frame_index`'s bake onto `loading_logo`/
+    /// `loading_logo_dark` (both light/dark layers, if that frame loaded).
+    /// Factored out of `advance_loading_logo_animation`'s loop body so
+    /// `start_home_to_loading`/`start_gallery_to_loading` can call it once,
+    /// immediately, to force frame 0 onto the entity the instant a fresh
+    /// Loading visit begins — otherwise the entity keeps showing whichever
+    /// frame the *previous* visit last left it on until
+    /// `advance_loading_logo_animation`'s own timer first ticks past
+    /// `LOGO_FRAME_DURATION`, which reads as the animation starting
+    /// mid-sequence and jumping back to frame 0 a beat later.
+    fn apply_loading_logo_frame(&mut self) {
+        let Some((texture_id, baked)) = self.logo_frames.get(self.loading_logo_frame_index) else {
+            return;
+        };
+        self.ui_world
+            .world
+            .entity_mut(self.loading_logo)
+            .insert((baked.clone(), TextureRef(*texture_id)));
+        if let Some((dark_id, dark_baked)) = self
+            .loading_logo_frames_dark
+            .get(self.loading_logo_frame_index)
+        {
             self.ui_world
                 .world
-                .entity_mut(self.loading_logo)
-                .insert((baked, TextureRef(texture_id)));
-            if let Some((dark_id, dark_baked)) = self
-                .loading_logo_frames_dark
-                .get(self.loading_logo_frame_index)
-            {
-                self.ui_world
-                    .world
-                    .entity_mut(self.loading_logo_dark)
-                    .insert((dark_baked.clone(), TextureRef(*dark_id)));
-            }
+                .entity_mut(self.loading_logo_dark)
+                .insert((dark_baked.clone(), TextureRef(*dark_id)));
         }
     }
 
     /// Glow + scale-boost hover reaction for gallery tiles — no overlay-tint/
     /// title-label children exist on them (unlike the video tiles' full
     /// `advance_tile_hover`), so this is a smaller, separate function rather
-    /// than a generalization of that one.
+    /// than a generalization of that one. `Gallery`-only: the enlarged
+    /// image is a separate entity (`gallery_enlarged_base`, see
+    /// `advance_gallery_enlarged_hover`), and these 12 real tiles are always
+    /// hidden/non-interactive during `GalleryImage`.
     fn advance_gallery_tile_hover(&mut self, dt: f32) {
         let suppressed = self.transition.is_some() || self.state != AppState::Gallery;
         for i in 0..12 {
@@ -4194,6 +5089,45 @@ impl RenderState {
             if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(entity) {
                 qs.scale = 1.0 + self.gallery_tile_hover_progress[i] * HOVER_SCALE_BOOST;
             }
+        }
+    }
+
+    /// `gallery_enlarged_base`'s own hover reaction — glow only, no
+    /// scale-boost (it's already as big as the grid box allows, so growing
+    /// it further on hover would read as an odd wobble rather than an
+    /// affordance, unlike the grid tiles' scale-boost). A separate function
+    /// rather than folding into `advance_gallery_tile_hover` because it
+    /// drives a different entity (not one of the 12 `gallery_tiles`) with
+    /// its own non-array progress scalar.
+    fn advance_gallery_enlarged_hover(&mut self, dt: f32) {
+        let entity = self.gallery_enlarged_base;
+        let suppressed =
+            self.transition.is_some() || !matches!(self.state, AppState::GalleryImage(_));
+        {
+            let events = self.ui_world.world.resource::<InteractionEvents>();
+            if events.hover_entered.contains(&entity) {
+                self.gallery_enlarged_is_hovering = true;
+            } else if events.hover_exited.contains(&entity) {
+                self.gallery_enlarged_is_hovering = false;
+            }
+        }
+        let target = if suppressed {
+            0.0
+        } else if self.gallery_enlarged_is_hovering {
+            1.0
+        } else {
+            0.0
+        };
+        let step = dt / GLOW_DURATION;
+        if self.gallery_enlarged_hover_progress < target {
+            self.gallery_enlarged_hover_progress =
+                (self.gallery_enlarged_hover_progress + step).min(target);
+        } else if self.gallery_enlarged_hover_progress > target {
+            self.gallery_enlarged_hover_progress =
+                (self.gallery_enlarged_hover_progress - step).max(target);
+        }
+        if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
+            glow.radius = self.gallery_enlarged_hover_progress * GLOW_MAX_RADIUS;
         }
     }
 
@@ -4419,6 +5353,7 @@ impl RenderState {
 
         self.ui_world.update(dt);
         self.bake_pending_text();
+        self.bake_gallery_hires_image();
         self.bake_pending_images();
         self.advance_gallery_fetch(dt);
         self.advance_background();
@@ -4428,11 +5363,14 @@ impl RenderState {
         self.advance_nav_hover(dt);
         self.advance_tile_hover(dt);
         self.advance_gallery_tile_hover(dt);
+        self.advance_gallery_enlarged_hover(dt);
         self.advance_gallery_button_fade(dt);
         self.advance_gallery_fetch_button_hover(dt);
         self.advance_demo(dt);
         self.advance_nav_icons(dt);
         self.advance_theme(dt);
+        self.advance_gallery_error_fade(dt);
+        self.advance_gallery_hires_overlay(dt);
 
         // The functions above mutate `Visibility` directly (e.g. `settle`
         // hiding/revealing tiles and nav buttons) — refresh the cascaded
