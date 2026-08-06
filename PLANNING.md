@@ -2120,17 +2120,39 @@ a regression test instead (`emptying_a_page_of_many_small_tiles_fully_reclaims_i
 
 ---
 
-### M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path — not started)*
+### M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path — complete)*
 
 Closes the two gaps M11.1 explicitly deferred, once M11.2's capacity work is available to build on.
 
+**What shipped:**
+- Gallery images now render at real quality (`GALLERY_IMAGE_MAX_SIDE`'s aggressive downscale
+  relaxed now that M11.2 provides real atlas headroom), "Fetch New Images" actually refetches a
+  new batch in place, and the enlarged-image view got a starburst transition and a hi-res
+  crossfade.
+- "Examples & Tests" fully built out: six sub-sections — Effects (drop shadow/glow/border/
+  opacity), Text (font size/color/letter spacing), Transforms & Animation (static rotation/scale
+  plus one continuously rotating, breathing, rainbow-cycling box — the demo's first genuinely
+  continuous, non-transition-driven animation), Stress Tests (two on-demand load tests, Burst
+  Spawn and Texture Churn, each reporting a live entity/cycle count and average FPS over a fixed
+  window), and two forward-looking placeholders (Layout, 3D). Reachable via a 3↔6 nav button
+  split/merge, each category morphing 1↔1 into one shared, reusable detail panel (mirroring
+  `gallery_enlarged_base`'s dedicated-coordinator pattern).
+- Several real framework bugs found and fixed by this pass, not by inspection: two independent
+  text-rasterization bugs (descender clipping, right-edge clipping) in `rasterize_text_tracked`;
+  `gather_bake_instances` silently ignoring the `Opacity`/`EffectiveOpacity` cascade, so
+  opacity-cascaded content flashed at full alpha mid-transition; and the general pitfall (now
+  documented on `example_content`) that a bake gathers a subtree's `ChildOf` children
+  unconditionally, ignoring `Visibility` — addressed with a reusable pattern (a dedicated
+  coordinator entity per detail panel, plus dynamic `ChildOf` reparenting scoped to whichever one
+  category is actually active) rather than a one-off patch.
+
 **Definition of done:**
-- [ ] Gallery images render at real quality — `GALLERY_IMAGE_MAX_SIDE`'s aggressive downscale
+- [x] Gallery images render at real quality — `GALLERY_IMAGE_MAX_SIDE`'s aggressive downscale
   removed/relaxed now that M11.2 provides real headroom
-- [ ] "Fetch New Images" wired up to actually refetch a new batch, in place, without leaving the
+- [x] "Fetch New Images" wired up to actually refetch a new batch, in place, without leaving the
   Gallery state
-- [ ] "Examples & Tests" section built with real content (currently an unbuilt placeholder button)
-- [ ] Full demo re-verified end to end on both shells once both pieces land
+- [x] "Examples & Tests" section built with real content
+- [x] Full demo re-verified end to end on both shells once both pieces land
 
 ---
 
@@ -2157,9 +2179,9 @@ a browser.
 - A manual build-and-publish script (build wasm, copy the built output plus `www/` assets, commit,
   push) is enough to satisfy this milestone's "fully working" bar. An automated CI pipeline that
   redeploys on every relevant change to the main repo is a natural fast-follow, not required here.
-- Conceptually follows M11.3 — hosting a demo whose gallery is still capacity-limited and whose
-  Examples section is an empty placeholder undersells the framework — but the repo/pipeline
-  groundwork itself has no hard dependency on M11.3 landing first.
+- Conceptually follows M11.3 (now complete) — hosting a demo with a capacity-limited gallery and
+  an empty Examples placeholder would have undersold the framework — though the repo/pipeline
+  groundwork itself never had a hard dependency on M11.3 landing first.
 
 **Definition of done:**
 - [ ] New public repo created and populated: the web shell source needed to build it (or prebuilt

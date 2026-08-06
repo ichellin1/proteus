@@ -84,10 +84,11 @@ mod inner {
     };
     use proteus_ui::{
         collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig,
-        BakedImage, BakedText, Border, ChildOf, Entity, Glow, GroupSource, GroupTarget,
-        HoveredEntity, Image, Interactable, InteractionEvents, Lifecycle, MergeLayout,
-        NToOneRequest, OneToNRequest, PointerInput, ProteusWorld, QuadState, SplitStrategy, Text,
-        TextureRef, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+        BakedImage, BakedText, Border, ChildOf, DropShadow, Entity, Glow, GroupSource,
+        GroupTarget, HoveredEntity, Image, Interactable, InteractionEvents, Lifecycle,
+        MergeLayout, NToOneRequest, OneToNRequest, Opacity, PointerInput, ProteusWorld, QuadState,
+        SplitStrategy, Text, TextureRef, TransitionRequest, VideoCrossfade, VideoPlayer,
+        Visibility,
     };
 
     // -------------------------------------------------------------------------
@@ -123,6 +124,44 @@ mod inner {
     /// Border and label color — white.
     fn white() -> Vec4 {
         Vec4::ONE
+    }
+
+    /// Convert a fully-saturated, full-value HSV color (`hue_deg` in
+    /// degrees, wrapped to `[0, 360)`; s=1, v=1 fixed) to RGB — standard
+    /// six-sector conversion. Used only by the Transforms & Animation
+    /// screen's continuous rainbow hue cycle
+    /// (`advance_example_animation`), which has no other place in this
+    /// demo to live given every other color is a fixed design token.
+    fn hsv_to_rgb(hue_deg: f32) -> Vec3 {
+        let h = hue_deg.rem_euclid(360.0) / 60.0;
+        let x = 1.0 - (h % 2.0 - 1.0).abs();
+        match h as i32 {
+            0 => Vec3::new(1.0, x, 0.0),
+            1 => Vec3::new(x, 1.0, 0.0),
+            2 => Vec3::new(0.0, 1.0, x),
+            3 => Vec3::new(0.0, x, 1.0),
+            4 => Vec3::new(x, 0.0, 1.0),
+            _ => Vec3::new(1.0, 0.0, x),
+        }
+    }
+
+    /// Tiny xorshift32 PRNG step — this file has no `rand`/`fastrand`
+    /// dependency, and Burst Spawn's random target positions/colors/scales
+    /// don't need cryptographic-quality randomness, just enough jitter to
+    /// look lively. `state` must be seeded nonzero (xorshift's one hard
+    /// requirement) — see `stress_rng_state`'s doc.
+    fn next_random_u32(state: &mut u32) -> u32 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        *state = x;
+        x
+    }
+
+    /// One xorshift32 step, mapped to `[0.0, 1.0)`.
+    fn random_unit_f32(state: &mut u32) -> f32 {
+        (next_random_u32(state) as f32) / (u32::MAX as f32)
     }
 
     const BORDER_WIDTH: f32 = 5.0;
@@ -352,6 +391,111 @@ mod inner {
     /// Design System — Color-dark treatment corner radius. See `advance_theme`.
     const NAV_BUTTON_CORNER_RADIUS_DARK: f32 = 20.0;
     const NAV_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(150.0, 46.0);
+
+    // -------------------------------------------------------------------------
+    // Examples & Tests — Home's 3rd button splits into a 3×2 grid of these
+    // -------------------------------------------------------------------------
+
+    /// Column-major (`i = col*2 + row`) — see `example_buttons`'s doc for
+    /// the spatial mapping to `nav_buttons`.
+    const EXAMPLE_CATEGORY_TITLES: [&str; 6] = [
+        "Effects",
+        "Text",
+        "Transforms & Animation",
+        "Stress Tests",
+        "Layout",
+        "3D",
+    ];
+    const EXAMPLE_BUTTON_COL_GAP_PX: f32 = 40.0;
+    const EXAMPLE_BUTTON_ROW_GAP_PX: f32 = 30.0;
+    /// Shared padding: the detail panel's own top/left inset (`example_panel_quad`
+    /// sizes the panel from content height using this same value, so the gap
+    /// from the panel's top edge to its first row matches the gap from its
+    /// left edge to a row's label) and the gap between a category's heading
+    /// and the panel below it.
+    const EXAMPLE_PANEL_PADDING_PX: f32 = 24.0;
+    const EXAMPLE_HEADING_PANEL_GAP_PX: f32 = 20.0;
+    /// Local Z for content `ChildOf` `example_detail_panel` — composes
+    /// additively over the panel's own Z (0.5), landing at 0.51, so
+    /// content renders above the panel's opaque fill instead of behind it.
+    /// Shared by every category's content (Effects, Text, ...) that
+    /// follows this pattern.
+    const EXAMPLE_CONTENT_LOCAL_Z: f32 = 0.01;
+    /// Effects screen (`ExampleDetail(0)`) content's own vertical extent —
+    /// see `layout_effects_content`'s row-spacing constants, which this
+    /// must stay consistent with: 3 row-to-row gaps + one row's own box
+    /// height + the opacity row's caption gap/height.
+    const EFFECTS_CONTENT_HEIGHT_PX: f32 = 3.0 * 90.0 + 64.0 + 18.0 + 18.0;
+    /// Text screen (`ExampleDetail(1)`) content's own vertical extent — see
+    /// `layout_text_content`'s row-spacing constants, which this must stay
+    /// consistent with: 2 row-to-row gaps + one row's own item height.
+    const TEXT_CONTENT_HEIGHT_PX: f32 = 2.0 * 90.0 + 56.0;
+    /// Transforms & Animation screen (`ExampleDetail(2)`) content's own
+    /// vertical extent — see `layout_transforms_content`'s row-spacing
+    /// constants, which this must stay consistent with: 2 row-to-row gaps
+    /// (120 each — wider than every other screen's, this content
+    /// rotates/scales) + one row's own box height + extra top/bottom
+    /// clearance (20px each) so rotated/scaled boxes don't clip the panel
+    /// edge. Unlike Effects' Opacity row, the row with captions here
+    /// (Rotation/Scale) isn't the *last* row, so no extra caption
+    /// allowance is needed: the last row (Continuous Animation) has no
+    /// caption of its own.
+    const TRANSFORMS_CONTENT_HEIGHT_PX: f32 = 2.0 * 120.0 + 64.0 + 2.0 * 20.0;
+    /// Both Stress Tests buttons' fixed height — same as
+    /// `gallery_fetch_button`'s. Width is *not* fixed (unlike
+    /// `gallery_fetch_button`): the two labels ("Run Burst Spawn"/"Run
+    /// Texture Churn") are different lengths, and a single shared width
+    /// gave the longer one uneven, cramped-looking horizontal padding —
+    /// `layout_stress_content` instead sizes each button to its own
+    /// baked label width plus `STRESS_BUTTON_HORIZONTAL_PADDING_PX`.
+    const STRESS_BUTTON_HEIGHT_PX: f32 = 46.0;
+    /// Horizontal padding (both sides combined) each Stress Tests button
+    /// adds around its own label — see `STRESS_BUTTON_HEIGHT_PX`'s doc.
+    const STRESS_BUTTON_HORIZONTAL_PADDING_PX: f32 = 40.0;
+    /// Height of the strip reserved at the bottom of the Stress Tests
+    /// panel for `stress_result_text` — `layout_stress_content` centers
+    /// the result line within it, and `random_burst_target` excludes it
+    /// from Burst Spawn's usable area so quads never render over the
+    /// result text.
+    const RESULT_TEXT_RESERVED_HEIGHT_PX: f32 = 40.0;
+    /// Wall-clock duration each stress test runs before finalizing and
+    /// reporting its average FPS.
+    const STRESS_TEST_DURATION: f32 = 3.0;
+    /// A result at or above this reads as "bumped into the vsync cap"
+    /// rather than "this is the actual load ceiling" — see
+    /// `finalize_stress_test`'s vsync note. Set a little under 60 to
+    /// absorb ordinary frame-timing jitter in the measured average.
+    const VSYNC_FPS_CAP_THRESHOLD: f32 = 55.0;
+    /// Number of small quad entities the Burst Spawn test keeps under
+    /// sustained, continuously-retriggered transition load for the whole
+    /// `STRESS_TEST_DURATION` window.
+    const BURST_SPAWN_COUNT: usize = 1000;
+    /// How long each Burst Spawn entity's own transition to a fresh
+    /// random target takes — short enough that entities retrigger several
+    /// times over `STRESS_TEST_DURATION`, keeping the load sustained
+    /// rather than a single initial burst.
+    const BURST_SPAWN_ITEM_DURATION: f32 = 0.4;
+    /// Burst Spawn entities' fixed base size (before their own random
+    /// scale is applied).
+    const BURST_ITEM_SIZE: f32 = 16.0;
+    /// Number of fixed scratch entities the Texture Churn test repeatedly
+    /// re-textures for the whole `STRESS_TEST_DURATION` window — small
+    /// and fixed (unlike Burst Spawn's entity count) since the load this
+    /// test isolates is the register/upload/evict path itself, not
+    /// entity count.
+    const TEXTURE_CHURN_SLOTS: usize = 8;
+    /// Each Texture Churn slot's fixed on-screen quad size — independent
+    /// of the synthetic texture's own (varying) pixel size, since
+    /// `BakedImage` UVs map onto whatever quad size is set regardless of
+    /// the source image's dimensions.
+    const TEXTURE_CHURN_SLOT_SIZE: f32 = 80.0;
+    /// Grid layout for `TEXTURE_CHURN_SLOTS`.
+    const TEXTURE_CHURN_COLS: usize = 4;
+    /// Synthetic texture side length range (min, spread) fed to
+    /// `TextureRegistry::register_static` each churn — "~100-400px" per
+    /// the plan, varying the atlas allocation size each cycle.
+    const TEXTURE_CHURN_SIZE_MIN: f32 = 100.0;
+    const TEXTURE_CHURN_SIZE_SPREAD: f32 = 300.0;
 
     // -------------------------------------------------------------------------
     // Home/back nav icons — top-left, visible whenever tiles/screen are showing
@@ -715,6 +859,53 @@ mod inner {
         }
     }
 
+    /// The "Examples & Tests" detail panel's target geometry — a big,
+    /// centered card any of the 6 category buttons morphs into when
+    /// clicked, mirroring `video_screen_quad`'s "big centered shape" idea
+    /// but a plain content card (subtle translucent fill, not untinted like
+    /// the video screen) sized to comfortably hold rows of example content
+    /// instead of a fixed 16:9 frame.
+    /// `content_height`: the category's own content's vertical extent —
+    /// `EFFECTS_CONTENT_HEIGHT_PX` for Effects, a placeholder-sized value
+    /// for categories not yet built. Panel height is `content_height +
+    /// 2*EXAMPLE_PANEL_PADDING_PX` (capped to the window), so the padding
+    /// above/below the content matches the padding used to the left of it
+    /// — the panel *shrinks to fit* rather than always filling a fixed
+    /// window fraction. `position.y` is always `0.0` here — a category
+    /// with its own heading rendered above the panel (see
+    /// `layout_effects_content`) shifts it down afterward so heading+panel
+    /// together land centered on screen.
+    fn example_panel_quad(
+        canvas_width: f32,
+        canvas_height: f32,
+        theme_progress: f32,
+        content_height: f32,
+    ) -> QuadState {
+        let width = (canvas_width * 0.85).min(1000.0);
+        let max_height = (canvas_height - 2.0 * ICON_ROW_RESERVED_PX).max(0.0);
+        let height = (content_height + 2.0 * EXAMPLE_PANEL_PADDING_PX).min(max_height);
+        // Neutral grey (not violet-tinted like everything else in this
+        // demo) — deliberately opaque and desaturated, so the
+        // effect/text/transform examples sitting on top of it (many close
+        // to white) read clearly against it instead of blending into the
+        // app's own light background. Unlike every other themed color in
+        // this file, this one does *not* lerp to a darker variant in dark
+        // mode — a darkened panel read as near-black, at odds with the
+        // rest of the demo's dark-mode surfaces; this backdrop stays the
+        // same light grey in both themes.
+        let light_grey = Vec4::new(0.82, 0.82, 0.83, 1.0);
+        QuadState {
+            position: Vec3::new(0.0, 0.0, 0.5),
+            size: Vec2::new(width, height),
+            rotation: 0.0,
+            scale: 1.0,
+            anchor: Vec2::new(0.5, 0.5),
+            color: light_grey,
+            corner_radius: SCREEN_CORNER_RADIUS
+                + (SCREEN_CORNER_RADIUS_DARK - SCREEN_CORNER_RADIUS) * theme_progress,
+        }
+    }
+
     // -------------------------------------------------------------------------
     // App state machine
     // -------------------------------------------------------------------------
@@ -751,6 +942,14 @@ mod inner {
         /// Click the image to return to `Gallery`, or home to converge
         /// straight to the nav buttons (skipping back through the grid).
         GalleryImage(usize),
+        /// 6 category buttons visible, 3 cols × 2 rows — click one to
+        /// converge into its own detail panel (`ExampleDetail`), or home to
+        /// converge back into the 3 nav buttons.
+        ExamplesHome,
+        /// `example_buttons[category_idx]` enlarged into a centered detail
+        /// panel — no longer interactive itself; the home/back icons drive
+        /// navigation from here, mirroring `VideoScreen`.
+        ExampleDetail(usize),
     }
 
     /// An in-flight move between two resting `AppState`s, keyed by the
@@ -767,6 +966,37 @@ mod inner {
         from: AppState,
         to: AppState,
         elapsed: f32,
+    }
+
+    /// Which Stress Tests screen (`ExampleDetail(3)`) button started the
+    /// current run — `StressTestRun::kind` dispatches
+    /// `advance_stress_test`'s per-frame work and `finalize_stress_test`'s
+    /// result-message formatting.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum StressTestKind {
+        BurstSpawn,
+        TextureChurn,
+    }
+
+    /// An in-flight Stress Tests run — mirrors `Transition`'s "one struct
+    /// tracks the in-flight thing" shape. `advance_stress_test` ticks
+    /// `elapsed`/`frame_count` every frame until `elapsed >=
+    /// STRESS_TEST_DURATION`, then hands off to `finalize_stress_test`,
+    /// which computes `frame_count as f32 / elapsed` for the result
+    /// message, despawns `entities`, and clears `self.stress_test_run`
+    /// back to `None` — at which point a fresh click can start another
+    /// run.
+    struct StressTestRun {
+        kind: StressTestKind,
+        elapsed: f32,
+        frame_count: u32,
+        /// The test's own scratch entities — Burst Spawn's quads, or
+        /// Texture Churn's `TEXTURE_CHURN_SLOTS` fixed slots.
+        entities: Vec<Entity>,
+        /// Texture Churn's register/evict cycle count — stays 0 for
+        /// Burst Spawn, which reports an entity count instead (see
+        /// `finalize_stress_test`).
+        churn_iterations: u32,
     }
 
     // -------------------------------------------------------------------------
@@ -833,6 +1063,190 @@ mod inner {
         nav_buttons: [Entity; 3],
         /// Per-button label — a `Text` child of `nav_buttons[i]`.
         nav_labels: [Entity; 3],
+        /// The 6 "Examples & Tests" category buttons, arranged 3 cols × 2
+        /// rows, column-major indexed (`i = col*2 + row`) to match
+        /// `nav_buttons[i]`'s own column — see `layout_example_buttons` and
+        /// `start_home_to_examples`'s doc for the exact spatial mapping.
+        /// Home's 3 nav buttons split into these and merge back from them,
+        /// 3 simultaneous per-column group requests each way, mirroring
+        /// `start_gallery_to_home`'s M→N composition. Always grid-button
+        /// shaped — unlike an earlier version of this feature, these never
+        /// double as the detail panel themselves (see
+        /// `example_detail_panel`).
+        example_buttons: [Entity; 6],
+        /// Per-button label — a `Text` child of `example_buttons[i]`.
+        example_labels: [Entity; 6],
+        /// Dedicated coordinator/display entity for whichever category is
+        /// enlarged — mirrors `gallery_enlarged_base` exactly, including
+        /// why it has to be a separate entity rather than reusing one of
+        /// the 6 `example_buttons`: a category's return-to-grid split has
+        /// that same button as *both* one of its own 6 targets *and* (if
+        /// it doubled as the panel) the coordinator baking the whole
+        /// detail screen — two roles needing different content from one
+        /// shared component at once. `start_examples_to_detail`/
+        /// `start_detail_to_examples` merge all 6 `example_buttons` into
+        /// this and split it back, `MergeLayout::Grid`/
+        /// `SplitStrategy::GridSlice{cols:3,rows:2}` matching the real
+        /// grid.
+        example_detail_panel: Entity,
+        /// Each category's own detail-screen content. `ChildOf`
+        /// `example_detail_panel` (not any of the 6 `example_buttons`) so
+        /// it bakes as part of the panel's own shared source/destination
+        /// bake during the 6↔1 group transition — this is what makes the
+        /// content visually read as *part of* the sliced/morphing element
+        /// instead of popping in after. This is safe from the flash bug an
+        /// earlier version hit (content briefly baking onto the wrong grid
+        /// button): that bug came from content being `ChildOf` one of the
+        /// 6 *targets themselves* (double duty as both a target and the
+        /// thing carrying the content); `example_detail_panel` is never
+        /// one of the 6 targets, so its bake only ever runs for an actual
+        /// `ExamplesHome`↔`ExampleDetail` transition. NOTE for future
+        /// categories (Step 3+): today only category 0 (Effects) has
+        /// content, so nothing else is a sibling `ChildOf` this same
+        /// panel; once more categories get content, a transition into/out
+        /// of *any* category would bake *all* categories' content
+        /// together (since baking ignores `Visibility`) unless this gets
+        /// revisited (e.g. attach/detach `ChildOf` per active category).
+        /// Local position is relative to the panel's center — see
+        /// `layout_*_content` for the per-category math — with a small
+        /// positive local Z (composes additively over the panel's own Z)
+        /// so content renders above the panel's opaque fill rather than
+        /// behind it. Shown only while `state == ExampleDetail(i)`.
+        /// Populated incrementally as each category's content lands;
+        /// empty for a category not yet built.
+        example_content: [Vec<Entity>; 6],
+        /// Effects screen (`ExampleDetail(0)`) layout handles — kept
+        /// separate from `example_content[0]` (which only needs a flat
+        /// list for visibility toggling) because `layout_effects_content`
+        /// has to reposition each of these individually, left-aligned to
+        /// the panel's current (window-dependent) size.
+        /// Unlike the rest of `example_content[0]`, deliberately **not**
+        /// `ChildOf` `example_detail_panel` — it renders *above/outside*
+        /// the panel's own bounds and fades in on its own after settle
+        /// (`advance_example_title_fade`), independent of the panel's
+        /// bake.
+        effects_title: Entity,
+        /// "Drop Shadow" / "Glow" / "Border" / "Opacity", row order.
+        effects_row_labels: [Entity; 4],
+        /// Each row's own boxes, row order matching `effects_row_labels`.
+        effects_row_boxes: [Vec<Entity>; 4],
+        /// The 5 small captions under the Opacity row's items (4 swatches
+        /// + the nested cascade pair).
+        effects_opacity_item_labels: [Entity; 5],
+        /// Text screen (`ExampleDetail(1)`) layout handles — same
+        /// shape/role as `effects_title` (independent, fades in above the
+        /// panel).
+        text_title: Entity,
+        /// "Font Size" / "Color" / "Letter Spacing", row order.
+        text_row_labels: [Entity; 3],
+        /// Each row's own sample-text items, row order matching
+        /// `text_row_labels`. Unlike `effects_row_boxes`'s uniform 64px
+        /// boxes, these vary in width (different font sizes/letter
+        /// spacing all widen the baked glyph run) — `layout_text_content`
+        /// flows each one past the previous using its own baked width
+        /// rather than a fixed grid column stride.
+        text_row_items: [Vec<Entity>; 3],
+        /// Transforms & Animation screen (`ExampleDetail(2)`) layout
+        /// handles — same shape/role as `effects_title` (independent,
+        /// fades in above the panel).
+        transforms_title: Entity,
+        /// "Rotation" / "Scale" / "Continuous Animation", row order.
+        transforms_row_labels: [Entity; 3],
+        /// Each row's own boxes, row order matching
+        /// `transforms_row_labels` — 3 static boxes for Rotation, 3 for
+        /// Scale, 1 for Continuous Animation
+        /// (`transforms_continuous_box`, tracked separately below too
+        /// since `advance_example_animation` needs direct access to it
+        /// every frame).
+        transforms_row_boxes: [Vec<Entity>; 3],
+        /// Captions underneath the Rotation/Scale rows' boxes (row order
+        /// matching `transforms_row_boxes`) — e.g. "0°"/"20°"/"-35°",
+        /// "0.6×"/"1.0×"/"1.4×". Empty for the Continuous Animation row:
+        /// one box, already described by its own row label.
+        transforms_item_labels: [Vec<Entity>; 3],
+        /// The Continuous Animation row's one box — same entity as
+        /// `transforms_row_boxes[2][0]`, just named directly since
+        /// `advance_example_animation` writes to it every frame this
+        /// screen is active.
+        transforms_continuous_box: Entity,
+        /// Elapsed time (seconds) the Continuous Animation box has spent
+        /// animating — only advances while `state == ExampleDetail(2)`
+        /// and idle (see `advance_example_animation`), paused otherwise.
+        /// Drives its rotation/scale/hue directly (not a 0..1 progress
+        /// value like every other `_progress`/`_fade` field in this file
+        /// — the animation has no end to progress toward, it just runs).
+        transforms_anim_elapsed: f32,
+        /// Entities `set_example_category_active` must never
+        /// attach/detach `ChildOf` `example_detail_panel` for, despite
+        /// appearing in the relevant `example_content[idx]` (for
+        /// visibility toggling) like every other row entity does. Two
+        /// distinct reasons an entity ends up here:
+        /// - It's `ChildOf` something *other* than the panel already —
+        ///   e.g. the Opacity row's nested cascade child (`ChildOf` its
+        ///   own sibling box) or a Stress Tests button's own label
+        ///   (`ChildOf` its button) — and inherits panel-relativity
+        ///   transitively through that instead.
+        /// - It's independent/absolute-positioned, same idea as a
+        ///   category's own heading (which has its own separate
+        ///   exemption via `example_heading_entity`) — e.g. the Stress
+        ///   Tests buttons themselves, which sit *outside* the panel's
+        ///   bounds (see `stress_buttons`'s doc).
+        ///
+        /// Reparenting either kind directly onto the panel would snap
+        /// its position onto the panel's own coordinate frame — a real
+        /// regression this list exists to prevent.
+        example_reparent_exempt: Vec<Entity>,
+        /// Stress Tests screen (`ExampleDetail(3)`) layout handles — same
+        /// shape/role as `effects_title` (independent, fades in above
+        /// the panel).
+        stress_title: Entity,
+        /// The two action buttons — independent/absolute (not `ChildOf`
+        /// `example_detail_panel`; see `example_reparent_exempt`'s doc),
+        /// positioned between the heading and the panel. Index 0 = "Run
+        /// Burst Spawn", index 1 = "Run Texture Churn".
+        stress_buttons: [Entity; 2],
+        /// Per-button label — a `Text` child of `stress_buttons[i]`, same
+        /// idiom as `gallery_fetch_button_label`.
+        stress_button_labels: [Entity; 2],
+        /// Hover glow/scale progress (0..1) per button — same pattern as
+        /// `gallery_fetch_button_hover_progress`.
+        stress_button_hover_progress: [f32; 2],
+        stress_button_is_hovering: [bool; 2],
+        /// Fade-in (once settled and idle on this screen) / fade-out (in
+        /// sync with the transition out) progress (0..1) shared by both
+        /// buttons — same rationale as `example_title_fade`: since the
+        /// buttons are independent/absolute (not `ChildOf` the panel,
+        /// so never baked into any transition — see `stress_buttons`'s
+        /// doc), an outbound transition would otherwise leave them
+        /// sitting there at full opacity for the whole morph and
+        /// popping off abruptly only once settle hides them.
+        stress_button_fade: f32,
+        /// Result line below the buttons — `ChildOf` the panel, empty (a
+        /// single space, so it still bakes once and never needs a
+        /// "pending forever" empty-string retry) until a test finishes
+        /// and `set_stress_result_text` gives it real content.
+        stress_result_text: Entity,
+        /// Photosensitivity warning, centered in the panel —
+        /// independent and absolute-positioned, unlike
+        /// `stress_result_text` (see its own spawn-site doc for why: a
+        /// `ChildOf` entity still rides along in an outbound bake
+        /// regardless of its live `Visibility`, so hiding it that way
+        /// wouldn't actually keep it out of the transition). Fixed
+        /// content (never changes at runtime, unlike the result line).
+        /// Visible only while settled and idle on this screen with no
+        /// test running (see `advance_stress_warning_visibility`);
+        /// hidden the instant a test *or* a transition starts.
+        stress_warning_text: Entity,
+        /// The currently in-flight stress test, if any — see
+        /// `StressTestRun`'s doc. `None` means a button click starts a
+        /// fresh run; `Some` means clicks are ignored until it finishes.
+        stress_test_run: Option<StressTestRun>,
+        /// Seed/state for the tiny xorshift32 PRNG `random_unit_f32`
+        /// advances — Burst Spawn's only source of randomness (this file
+        /// has no `rand` crate dependency, and doesn't need
+        /// cryptographic-quality randomness for jittering stress-test
+        /// target positions/colors).
+        stress_rng_state: u32,
         tiles: [Entity; 3],
         /// Per-tile black hover overlay — a `Quad` child of `tiles[i]` (M10).
         tile_overlays: [Entity; 3],
@@ -1014,6 +1428,15 @@ mod inner {
         splash_hold_remaining: f32,
         nav_hover_progress: [f32; 3],
         nav_is_hovering: [bool; 3],
+        example_hover_progress: [f32; 6],
+        example_is_hovering: [bool; 6],
+        /// Fade-in progress for whichever category's own heading is
+        /// currently active (see `example_heading_entity`) — 0 the instant
+        /// the 6→1 merge into `example_detail_panel` completes, ramping to
+        /// 1 only once fully settled and idle in `ExampleDetail`, so the
+        /// heading visibly fades in *after* the morph lands, not alongside
+        /// it.
+        example_title_fade: f32,
         tile_hover_progress: [f32; 3],
         tile_is_hovering: [bool; 3],
         /// Fade-in/out progress (0..1) for `nav_icons`.
@@ -1365,6 +1788,827 @@ mod inner {
                         ChildOf(btn),
                     ))
                     .id();
+            }
+
+            // Examples & Tests category buttons — same spawn recipe as
+            // nav_buttons (border/glow/interactable), start hidden.
+            // Placeholder geometry; `layout_example_buttons` overwrites
+            // position/size once each label's baked width is known.
+            let mut example_buttons = [Entity::PLACEHOLDER; 6];
+            let mut example_labels = [Entity::PLACEHOLDER; 6];
+            for i in 0..6 {
+                let btn = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.5),
+                            size: NAV_BUTTON_FALLBACK_SIZE,
+                            rotation: 0.0,
+                            scale: 1.0,
+                            anchor: Vec2::new(0.5, 0.5),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            corner_radius: NAV_BUTTON_CORNER_RADIUS,
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Interactable,
+                        nav_button_border(),
+                        nav_hover_glow(),
+                    ))
+                    .id();
+                example_buttons[i] = btn;
+                example_labels[i] = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::VISIBLE,
+                        Text::new(EXAMPLE_CATEGORY_TITLES[i], NAV_BUTTON_LABEL_SIZE_PX)
+                            .with_color(violet())
+                            .with_letter_spacing(NAV_BUTTON_LETTER_SPACING_PX),
+                        ChildOf(btn),
+                    ))
+                    .id();
+            }
+
+            // Dedicated enlarged-category entity — see
+            // `example_detail_panel`'s doc for why this can't just be
+            // whichever `example_buttons[idx]` was clicked.
+            let example_detail_panel = ui_world
+                .world
+                .spawn((
+                    QuadState {
+                        position: Vec3::new(0.0, 0.0, 0.5),
+                        size: Vec2::ONE,
+                        rotation: 0.0,
+                        scale: 1.0,
+                        anchor: Vec2::new(0.5, 0.5),
+                        color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                        corner_radius: 0.0,
+                    },
+                    Lifecycle::Idle,
+                    Visibility::HIDDEN,
+                    nav_button_border(),
+                ))
+                .id();
+
+            let mut example_content: [Vec<Entity>; 6] = std::array::from_fn(|_| Vec::new());
+            // See `example_reparent_exempt`'s doc — populated below wherever
+            // a category spawns a nested (grandchild) hierarchy.
+            let mut example_reparent_exempt: Vec<Entity> = Vec::new();
+
+            // Effects (ExampleDetail(0)) content: a title (rendered
+            // *outside* the panel, above it, independent of the panel's
+            // bake — fades in on its own after settle) plus 4 labelled
+            // rows (Drop Shadow / Glow / Border / Opacity), each a row
+            // label followed by a horizontal strip of boxes. The rows are
+            // `ChildOf` `example_detail_panel` — see `example_content`'s
+            // doc for why — so their positions below are *local*,
+            // relative to the panel's own center, with a small positive
+            // local Z (`EXAMPLE_CONTENT_LOCAL_Z`) so they render above the panel's
+            // opaque fill once composed. Spawned at placeholder positions
+            // here; `layout_effects_content` (called from
+            // `settle_example_detail_panel`) does the real positioning
+            // once `example_detail_panel`'s actual (window-dependent)
+            // geometry is known.
+            let (effects_title, effects_row_labels, effects_row_boxes, effects_opacity_item_labels) = {
+                // A non-brand accent color, for the "different color" example
+                // in the Glow/Border rows — everything else in this demo is
+                // violet.
+                let accent = Vec4::new(0.95, 0.55, 0.25, 1.0);
+
+                let title = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.51),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Text::new("Effects", 28.0).with_color(violet()),
+                    ))
+                    .id();
+
+                let label = |ui_world: &mut ProteusWorld, text: &str, size_px: f32| {
+                    ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                                ..Default::default()
+                            },
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            Text::new(text, size_px).with_color(violet()),
+                            ChildOf(example_detail_panel),
+                        ))
+                        .id()
+                };
+                let effect_box = || QuadState {
+                    position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                    size: Vec2::new(64.0, 64.0),
+                    rotation: 0.0,
+                    scale: 1.0,
+                    anchor: Vec2::new(0.5, 0.5),
+                    color: white(),
+                    corner_radius: 10.0,
+                };
+
+                // Drop Shadow — soft small offset, hard large offset, large
+                // spread (a wider, less-blurred silhouette, not a halo — same
+                // black as the other two, just a bigger spread/lower
+                // softness, so it doesn't read as a Glow effect instead).
+                let drop_shadow_label = label(&mut ui_world, "Drop Shadow", 16.0);
+                let drop_shadow_boxes = vec![
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            DropShadow {
+                                offset: Vec2::new(2.0, -2.0),
+                                color: Vec4::new(0.0, 0.0, 0.0, 0.5),
+                                softness: 4.0,
+                                spread: 0.0,
+                            },
+                        ))
+                        .id(),
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            DropShadow {
+                                offset: Vec2::new(8.0, -8.0),
+                                color: Vec4::new(0.0, 0.0, 0.0, 0.8),
+                                softness: 2.0,
+                                spread: 2.0,
+                            },
+                        ))
+                        .id(),
+                    ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                size: Vec2::new(61.0, 61.0),
+                                ..effect_box()
+                            },
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            DropShadow {
+                                offset: Vec2::new(6.0, -6.0),
+                                color: Vec4::new(0.0, 0.0, 0.0, 0.6),
+                                softness: 6.0,
+                                spread: 10.0,
+                            },
+                        ))
+                        .id(),
+                ];
+    
+                // Glow — small radius, large radius, non-brand accent color.
+                let glow_label = label(&mut ui_world, "Glow", 16.0);
+                let glow_boxes = vec![
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            Glow {
+                                radius: 6.0,
+                                color: violet(),
+                                intensity: 1.0,
+                            },
+                        ))
+                        .id(),
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            Glow {
+                                radius: 24.0,
+                                color: violet(),
+                                intensity: 1.0,
+                            },
+                        ))
+                        .id(),
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            Glow {
+                                radius: 16.0,
+                                color: accent,
+                                intensity: 1.0,
+                            },
+                        ))
+                        .id(),
+                ];
+    
+                // Border — thin, thick, different color. Inner offset only —
+                // `Border::offset` center/outer are a known-broken limitation
+                // (see the type's own doc), not demonstrated here.
+                let border_label = label(&mut ui_world, "Border", 16.0);
+                let border_boxes = vec![
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            Border {
+                                width: 2.0,
+                                color: violet(),
+                                offset: -1.0,
+                            },
+                        ))
+                        .id(),
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            Border {
+                                width: 8.0,
+                                color: violet(),
+                                offset: -1.0,
+                            },
+                        ))
+                        .id(),
+                    ui_world
+                        .world
+                        .spawn((
+                            effect_box(),
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            ChildOf(example_detail_panel),
+                            Border {
+                                width: 4.0,
+                                color: accent,
+                                offset: -1.0,
+                            },
+                        ))
+                        .id(),
+                ];
+    
+                // Opacity — 4 flat `color.w` swatches, plus one nested
+                // parent+child pair using the real `Opacity`/`EffectiveOpacity`
+                // cascade (already wired into the schedule and already read by
+                // `collect_instances` — no new plumbing needed): parent
+                // `Opacity(0.6)` with a child also `Opacity(0.6)` multiplies
+                // down to an effective 0.36, distinguishing "flat alpha" from
+                // "cascaded opacity."
+                let opacity_label = label(&mut ui_world, "Opacity", 16.0);
+                let mut opacity_boxes = Vec::with_capacity(5);
+                let mut opacity_item_labels = Vec::with_capacity(5);
+                for (alpha, caption) in [(0.25, "25%"), (0.5, "50%"), (0.75, "75%"), (1.0, "100%")] {
+                    opacity_boxes.push(
+                        ui_world
+                            .world
+                            .spawn((
+                                QuadState {
+                                    position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                                    size: Vec2::new(64.0, 64.0),
+                                    rotation: 0.0,
+                                    scale: 1.0,
+                                    anchor: Vec2::new(0.5, 0.5),
+                                    color: Vec4::new(1.0, 1.0, 1.0, alpha),
+                                    corner_radius: 10.0,
+                                },
+                                Lifecycle::Idle,
+                                Visibility::HIDDEN,
+                                ChildOf(example_detail_panel),
+                            ))
+                            .id(),
+                    );
+                    opacity_item_labels.push(label(&mut ui_world, caption, 12.0));
+                }
+                let nested_parent = ui_world
+                    .world
+                    .spawn((
+                        effect_box(),
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Opacity(0.6),
+                        ChildOf(example_detail_panel),
+                    ))
+                    .id();
+                let nested_child = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::ZERO,
+                            size: Vec2::new(36.0, 36.0),
+                            rotation: 0.0,
+                            scale: 1.0,
+                            anchor: Vec2::new(0.5, 0.5),
+                            color: accent,
+                            corner_radius: 6.0,
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Opacity(0.6),
+                        ChildOf(nested_parent),
+                    ))
+                    .id();
+                // `ChildOf(nested_parent)`, not the panel — see
+                // `example_reparent_exempt`'s doc for why this must be
+                // tracked so `set_example_category_active` never
+                // reparents it.
+                example_reparent_exempt.push(nested_child);
+                opacity_boxes.push(nested_parent);
+                opacity_item_labels.push(label(&mut ui_world, "0.6 × 0.6", 12.0));
+
+                let opacity_item_labels: [Entity; 5] = opacity_item_labels.try_into().unwrap();
+
+                // `nested_child` is never repositioned by
+                // `layout_effects_content` (it's placed purely by
+                // `ChildOf(nested_parent)` composition), but it still
+                // needs its own `Visibility` toggled at settle time like
+                // every other piece of content — without this it was
+                // never added to `example_content[0]`, so it stayed
+                // permanently hidden in the steady state, only ever
+                // appearing mid-transition since baking ignores
+                // `Visibility`.
+                example_content[0].push(nested_child);
+                example_content[0].push(title);
+                for &e in [drop_shadow_label, glow_label, border_label, opacity_label]
+                    .iter()
+                    .chain(drop_shadow_boxes.iter())
+                    .chain(glow_boxes.iter())
+                    .chain(border_boxes.iter())
+                    .chain(opacity_boxes.iter())
+                    .chain(opacity_item_labels.iter())
+                {
+                    example_content[0].push(e);
+                }
+    
+                (
+                    title,
+                    [drop_shadow_label, glow_label, border_label, opacity_label],
+                    [drop_shadow_boxes, glow_boxes, border_boxes, opacity_boxes],
+                    opacity_item_labels,
+                )
+            };
+
+            // Text (ExampleDetail(1)) content: mirrors Effects' structure —
+            // an independent title above the panel (fades in on its own
+            // after settle) plus 3 labelled rows `ChildOf`
+            // `example_detail_panel` (baked as part of the panel's own
+            // crossfade, same rationale as `example_content`'s doc). Each
+            // row demonstrates one `Text` parameter at a time, holding the
+            // sample string constant.
+            let (text_title, text_row_labels, text_row_items) = {
+                const SAMPLE: &str = "Sample Text";
+                let accent = Vec4::new(0.95, 0.55, 0.25, 1.0);
+                // The sample text itself reads as very dark grey (not
+                // violet, unlike the row labels) — closer to how body text
+                // actually looks, and it keeps the Color row's
+                // violet/white/accent items the only samples using
+                // brand/accent color on purpose.
+                let text_grey = Vec4::new(0.16, 0.16, 0.17, 1.0);
+
+                let title = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.51),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Text::new("Text", 28.0).with_color(violet()),
+                    ))
+                    .id();
+
+                let label = |ui_world: &mut ProteusWorld, text: &str, size_px: f32| {
+                    ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                                ..Default::default()
+                            },
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            Text::new(text, size_px).with_color(violet()),
+                            ChildOf(example_detail_panel),
+                        ))
+                        .id()
+                };
+                let sample = |ui_world: &mut ProteusWorld, text: Text| {
+                    ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                                ..Default::default()
+                            },
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            text,
+                            ChildOf(example_detail_panel),
+                        ))
+                        .id()
+                };
+
+                // Font Size — same sample string at 14/20/28/40px.
+                let font_size_label = label(&mut ui_world, "Font Size", 16.0);
+                let font_size_items: Vec<Entity> = [14.0, 20.0, 28.0, 40.0]
+                    .into_iter()
+                    .map(|size| {
+                        sample(&mut ui_world, Text::new(SAMPLE, size).with_color(text_grey))
+                    })
+                    .collect();
+
+                // Color — same string in dark grey, white, one extra
+                // accent color (the row's whole point, so these two stay
+                // put).
+                let color_label = label(&mut ui_world, "Color", 16.0);
+                let color_items: Vec<Entity> = [text_grey, white(), accent]
+                    .into_iter()
+                    .map(|color| sample(&mut ui_world, Text::new(SAMPLE, 20.0).with_color(color)))
+                    .collect();
+
+                // Letter Spacing — same string at 0/4/10px spacing.
+                let letter_spacing_label = label(&mut ui_world, "Letter Spacing", 16.0);
+                let letter_spacing_items: Vec<Entity> = [0.0, 4.0, 10.0]
+                    .into_iter()
+                    .map(|spacing| {
+                        sample(
+                            &mut ui_world,
+                            Text::new(SAMPLE, 20.0)
+                                .with_color(text_grey)
+                                .with_letter_spacing(spacing),
+                        )
+                    })
+                    .collect();
+
+                example_content[1].push(title);
+                for &e in [font_size_label, color_label, letter_spacing_label]
+                    .iter()
+                    .chain(font_size_items.iter())
+                    .chain(color_items.iter())
+                    .chain(letter_spacing_items.iter())
+                {
+                    example_content[1].push(e);
+                }
+
+                (
+                    title,
+                    [font_size_label, color_label, letter_spacing_label],
+                    [font_size_items, color_items, letter_spacing_items],
+                )
+            };
+
+            // Transforms & Animation (ExampleDetail(2)) content: mirrors
+            // Effects' structure — an independent title above the panel
+            // (fades in on its own after settle) plus 3 labelled rows
+            // `ChildOf` `example_detail_panel` (baked as part of the
+            // panel's own crossfade, same rationale as
+            // `example_content`'s doc). Rotation/Scale are static, each
+            // box labelled with its own value underneath; Continuous
+            // Animation is one box kept spinning/breathing/color-cycling
+            // by `advance_example_animation` for as long as this screen
+            // is active.
+            let (
+                transforms_title,
+                transforms_row_labels,
+                transforms_row_boxes,
+                transforms_item_labels,
+                transforms_continuous_box,
+            ) = {
+                let title = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.51),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Text::new("Transforms & Animation", 28.0).with_color(violet()),
+                    ))
+                    .id();
+
+                let label = |ui_world: &mut ProteusWorld, text: &str, size_px: f32| {
+                    ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                                ..Default::default()
+                            },
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            Text::new(text, size_px).with_color(violet()),
+                            ChildOf(example_detail_panel),
+                        ))
+                        .id()
+                };
+                let transform_box = |rotation: f32, scale: f32| QuadState {
+                    position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                    size: Vec2::new(64.0, 64.0),
+                    rotation,
+                    scale,
+                    anchor: Vec2::new(0.5, 0.5),
+                    color: white(),
+                    corner_radius: 10.0,
+                };
+
+                // Rotation — 0°/20°/-35°, each labelled underneath with
+                // its own value.
+                let rotation_label = label(&mut ui_world, "Rotation", 16.0);
+                let rotation_degrees = [0.0_f32, 20.0, -35.0];
+                let rotation_boxes: Vec<Entity> = rotation_degrees
+                    .iter()
+                    .map(|deg| {
+                        ui_world
+                            .world
+                            .spawn((
+                                transform_box(deg.to_radians(), 1.0),
+                                Lifecycle::Idle,
+                                Visibility::HIDDEN,
+                                ChildOf(example_detail_panel),
+                            ))
+                            .id()
+                    })
+                    .collect();
+                let rotation_item_labels: Vec<Entity> = rotation_degrees
+                    .iter()
+                    .map(|deg| label(&mut ui_world, &format!("{deg:.0}°"), 12.0))
+                    .collect();
+
+                // Scale — 0.6×/1.0×/1.4×, each labelled underneath with
+                // its own value.
+                let scale_label = label(&mut ui_world, "Scale", 16.0);
+                let scale_factors = [0.6_f32, 1.0, 1.4];
+                let scale_boxes: Vec<Entity> = scale_factors
+                    .iter()
+                    .map(|scale| {
+                        ui_world
+                            .world
+                            .spawn((
+                                transform_box(0.0, *scale),
+                                Lifecycle::Idle,
+                                Visibility::HIDDEN,
+                                ChildOf(example_detail_panel),
+                            ))
+                            .id()
+                    })
+                    .collect();
+                let scale_item_labels: Vec<Entity> = scale_factors
+                    .iter()
+                    .map(|scale| label(&mut ui_world, &format!("{scale:.1}×"), 12.0))
+                    .collect();
+
+                // Continuous Animation — one box, kept
+                // spinning/breathing/color-cycling by
+                // `advance_example_animation` for as long as this screen
+                // is active.
+                let continuous_label = label(&mut ui_world, "Continuous Animation", 16.0);
+                let continuous_box = ui_world
+                    .world
+                    .spawn((
+                        transform_box(0.0, 1.0),
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        ChildOf(example_detail_panel),
+                    ))
+                    .id();
+
+                example_content[2].push(title);
+                for &e in [rotation_label, scale_label, continuous_label]
+                    .iter()
+                    .chain(rotation_boxes.iter())
+                    .chain(scale_boxes.iter())
+                    .chain(std::iter::once(&continuous_box))
+                    .chain(rotation_item_labels.iter())
+                    .chain(scale_item_labels.iter())
+                {
+                    example_content[2].push(e);
+                }
+
+                (
+                    title,
+                    [rotation_label, scale_label, continuous_label],
+                    [rotation_boxes, scale_boxes, vec![continuous_box]],
+                    [rotation_item_labels, scale_item_labels, Vec::new()],
+                    continuous_box,
+                )
+            };
+
+            // Stress Tests (ExampleDetail(3)) content: an independent
+            // title above the panel (fades in on its own after settle),
+            // two action buttons *below* the panel (also
+            // independent/absolute, side by side, left-aligned as a pair
+            // to the panel's left edge — this screen's panel fills
+            // available vertical space rather than being sized from a
+            // fixed content height, so unlike every other category's
+            // rows these buttons live outside it, not `ChildOf` it), and
+            // a result line that *does* stay `ChildOf` the panel, near
+            // its bottom.
+            let (stress_title, stress_buttons, stress_button_labels, stress_result_text, stress_warning_text) = {
+                let title = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.51),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Text::new("Stress Tests", 28.0).with_color(violet()),
+                    ))
+                    .id();
+
+                // Same shape as
+                // `gallery_fetch_button`/`gallery_fetch_button_label`
+                // (border + hover glow + Interactable, label as a
+                // `ChildOf` child) — independent/absolute like `title`,
+                // not `ChildOf` the panel, since these sit outside its
+                // bounds.
+                let button = |ui_world: &mut ProteusWorld, label_text: &str| -> (Entity, Entity) {
+                    let button = ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                position: Vec3::new(0.0, 0.0, 0.51),
+                                // Placeholder width —
+                                // `layout_stress_content` overwrites it
+                                // with this button's own label width
+                                // before it's ever shown.
+                                size: Vec2::new(200.0, STRESS_BUTTON_HEIGHT_PX),
+                                rotation: 0.0,
+                                scale: 1.0,
+                                anchor: Vec2::new(0.5, 0.5),
+                                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                                corner_radius: NAV_BUTTON_CORNER_RADIUS,
+                            },
+                            Lifecycle::Idle,
+                            Visibility::HIDDEN,
+                            Interactable,
+                            nav_button_border(),
+                            nav_hover_glow(),
+                        ))
+                        .id();
+                    let label = ui_world
+                        .world
+                        .spawn((
+                            QuadState {
+                                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                                ..Default::default()
+                            },
+                            Lifecycle::Idle,
+                            Visibility::VISIBLE,
+                            Text::new(label_text, NAV_BUTTON_LABEL_SIZE_PX)
+                                .with_color(violet())
+                                .with_letter_spacing(NAV_BUTTON_LETTER_SPACING_PX),
+                            ChildOf(button),
+                        ))
+                        .id();
+                    (button, label)
+                };
+
+                let (burst_button, burst_label) = button(&mut ui_world, "Run Burst Spawn");
+                let (churn_button, churn_label) = button(&mut ui_world, "Run Texture Churn");
+
+                let result_text = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, EXAMPLE_CONTENT_LOCAL_Z),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        // A single space, not an empty string:
+                        // `bake_pending_text` only ever bakes entities
+                        // without `BakedText`, and an empty string fails
+                        // to rasterize at all (see
+                        // `FontAtlas::rasterize_text_tracked`), which
+                        // would leave this entity permanently "pending"
+                        // — retried, and logging a warning, every single
+                        // frame.
+                        Text::new(" ", 16.0).with_color(violet()),
+                        ChildOf(example_detail_panel),
+                    ))
+                    .id();
+
+                // Photosensitivity warning — centered in the panel
+                // (`layout_stress_content` positions it in *absolute*
+                // world coordinates, matching `title`/the buttons),
+                // independent — deliberately NOT `ChildOf` the panel,
+                // unlike `result_text`. `gather_bake_instances` bakes a
+                // subtree's children unconditionally, ignoring
+                // `Visibility` (the same root cause `example_content`'s
+                // doc already documents for Effects/Text/Transforms
+                // content): if this were `ChildOf` the panel,
+                // `advance_stress_warning_visibility` hiding it the
+                // instant a transition starts wouldn't stop the outbound
+                // bake — taken *before* that hide lands — from capturing
+                // it anyway, so it would still visibly ride along
+                // through the whole transition. Independent content is
+                // never gathered into any bake at all, so this concern
+                // doesn't apply.
+                let warning_text = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.51),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Text::new(
+                            "Warning: the Texture Churn test may be harmful to photosensitive users.",
+                            24.0,
+                        )
+                        .with_color(violet()),
+                    ))
+                    .id();
+
+                // Buttons and the warning text are independent/absolute
+                // (see their own docs), and the button labels are
+                // `ChildOf` their own button, not the panel — see
+                // `example_reparent_exempt`'s doc for why all 5 must be
+                // tracked there.
+                example_reparent_exempt.push(burst_button);
+                example_reparent_exempt.push(churn_button);
+                example_reparent_exempt.push(burst_label);
+                example_reparent_exempt.push(churn_label);
+                example_reparent_exempt.push(warning_text);
+
+                example_content[3].push(title);
+                for &e in [burst_button, churn_button, result_text, warning_text]
+                    .iter()
+                    .chain(std::iter::once(&burst_label))
+                    .chain(std::iter::once(&churn_label))
+                {
+                    example_content[3].push(e);
+                }
+
+                (
+                    title,
+                    [burst_button, churn_button],
+                    [burst_label, churn_label],
+                    result_text,
+                    warning_text,
+                )
+            };
+
+            // Layout (4) and 3D (5) are placeholders for future milestones
+            // — just a centered "planned future feature" label, hidden
+            // until their own `ExampleDetail` settles. Not `ChildOf`
+            // anything — see `example_content`'s doc — but unlike Effects'
+            // content this never needs repositioning: their panel has no
+            // heading pushing it off center, so it always settles back to
+            // world (0,0).
+            for idx in [4usize, 5] {
+                let placeholder = ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(0.0, 0.0, 0.51),
+                            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                            ..Default::default()
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                        Text::new("Planned future feature", NAV_BUTTON_LABEL_SIZE_PX)
+                            .with_color(violet()),
+                    ))
+                    .id();
+                example_content[idx].push(placeholder);
             }
 
             // Tiles start hidden; box-cover art (fetched separately, see
@@ -1833,6 +3077,34 @@ mod inner {
                 wordmark,
                 nav_buttons,
                 nav_labels,
+                example_buttons,
+                example_labels,
+                example_detail_panel,
+                example_content,
+                effects_title,
+                effects_row_labels,
+                effects_row_boxes,
+                effects_opacity_item_labels,
+                text_title,
+                text_row_labels,
+                text_row_items,
+                transforms_title,
+                transforms_row_labels,
+                transforms_row_boxes,
+                transforms_item_labels,
+                transforms_continuous_box,
+                transforms_anim_elapsed: 0.0,
+                example_reparent_exempt,
+                stress_title,
+                stress_buttons,
+                stress_button_labels,
+                stress_button_hover_progress: [0.0; 2],
+                stress_button_is_hovering: [false; 2],
+                stress_button_fade: 0.0,
+                stress_result_text,
+                stress_warning_text,
+                stress_test_run: None,
+                stress_rng_state: 0x9E3779B9,
                 tiles,
                 tile_overlays,
                 tile_labels,
@@ -1886,6 +3158,9 @@ mod inner {
                 splash_hold_remaining: SPLASH_HOLD_DURATION,
                 nav_hover_progress: [0.0; 3],
                 nav_is_hovering: [false; 3],
+                example_hover_progress: [0.0; 6],
+                example_is_hovering: [false; 6],
+                example_title_fade: 0.0,
                 tile_hover_progress: [0.0; 3],
                 tile_is_hovering: [false; 3],
                 nav_icon_fade: [0.0; 2],
@@ -1935,11 +3210,18 @@ mod inner {
             self.advance_logo_animation(dt);
             self.advance_loading_logo_animation(dt);
             self.advance_nav_hover(dt);
+            self.advance_example_button_hover(dt);
             self.advance_tile_hover(dt);
             self.advance_gallery_tile_hover(dt);
             self.advance_gallery_enlarged_hover(dt);
             self.advance_gallery_button_fade(dt);
             self.advance_gallery_fetch_button_hover(dt);
+            self.advance_example_title_fade(dt);
+            self.advance_example_animation(dt);
+            self.advance_stress_button_hover(dt);
+            self.advance_stress_button_fade(dt);
+            self.advance_stress_warning_visibility();
+            self.advance_stress_test(dt);
             self.advance_demo(dt);
             self.advance_nav_icons(dt);
             self.advance_theme(dt);
@@ -3042,6 +4324,48 @@ mod inner {
             }
         }
 
+        /// Same glow+scale hover reaction as `advance_nav_hover`, for
+        /// `example_buttons` — suppressed whenever a transition is in
+        /// flight or we're not resting in `ExamplesHome` (mirrors
+        /// `advance_gallery_tile_hover`'s same reasoning: a button
+        /// mid-morph, or one that's currently the detail panel, isn't
+        /// meaningfully "hoverable").
+        fn advance_example_button_hover(&mut self, dt: f32) {
+            let suppressed = self.transition.is_some() || self.state != AppState::ExamplesHome;
+            for i in 0..6 {
+                let entity = self.example_buttons[i];
+                {
+                    let events = self.ui_world.world.resource::<InteractionEvents>();
+                    if events.hover_entered.contains(&entity) {
+                        self.example_is_hovering[i] = true;
+                    } else if events.hover_exited.contains(&entity) {
+                        self.example_is_hovering[i] = false;
+                    }
+                }
+                let target = if suppressed {
+                    0.0
+                } else if self.example_is_hovering[i] {
+                    1.0
+                } else {
+                    0.0
+                };
+                let step = dt / GLOW_DURATION;
+                if self.example_hover_progress[i] < target {
+                    self.example_hover_progress[i] =
+                        (self.example_hover_progress[i] + step).min(target);
+                } else if self.example_hover_progress[i] > target {
+                    self.example_hover_progress[i] =
+                        (self.example_hover_progress[i] - step).max(target);
+                }
+                if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
+                    glow.radius = self.example_hover_progress[i] * GLOW_MAX_RADIUS;
+                }
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(entity) {
+                    qs.scale = 1.0 + self.example_hover_progress[i] * HOVER_SCALE_BOOST;
+                }
+            }
+        }
+
         /// Fades home/back icons and the logo lockup in/out based on phase,
         /// positions the logo lockup and both icons top-left (recomputed
         /// every frame so canvas resizes track correctly), drives the
@@ -3060,13 +4384,14 @@ mod inner {
                 (None, AppState::Splash) => 0.0,
                 _ => 1.0,
             };
-            // "back" only ever fades in once idle on the video screen —
-            // clicking home from there skips straight to a
-            // (VideoScreen, Home) transition (see `start_screen_to_nav`),
-            // which falls into the `_` arm below without needing a
-            // `then_home` flag.
+            // "back" only ever fades in once idle on the video screen or an
+            // example detail screen — clicking home from either skips
+            // straight to a `(_, Home)` transition
+            // (`start_screen_to_nav`/`start_detail_to_home`), which falls
+            // into the `_` arm below without needing a `then_home` flag.
             let back_target: f32 = match (&self.transition, self.state) {
                 (None, AppState::VideoScreen(_)) => 1.0,
+                (None, AppState::ExampleDetail(_)) => 1.0,
                 _ => 0.0,
             };
             let targets = [home_target, back_target];
@@ -3352,6 +4677,27 @@ mod inner {
                     + (NAV_BUTTON_CORNER_RADIUS_DARK - NAV_BUTTON_CORNER_RADIUS) * p;
             }
 
+            // Example buttons — same continuous theme-driven corner radius
+            // as nav_buttons above (no "actively morphing" concern like
+            // the video tiles' dual-shape reuse: an example button is
+            // always a single grid-cell shape now that
+            // `example_detail_panel` is a dedicated entity, never one of
+            // the 6 buttons themselves).
+            for &btn in &self.example_buttons {
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(btn) {
+                    qs.corner_radius = NAV_BUTTON_CORNER_RADIUS
+                        + (NAV_BUTTON_CORNER_RADIUS_DARK - NAV_BUTTON_CORNER_RADIUS) * p;
+                }
+            }
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.example_detail_panel)
+            {
+                qs.corner_radius =
+                    SCREEN_CORNER_RADIUS + (SCREEN_CORNER_RADIUS_DARK - SCREEN_CORNER_RADIUS) * p;
+            }
+
             // 5. Border/Glow RGB lerp — alpha stays independently owned by
             // existing hover/fade code, never touched here.
             let primary = violet().lerp(violet_dark(), p);
@@ -3441,6 +4787,76 @@ mod inner {
                 t.color.x = primary.x;
                 t.color.y = primary.y;
                 t.color.z = primary.z;
+            }
+            for i in 0..6 {
+                let btn = self.example_buttons[i];
+                if let Some(mut b) = self.ui_world.world.get_mut::<Border>(btn) {
+                    b.color.x = primary.x;
+                    b.color.y = primary.y;
+                    b.color.z = primary.z;
+                }
+                if let Some(mut g) = self.ui_world.world.get_mut::<Glow>(btn) {
+                    g.color.x = primary.x;
+                    g.color.y = primary.y;
+                    g.color.z = primary.z;
+                }
+                let label = self.example_labels[i];
+                if let Some(mut t) = self.ui_world.world.get_mut::<Text>(label) {
+                    t.color.x = primary.x;
+                    t.color.y = primary.y;
+                    t.color.z = primary.z;
+                }
+            }
+            if let Some(mut b) = self
+                .ui_world
+                .world
+                .get_mut::<Border>(self.example_detail_panel)
+            {
+                b.color.x = primary.x;
+                b.color.y = primary.y;
+                b.color.z = primary.z;
+            }
+            if let Some(mut t) = self.ui_world.world.get_mut::<Text>(self.effects_title) {
+                t.color.x = primary.x;
+                t.color.y = primary.y;
+                t.color.z = primary.z;
+            }
+            if let Some(mut t) = self.ui_world.world.get_mut::<Text>(self.text_title) {
+                t.color.x = primary.x;
+                t.color.y = primary.y;
+                t.color.z = primary.z;
+            }
+            if let Some(mut t) = self.ui_world.world.get_mut::<Text>(self.transforms_title) {
+                t.color.x = primary.x;
+                t.color.y = primary.y;
+                t.color.z = primary.z;
+            }
+            if let Some(mut t) = self.ui_world.world.get_mut::<Text>(self.stress_title) {
+                t.color.x = primary.x;
+                t.color.y = primary.y;
+                t.color.z = primary.z;
+            }
+            for i in 0..2 {
+                if let Some(mut b) = self.ui_world.world.get_mut::<Border>(self.stress_buttons[i])
+                {
+                    b.color.x = primary.x;
+                    b.color.y = primary.y;
+                    b.color.z = primary.z;
+                }
+                if let Some(mut g) = self.ui_world.world.get_mut::<Glow>(self.stress_buttons[i]) {
+                    g.color.x = primary.x;
+                    g.color.y = primary.y;
+                    g.color.z = primary.z;
+                }
+                if let Some(mut t) = self
+                    .ui_world
+                    .world
+                    .get_mut::<Text>(self.stress_button_labels[i])
+                {
+                    t.color.x = primary.x;
+                    t.color.y = primary.y;
+                    t.color.z = primary.z;
+                }
             }
             for i in 0..2 {
                 let icon = self.nav_icons[i];
@@ -3664,6 +5080,8 @@ mod inner {
                         self.begin_transition(AppState::Home, AppState::VideoTiles);
                     } else if clicked.contains(&self.nav_buttons[1]) {
                         self.begin_transition(AppState::Home, AppState::Loading);
+                    } else if clicked.contains(&self.nav_buttons[2]) {
+                        self.begin_transition(AppState::Home, AppState::ExamplesHome);
                     }
                 }
 
@@ -3748,6 +5166,40 @@ mod inner {
                         self.begin_transition(AppState::GalleryImage(idx), AppState::Gallery);
                     }
                 }
+
+                AppState::ExamplesHome => {
+                    if clicked.contains(&self.nav_icons[0]) {
+                        self.begin_transition(AppState::ExamplesHome, AppState::Home);
+                    } else if let Some(idx) =
+                        (0..6).find(|&i| clicked.contains(&self.example_buttons[i]))
+                    {
+                        self.begin_transition(
+                            AppState::ExamplesHome,
+                            AppState::ExampleDetail(idx),
+                        );
+                    }
+                }
+
+                AppState::ExampleDetail(idx) => {
+                    if clicked.contains(&self.nav_icons[0]) {
+                        if idx == 3 {
+                            self.cancel_stress_test();
+                        }
+                        self.begin_transition(AppState::ExampleDetail(idx), AppState::Home);
+                    } else if clicked.contains(&self.nav_icons[1]) {
+                        if idx == 3 {
+                            self.cancel_stress_test();
+                        }
+                        self.begin_transition(
+                            AppState::ExampleDetail(idx),
+                            AppState::ExamplesHome,
+                        );
+                    } else if idx == 3 && clicked.contains(&self.stress_buttons[0]) {
+                        self.run_burst_spawn();
+                    } else if idx == 3 && clicked.contains(&self.stress_buttons[1]) {
+                        self.run_texture_churn();
+                    }
+                }
             }
         }
 
@@ -3789,6 +5241,15 @@ mod inner {
                 }
                 (AppState::GalleryImage(_), AppState::Gallery) => self.start_image_to_gallery(),
                 (AppState::GalleryImage(_), AppState::Home) => self.start_image_to_home(),
+                (AppState::Home, AppState::ExamplesHome) => self.start_home_to_examples(),
+                (AppState::ExamplesHome, AppState::Home) => self.start_examples_to_home(),
+                (AppState::ExamplesHome, AppState::ExampleDetail(idx)) => {
+                    self.start_examples_to_detail(idx)
+                }
+                (AppState::ExampleDetail(_), AppState::ExamplesHome) => {
+                    self.start_detail_to_examples()
+                }
+                (AppState::ExampleDetail(_), AppState::Home) => self.start_detail_to_home(),
                 (from, to) => unreachable!("no transition defined for {from:?} -> {to:?}"),
             }
             self.transition = Some(Transition {
@@ -3839,7 +5300,9 @@ mod inner {
                 ),
                 (AppState::Loading, AppState::Home)
                 | (AppState::Gallery, AppState::Home)
-                | (AppState::GalleryImage(_), AppState::Home) => self.nav_buttons.iter().all(
+                | (AppState::GalleryImage(_), AppState::Home)
+                | (AppState::ExamplesHome, AppState::Home)
+                | (AppState::ExampleDetail(_), AppState::Home) => self.nav_buttons.iter().all(
                     |&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible),
                 ),
                 (AppState::Gallery, AppState::GalleryImage(_)) => {
@@ -3848,6 +5311,15 @@ mod inner {
                 (AppState::GalleryImage(_), AppState::Gallery) => self.gallery_tiles.iter().all(
                     |&e| matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible),
                 ),
+                (AppState::Home, AppState::ExamplesHome)
+                | (AppState::ExampleDetail(_), AppState::ExamplesHome) => {
+                    self.example_buttons.iter().all(|&e| {
+                        matches!(self.ui_world.world.get::<Visibility>(e), Some(v) if v.visible)
+                    })
+                }
+                (AppState::ExamplesHome, AppState::ExampleDetail(_)) => {
+                    matches!(self.ui_world.world.get::<Visibility>(self.example_detail_panel), Some(v) if v.visible)
+                }
                 (from, to) => unreachable!("no transition defined for {from:?} -> {to:?}"),
             }
         }
@@ -3873,6 +5345,9 @@ mod inner {
                         self.settle_tile_idle(i, false);
                     }
                     self.settle_gallery_hidden();
+                    for i in 0..6 {
+                        self.settle_example_button_idle(i, false);
+                    }
                 }
 
                 AppState::VideoTiles => {
@@ -3933,6 +5408,23 @@ mod inner {
                         self.settle_gallery_tile(i, false);
                     }
                     self.settle_gallery_enlarged_base(image_idx);
+                }
+
+                AppState::ExamplesHome => {
+                    self.set_nav_buttons_visible(false);
+                    for i in 0..6 {
+                        self.settle_example_button_idle(i, true);
+                    }
+                }
+
+                AppState::ExampleDetail(category_idx) => {
+                    self.set_nav_buttons_visible(false);
+                    // All 6 stay hidden — `example_detail_panel`, not any
+                    // of these buttons, is what's on screen now.
+                    for i in 0..6 {
+                        self.settle_example_button_idle(i, false);
+                    }
+                    self.settle_example_detail_panel(category_idx);
                 }
             }
         }
@@ -4115,6 +5607,464 @@ mod inner {
                 }
             }
             states
+        }
+
+        /// Lays out `example_buttons` in a 3 col × 2 row grid, centered on
+        /// both axes (unlike the bottom-anchored gallery grid) — the
+        /// resting shape for `AppState::ExamplesHome`. Same "size from each
+        /// label's baked width" idiom as `layout_nav_buttons`, just 2D;
+        /// column-major indexed (`i = col*2 + row`) to match
+        /// `example_buttons`'s doc.
+        fn layout_example_buttons(&mut self) -> [QuadState; 6] {
+            let sizes: [Vec2; 6] = std::array::from_fn(|i| {
+                self.ui_world
+                    .world
+                    .get::<BakedText>(self.example_labels[i])
+                    .map(|b| {
+                        Vec2::new(b.pixel_size[0], b.pixel_size[1])
+                            + Vec2::splat(2.0 * NAV_BUTTON_PADDING_PX)
+                    })
+                    .unwrap_or(NAV_BUTTON_FALLBACK_SIZE)
+            });
+            let col_width = |col: usize| sizes[col * 2].x.max(sizes[col * 2 + 1].x);
+            let widths = [col_width(0), col_width(1), col_width(2)];
+            let total_width: f32 = widths.iter().sum::<f32>() + 2.0 * EXAMPLE_BUTTON_COL_GAP_PX;
+            let row_height = sizes.iter().map(|s| s.y).fold(0.0, f32::max);
+            let total_height = 2.0 * row_height + EXAMPLE_BUTTON_ROW_GAP_PX;
+            let mut col_centers = [0.0f32; 3];
+            let mut x = -total_width / 2.0;
+            for c in 0..3 {
+                col_centers[c] = x + widths[c] / 2.0;
+                x += widths[c] + EXAMPLE_BUTTON_COL_GAP_PX;
+            }
+            let top_y = total_height / 2.0 - row_height / 2.0;
+            let states: [QuadState; 6] = std::array::from_fn(|i| {
+                let col = i / 2;
+                let y = if i % 2 == 0 { top_y } else { -top_y };
+                QuadState {
+                    position: Vec3::new(col_centers[col], y, 0.5),
+                    // Both buttons in a column share the column's width
+                    // (its wider label's own size) rather than each sizing
+                    // to its own label — e.g. "3D" matches "Layout"'s width.
+                    size: Vec2::new(widths[col], row_height),
+                    rotation: 0.0,
+                    scale: 1.0,
+                    anchor: Vec2::new(0.5, 0.5),
+                    color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                    corner_radius: NAV_BUTTON_CORNER_RADIUS,
+                }
+            });
+            for (i, state) in states.iter().enumerate() {
+                if let Some(mut qs) = self
+                    .ui_world
+                    .world
+                    .get_mut::<QuadState>(self.example_buttons[i])
+                {
+                    *qs = state.clone();
+                }
+            }
+            states
+        }
+
+        /// Positions the Effects screen's content (`example_content`'s doc
+        /// for why the rows are `ChildOf` `example_detail_panel` while the
+        /// title isn't), relative to `example_detail_panel`'s current
+        /// position/size (window-dependent, so this must run after that
+        /// geometry is set — called from `settle_example_detail_panel`):
+        /// the title renders *above* the panel in absolute world
+        /// coordinates (outside its bounds, `EXAMPLE_HEADING_PANEL_GAP_PX`
+        /// above its top edge), left-aligned to the panel's own left edge.
+        /// Each row's label/boxes are positioned in *local*, panel-relative
+        /// coordinates instead (since they're children of the panel,
+        /// `panel_position` doesn't factor in — only `panel_size`),
+        /// indented 10px further than the title, boxes flowing right
+        /// starting just past that row's own label (read from its baked
+        /// width). Text entities render centered on their own position
+        /// (anchor 0.5,0.5), so left-aligning means shifting each one
+        /// right by half its own baked width.
+        fn layout_effects_content(&mut self, panel_position: Vec3, panel_size: Vec2) {
+            const ROW_INDENT_EXTRA: f32 = 10.0;
+            const ROW_GAP_Y: f32 = 90.0;
+            const LABEL_BOX_GAP: f32 = 24.0;
+            const BOX_GAP: f32 = 30.0;
+            const BOX_SIZE: f32 = 64.0;
+            // Gap from a box's bottom edge to its caption underneath — 3px
+            // more than the original (too-tight) spacing.
+            const OPACITY_LABEL_GAP: f32 = 18.0;
+
+            // Title: absolute world coordinates (independent entity, not a
+            // panel child).
+            let abs_left_x = panel_position.x - panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let abs_panel_top_y = panel_position.y + panel_size.y / 2.0;
+
+            let title_height = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.effects_title)
+                .map(|b| b.pixel_size[1])
+                .unwrap_or(0.0);
+            let title_width = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.effects_title)
+                .map(|b| b.pixel_size[0])
+                .unwrap_or(0.0);
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.effects_title) {
+                qs.position.x = abs_left_x + title_width / 2.0;
+                qs.position.y = abs_panel_top_y + EXAMPLE_HEADING_PANEL_GAP_PX + title_height / 2.0;
+            }
+
+            // Rows: local, panel-relative coordinates (panel center =
+            // origin) — these entities are `ChildOf` the panel, so
+            // `panel_position` must NOT be added in here.
+            let left_x = -panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let row_left_x = left_x + ROW_INDENT_EXTRA;
+            let panel_top_y = panel_size.y / 2.0;
+
+            let top_y = panel_top_y - EXAMPLE_PANEL_PADDING_PX - BOX_SIZE / 2.0;
+            let row_y = [
+                top_y,
+                top_y - ROW_GAP_Y,
+                top_y - 2.0 * ROW_GAP_Y,
+                top_y - 3.0 * ROW_GAP_Y,
+            ];
+
+            // All 4 rows' boxes share one column start — the Drop Shadow
+            // row's own label (the widest of the four), not each row's own
+            // label — so every row's leftmost box lines up on the same
+            // left edge instead of drifting with each row's label width.
+            let boxes_start_x = {
+                let drop_shadow_label_width = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(self.effects_row_labels[0])
+                    .map(|b| b.pixel_size[0])
+                    .unwrap_or(0.0);
+                row_left_x + drop_shadow_label_width + LABEL_BOX_GAP
+            };
+
+            for (row, &y) in row_y.iter().enumerate() {
+                let label_entity = self.effects_row_labels[row];
+                let label_width = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(label_entity)
+                    .map(|b| b.pixel_size[0])
+                    .unwrap_or(0.0);
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(label_entity) {
+                    qs.position.x = row_left_x + label_width / 2.0;
+                    qs.position.y = y;
+                }
+                for i in 0..self.effects_row_boxes[row].len() {
+                    let box_entity = self.effects_row_boxes[row][i];
+                    let x = boxes_start_x + BOX_SIZE / 2.0 + i as f32 * (BOX_SIZE + BOX_GAP);
+                    if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(box_entity) {
+                        qs.position.x = x;
+                        qs.position.y = y;
+                    }
+                    // Opacity row (3) — also place this item's own caption
+                    // just below it.
+                    if row == 3 {
+                        let caption = self.effects_opacity_item_labels[i];
+                        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(caption) {
+                            qs.position.x = x;
+                            qs.position.y = y - BOX_SIZE / 2.0 - OPACITY_LABEL_GAP;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Positions the Text screen's content — same title/row split as
+        /// `layout_effects_content` (title absolute, rows local to the
+        /// panel), just with items flowed by their own *actual* baked
+        /// width instead of a fixed box grid, since font size/letter
+        /// spacing directly change how wide each sample renders.
+        fn layout_text_content(&mut self, panel_position: Vec3, panel_size: Vec2) {
+            const ROW_INDENT_EXTRA: f32 = 10.0;
+            const ROW_GAP_Y: f32 = 90.0;
+            const LABEL_ITEM_GAP: f32 = 24.0;
+            const ITEM_GAP: f32 = 30.0;
+            const ROW_HEIGHT: f32 = 56.0;
+
+            // Title: absolute world coordinates (independent entity, not a
+            // panel child) — same treatment as `layout_effects_content`.
+            let abs_left_x = panel_position.x - panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let abs_panel_top_y = panel_position.y + panel_size.y / 2.0;
+
+            let title_height = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.text_title)
+                .map(|b| b.pixel_size[1])
+                .unwrap_or(0.0);
+            let title_width = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.text_title)
+                .map(|b| b.pixel_size[0])
+                .unwrap_or(0.0);
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.text_title) {
+                qs.position.x = abs_left_x + title_width / 2.0;
+                qs.position.y = abs_panel_top_y + EXAMPLE_HEADING_PANEL_GAP_PX + title_height / 2.0;
+            }
+
+            // Rows: local, panel-relative coordinates (panel center =
+            // origin).
+            let left_x = -panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let row_left_x = left_x + ROW_INDENT_EXTRA;
+            let panel_top_y = panel_size.y / 2.0;
+
+            let top_y = panel_top_y - EXAMPLE_PANEL_PADDING_PX - ROW_HEIGHT / 2.0;
+            let row_y = [top_y, top_y - ROW_GAP_Y, top_y - 2.0 * ROW_GAP_Y];
+
+            // All 3 rows' items share one column start — "Letter Spacing"
+            // (row 2), the widest of the three labels, not each row's own
+            // label — so every row's leftmost item lines up on the same
+            // left edge instead of drifting with each row's label width.
+            let items_start_x = {
+                let letter_spacing_label_width = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(self.text_row_labels[2])
+                    .map(|b| b.pixel_size[0])
+                    .unwrap_or(0.0);
+                row_left_x + letter_spacing_label_width + LABEL_ITEM_GAP
+            };
+
+            for (row, &y) in row_y.iter().enumerate() {
+                let label_entity = self.text_row_labels[row];
+                let label_width = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(label_entity)
+                    .map(|b| b.pixel_size[0])
+                    .unwrap_or(0.0);
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(label_entity) {
+                    qs.position.x = row_left_x + label_width / 2.0;
+                    qs.position.y = y;
+                }
+                let mut running_x = items_start_x;
+                for i in 0..self.text_row_items[row].len() {
+                    let item_entity = self.text_row_items[row][i];
+                    let item_width = self
+                        .ui_world
+                        .world
+                        .get::<BakedText>(item_entity)
+                        .map(|b| b.pixel_size[0])
+                        .unwrap_or(0.0);
+                    if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(item_entity) {
+                        qs.position.x = running_x + item_width / 2.0;
+                        qs.position.y = y;
+                    }
+                    running_x += item_width + ITEM_GAP;
+                }
+            }
+        }
+
+        /// Positions the Transforms & Animation screen's content — same
+        /// title/row split as `layout_effects_content` (title absolute,
+        /// rows local to the panel), using the same fixed box-grid layout
+        /// as Effects' rows. Rotation/Scale rows also place each box's
+        /// own caption underneath it (mirroring Effects' Opacity row);
+        /// Continuous Animation has none (one box, already described by
+        /// its own row label).
+        fn layout_transforms_content(&mut self, panel_position: Vec3, panel_size: Vec2) {
+            const ROW_INDENT_EXTRA: f32 = 10.0;
+            // Wider than every other screen's row gap (90) — this
+            // screen's boxes rotate/scale, so they need more room to
+            // breathe between rows than a row of static content does.
+            const ROW_GAP_Y: f32 = 120.0;
+            const LABEL_BOX_GAP: f32 = 29.0;
+            const BOX_GAP: f32 = 40.0;
+            const BOX_SIZE: f32 = 64.0;
+            const ITEM_LABEL_GAP: f32 = 21.0;
+            // Extra clearance beyond `EXAMPLE_PANEL_PADDING_PX`, top and
+            // bottom, specific to this screen: a rotated box's diagonal
+            // extends past its own bounding box, and the Scale/Continuous
+            // rows scale boxes up to 1.4×/1.2× — both eat into the
+            // standard padding enough to visibly clip against the panel
+            // edge without this.
+            const EXTRA_VERTICAL_PADDING: f32 = 20.0;
+
+            // Title: absolute world coordinates (independent entity, not
+            // a panel child) — same treatment as `layout_effects_content`.
+            let abs_left_x = panel_position.x - panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let abs_panel_top_y = panel_position.y + panel_size.y / 2.0;
+
+            let title_height = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.transforms_title)
+                .map(|b| b.pixel_size[1])
+                .unwrap_or(0.0);
+            let title_width = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.transforms_title)
+                .map(|b| b.pixel_size[0])
+                .unwrap_or(0.0);
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.transforms_title) {
+                qs.position.x = abs_left_x + title_width / 2.0;
+                qs.position.y = abs_panel_top_y + EXAMPLE_HEADING_PANEL_GAP_PX + title_height / 2.0;
+            }
+
+            // Rows: local, panel-relative coordinates (panel center =
+            // origin).
+            let left_x = -panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let row_left_x = left_x + ROW_INDENT_EXTRA;
+            let panel_top_y = panel_size.y / 2.0;
+
+            let top_y =
+                panel_top_y - EXAMPLE_PANEL_PADDING_PX - EXTRA_VERTICAL_PADDING - BOX_SIZE / 2.0;
+            let row_y = [top_y, top_y - ROW_GAP_Y, top_y - 2.0 * ROW_GAP_Y];
+
+            // All 3 rows' boxes share one column start — "Continuous
+            // Animation" (row 2), the widest of the three labels, not
+            // each row's own label — so every row's leftmost box lines up
+            // on the same left edge instead of drifting with each row's
+            // label width.
+            let boxes_start_x = {
+                let continuous_label_width = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(self.transforms_row_labels[2])
+                    .map(|b| b.pixel_size[0])
+                    .unwrap_or(0.0);
+                row_left_x + continuous_label_width + LABEL_BOX_GAP
+            };
+
+            for (row, &y) in row_y.iter().enumerate() {
+                let label_entity = self.transforms_row_labels[row];
+                let label_width = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(label_entity)
+                    .map(|b| b.pixel_size[0])
+                    .unwrap_or(0.0);
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(label_entity) {
+                    qs.position.x = row_left_x + label_width / 2.0;
+                    qs.position.y = y;
+                }
+                for i in 0..self.transforms_row_boxes[row].len() {
+                    let box_entity = self.transforms_row_boxes[row][i];
+                    let x = boxes_start_x + BOX_SIZE / 2.0 + i as f32 * (BOX_SIZE + BOX_GAP);
+                    if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(box_entity) {
+                        qs.position.x = x;
+                        qs.position.y = y;
+                    }
+                    if let Some(&caption) = self.transforms_item_labels[row].get(i) {
+                        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(caption) {
+                            qs.position.x = x;
+                            qs.position.y = y - BOX_SIZE / 2.0 - ITEM_LABEL_GAP;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Positions the Stress Tests screen's content. Stacking order,
+        /// top to bottom: title, then the two buttons, then the panel —
+        /// mirroring `stress_panel_target`'s own derivation of the
+        /// panel's top edge, which stacks the *same* three gaps/heights
+        /// in the same order to work out how far down the panel has to
+        /// start. Title and buttons are both absolute (independent
+        /// entities, not `ChildOf` the panel — see `stress_buttons`'s
+        /// doc), left-aligned to the panel's own left edge, using the
+        /// same gap (`EXAMPLE_HEADING_PANEL_GAP_PX`) between
+        /// title/buttons and buttons/panel. Each button is sized to its
+        /// own baked label width (see `STRESS_BUTTON_HEIGHT_PX`'s doc for
+        /// why a shared fixed width didn't work) — the second button's x
+        /// depends on the first's actual width, so `stress_buttons[0]`
+        /// must be sized before `stress_buttons[1]`'s x is computed. The
+        /// result line stays `ChildOf` the panel, centered horizontally
+        /// (local x=0 — its own anchor already centers it regardless of
+        /// baked width) near the panel's bottom edge, within
+        /// `RESULT_TEXT_RESERVED_HEIGHT_PX` of it — `random_burst_target`
+        /// reserves that same strip so Burst Spawn's quads never render
+        /// over it.
+        fn layout_stress_content(&mut self, panel_position: Vec3, panel_size: Vec2) {
+            const BUTTON_GAP: f32 = 24.0;
+
+            let abs_left_x = panel_position.x - panel_size.x / 2.0 + EXAMPLE_PANEL_PADDING_PX;
+            let panel_top_edge = panel_position.y + panel_size.y / 2.0;
+
+            // Buttons: directly above the panel, side by side,
+            // left-aligned as a pair, each sized to its own label.
+            let burst_label_width = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.stress_button_labels[0])
+                .map(|b| b.pixel_size[0])
+                .unwrap_or(0.0);
+            let churn_label_width = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.stress_button_labels[1])
+                .map(|b| b.pixel_size[0])
+                .unwrap_or(0.0);
+            let burst_width = burst_label_width + STRESS_BUTTON_HORIZONTAL_PADDING_PX;
+            let churn_width = churn_label_width + STRESS_BUTTON_HORIZONTAL_PADDING_PX;
+
+            let buttons_y =
+                panel_top_edge + EXAMPLE_HEADING_PANEL_GAP_PX + STRESS_BUTTON_HEIGHT_PX / 2.0;
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_buttons[0])
+            {
+                qs.size.x = burst_width;
+                qs.position.x = abs_left_x + burst_width / 2.0;
+                qs.position.y = buttons_y;
+            }
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_buttons[1])
+            {
+                qs.size.x = churn_width;
+                qs.position.x = abs_left_x + burst_width + BUTTON_GAP + churn_width / 2.0;
+                qs.position.y = buttons_y;
+            }
+
+            // Title: above the buttons.
+            let title_height = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.stress_title)
+                .map(|b| b.pixel_size[1])
+                .unwrap_or(0.0);
+            let title_width = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.stress_title)
+                .map(|b| b.pixel_size[0])
+                .unwrap_or(0.0);
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_title) {
+                qs.position.x = abs_left_x + title_width / 2.0;
+                qs.position.y = buttons_y
+                    + STRESS_BUTTON_HEIGHT_PX / 2.0
+                    + EXAMPLE_HEADING_PANEL_GAP_PX
+                    + title_height / 2.0;
+            }
+
+            // Result: local, panel-relative — stays inside the panel,
+            // near its bottom edge.
+            let result_y = -panel_size.y / 2.0 + RESULT_TEXT_RESERVED_HEIGHT_PX / 2.0;
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.stress_result_text)
+            {
+                qs.position.x = 0.0;
+                qs.position.y = result_y;
+            }
+
+            // Warning: dead center of the panel — absolute world
+            // coordinates (independent entity, not a panel child; see
+            // its own spawn-site doc for why).
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.stress_warning_text)
+            {
+                qs.position.x = panel_position.x;
+                qs.position.y = panel_position.y;
+            }
         }
 
         /// 1→N Slice: the splash composite splits into the three nav buttons.
@@ -4348,6 +6298,381 @@ mod inner {
                     child_behavior: None,
                     strategy: SplitStrategy::Slice,
                 });
+        }
+
+        // -------------------------------------------------------------------
+        // Examples & Tests — Home ↔ ExamplesHome ↔ ExampleDetail (M11.3)
+        // -------------------------------------------------------------------
+
+        /// 3 simultaneous 1→2 `OneToNRequest`s (`GridSlice{cols:1,rows:2}`),
+        /// one per nav button — the reverse of `start_examples_to_home`,
+        /// and the same "M→N via composed 1↔N primitives" idiom
+        /// `start_gallery_to_home` established. Column `i`
+        /// (`nav_buttons[i]`) splits into `example_buttons[i*2]` (top) and
+        /// `example_buttons[i*2+1]` (bottom) — the home row `[0,1,2]`
+        /// becomes grid `[a,b,c]/[d,e,f]` as `0→(a,d)`, `1→(b,e)`,
+        /// `2→(c,f)`, each button's column landing directly at/below itself
+        /// spatially. All 3 fire in the same frame, so it reads as one
+        /// continuous 3→6 fan-out, not 3 separate moments.
+        fn start_home_to_examples(&mut self) {
+            let states = self.layout_example_buttons();
+            for col in 0..3 {
+                let targets = (0..2)
+                    .map(|row| {
+                        let i = col * 2 + row;
+                        GroupTarget {
+                            entity: self.example_buttons[i],
+                            state: states[i].clone(),
+                        }
+                    })
+                    .collect();
+                self.ui_world
+                    .world
+                    .entity_mut(self.nav_buttons[col])
+                    .insert(OneToNRequest {
+                        targets,
+                        default_config: TransitionConfig {
+                            duration: BUTTON_TILES_MORPH_DURATION,
+                            delay: 0.0,
+                            easing: ease_in_out_quad,
+                        },
+                        child_behavior: None,
+                        strategy: SplitStrategy::GridSlice { cols: 1, rows: 2 },
+                    });
+            }
+        }
+
+        /// Reverse of `start_home_to_examples`: 3 simultaneous 2→1
+        /// `NToOneRequest`s (`MergeLayout::Grid{cols:1,rows:2}`), each
+        /// column's top+bottom pair merging back into its matching
+        /// `nav_buttons[i]` — mirrors `start_gallery_to_home`'s per-column
+        /// merges exactly.
+        fn start_examples_to_home(&mut self) {
+            for col in 0..3 {
+                let sources = (0..2)
+                    .map(|row| {
+                        let i = col * 2 + row;
+                        let entity = self.example_buttons[i];
+                        let state = self
+                            .ui_world
+                            .world
+                            .get::<QuadState>(entity)
+                            .cloned()
+                            .unwrap_or_default();
+                        GroupSource { entity, state }
+                    })
+                    .collect();
+                self.ui_world
+                    .world
+                    .entity_mut(self.nav_buttons[col])
+                    .insert(NToOneRequest {
+                        sources,
+                        default_config: TransitionConfig {
+                            duration: BUTTON_TILES_MORPH_DURATION,
+                            delay: 0.0,
+                            easing: ease_in_out_quad,
+                        },
+                        child_behavior: None,
+                        layout: MergeLayout::Grid { cols: 1, rows: 2 },
+                    });
+            }
+        }
+
+        /// N→1 GridSlice: all 6 `example_buttons` converge into
+        /// `example_detail_panel` — the same starburst mechanic
+        /// `start_gallery_to_image` uses for the gallery grid, just
+        /// converging onto a dedicated entity instead of
+        /// `gallery_enlarged_base`. Sources are remapped to row-major
+        /// order (row 0: all 3 cols, then row 1) to match
+        /// `MergeLayout::Grid`'s expectation — `example_buttons` itself is
+        /// column-major (`i = col*2 + row`).
+        fn start_examples_to_detail(&mut self, idx: usize) {
+            // Only category `idx`'s content stays `ChildOf` the panel for
+            // this merge's bake — see `set_example_category_active`'s doc
+            // for why this has to happen before the bake, not after.
+            self.set_example_category_active(idx);
+
+            let canvas_width = self.surface_config.width as f32;
+            let canvas_height = self.surface_config.height as f32;
+
+            let sources: Vec<GroupSource> = (0..2)
+                .flat_map(|row| (0..3).map(move |col| col * 2 + row))
+                .map(|i| {
+                    let entity = self.example_buttons[i];
+                    let state = self
+                        .ui_world
+                        .world
+                        .get::<QuadState>(entity)
+                        .cloned()
+                        .unwrap_or_default();
+                    GroupSource { entity, state }
+                })
+                .collect();
+
+            let dest = self.example_detail_panel;
+            // The real, final resting geometry for category `idx` —
+            // computed the same way `settle_example_detail_panel` will
+            // once the transition completes, so the merge animates
+            // straight to the correct spot instead of animating to a
+            // generic placeholder and then snapping (a visible
+            // "pop"/"drop") once settle overrides it.
+            let to = self.example_detail_target(idx, canvas_width, canvas_height);
+            let target_position = to.position;
+            let target_size = to.size;
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(dest) {
+                *qs = to;
+            }
+            if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dest) {
+                vis.visible = false;
+            }
+            // Position content *before* the merge's own bake runs (not
+            // just at settle) — otherwise on the very first-ever visit to
+            // this category, content still sits at its raw spawn-time
+            // (panel-center) offset when the bake captures it, flashing
+            // there before jumping to its real position once settle
+            // catches up.
+            match idx {
+                0 => self.layout_effects_content(target_position, target_size),
+                1 => self.layout_text_content(target_position, target_size),
+                2 => self.layout_transforms_content(target_position, target_size),
+                3 => self.layout_stress_content(target_position, target_size),
+                _ => {}
+            }
+
+            self.ui_world.world.entity_mut(dest).insert(NToOneRequest {
+                sources,
+                default_config: TransitionConfig {
+                    duration: BUTTON_TILES_MORPH_DURATION,
+                    delay: 0.0,
+                    easing: ease_in_out_quad,
+                },
+                child_behavior: None,
+                layout: MergeLayout::Grid { cols: 3, rows: 2 },
+            });
+        }
+
+        /// 1→N GridSlice: reverses `start_examples_to_detail` —
+        /// `example_detail_panel` splits back into all 6 category buttons.
+        /// `GridSlice` (not `Slice`) since the 6 targets form a real 3×2
+        /// grid, same reasoning as the gallery's own `GridSlice` choice.
+        fn start_detail_to_examples(&mut self) {
+            let states = self.layout_example_buttons();
+            // GridSlice needs targets in row-major order (row 0: all 3
+            // cols, then row 1), but `example_buttons` is column-major
+            // (`i = col*2 + row`, matching the category table) — remap
+            // here.
+            let targets = (0..2)
+                .flat_map(|row| (0..3).map(move |col| col * 2 + row))
+                .map(|i| GroupTarget {
+                    entity: self.example_buttons[i],
+                    state: states[i].clone(),
+                })
+                .collect();
+            self.ui_world
+                .world
+                .entity_mut(self.example_detail_panel)
+                .insert(OneToNRequest {
+                    targets,
+                    default_config: TransitionConfig {
+                        duration: BUTTON_TILES_MORPH_DURATION,
+                        delay: 0.0,
+                        easing: ease_in_out_quad,
+                    },
+                    child_behavior: None,
+                    strategy: SplitStrategy::GridSlice { cols: 3, rows: 2 },
+                });
+        }
+
+        /// 1→N Slice, the escape-hatch path: `example_detail_panel` splits
+        /// directly into the 3 nav buttons — mirrors `start_screen_to_nav`.
+        fn start_detail_to_home(&mut self) {
+            let targets = (0..3)
+                .map(|i| {
+                    let state = self
+                        .ui_world
+                        .world
+                        .get::<QuadState>(self.nav_buttons[i])
+                        .cloned()
+                        .unwrap_or_default();
+                    GroupTarget {
+                        entity: self.nav_buttons[i],
+                        state,
+                    }
+                })
+                .collect();
+            self.ui_world
+                .world
+                .entity_mut(self.example_detail_panel)
+                .insert(OneToNRequest {
+                    targets,
+                    default_config: TransitionConfig {
+                        duration: BUTTON_TILES_MORPH_DURATION,
+                        delay: 0.0,
+                        easing: ease_in_out_quad,
+                    },
+                    child_behavior: None,
+                    strategy: SplitStrategy::Slice,
+                });
+        }
+
+        /// Forces `example_buttons[i]` back to its resting grid shape,
+        /// either hidden (`AppState::Home`) or visible
+        /// (`AppState::ExamplesHome`) — hover reset to idle either way,
+        /// mirroring `settle_tile_idle`.
+        fn settle_example_button_idle(&mut self, i: usize, visible: bool) {
+            let btn = self.example_buttons[i];
+            if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(btn) {
+                vis.visible = visible;
+            }
+            if let Some(mut border) = self.ui_world.world.get_mut::<Border>(btn) {
+                border.color.w = 1.0;
+            }
+            if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(btn) {
+                glow.radius = 0.0;
+                glow.color.w = 1.0;
+            }
+            if let Some(mut label) = self.ui_world.world.get_mut::<Text>(self.example_labels[i]) {
+                label.color.w = 1.0;
+            }
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(btn) {
+                qs.scale = 1.0;
+            }
+            self.example_hover_progress[i] = 0.0;
+            for &content in &self.example_content[i] {
+                if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(content) {
+                    vis.visible = false;
+                }
+            }
+        }
+
+        /// The `example_detail_panel`'s resting geometry for category
+        /// `idx` — shared by `start_examples_to_detail` (so the merge's
+        /// own destination target already matches the final settled
+        /// position, no end-of-morph pop) and `settle_example_detail_panel`
+        /// (the actual resting assert). idx 0/1/2
+        /// (Effects/Text/Transforms & Animation) use their own measured
+        /// content height, and — since they each have their own heading
+        /// rendered above the panel — shift the panel down so
+        /// heading+panel together land vertically centered on screen
+        /// (see `layout_effects_content`'s doc); 4/5 (Layout/3D
+        /// placeholders) just need enough room for one line of text. idx
+        /// 3 (Stress Tests) is a genuinely different shape — see
+        /// `stress_panel_target`'s doc.
+        fn example_detail_target(&mut self, idx: usize, canvas_width: f32, canvas_height: f32) -> QuadState {
+            if idx == 3 {
+                return self.stress_panel_target(canvas_width, canvas_height);
+            }
+            let content_height = match idx {
+                0 => EFFECTS_CONTENT_HEIGHT_PX,
+                1 => TEXT_CONTENT_HEIGHT_PX,
+                2 => TRANSFORMS_CONTENT_HEIGHT_PX,
+                4 | 5 => 100.0,
+                _ => canvas_height * 0.78 - 2.0 * EXAMPLE_PANEL_PADDING_PX,
+            };
+            let mut target =
+                example_panel_quad(canvas_width, canvas_height, self.theme_progress, content_height);
+
+            if let Some(heading) = self.example_heading_entity(idx) {
+                let heading_height = self
+                    .ui_world
+                    .world
+                    .get::<BakedText>(heading)
+                    .map(|b| b.pixel_size[1])
+                    .unwrap_or(0.0);
+                target.position.y = -(heading_height + EXAMPLE_HEADING_PANEL_GAP_PX) / 2.0;
+            }
+            target
+        }
+
+        /// The Stress Tests panel's resting geometry — unlike every
+        /// other category, this one doesn't size from a fixed content
+        /// height centered as a block. Instead the whole assembly (top
+        /// nav icons → heading → buttons → panel → bottom of screen) is
+        /// anchored at both ends: the heading sits
+        /// `SCREEN_NAV_CLEARANCE_PX` below the reserved nav-icon row
+        /// (`ICON_ROW_RESERVED_PX` already bakes that clearance in), the
+        /// panel's bottom edge sits `SCREEN_NAV_CLEARANCE_PX` above the
+        /// very bottom of the screen — the *same* clearance value used at
+        /// the top, so the assembly reads as symmetric — and the panel's
+        /// top edge is wherever it lands after stacking the heading and
+        /// buttons (with the usual `EXAMPLE_HEADING_PANEL_GAP_PX` gap
+        /// between each) down from the top: growing/shrinking either of
+        /// those pushes the panel's top edge down/up, but its bottom
+        /// edge never moves. `layout_stress_content` positions the
+        /// heading and buttons by stacking the *same* gaps in the same
+        /// order starting from this panel's own top edge, so the two
+        /// stay in sync.
+        fn stress_panel_target(&mut self, canvas_width: f32, canvas_height: f32) -> QuadState {
+            let width = (canvas_width * 0.85).min(1000.0);
+
+            let heading_height = self
+                .ui_world
+                .world
+                .get::<BakedText>(self.stress_title)
+                .map(|b| b.pixel_size[1])
+                .unwrap_or(0.0);
+
+            let heading_top_y = canvas_height / 2.0 - ICON_ROW_RESERVED_PX;
+            let heading_bottom_y = heading_top_y - heading_height;
+            let buttons_top_y = heading_bottom_y - EXAMPLE_HEADING_PANEL_GAP_PX;
+            let buttons_bottom_y = buttons_top_y - STRESS_BUTTON_HEIGHT_PX;
+            let panel_top_edge = buttons_bottom_y - EXAMPLE_HEADING_PANEL_GAP_PX;
+
+            let panel_bottom_edge = -canvas_height / 2.0 + SCREEN_NAV_CLEARANCE_PX;
+
+            let height = (panel_top_edge - panel_bottom_edge).max(0.0);
+            let position_y = (panel_top_edge + panel_bottom_edge) / 2.0;
+
+            // Same flat, theme-independent light grey and theme-lerped
+            // corner radius as `example_panel_quad` — duplicated rather
+            // than shared since this screen's height/position math isn't
+            // content-height driven the way that helper assumes.
+            QuadState {
+                position: Vec3::new(0.0, position_y, 0.5),
+                size: Vec2::new(width, height),
+                rotation: 0.0,
+                scale: 1.0,
+                anchor: Vec2::new(0.5, 0.5),
+                color: Vec4::new(0.82, 0.82, 0.83, 1.0),
+                corner_radius: SCREEN_CORNER_RADIUS
+                    + (SCREEN_CORNER_RADIUS_DARK - SCREEN_CORNER_RADIUS) * self.theme_progress,
+            }
+        }
+
+        /// Unconditionally forces `example_detail_panel` into its resting
+        /// geometry for category `idx` and reveals that category's
+        /// content — the `ExampleDetail` counterpart of
+        /// `settle_tile_screen`.
+        fn settle_example_detail_panel(&mut self, idx: usize) {
+            let panel = self.example_detail_panel;
+            if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(panel) {
+                vis.visible = true;
+            }
+            let canvas_width = self.surface_config.width as f32;
+            let canvas_height = self.surface_config.height as f32;
+
+            let target = self.example_detail_target(idx, canvas_width, canvas_height);
+
+            let panel_position = target.position;
+            let panel_size = target.size;
+            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(panel) {
+                *qs = target;
+            }
+            if let Some(mut border) = self.ui_world.world.get_mut::<Border>(panel) {
+                border.color.w = 1.0;
+            }
+            for &content in &self.example_content[idx] {
+                if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(content) {
+                    vis.visible = true;
+                }
+            }
+            match idx {
+                0 => self.layout_effects_content(panel_position, panel_size),
+                1 => self.layout_text_content(panel_position, panel_size),
+                2 => self.layout_transforms_content(panel_position, panel_size),
+                3 => self.layout_stress_content(panel_position, panel_size),
+                _ => {}
+            }
         }
 
         // -------------------------------------------------------------------
@@ -5299,6 +7624,609 @@ mod inner {
                 .get_mut::<Text>(self.gallery_fetch_button_label)
             {
                 label.color.w = self.gallery_button_fade;
+            }
+        }
+
+        /// The independent heading entity rendered above
+        /// `example_detail_panel` for category `idx`, if it has one — not
+        /// every category does (yet).
+        fn example_heading_entity(&self, idx: usize) -> Option<Entity> {
+            match idx {
+                0 => Some(self.effects_title),
+                1 => Some(self.text_title),
+                2 => Some(self.transforms_title),
+                3 => Some(self.stress_title),
+                _ => None,
+            }
+        }
+
+        /// Makes category `idx` the *only* one `ChildOf`
+        /// `example_detail_panel` — every other category's content gets
+        /// `ChildOf` removed. Call this before starting an
+        /// `ExamplesHome`→`ExampleDetail(idx)` merge.
+        ///
+        /// Every category's content is spawned `ChildOf` the panel (see
+        /// `example_content`'s doc for why: it's what makes content bake
+        /// as part of the panel's own crossfade instead of popping in
+        /// after). But `gather_bake_instances` walks a subtree
+        /// unconditionally, ignoring `Visibility` — so with *two or more*
+        /// categories simultaneously `ChildOf` the same panel, any bake of
+        /// that panel (entering *or* leaving *any* category) would gather
+        /// all of them at once, flashing every other category's content
+        /// too. This keeps only the category actually being entered
+        /// attached at any given moment, so a bake only ever sees that one
+        /// category's content.
+        ///
+        /// Skips each category's own heading (`example_heading_entity`)
+        /// and any tracked `example_reparent_exempt` even though both are
+        /// tracked in the same `example_content[idx]` list — the heading
+        /// is deliberately never `ChildOf` the panel (see
+        /// `effects_title`'s doc), and a grandchild is `ChildOf` a
+        /// *different* entity entirely (see `example_reparent_exempt`'s
+        /// doc), so neither must ever gain or lose `ChildOf` the panel
+        /// here.
+        fn set_example_category_active(&mut self, idx: usize) {
+            let panel = self.example_detail_panel;
+            for category in 0..6 {
+                let heading = self.example_heading_entity(category);
+                let is_active = category == idx;
+                for &content in &self.example_content[category] {
+                    if Some(content) == heading || self.example_reparent_exempt.contains(&content) {
+                        continue;
+                    }
+                    let mut entity = self.ui_world.world.entity_mut(content);
+                    if is_active {
+                        entity.insert(ChildOf(panel));
+                    } else {
+                        entity.remove::<ChildOf>();
+                    }
+                }
+            }
+        }
+
+        /// Fades the active category's own heading in only once fully
+        /// settled and idle in its `ExampleDetail` — never while the 6→1
+        /// merge into `example_detail_panel` is still in flight — so the
+        /// heading visibly fades in *after* the panel morph lands, not
+        /// alongside it. Mirrors `advance_gallery_button_fade`'s pattern.
+        /// Explicitly zeroes every *other* category's heading each tick
+        /// too (rather than assuming the state machine always fades one
+        /// out before fading the next in) — robust regardless of how the
+        /// `ExampleDetail(idx)` transition graph evolves later.
+        fn advance_example_title_fade(&mut self, dt: f32) {
+            let active_heading = if self.transition.is_none() {
+                match self.state {
+                    AppState::ExampleDetail(idx) => self.example_heading_entity(idx),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let target = if active_heading.is_some() { 1.0 } else { 0.0 };
+            let step = dt / BUTTON_TILES_MORPH_DURATION;
+            if self.example_title_fade < target {
+                self.example_title_fade = (self.example_title_fade + step).min(target);
+            } else if self.example_title_fade > target {
+                self.example_title_fade = (self.example_title_fade - step).max(target);
+            }
+            for idx in 0..6 {
+                if let Some(heading) = self.example_heading_entity(idx) {
+                    let alpha = if Some(heading) == active_heading {
+                        self.example_title_fade
+                    } else {
+                        0.0
+                    };
+                    if let Some(mut title) = self.ui_world.world.get_mut::<Text>(heading) {
+                        title.color.w = alpha;
+                    }
+                }
+            }
+        }
+
+        /// Drives the Continuous Animation box's rotation/scale/hue for
+        /// as long as this screen is fully settled and idle in
+        /// `ExampleDetail(2)` — paused (not reset) otherwise, so leaving
+        /// and returning resumes from wherever it left off rather than
+        /// snapping back to a fixed start pose.
+        fn advance_example_animation(&mut self, dt: f32) {
+            if self.transition.is_some() || self.state != AppState::ExampleDetail(2) {
+                return;
+            }
+            self.transforms_anim_elapsed += dt;
+            let t = self.transforms_anim_elapsed;
+
+            const ROTATION_PERIOD_SECS: f32 = 4.0;
+            const SCALE_PERIOD_SECS: f32 = 2.0;
+            const HUE_PERIOD_SECS: f32 = 5.0;
+            const SCALE_MIN: f32 = 0.8;
+            const SCALE_MAX: f32 = 1.2;
+
+            let rotation = (t / ROTATION_PERIOD_SECS) * std::f32::consts::TAU;
+            let scale_mid = (SCALE_MIN + SCALE_MAX) / 2.0;
+            let scale_amplitude = (SCALE_MAX - SCALE_MIN) / 2.0;
+            let scale = scale_mid
+                + scale_amplitude * (t / SCALE_PERIOD_SECS * std::f32::consts::TAU).sin();
+            let hue = (t / HUE_PERIOD_SECS) * 360.0;
+            let rgb = hsv_to_rgb(hue);
+
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.transforms_continuous_box)
+            {
+                qs.rotation = rotation;
+                qs.scale = scale;
+                qs.color = Vec4::new(rgb.x, rgb.y, rgb.z, 1.0);
+            }
+        }
+
+        /// Hover glow/scale for both Stress Tests buttons — same
+        /// `hover_entered`/`hover_exited` → progress → `glow.radius`/`scale`
+        /// pattern as `advance_gallery_fetch_button_hover`, just looped
+        /// over `stress_buttons`'s 2 entries instead of a single button.
+        /// Suppressed (forced toward 0) whenever a transition is in
+        /// flight or the app isn't on this screen, same rationale as
+        /// every other hover function in this file.
+        fn advance_stress_button_hover(&mut self, dt: f32) {
+            for i in 0..2 {
+                let entity = self.stress_buttons[i];
+                {
+                    let events = self.ui_world.world.resource::<InteractionEvents>();
+                    if events.hover_entered.contains(&entity) {
+                        self.stress_button_is_hovering[i] = true;
+                    } else if events.hover_exited.contains(&entity) {
+                        self.stress_button_is_hovering[i] = false;
+                    }
+                }
+                let suppressed =
+                    self.transition.is_some() || self.state != AppState::ExampleDetail(3);
+                let target = if suppressed {
+                    0.0
+                } else if self.stress_button_is_hovering[i] {
+                    1.0
+                } else {
+                    0.0
+                };
+                let step = dt / GLOW_DURATION;
+                if self.stress_button_hover_progress[i] < target {
+                    self.stress_button_hover_progress[i] =
+                        (self.stress_button_hover_progress[i] + step).min(target);
+                } else if self.stress_button_hover_progress[i] > target {
+                    self.stress_button_hover_progress[i] =
+                        (self.stress_button_hover_progress[i] - step).max(target);
+                }
+                if let Some(mut glow) = self.ui_world.world.get_mut::<Glow>(entity) {
+                    glow.radius = self.stress_button_hover_progress[i] * GLOW_MAX_RADIUS;
+                }
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(entity) {
+                    qs.scale = 1.0 + self.stress_button_hover_progress[i] * HOVER_SCALE_BOOST;
+                }
+            }
+        }
+
+        /// Fades both Stress Tests buttons in (once settled and idle
+        /// here) and out (in sync with any transition away from this
+        /// screen) — mirrors `advance_example_title_fade`'s exact
+        /// pattern for the same reason: the buttons are
+        /// independent/absolute (never baked into any transition — see
+        /// `stress_buttons`'s doc), so without this they'd sit at full
+        /// opacity for the whole outbound morph and pop off abruptly
+        /// only once settle hides them via `example_content[3]`'s
+        /// Visibility toggle. Only touches `Border`/`Glow`/`Text` alpha
+        /// — `Visibility` itself stays owned by that same generic
+        /// toggle, same division of labor as
+        /// `advance_example_title_fade`.
+        fn advance_stress_button_fade(&mut self, dt: f32) {
+            let target = if self.transition.is_none() && self.state == AppState::ExampleDetail(3)
+            {
+                1.0
+            } else {
+                0.0
+            };
+            let step = dt / BUTTON_TILES_MORPH_DURATION;
+            if self.stress_button_fade < target {
+                self.stress_button_fade = (self.stress_button_fade + step).min(target);
+            } else if self.stress_button_fade > target {
+                self.stress_button_fade = (self.stress_button_fade - step).max(target);
+            }
+            for i in 0..2 {
+                let button = self.stress_buttons[i];
+                if let Some(mut b) = self.ui_world.world.get_mut::<Border>(button) {
+                    b.color.w = self.stress_button_fade;
+                }
+                if let Some(mut g) = self.ui_world.world.get_mut::<Glow>(button) {
+                    g.color.w = self.stress_button_fade;
+                }
+                let label = self.stress_button_labels[i];
+                if let Some(mut t) = self.ui_world.world.get_mut::<Text>(label) {
+                    t.color.w = self.stress_button_fade;
+                }
+            }
+        }
+
+        /// Shows the photosensitivity warning only while settled and
+        /// idle on the Stress Tests screen with no test currently
+        /// running — hidden the instant a test starts (Texture Churn's
+        /// rapid color swaps are exactly what it warns about) and shown
+        /// again once `finalize_stress_test`/`cancel_stress_test` clears
+        /// the run.
+        fn advance_stress_warning_visibility(&mut self) {
+            let visible = self.transition.is_none()
+                && self.state == AppState::ExampleDetail(3)
+                && self.stress_test_run.is_none();
+            if let Some(mut vis) = self
+                .ui_world
+                .world
+                .get_mut::<Visibility>(self.stress_warning_text)
+            {
+                vis.visible = visible;
+            }
+        }
+
+        /// Overwrites `stress_result_text`'s content and forces a fresh
+        /// bake (`bake_pending_text` only ever bakes entities *without*
+        /// `BakedText` — see the result text's own spawn-site doc — so
+        /// updating `content` alone would leave the old baked glyph
+        /// texture on screen forever). Removing `TextureRef` alongside it
+        /// also frees the old atlas region via the M11 ref-counting path
+        /// instead of leaking it.
+        fn set_stress_result_text(&mut self, message: &str) {
+            if let Some(mut text) = self.ui_world.world.get_mut::<Text>(self.stress_result_text) {
+                text.content = message.to_string();
+            }
+            self.ui_world
+                .world
+                .entity_mut(self.stress_result_text)
+                .remove::<BakedText>();
+            self.ui_world
+                .world
+                .entity_mut(self.stress_result_text)
+                .remove::<TextureRef>();
+        }
+
+        /// A fresh random target `QuadState` for one Burst Spawn entity,
+        /// somewhere within `panel`'s current bounds — position, scale,
+        /// and hue all randomized per the plan's "random
+        /// position/color/scale" spec, reusing `hsv_to_rgb` (already
+        /// built for the Transforms & Animation screen) for varied
+        /// colors. Excludes the `RESULT_TEXT_RESERVED_HEIGHT_PX` strip at
+        /// the bottom (see `layout_stress_content`) so quads fill the
+        /// rest of the panel without ever rendering over the result
+        /// text.
+        fn random_burst_target(&mut self, panel: &QuadState) -> QuadState {
+            let half_w =
+                (panel.size.x / 2.0 - EXAMPLE_PANEL_PADDING_PX - BURST_ITEM_SIZE / 2.0).max(0.0);
+            let usable_top = panel.position.y + panel.size.y / 2.0
+                - EXAMPLE_PANEL_PADDING_PX
+                - BURST_ITEM_SIZE / 2.0;
+            let usable_bottom = panel.position.y - panel.size.y / 2.0
+                + RESULT_TEXT_RESERVED_HEIGHT_PX
+                + BURST_ITEM_SIZE / 2.0;
+            let usable_center_y = (usable_top + usable_bottom) / 2.0;
+            let usable_half_h = ((usable_top - usable_bottom) / 2.0).max(0.0);
+
+            let x = panel.position.x
+                + (random_unit_f32(&mut self.stress_rng_state) * 2.0 - 1.0) * half_w;
+            let y = usable_center_y
+                + (random_unit_f32(&mut self.stress_rng_state) * 2.0 - 1.0) * usable_half_h;
+            let scale = 0.6 + random_unit_f32(&mut self.stress_rng_state) * 0.8;
+            let hue = random_unit_f32(&mut self.stress_rng_state) * 360.0;
+            let rgb = hsv_to_rgb(hue);
+            QuadState {
+                position: Vec3::new(x, y, 0.51),
+                size: Vec2::new(BURST_ITEM_SIZE, BURST_ITEM_SIZE),
+                rotation: 0.0,
+                scale,
+                anchor: Vec2::new(0.5, 0.5),
+                color: Vec4::new(rgb.x, rgb.y, rgb.z, 1.0),
+                corner_radius: 4.0,
+            }
+        }
+
+        /// "Run Burst Spawn" click handler — a no-op if a run is already
+        /// in flight (per the plan: clicking either button mid-run
+        /// doesn't restart it). Spawns `BURST_SPAWN_COUNT` small quads at
+        /// random positions within the panel's current bounds, each
+        /// already `Lifecycle::Idle` (so `advance_burst_spawn_entities`
+        /// retriggers them on the very first tick rather than waiting a
+        /// full `BURST_SPAWN_ITEM_DURATION`), and starts tracking the
+        /// run.
+        fn run_burst_spawn(&mut self) {
+            if self.stress_test_run.is_some() {
+                return;
+            }
+            let panel = self
+                .ui_world
+                .world
+                .get::<QuadState>(self.example_detail_panel)
+                .cloned()
+                .unwrap_or_default();
+            let mut entities = Vec::with_capacity(BURST_SPAWN_COUNT);
+            for _ in 0..BURST_SPAWN_COUNT {
+                let state = self.random_burst_target(&panel);
+                let entity = self
+                    .ui_world
+                    .world
+                    .spawn((state, Lifecycle::Idle, Visibility::VISIBLE))
+                    .id();
+                entities.push(entity);
+            }
+            self.stress_test_run = Some(StressTestRun {
+                kind: StressTestKind::BurstSpawn,
+                elapsed: 0.0,
+                frame_count: 0,
+                entities,
+                churn_iterations: 0,
+            });
+        }
+
+        /// "Run Texture Churn" click handler — same no-op-while-a-run-is-
+        /// active guard as `run_burst_spawn`. Spawns `TEXTURE_CHURN_SLOTS`
+        /// fixed quads in a `TEXTURE_CHURN_COLS`-column grid, centered in
+        /// the panel's usable area (same reserved-bottom-strip exclusion
+        /// as Burst Spawn's random target area, so the grid doesn't
+        /// overlap the result text either) — each slot starts untextured
+        /// (flat white); `advance_texture_churn_entities` gives all 8
+        /// their first real texture on the very next tick.
+        fn run_texture_churn(&mut self) {
+            if self.stress_test_run.is_some() {
+                return;
+            }
+            let panel = self
+                .ui_world
+                .world
+                .get::<QuadState>(self.example_detail_panel)
+                .cloned()
+                .unwrap_or_default();
+
+            let cols = TEXTURE_CHURN_COLS;
+            let rows = (TEXTURE_CHURN_SLOTS as f32 / cols as f32).ceil();
+            const GAP: f32 = 30.0;
+            let total_w = cols as f32 * TEXTURE_CHURN_SLOT_SIZE + (cols as f32 - 1.0) * GAP;
+            let total_h = rows * TEXTURE_CHURN_SLOT_SIZE + (rows - 1.0) * GAP;
+
+            let usable_top = panel.position.y + panel.size.y / 2.0 - EXAMPLE_PANEL_PADDING_PX;
+            let usable_bottom =
+                panel.position.y - panel.size.y / 2.0 + RESULT_TEXT_RESERVED_HEIGHT_PX;
+            let usable_center_y = (usable_top + usable_bottom) / 2.0;
+
+            let start_x = panel.position.x - total_w / 2.0 + TEXTURE_CHURN_SLOT_SIZE / 2.0;
+            let start_y = usable_center_y + total_h / 2.0 - TEXTURE_CHURN_SLOT_SIZE / 2.0;
+
+            let mut entities = Vec::with_capacity(TEXTURE_CHURN_SLOTS);
+            for i in 0..TEXTURE_CHURN_SLOTS {
+                let row = i / cols;
+                let col = i % cols;
+                let x = start_x + col as f32 * (TEXTURE_CHURN_SLOT_SIZE + GAP);
+                let y = start_y - row as f32 * (TEXTURE_CHURN_SLOT_SIZE + GAP);
+                let entity = self
+                    .ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(x, y, 0.51),
+                            size: Vec2::new(TEXTURE_CHURN_SLOT_SIZE, TEXTURE_CHURN_SLOT_SIZE),
+                            rotation: 0.0,
+                            scale: 1.0,
+                            anchor: Vec2::new(0.5, 0.5),
+                            color: white(),
+                            corner_radius: 8.0,
+                        },
+                        Lifecycle::Idle,
+                        Visibility::VISIBLE,
+                    ))
+                    .id();
+                entities.push(entity);
+            }
+
+            self.stress_test_run = Some(StressTestRun {
+                kind: StressTestKind::TextureChurn,
+                elapsed: 0.0,
+                frame_count: 0,
+                entities,
+                churn_iterations: 0,
+            });
+        }
+
+        /// A synthetic solid-color RGBA pixel buffer — Texture Churn's
+        /// "isolate the resource-management path, not JPEG decode speed"
+        /// source data (see its own doc). No image format, no allocation
+        /// beyond the flat buffer itself.
+        fn synthetic_texture_rgba(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+            let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+            for _ in 0..(width * height) {
+                pixels.extend_from_slice(&color);
+            }
+            pixels
+        }
+
+        /// One Texture Churn register/evict cycle for a single slot
+        /// entity: generates a fresh synthetic buffer (varying size and
+        /// hue), registers + uploads it into `main_atlas`, then replaces
+        /// the entity's `BakedImage`/`TextureRef` — `TextureRef`'s own
+        /// `ComponentHooks` decref the old texture (freeing it once
+        /// unreferenced, via the same eviction path `register_static`
+        /// already falls back to when the atlas is full) and incref the
+        /// new one, so no manual free call is needed here.
+        fn churn_texture(&mut self, entity: Entity) {
+            let width = TEXTURE_CHURN_SIZE_MIN
+                + random_unit_f32(&mut self.stress_rng_state) * TEXTURE_CHURN_SIZE_SPREAD;
+            let height = TEXTURE_CHURN_SIZE_MIN
+                + random_unit_f32(&mut self.stress_rng_state) * TEXTURE_CHURN_SIZE_SPREAD;
+            let (width, height) = (width as u32, height as u32);
+            let hue = random_unit_f32(&mut self.stress_rng_state) * 360.0;
+            let rgb = hsv_to_rgb(hue);
+            let color = [
+                (rgb.x * 255.0) as u8,
+                (rgb.y * 255.0) as u8,
+                (rgb.z * 255.0) as u8,
+                255,
+            ];
+            let pixels = Self::synthetic_texture_rgba(width, height, color);
+
+            let Some(texture_id) = self
+                .ui_world
+                .world
+                .resource_mut::<QuadPipeline>()
+                .texture_registry
+                .register_static(width, height, false)
+            else {
+                // Atlas full even after eviction — skip this cycle
+                // rather than panicking; the next one tries again.
+                return;
+            };
+            let pipeline = self.ui_world.world.resource::<QuadPipeline>();
+            let placement = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(&self.queue, placement, &pixels);
+            let uv = pipeline
+                .texture_registry
+                .main_atlas_uv(texture_id)
+                .expect("just registered");
+
+            self.ui_world.world.entity_mut(entity).insert((
+                BakedImage {
+                    uv_offset: uv.uv_offset,
+                    uv_scale: uv.uv_scale,
+                    page: uv.page,
+                    pixel_size: [width as f32, height as f32],
+                },
+                TextureRef(texture_id),
+            ));
+        }
+
+        /// Churns every Texture Churn slot once per tick — unlike Burst
+        /// Spawn's per-entity `Lifecycle::Idle` gating (a texture swap is
+        /// instantaneous, no transition to wait out), so all
+        /// `TEXTURE_CHURN_SLOTS` entities get a fresh texture every frame
+        /// the test runs, each swap counted toward `churn_iterations`.
+        fn advance_texture_churn_entities(&mut self) {
+            let entities = match &self.stress_test_run {
+                Some(run) if run.kind == StressTestKind::TextureChurn => run.entities.clone(),
+                _ => return,
+            };
+            for &entity in &entities {
+                self.churn_texture(entity);
+            }
+            if let Some(run) = self.stress_test_run.as_mut() {
+                run.churn_iterations += entities.len() as u32;
+            }
+        }
+
+        /// For every Burst Spawn entity that's finished its current
+        /// transition (`Lifecycle::Idle`), fires a fresh one to a new
+        /// random target — the "continuously re-triggers... for the
+        /// full 3s window" sustained load the plan calls for, rather
+        /// than a one-shot initial burst.
+        fn advance_burst_spawn_entities(&mut self) {
+            let entities = match &self.stress_test_run {
+                Some(run) if run.kind == StressTestKind::BurstSpawn => run.entities.clone(),
+                _ => return,
+            };
+            let panel = self
+                .ui_world
+                .world
+                .get::<QuadState>(self.example_detail_panel)
+                .cloned()
+                .unwrap_or_default();
+            for entity in entities {
+                let lifecycle = self.ui_world.world.get::<Lifecycle>(entity);
+                if !matches!(lifecycle, Some(Lifecycle::Idle)) {
+                    continue;
+                }
+                let to = self.random_burst_target(&panel);
+                self.ui_world
+                    .world
+                    .entity_mut(entity)
+                    .insert(TransitionRequest {
+                        to,
+                        config: TransitionConfig {
+                            duration: BURST_SPAWN_ITEM_DURATION,
+                            delay: 0.0,
+                            easing: ease_in_out_quad,
+                        },
+                        from_state: None,
+                    });
+            }
+        }
+
+        /// Ticks the in-flight stress test (if any), dispatching
+        /// per-frame work by `StressTestKind`, and hands off to
+        /// `finalize_stress_test` once `STRESS_TEST_DURATION` has
+        /// elapsed.
+        fn advance_stress_test(&mut self, dt: f32) {
+            let kind = match &self.stress_test_run {
+                Some(run) => run.kind,
+                None => return,
+            };
+            let elapsed = {
+                let run = self.stress_test_run.as_mut().expect("checked above");
+                run.elapsed += dt;
+                run.frame_count += 1;
+                run.elapsed
+            };
+            if elapsed >= STRESS_TEST_DURATION {
+                self.finalize_stress_test();
+                return;
+            }
+            match kind {
+                StressTestKind::BurstSpawn => self.advance_burst_spawn_entities(),
+                StressTestKind::TextureChurn => self.advance_texture_churn_entities(),
+            }
+        }
+
+        /// Computes the average FPS, formats the result message,
+        /// despawns the run's scratch entities, and clears
+        /// `stress_test_run` back to `None` so a fresh click can start
+        /// another run.
+        fn finalize_stress_test(&mut self) {
+            let Some(run) = self.stress_test_run.take() else {
+                return;
+            };
+            let avg_fps = run.frame_count as f32 / run.elapsed;
+            // Both shells set `PresentMode::AutoVsync` (see `lib.rs`'s own
+            // surface config) — a real, deliberate cap, not a
+            // stress-test bottleneck, so a result that bumped up against
+            // it deserves a callout rather than reading like this demo
+            // can't push past ~60 FPS on its own.
+            let vsync_note = if avg_fps >= VSYNC_FPS_CAP_THRESHOLD {
+                " (FPS capped at 60 by vsync)"
+            } else {
+                ""
+            };
+            let message = match run.kind {
+                StressTestKind::BurstSpawn => format!(
+                    "Burst Spawn: {} entities, avg {avg_fps:.1} FPS over {STRESS_TEST_DURATION:.1}s{vsync_note}",
+                    run.entities.len()
+                ),
+                StressTestKind::TextureChurn => format!(
+                    "Texture Churn: {} register/evict cycles, avg {avg_fps:.1} FPS over {STRESS_TEST_DURATION:.1}s{vsync_note}",
+                    run.churn_iterations
+                ),
+            };
+            for &entity in &run.entities {
+                self.ui_world.world.despawn(entity);
+            }
+            self.set_stress_result_text(&message);
+        }
+
+        /// Immediately cancels the in-flight stress test (if any) —
+        /// despawns its scratch entities and clears `stress_test_run`
+        /// back to `None`, without reporting a result (unlike
+        /// `finalize_stress_test`, this isn't a completion). Called when
+        /// navigating away from the Stress Tests screen mid-run, so a
+        /// test's entities don't keep existing (and, since they're
+        /// independent/absolute rather than `ChildOf` the panel, keep
+        /// rendering) over the transition or on whatever screen comes
+        /// next.
+        fn cancel_stress_test(&mut self) {
+            let Some(run) = self.stress_test_run.take() else {
+                return;
+            };
+            for &entity in &run.entities {
+                self.ui_world.world.despawn(entity);
             }
         }
 

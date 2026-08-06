@@ -29,8 +29,13 @@
 
     canvas {
       display: block;
-      width: 1000px;
-      height: 700px;
+      /* Matches proteus-shell-native's default window
+         (`with_inner_size(LogicalSize::new(1280, 800))` in main.rs) so
+         both shells lay out identically at default size — divergent sizes
+         made layouts computed against one shell's window clip/overflow in
+         the other. */
+      width: 1280px;
+      height: 800px;
       /* Crisp pixels — no browser smoothing */
       image-rendering: pixelated;
     }
@@ -51,7 +56,7 @@
     The CSS width/height only controls display size (pixel density handled by devicePixelRatio).
     For simplicity this demo uses 1:1 logical pixels.
   -->
-  <canvas id="proteus-canvas" width="1000" height="700"></canvas>
+  <canvas id="proteus-canvas" width="1280" height="800"></canvas>
   <p id="status">Loading…</p>
 
   <script type="module">

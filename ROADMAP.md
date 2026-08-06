@@ -40,7 +40,7 @@ M13 Developer Release
 - **M10.6 — Oriented Hit-Test Boxes** — can begin after M10
 - **M11.1 — Update Demo, Part 1** — after M11 (complete, ready to commit)
 - **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1 (complete)
-- **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2
+- **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2 (complete)
 - **M11.4 — Host Demo on GitHub Pages** — conceptually after M11.3, no hard dependency
 
 **Cross-shell parity is a standing requirement, not a milestone.** Every milestone's definition of
@@ -250,11 +250,17 @@ experience" tractable, not the page count alone. Page size/count are developer-c
 PLANNING.md for the full DoD, including the documented UHD-on-web limitation and the fragmentation
 investigation's findings.
 
-## M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path)*
+## M11.3 — Update Demo, Part 2: Gallery + Examples *(off critical path — complete)*
 
-Closes the two gaps M11.1 deferred, once M11.2 provides real atlas headroom: the gallery drops
-its aggressive per-image downscale and gets a working "Fetch New Images" refetch, and the
-"Examples & Tests" nav button (currently an unbuilt placeholder) gets real content.
+Closed the two gaps M11.1 deferred, once M11.2 provided real atlas headroom: the gallery dropped
+its aggressive per-image downscale and got a working "Fetch New Images" refetch, and the
+"Examples & Tests" nav button (previously an unbuilt placeholder) got real content — six
+sub-sections (Effects, Text, Transforms & Animation, Stress Tests, plus two forward-looking
+placeholders) reachable from a 3↔6 nav split, each morphing 1↔1 into a shared detail panel. Also
+surfaced and fixed several real framework bugs along the way (text-rasterization clipping, an
+opacity cascade being ignored during transition bakes, and a general "bake ignores `Visibility`"
+pitfall worked around with a reusable coordinator-entity pattern). See PLANNING.md for the full
+DoD and what shipped.
 
 ## M11.4 — Host Demo on GitHub Pages *(off critical path)*
 

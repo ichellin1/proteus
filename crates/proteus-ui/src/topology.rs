@@ -46,7 +46,7 @@ use proteus_render::{
 use crate::collect::{quad_state_to_instance, BakedTexture};
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 use crate::effects::{Border, DropShadow, Glow};
-use crate::hierarchy::compose_with_parent;
+use crate::hierarchy::{compose_with_parent, EffectiveOpacity, Opacity};
 use crate::image::BakedImage;
 use crate::text::{BakedText, Text};
 use crate::transition::{ActiveTransition, TransitionConfig};
@@ -373,6 +373,8 @@ pub(crate) type BakeVisualsQuery<'w, 's> = Query<
         Option<&'static BakedText>,
         Option<&'static Text>,
         Option<&'static BakedImage>,
+        Option<&'static EffectiveOpacity>,
+        Option<&'static Opacity>,
     ),
 >;
 
@@ -399,11 +401,25 @@ pub(crate) fn gather_bake_instances(
     entity: Entity,
     qs: &QuadState,
 ) -> Vec<QuadInstance> {
-    let Ok((border, glow, shadow, baked_text, text, baked_image)) = visuals.get(entity) else {
+    let Ok((border, glow, shadow, baked_text, text, baked_image, effective_opacity, opacity)) =
+        visuals.get(entity)
+    else {
         return vec![quad_state_to_instance(qs, None, None, None, None)];
     };
+    // Cascaded opacity (M10) — same fallback chain as
+    // `push_entity_instances`: prefer the cascaded `EffectiveOpacity`,
+    // fall back to the entity's own raw `Opacity`, else fully opaque.
+    // Without this, an `Opacity`-cascaded entity baked mid-transition
+    // (e.g. a group-transition source/destination whose subtree includes
+    // opacity-cascaded content) would bake at full alpha regardless of its
+    // real effective opacity, then visibly snap to the correct alpha once
+    // the transition completes and per-frame rendering takes over.
+    let effective_opacity = effective_opacity
+        .map(|o| o.0)
+        .unwrap_or_else(|| opacity.map(|o| o.0).unwrap_or(1.0));
 
     let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
+    bg_inst.opacity = effective_opacity;
     // A static image (M9.7 box-cover art) is a one-time UV mapping into
     // main_atlas — same handling as the per-frame path in collect.rs's
     // push_entity_instances. Without this, a Slice-transition target with
@@ -428,7 +444,9 @@ pub(crate) fn gather_bake_instances(
         // text overlay in collect.rs — see that file for the full rationale.
         text_qs.size = b.pixel_size.into();
         text_qs.corner_radius = 0.0;
-        out.push(quad_state_to_instance(&text_qs, Some(b), None, None, None));
+        let mut text_inst = quad_state_to_instance(&text_qs, Some(b), None, None, None);
+        text_inst.opacity = effective_opacity;
+        out.push(text_inst);
     }
 
     // M10: fold in every descendant's own instances too, recursively (not
@@ -673,15 +691,15 @@ pub fn one_to_n_setup_system(
                 let src_glow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, g, _, _, _, _)| g.cloned());
+                    .and_then(|(_, g, _, _, _, _, _, _)| g.cloned());
                 let src_shadow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, s, _, _, _)| s.cloned());
+                    .and_then(|(_, _, s, _, _, _, _, _)| s.cloned());
                 let src_baked = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, _, b, _, _)| b.cloned());
+                    .and_then(|(_, _, _, b, _, _, _, _)| b.cloned());
 
                 let slices = match request.strategy {
                     SplitStrategy::GridSlice { cols, rows } => {
@@ -950,7 +968,7 @@ pub fn n_to_one_setup_system(
 
             if let Some(bt) = baked_texture {
                 entity_cmd.insert(bt);
-            } else if let Ok((_, glow, shadow, baked, _, _)) = visuals.get(source.entity) {
+            } else if let Ok((_, glow, shadow, baked, _, _, _, _)) = visuals.get(source.entity) {
                 // Fallback path (no bake): propagate the source entity's own
                 // visuals, exactly as before this feature existed.
                 if let Some(s) = shadow {

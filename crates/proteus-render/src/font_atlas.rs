@@ -157,16 +157,46 @@ impl FontAtlas {
         let line_metrics = self.font.horizontal_line_metrics(size_px)?;
 
         // Ascent is positive (above baseline), descent is negative (below).
+        // `ascent_px`/`descent_px` are ceiled *independently*, not
+        // `(ascent - descent).ceil()` as a single sum — ceiling isn't
+        // linear, so rounding the combined height could allocate up to
+        // ~1px less room below the baseline than the font's true
+        // (unrounded) descent needs. `glyph_top`'s placement below is
+        // anchored to `ascent_px` alone (see its own doc), so any shortfall
+        // there always eats into the space *below* it — i.e. the bottom
+        // row of descenders (g/y/p/q/j) or below-baseline diacritics gets
+        // silently dropped by the bounds check a few lines down. Ceiling
+        // each term on its own guarantees `text_height - ascent_px` is
+        // always >= the true descent magnitude.
         let ascent_px = line_metrics.ascent.ceil() as i32;
-        let text_height = (line_metrics.ascent - line_metrics.descent).ceil() as u32;
+        let descent_px = (-line_metrics.descent).ceil() as i32;
+        let text_height = (ascent_px + descent_px) as u32;
         if text_height == 0 {
             return None;
         }
 
         let glyph_count = rasterized.len();
-        let advance_sum: f32 = rasterized.iter().map(|(m, _)| m.advance_width).sum();
-        let tracking_total = letter_spacing_px * glyph_count.saturating_sub(1) as f32;
-        let text_width = (advance_sum + tracking_total).ceil().max(0.0) as u32;
+
+        // Width: a glyph's ink can extend past its own advance box (common
+        // for many glyphs — decorative caps, descenders like "y"/"j", or
+        // just ordinary overhang — and most visible on the *last* glyph,
+        // since there's no following glyph's space for it to overlap
+        // into). Sizing purely off the sum of advance widths silently
+        // clipped that overhang at the right edge. Instead, walk the same
+        // pen-advance sequence the compositing loop below uses, tracking
+        // the rightmost ink pixel any glyph's bitmap actually reaches, not
+        // just where the pen ends up.
+        let mut pen_x_probe: i32 = 0;
+        let mut max_right: i32 = 0;
+        for (i, (metrics, _)) in rasterized.iter().enumerate() {
+            let glyph_left = pen_x_probe + metrics.xmin;
+            max_right = max_right.max(glyph_left + metrics.width as i32);
+            pen_x_probe += metrics.advance_width.ceil() as i32;
+            if i + 1 < glyph_count {
+                pen_x_probe += letter_spacing_px.round() as i32;
+            }
+        }
+        let text_width = max_right.max(0) as u32;
         if text_width == 0 {
             return None;
         }
