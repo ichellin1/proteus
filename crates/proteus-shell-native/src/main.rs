@@ -276,10 +276,7 @@ const TILE_COLORS: [Vec4; 3] = [
 /// working directory. Missing files degrade gracefully: `start_video_playback`
 /// logs a warning and the tile↔screen morph still runs, just without video.
 const TILE_VIDEO_PATHS: [&str; 3] = [
-    concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/videos/tiger.mp4"
-    ),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/videos/tiger.mp4"),
     concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/assets/videos/sintel_fixed.mp4"
