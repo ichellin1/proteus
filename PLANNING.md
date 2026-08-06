@@ -2165,7 +2165,48 @@ framework at all, anyone who just wants to see it work before reading a line of 
 fully working, publicly reachable, browser-hosted build of the web shell demo — nothing needed but
 a browser.
 
-**Decisions, defaults proposed here, open to revisit when this milestone actually starts:**
+**Decisions (revisited from the original draft below before this milestone started):**
+- **Same repo, not a separate public repo.** The original rationale for a second repo was keeping
+  binary demo assets out of `proteus`'s history. GitHub Pages' "deploy from GitHub Actions" mode
+  (`actions/upload-pages-artifact` + `actions/deploy-pages`) uploads a build artifact straight to
+  Pages — it never touches a git branch or commit, so the history-cleanliness goal is met without a
+  second repo, a git-dependency pin back to `proteus`, or an asset/version sync step.
+- **CI from the start, not a manual publish script.** The deploy-pages mechanism above requires a
+  GitHub Actions workflow regardless — there's no simpler manual alternative once using it — so
+  automating the trigger (push to `main`, plus manual `workflow_dispatch`) costs nothing extra over
+  a one-off script and means every future demo update is just a normal push.
+- **Assets committed directly to the repo, not fetched from a Release at build time.** The original
+  `scripts/fetch-assets.sh` + `demo-assets-v1` Release setup existed to keep binary assets out of
+  git over file-size concerns that don't hold up: total payload is ~14MB for the web shell (~29MB
+  including native's duplicate `_fixed`-suffix video re-encodes), far under GitHub's 100MB
+  per-file limit. Worse, the script was already stale — it only fetched the original three
+  box-cover images/videos, not the `bg/`/`icons/`/`logo/` assets added during M11.1–M11.3, so it
+  would have 404'd on the deployed demo's logo and dark-mode icons. Fix: `images/`/`videos/` are
+  no longer gitignored for either shell, the real files are committed, and
+  `scripts/fetch-assets.sh` plus the `demo-assets-v1` Release are deleted outright rather than
+  patched. `www/pkg/` (the wasm-pack build output) stays gitignored — that one's a real build
+  artifact, not source.
+- **GitHub Pages, not Vercel/Netlify/Cloudflare Pages.** No new external account/service to connect
+  and trust; fits naturally alongside the repo's existing GitHub Release asset pattern. Loses
+  per-PR preview deploys and edge-CDN niceties, neither of which matters for a single demo page.
+- All `www/index.html` asset and `pkg` references are relative paths, so serving under GitHub's
+  project-page subpath (`ichellin1.github.io/proteus/`) requires no base-href changes.
+- Conceptually follows M11.3 (now complete) — hosting a demo with a capacity-limited gallery and
+  an empty Examples placeholder would have undersold the framework — though the CI/Pages groundwork
+  itself never had a hard dependency on M11.3 landing first.
+
+**Definition of done:**
+- [ ] `.github/workflows/pages.yml` builds the web shell (`wasm-pack build` → upload Pages
+  artifact → deploy), triggered on relevant pushes to `main` and manually
+- [ ] GitHub Pages source set to "GitHub Actions" on the repo, serving the demo at a real, public URL
+- [ ] The hosted build verified end to end in a real browser with no local setup — every nav
+  button's flow works, including the picsum.photos network fetch from a real HTTPS origin (should
+  behave identically to local testing; worth a real check rather than an assumption)
+- [ ] Linked from the main repo's README (or wherever's appropriate) so a visitor can actually find it
+
+<details>
+<summary>Original draft (superseded — kept for context)</summary>
+
 - **A separate public repo, not a branch of the main `proteus` repo** — per the explicit ask. Keeps
   the framework repo's own history free of the demo's binary assets (images, videos, design packs),
   and keeps "the framework" and "the showcase" visibly separate to anyone browsing GitHub.
@@ -2179,20 +2220,8 @@ a browser.
 - A manual build-and-publish script (build wasm, copy the built output plus `www/` assets, commit,
   push) is enough to satisfy this milestone's "fully working" bar. An automated CI pipeline that
   redeploys on every relevant change to the main repo is a natural fast-follow, not required here.
-- Conceptually follows M11.3 (now complete) — hosting a demo with a capacity-limited gallery and
-  an empty Examples placeholder would have undersold the framework — though the repo/pipeline
-  groundwork itself never had a hard dependency on M11.3 landing first.
 
-**Definition of done:**
-- [ ] New public repo created and populated: the web shell source needed to build it (or prebuilt
-  wasm artifacts directly — decide which approach when this milestone starts), `www/index.html`,
-  and the real, committed (not gitignored) image/video/logo assets the demo depends on
-- [ ] GitHub Pages configured and serving the demo at a real, public URL
-- [ ] A documented, scripted (not memorized) process for publishing an update
-- [ ] The hosted build verified end to end in a real browser with no local setup — every nav
-  button's flow works, including the picsum.photos network fetch from a real HTTPS origin (should
-  behave identically to local testing; worth a real check rather than an assumption)
-- [ ] Linked from the main repo's README (or wherever's appropriate) so a visitor can actually find it
+</details>
 
 ---
 

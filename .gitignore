@@ -7,20 +7,6 @@
 dist/
 pkg/
 
-# Video demo assets (M9.5) — sample .mp4 clips for the reference demo's
-# video tiles, not source. Place your own under these paths; see PLANNING.md.
-crates/proteus-shell-native/assets/videos/
-crates/proteus-shell-web/www/videos/
-
-# Box-cover image demo assets (M9.7) — sample PNG/JPEG art for the reference
-# demo's video tiles, not source. Place your own under these paths; see PLANNING.md.
-crates/proteus-shell-native/images/
-crates/proteus-shell-web/www/images/
-
-# Staged demo-assets bundle awaiting upload to a GitHub Release (see
-# scripts/fetch-assets.sh) — not source, not meant to be tracked in git.
-release-assets/
-
 # Editor
 .vscode/
 .idea/
