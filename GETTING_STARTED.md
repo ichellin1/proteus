@@ -32,43 +32,18 @@ Web shell only:
 
 ## Demo assets
 
-The box-cover images and video clips aren't committed to the repo (GitHub has file-size
-limits, and they're not source anyway).
+The box-cover images and video clips are committed directly under each shell's asset
+directories (`crates/proteus-shell-native/images/` + `assets/videos/`, and
+`crates/proteus-shell-web/www/images/` + `www/videos/`) — nothing to download or fetch
+separately, they come with the repo.
 
-### Option A: fetch script (recommended)
+### Using your own assets
 
-```
-scripts/fetch-assets.sh
-```
-
-Downloads `demo-assets.zip` from the project's GitHub Release and places the files under both
-shells' expected asset directories automatically (see the script for exact paths).
-
-### Option B: manual download
-
-If you'd rather fetch and place the files yourself, or the release isn't available:
-
-1. Download `demo-assets.zip` from the [Releases page](https://github.com/ichellin1/proteus/releases)
-   (tag `demo-assets-v1`) and unzip it. It contains `images/` and `videos/` folders.
-2. Copy the images to:
-   - `crates/proteus-shell-native/images/`
-   - `crates/proteus-shell-web/www/images/`
-   - (same filenames on both: `Big_buck_bunny.jpg`, `sintel.jpg`, `jellyfish.jpg`)
-3. Copy the videos to:
-   - `crates/proteus-shell-native/assets/videos/`, renamed to add a `_fixed` suffix:
-     `big_buck_bunny_fixed.mp4`, `sintel_fixed.mp4`, `jellyfish_fixed.mp4`
-   - `crates/proteus-shell-web/www/videos/`, with the plain filename:
-     `big_buck_bunny.mp4`, `sintel.mp4`, `jellyfish.mp4`
-
-Without assets, the demo still runs — tiles just fall back to solid-color placeholders and
-there's no video.
-
-### Option C: your own assets
-
-Place your own images/videos at the same paths and filenames listed in Option B above (see
+To swap in your own images/videos, place them at the same paths and filenames (see
 `TILE_IMAGE_PATHS`/`TILE_VIDEO_PATHS` in `crates/proteus-shell-native/src/main.rs`, and
 `TILE_IMAGE_SRCS`/`TILE_VIDEO_SRCS` in `crates/proteus-shell-web/www/index.html`, for the
-authoritative list).
+authoritative list). Without assets, the demo still runs — tiles just fall back to
+solid-color placeholders and there's no video.
 
 ## Building and Running on Native
 

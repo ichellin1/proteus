@@ -1,0 +1,68 @@
+name: Deploy Demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/proteus-gpu/**"
+      - "crates/proteus-render/**"
+      - "crates/proteus-ui/**"
+      - "crates/proteus-shell-web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache wasm-pack binary
+        uses: actions/cache@v4
+        id: cache-wasm-pack
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ubuntu-wasm-pack-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: wasm-pack build (web shell)
+        run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
+
+      - name: Disable Jekyll processing
+        run: touch crates/proteus-shell-web/www/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/proteus-shell-web/www
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
