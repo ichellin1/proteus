@@ -84,9 +84,9 @@ mod inner {
     };
     use proteus_ui::{
         collect_instances, ease_in_out_quad, ease_out_quad, transition::TransitionConfig,
-        BakedImage, BakedText, Border, ChildOf, DropShadow, Entity, Glow, GroupSource,
-        GroupTarget, HoveredEntity, Image, Interactable, InteractionEvents, Lifecycle,
-        MergeLayout, NToOneRequest, OneToNRequest, Opacity, PointerInput, ProteusWorld, QuadState,
+        BakedImage, BakedText, Border, ChildOf, DropShadow, Entity, Glow, GroupSource, GroupTarget,
+        HoveredEntity, Image, Interactable, InteractionEvents, Lifecycle, MergeLayout,
+        NToOneRequest, OneToNRequest, Opacity, PointerInput, ProteusWorld, QuadState,
         SplitStrategy, Text, TextureRef, TransitionRequest, VideoCrossfade, VideoPlayer,
         Visibility,
     };
@@ -1975,7 +1975,7 @@ mod inner {
                         ))
                         .id(),
                 ];
-    
+
                 // Glow — small radius, large radius, non-brand accent color.
                 let glow_label = label(&mut ui_world, "Glow", 16.0);
                 let glow_boxes = vec![
@@ -2022,7 +2022,7 @@ mod inner {
                         ))
                         .id(),
                 ];
-    
+
                 // Border — thin, thick, different color. Inner offset only —
                 // `Border::offset` center/outer are a known-broken limitation
                 // (see the type's own doc), not demonstrated here.
@@ -2071,7 +2071,7 @@ mod inner {
                         ))
                         .id(),
                 ];
-    
+
                 // Opacity — 4 flat `color.w` swatches, plus one nested
                 // parent+child pair using the real `Opacity`/`EffectiveOpacity`
                 // cascade (already wired into the schedule and already read by
@@ -2082,7 +2082,8 @@ mod inner {
                 let opacity_label = label(&mut ui_world, "Opacity", 16.0);
                 let mut opacity_boxes = Vec::with_capacity(5);
                 let mut opacity_item_labels = Vec::with_capacity(5);
-                for (alpha, caption) in [(0.25, "25%"), (0.5, "50%"), (0.75, "75%"), (1.0, "100%")] {
+                for (alpha, caption) in [(0.25, "25%"), (0.5, "50%"), (0.75, "75%"), (1.0, "100%")]
+                {
                     opacity_boxes.push(
                         ui_world
                             .world
@@ -2163,7 +2164,7 @@ mod inner {
                 {
                     example_content[0].push(e);
                 }
-    
+
                 (
                     title,
                     [drop_shadow_label, glow_label, border_label, opacity_label],
@@ -2434,7 +2435,13 @@ mod inner {
             // rows these buttons live outside it, not `ChildOf` it), and
             // a result line that *does* stay `ChildOf` the panel, near
             // its bottom.
-            let (stress_title, stress_buttons, stress_button_labels, stress_result_text, stress_warning_text) = {
+            let (
+                stress_title,
+                stress_buttons,
+                stress_button_labels,
+                stress_result_text,
+                stress_warning_text,
+            ) = {
                 let title = ui_world
                     .world
                     .spawn((
@@ -4837,7 +4844,10 @@ mod inner {
                 t.color.z = primary.z;
             }
             for i in 0..2 {
-                if let Some(mut b) = self.ui_world.world.get_mut::<Border>(self.stress_buttons[i])
+                if let Some(mut b) = self
+                    .ui_world
+                    .world
+                    .get_mut::<Border>(self.stress_buttons[i])
                 {
                     b.color.x = primary.x;
                     b.color.y = primary.y;
@@ -5173,10 +5183,7 @@ mod inner {
                     } else if let Some(idx) =
                         (0..6).find(|&i| clicked.contains(&self.example_buttons[i]))
                     {
-                        self.begin_transition(
-                            AppState::ExamplesHome,
-                            AppState::ExampleDetail(idx),
-                        );
+                        self.begin_transition(AppState::ExamplesHome, AppState::ExampleDetail(idx));
                     }
                 }
 
@@ -5190,10 +5197,7 @@ mod inner {
                         if idx == 3 {
                             self.cancel_stress_test();
                         }
-                        self.begin_transition(
-                            AppState::ExampleDetail(idx),
-                            AppState::ExamplesHome,
-                        );
+                        self.begin_transition(AppState::ExampleDetail(idx), AppState::ExamplesHome);
                     } else if idx == 3 && clicked.contains(&self.stress_buttons[0]) {
                         self.run_burst_spawn();
                     } else if idx == 3 && clicked.contains(&self.stress_buttons[1]) {
@@ -5904,7 +5908,11 @@ mod inner {
                 .get::<BakedText>(self.transforms_title)
                 .map(|b| b.pixel_size[0])
                 .unwrap_or(0.0);
-            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.transforms_title) {
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.transforms_title)
+            {
                 qs.position.x = abs_left_x + title_width / 2.0;
                 qs.position.y = abs_panel_top_y + EXAMPLE_HEADING_PANEL_GAP_PX + title_height / 2.0;
             }
@@ -6008,13 +6016,19 @@ mod inner {
 
             let buttons_y =
                 panel_top_edge + EXAMPLE_HEADING_PANEL_GAP_PX + STRESS_BUTTON_HEIGHT_PX / 2.0;
-            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_buttons[0])
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.stress_buttons[0])
             {
                 qs.size.x = burst_width;
                 qs.position.x = abs_left_x + burst_width / 2.0;
                 qs.position.y = buttons_y;
             }
-            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_buttons[1])
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.stress_buttons[1])
             {
                 qs.size.x = churn_width;
                 qs.position.x = abs_left_x + burst_width + BUTTON_GAP + churn_width / 2.0;
@@ -6558,7 +6572,12 @@ mod inner {
         /// placeholders) just need enough room for one line of text. idx
         /// 3 (Stress Tests) is a genuinely different shape — see
         /// `stress_panel_target`'s doc.
-        fn example_detail_target(&mut self, idx: usize, canvas_width: f32, canvas_height: f32) -> QuadState {
+        fn example_detail_target(
+            &mut self,
+            idx: usize,
+            canvas_width: f32,
+            canvas_height: f32,
+        ) -> QuadState {
             if idx == 3 {
                 return self.stress_panel_target(canvas_width, canvas_height);
             }
@@ -6569,8 +6588,12 @@ mod inner {
                 4 | 5 => 100.0,
                 _ => canvas_height * 0.78 - 2.0 * EXAMPLE_PANEL_PADDING_PX,
             };
-            let mut target =
-                example_panel_quad(canvas_width, canvas_height, self.theme_progress, content_height);
+            let mut target = example_panel_quad(
+                canvas_width,
+                canvas_height,
+                self.theme_progress,
+                content_height,
+            );
 
             if let Some(heading) = self.example_heading_entity(idx) {
                 let heading_height = self
@@ -7744,8 +7767,8 @@ mod inner {
             let rotation = (t / ROTATION_PERIOD_SECS) * std::f32::consts::TAU;
             let scale_mid = (SCALE_MIN + SCALE_MAX) / 2.0;
             let scale_amplitude = (SCALE_MAX - SCALE_MIN) / 2.0;
-            let scale = scale_mid
-                + scale_amplitude * (t / SCALE_PERIOD_SECS * std::f32::consts::TAU).sin();
+            let scale =
+                scale_mid + scale_amplitude * (t / SCALE_PERIOD_SECS * std::f32::consts::TAU).sin();
             let hue = (t / HUE_PERIOD_SECS) * 360.0;
             let rgb = hsv_to_rgb(hue);
 
@@ -7817,8 +7840,7 @@ mod inner {
         /// toggle, same division of labor as
         /// `advance_example_title_fade`.
         fn advance_stress_button_fade(&mut self, dt: f32) {
-            let target = if self.transition.is_none() && self.state == AppState::ExampleDetail(3)
-            {
+            let target = if self.transition.is_none() && self.state == AppState::ExampleDetail(3) {
                 1.0
             } else {
                 0.0
