@@ -22,8 +22,9 @@ crates/
 
 ## Build & Run
 
-The reference demo (a "START" button that morphs into three video tiles, each of which morphs
-into a full playback screen) runs on both shells from the same `proteus-ui`/`proteus-render` core.
+The reference demo — three sections (video playback, a photo gallery, and interactive framework
+examples) reached from one splash screen, everything morphing rather than navigating — runs on
+both shells from the same `proteus-ui`/`proteus-render` core.
 
 See **[GETTING_STARTED.md](./GETTING_STARTED.md)** for dependency installation, demo-asset
 setup, and full run/test instructions for both shells. Quick version, once dependencies and
