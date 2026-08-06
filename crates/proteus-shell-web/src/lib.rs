@@ -277,7 +277,7 @@ mod inner {
     const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
 
     const TILE_COLORS: [Vec4; 3] = [
-        Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck 
+        Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck
         Vec4::new(0.10, 0.45, 0.35, 1.0), // deep teal — Sintel
         Vec4::new(0.10, 0.55, 0.65, 1.0), // aqua — Jellyfish
     ];
