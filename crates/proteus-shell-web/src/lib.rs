@@ -277,7 +277,7 @@ mod inner {
     const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
 
     const TILE_COLORS: [Vec4; 3] = [
-        Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck Bunny
+        Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck 
         Vec4::new(0.10, 0.45, 0.35, 1.0), // deep teal — Sintel
         Vec4::new(0.10, 0.55, 0.65, 1.0), // aqua — Jellyfish
     ];
@@ -301,7 +301,7 @@ mod inner {
 
     /// Title shown in the hover overlay (M10) — each tile's `tile_labels[idx]`
     /// `Text` child.
-    const TILE_TITLES: [&str; 3] = ["Big Buck Bunny", "Sintel", "Jellyfish"];
+    const TILE_TITLES: [&str; 3] = ["Tiger", "Sintel", "Jellyfish"];
 
     /// Hover-overlay label size.
     const TILE_LABEL_SIZE_PX: f32 = 16.0;
