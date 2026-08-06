@@ -1043,7 +1043,7 @@ fn baked_image_coexists_with_text_overlay() {
         sky_blue_button(),
         baked_image(),
         baked_text,
-        Text::new("Big Buck Bunny", 18.0),
+        Text::new("Tiger", 18.0),
     ));
 
     let instances = collect_instances(&mut world);

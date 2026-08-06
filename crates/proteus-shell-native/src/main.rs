@@ -265,7 +265,7 @@ const TILE_CORNER_RADIUS: f32 = 20.0;
 const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
 
 const TILE_COLORS: [Vec4; 3] = [
-    Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Big Buck Bunny
+    Vec4::new(0.85, 0.55, 0.15, 1.0), // amber — Tiger
     Vec4::new(0.10, 0.45, 0.35, 1.0), // deep teal — Sintel
     Vec4::new(0.10, 0.55, 0.65, 1.0), // aqua — Jellyfish
 ];
@@ -278,7 +278,7 @@ const TILE_COLORS: [Vec4; 3] = [
 const TILE_VIDEO_PATHS: [&str; 3] = [
     concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/assets/videos/big_buck_bunny_fixed.mp4"
+        "/assets/videos/tiger.mp4"
     ),
     concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -296,14 +296,14 @@ const TILE_VIDEO_PATHS: [&str; 3] = [
 /// working directory. Missing/unreadable files degrade gracefully: the tile
 /// keeps its solid `TILE_COLORS` fill instead of an `Image` component.
 const TILE_IMAGE_PATHS: [&str; 3] = [
-    concat!(env!("CARGO_MANIFEST_DIR"), "/images/Big_buck_bunny.jpg"),
+    concat!(env!("CARGO_MANIFEST_DIR"), "/images/tiger.jpg"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/images/sintel.jpg"),
     concat!(env!("CARGO_MANIFEST_DIR"), "/images/jellyfish.jpg"),
 ];
 
 /// Title shown in the hover overlay (M10) — each tile's `tile_labels[idx]`
 /// `Text` child.
-const TILE_TITLES: [&str; 3] = ["Big Buck Bunny", "Sintel", "Jellyfish"];
+const TILE_TITLES: [&str; 3] = ["Tiger", "Sintel", "Jellyfish"];
 
 /// Hover-overlay label size.
 const TILE_LABEL_SIZE_PX: f32 = 18.0;
