@@ -2744,7 +2744,13 @@ impl RenderState {
         // category's rows these buttons live outside it, not `ChildOf`
         // it), and a result line that *does* stay `ChildOf` the panel,
         // near its bottom.
-        let (stress_title, stress_buttons, stress_button_labels, stress_result_text, stress_warning_text) = {
+        let (
+            stress_title,
+            stress_buttons,
+            stress_button_labels,
+            stress_result_text,
+            stress_warning_text,
+        ) = {
             let title = ui_world
                 .world
                 .spawn((
@@ -4647,7 +4653,11 @@ impl RenderState {
             t.color.z = primary.z;
         }
         for i in 0..2 {
-            if let Some(mut b) = self.ui_world.world.get_mut::<Border>(self.stress_buttons[i]) {
+            if let Some(mut b) = self
+                .ui_world
+                .world
+                .get_mut::<Border>(self.stress_buttons[i])
+            {
                 b.color.x = primary.x;
                 b.color.y = primary.y;
                 b.color.z = primary.z;
@@ -5031,7 +5041,9 @@ impl RenderState {
             (AppState::GalleryImage(_), AppState::Home) => self.start_image_to_home(),
             (AppState::Home, AppState::ExamplesHome) => self.start_home_to_examples(),
             (AppState::ExamplesHome, AppState::Home) => self.start_examples_to_home(),
-            (AppState::ExamplesHome, AppState::ExampleDetail(idx)) => self.start_examples_to_detail(idx),
+            (AppState::ExamplesHome, AppState::ExampleDetail(idx)) => {
+                self.start_examples_to_detail(idx)
+            }
             (AppState::ExampleDetail(_), AppState::ExamplesHome) => self.start_detail_to_examples(),
             (AppState::ExampleDetail(_), AppState::Home) => self.start_detail_to_home(),
             (from, to) => unreachable!("no transition defined for {from:?} -> {to:?}"),
@@ -5679,7 +5691,11 @@ impl RenderState {
             .get::<BakedText>(self.transforms_title)
             .map(|b| b.pixel_size[0])
             .unwrap_or(0.0);
-        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.transforms_title) {
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.transforms_title)
+        {
             qs.position.x = abs_left_x + title_width / 2.0;
             qs.position.y = abs_panel_top_y + EXAMPLE_HEADING_PANEL_GAP_PX + title_height / 2.0;
         }
@@ -5780,12 +5796,20 @@ impl RenderState {
 
         let buttons_y =
             panel_top_edge + EXAMPLE_HEADING_PANEL_GAP_PX + STRESS_BUTTON_HEIGHT_PX / 2.0;
-        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_buttons[0]) {
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.stress_buttons[0])
+        {
             qs.size.x = burst_width;
             qs.position.x = abs_left_x + burst_width / 2.0;
             qs.position.y = buttons_y;
         }
-        if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.stress_buttons[1]) {
+        if let Some(mut qs) = self
+            .ui_world
+            .world
+            .get_mut::<QuadState>(self.stress_buttons[1])
+        {
             qs.size.x = churn_width;
             qs.position.x = abs_left_x + burst_width + BUTTON_GAP + churn_width / 2.0;
             qs.position.y = buttons_y;
@@ -6303,7 +6327,12 @@ impl RenderState {
     /// `layout_effects_content`'s doc); 4/5 (Layout/3D placeholders) just
     /// need enough room for one line of text. idx 3 (Stress Tests) is a
     /// genuinely different shape — see `stress_panel_target`'s doc.
-    fn example_detail_target(&mut self, idx: usize, window_width: f32, window_height: f32) -> QuadState {
+    fn example_detail_target(
+        &mut self,
+        idx: usize,
+        window_width: f32,
+        window_height: f32,
+    ) -> QuadState {
         if idx == 3 {
             return self.stress_panel_target(window_width, window_height);
         }
@@ -6314,8 +6343,12 @@ impl RenderState {
             4 | 5 => 100.0,
             _ => window_height * 0.78 - 2.0 * EXAMPLE_PANEL_PADDING_PX,
         };
-        let mut target =
-            example_panel_quad(window_width, window_height, self.theme_progress, content_height);
+        let mut target = example_panel_quad(
+            window_width,
+            window_height,
+            self.theme_progress,
+            content_height,
+        );
 
         if let Some(heading) = self.example_heading_entity(idx) {
             let heading_height = self
@@ -7695,16 +7728,19 @@ impl RenderState {
     /// `layout_stress_content`) so quads fill the rest of the panel
     /// without ever rendering over the result text.
     fn random_burst_target(&mut self, panel: &QuadState) -> QuadState {
-        let half_w = (panel.size.x / 2.0 - EXAMPLE_PANEL_PADDING_PX - BURST_ITEM_SIZE / 2.0).max(0.0);
-        let usable_top =
-            panel.position.y + panel.size.y / 2.0 - EXAMPLE_PANEL_PADDING_PX - BURST_ITEM_SIZE / 2.0;
-        let usable_bottom =
-            panel.position.y - panel.size.y / 2.0 + RESULT_TEXT_RESERVED_HEIGHT_PX + BURST_ITEM_SIZE / 2.0;
+        let half_w =
+            (panel.size.x / 2.0 - EXAMPLE_PANEL_PADDING_PX - BURST_ITEM_SIZE / 2.0).max(0.0);
+        let usable_top = panel.position.y + panel.size.y / 2.0
+            - EXAMPLE_PANEL_PADDING_PX
+            - BURST_ITEM_SIZE / 2.0;
+        let usable_bottom = panel.position.y - panel.size.y / 2.0
+            + RESULT_TEXT_RESERVED_HEIGHT_PX
+            + BURST_ITEM_SIZE / 2.0;
         let usable_center_y = (usable_top + usable_bottom) / 2.0;
         let usable_half_h = ((usable_top - usable_bottom) / 2.0).max(0.0);
 
-        let x = panel.position.x
-            + (random_unit_f32(&mut self.stress_rng_state) * 2.0 - 1.0) * half_w;
+        let x =
+            panel.position.x + (random_unit_f32(&mut self.stress_rng_state) * 2.0 - 1.0) * half_w;
         let y = usable_center_y
             + (random_unit_f32(&mut self.stress_rng_state) * 2.0 - 1.0) * usable_half_h;
         let scale = 0.6 + random_unit_f32(&mut self.stress_rng_state) * 0.8;
@@ -7933,15 +7969,18 @@ impl RenderState {
                 continue;
             }
             let to = self.random_burst_target(&panel);
-            self.ui_world.world.entity_mut(entity).insert(TransitionRequest {
-                to,
-                config: TransitionConfig {
-                    duration: BURST_SPAWN_ITEM_DURATION,
-                    delay: 0.0,
-                    easing: ease_in_out_quad,
-                },
-                from_state: None,
-            });
+            self.ui_world
+                .world
+                .entity_mut(entity)
+                .insert(TransitionRequest {
+                    to,
+                    config: TransitionConfig {
+                        duration: BURST_SPAWN_ITEM_DURATION,
+                        delay: 0.0,
+                        easing: ease_in_out_quad,
+                    },
+                    from_state: None,
+                });
         }
     }
 
