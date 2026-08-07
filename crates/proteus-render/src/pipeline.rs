@@ -1056,23 +1056,31 @@ impl QuadPipeline {
     /// Call this once per render frame while video is playing, before
     /// [`draw`].
     ///
-    /// # Panics
-    ///
-    /// Panics in debug builds if `rgba.len() != width * height * 4`.
+    /// A length mismatch is a caller bug (e.g. a browser-side frame
+    /// pipeline racing with a dimensions change), not a `proteus-render`
+    /// invariant to trust — silently drops the frame (logged) rather than
+    /// handing `wgpu::Queue::write_texture` a buffer that doesn't match
+    /// the declared copy size, which wgpu validates independently of this
+    /// crate's own build profile and can reject harshly (in the browser,
+    /// as an uncaptured GPU error that can lose the whole device — every
+    /// future frame silently stops rendering). A `debug_assert_eq!` alone
+    /// isn't enough here specifically because `wasm-pack build` defaults
+    /// to `--release`, which compiles debug-only asserts out entirely, so
+    /// this exact bug would be invisible until it reached wgpu itself in
+    /// the one build that actually ships.
     ///
     /// [`init_video`]: QuadPipeline::init_video
     /// [`draw`]: QuadPipeline::draw
     pub fn upload_video_frame(&self, queue: &wgpu::Queue, rgba: &[u8]) {
         let (w, h) = self.video_atlas_size;
-        debug_assert_eq!(
-            rgba.len(),
-            (w * h * 4) as usize,
-            "upload_video_frame: expected {}×{}×4={} bytes, got {}",
-            w,
-            h,
-            w * h * 4,
-            rgba.len(),
-        );
+        let expected_len = (w * h * 4) as usize;
+        if rgba.len() != expected_len {
+            log::warn!(
+                "upload_video_frame: expected {w}×{h}×4={expected_len} bytes, got {} — dropping frame",
+                rgba.len(),
+            );
+            return;
+        }
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.video_atlas,

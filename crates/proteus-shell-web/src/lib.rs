@@ -3534,8 +3534,26 @@ mod inner {
         /// Sizes the pipeline's video texture and attaches `VideoPlayer` to
         /// `tiles[tile_idx]`. Call once `<video>`'s `loadedmetadata` event has
         /// fired, passing its `videoWidth`/`videoHeight`.
+        ///
+        /// Rejects `0×0` outright rather than trusting it — JS is expected
+        /// to guard against calling this before real dimensions are known
+        /// (some browsers' `loadedmetadata` can fire on an MSE-backed
+        /// `<video>` before `videoWidth`/`videoHeight` are actually
+        /// populated), but this is still untrusted external input reaching
+        /// a GPU resource allocation, not a caller-guaranteed invariant —
+        /// a `0×0` `wgpu` texture is itself invalid, and would otherwise
+        /// leave `video_atlas_size` stuck at `(0, 0)` for the rest of this
+        /// playback attempt with no `start_video` retry ever coming (only
+        /// called once per click), so every real frame that later arrives
+        /// via `push_video_frame` would mismatch and get silently dropped
+        /// by `upload_video_frame`'s own size check forever — video would
+        /// simply never show.
         #[wasm_bindgen]
         pub fn start_video(&mut self, tile_idx: u32, width: u32, height: u32) {
+            if width == 0 || height == 0 {
+                log::warn!("start_video: rejecting 0×0 dimensions for tile {tile_idx}");
+                return;
+            }
             let (texture_id, _sender) = self
                 .ui_world
                 .world

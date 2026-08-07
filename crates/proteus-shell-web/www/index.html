@@ -417,6 +417,12 @@
         let currentObjectUrl = null;
 
         function pushCurrentFrame() {
+          // getImageData throws IndexSizeError on a 0×0 rect — belt and
+          // suspenders alongside the videoWidth/videoHeight guard in
+          // maybeStart() below; shouldn't trigger in practice once that's
+          // in place, but cheap to keep frameLoop from ever calling this
+          // with a stale/unsized canvas.
+          if (frameCanvas.width === 0 || frameCanvas.height === 0) return;
           frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
           const { data } = frameCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
           app.push_video_frame(data);
@@ -503,6 +509,15 @@
             function maybeStart() {
               if (started || !metadataReady || !firstSegmentReady) return;
               if (generation !== playbackGeneration) return;
+              // On Safari specifically, loadedmetadata can fire for an
+              // MSE-backed <video> before videoWidth/videoHeight are
+              // actually known (they stay 0 until decoding catches up) —
+              // sizing frameCanvas to 0×0 here would make every later
+              // getImageData() throw IndexSizeError. Bail out and let the
+              // 'resize' listener below re-drive this once real
+              // dimensions land instead of assuming loadedmetadata alone
+              // means they're ready.
+              if (!(video.videoWidth > 0 && video.videoHeight > 0)) return;
               started = true;
               frameCanvas.width = video.videoWidth;
               frameCanvas.height = video.videoHeight;
@@ -511,11 +526,19 @@
                 console.error('video.play() failed:', err);
               });
             }
-            video.addEventListener('loadedmetadata', () => {
+            const onMetadataMaybeReady = () => {
               if (generation !== playbackGeneration) return;
               metadataReady = true;
               maybeStart();
-            }, { once: true });
+            };
+            video.addEventListener('loadedmetadata', onMetadataMaybeReady, { once: true });
+            // HTMLMediaElement fires 'resize' whenever videoWidth/videoHeight
+            // change (not just on true resizes) — the fallback for when
+            // loadedmetadata fired too early with 0×0. Not `{once: true}`
+            // since maybeStart() itself is idempotent (guarded by `started`)
+            // and re-running onMetadataMaybeReady after it already
+            // succeeded is a harmless no-op.
+            video.addEventListener('resize', onMetadataMaybeReady);
 
             mediaSource.addEventListener('sourceopen', async () => {
               if (generation !== playbackGeneration) return;
