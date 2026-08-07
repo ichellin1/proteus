@@ -996,17 +996,22 @@ impl QuadPipeline {
     /// uploaded — stale intermediate frames are discarded.  No-op if the
     /// channel is empty or if [`init_video`] has not been called.
     ///
+    /// Returns `true` iff a frame was actually uploaded this call — callers
+    /// that need to know "has the video produced its first real frame yet"
+    /// (e.g. to drive a loading indicator while the decoder is still
+    /// buffering) can latch this once true.
+    ///
     /// [`draw`]: QuadPipeline::draw
     /// [`init_video`]: QuadPipeline::init_video
-    pub fn consume_video_frame(&self, queue: &wgpu::Queue) {
+    pub fn consume_video_frame(&self, queue: &wgpu::Queue) -> bool {
         let guard = self.video_rx.lock().unwrap();
-        let Some(rx) = guard.as_ref() else { return };
+        let Some(rx) = guard.as_ref() else { return false };
         // After suspend_video() the texture is a 1×1 placeholder.  Uploading a
         // full-resolution frame into it would hit the debug_assert in
         // upload_video_frame and corrupt GPU memory.  Skip until resume_video()
         // restores the full-resolution allocation.
         if self.video_atlas_size == (1, 1) {
-            return;
+            return false;
         }
         let mut latest: Option<Vec<u8>> = None;
         let mut drained = 0u32;
@@ -1026,7 +1031,9 @@ impl QuadPipeline {
         }
         if let Some(frame) = latest {
             self.upload_video_frame(queue, &frame);
+            return true;
         }
+        false
     }
 
     /// Upload one frame of RGBA pixels to the video texture.
