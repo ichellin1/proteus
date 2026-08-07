@@ -929,6 +929,11 @@ const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
 /// "elapsed timer → inline error" shape as `GALLERY_FETCH_TIMEOUT`.
 const VIDEO_LOAD_TIMEOUT_SECS: f32 = 30.0;
 const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
+/// How long to sit settled-and-waiting before the loading dots actually
+/// show — playback often becomes ready within a beat of settling, and
+/// showing the dots immediately in that case reads as a flash rather than
+/// a loading indicator.
+const VIDEO_DOT_SHOW_DELAY_SECS: f32 = 0.25;
 
 /// The video screen shape, sized to `SCREEN_WIDTH_FRACTION` of the current
 /// window width at a 720p aspect ratio. Recomputed (not cached) each time a
@@ -1463,6 +1468,13 @@ struct RenderState {
     /// shown only once `video_load_timed_out` latches, same idea as
     /// `gallery_error_text`.
     video_error_text: Entity,
+    /// How long we've been *continuously* settled-and-waiting (transition
+    /// none, in `VideoScreen`, no frame yet) — unlike `video_dots_elapsed`
+    /// (which runs from click time and never resets early), this resets to
+    /// 0 the instant that condition stops holding, so it always measures
+    /// just the current wait. Gates the dots' `VIDEO_DOT_SHOW_DELAY_SECS`
+    /// grace period.
+    video_settled_elapsed: f32,
     /// Home/back nav icons, top-left — `nav_icons[0]` = home, `[1]` = back.
     nav_icons: [Entity; 2],
     /// "Selected" home icon art — a `Quad` child of `nav_icons[0]`, alpha
@@ -3643,6 +3655,7 @@ impl RenderState {
             video_dots_elapsed: 0.0,
             video_load_timed_out: false,
             video_error_text,
+            video_settled_elapsed: 0.0,
             nav_icons,
             home_icon_selected,
             home_icon_dark,
@@ -8440,13 +8453,26 @@ impl RenderState {
             }
         }
         self.video_dots_elapsed += dt;
+        if settled_waiting {
+            self.video_settled_elapsed += dt;
+        } else {
+            self.video_settled_elapsed = 0.0;
+        }
         if settled_waiting
             && !self.video_load_timed_out
             && self.video_dots_elapsed >= VIDEO_LOAD_TIMEOUT_SECS
         {
             self.video_load_timed_out = true;
         }
-        let dots_visible = settled_waiting && !self.video_load_timed_out;
+        // Delayed by `VIDEO_DOT_SHOW_DELAY_SECS` from when we *first*
+        // became settled-and-waiting (not from click time, unlike
+        // `video_dots_elapsed`/the timeout above) — playback often becomes
+        // ready within a beat of settling, and showing the dots
+        // immediately in that case reads as a flash right as the video
+        // appears rather than an actual loading indicator.
+        let dots_visible = settled_waiting
+            && !self.video_load_timed_out
+            && self.video_settled_elapsed >= VIDEO_DOT_SHOW_DELAY_SECS;
         let error_visible = settled_waiting && self.video_load_timed_out;
         for (i, &dot) in self.video_loading_dots.iter().enumerate() {
             if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dot) {

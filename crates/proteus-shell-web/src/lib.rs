@@ -848,6 +848,11 @@ mod inner {
     /// same "elapsed timer → inline error" shape as `GALLERY_FETCH_TIMEOUT`.
     const VIDEO_LOAD_TIMEOUT_SECS: f32 = 30.0;
     const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
+    /// How long to sit settled-and-waiting before the loading dots actually
+    /// show — playback often becomes ready within a beat of settling, and
+    /// showing the dots immediately in that case reads as a flash rather
+    /// than a loading indicator.
+    const VIDEO_DOT_SHOW_DELAY_SECS: f32 = 0.25;
 
     /// The video screen shape, sized to `SCREEN_WIDTH_FRACTION` of the
     /// current canvas width at a 720p aspect ratio. Recomputed (not cached)
@@ -1321,6 +1326,13 @@ mod inner {
         /// on `VideoScreen` to show the error, so no Rust-side component
         /// cleanup should happen here.
         pending_video_cancel: bool,
+        /// How long we've been *continuously* settled-and-waiting
+        /// (transition none, in `VideoScreen`, no frame yet) — unlike
+        /// `video_dots_elapsed` (which runs from click time and never
+        /// resets early), this resets to 0 the instant that condition
+        /// stops holding, so it always measures just the current wait.
+        /// Gates the dots' `VIDEO_DOT_SHOW_DELAY_SECS` grace period.
+        video_settled_elapsed: f32,
         /// Home/back nav icons, top-left — `nav_icons[0]` = home, `[1]` = back.
         nav_icons: [Entity; 2],
         /// "Selected" home icon art — a `Quad` child of `nav_icons[0]`, alpha
@@ -3249,6 +3261,7 @@ mod inner {
                 video_load_timed_out: false,
                 video_error_text,
                 pending_video_cancel: false,
+                video_settled_elapsed: 0.0,
                 nav_icons,
                 home_icon_selected,
                 home_icon_dark,
@@ -3618,12 +3631,11 @@ mod inner {
                 texture_id,
                 first_frame_shown: false,
             });
-            // Fresh pulse phase each time, so the sequence always starts
-            // from dot 0 rather than whatever phase the clock happened to
-            // be at — also doubles as this attempt's "waited how long"
-            // clock, so it resets the timeout countdown too.
-            self.video_dots_elapsed = 0.0;
-            self.video_load_timed_out = false;
+            // `video_dots_elapsed`/`video_load_timed_out` are reset at
+            // click time instead (see `begin_transition`'s
+            // `(VideoTiles, VideoScreen(idx))` arm) — this is called too
+            // late for that job, only once JS has already fetched the
+            // manifest and first segment.
         }
 
         /// Uploads one decoded RGBA frame (`width×height×4` bytes, matching
@@ -5449,8 +5461,24 @@ mod inner {
                     // when the morph finishes — it plays underneath the
                     // morph. JS polls `take_video_start_tile` once per tick
                     // and, once the browser's <video> element has loaded
-                    // metadata, calls back into `start_video`.
+                    // metadata *and* buffered a segment, calls back into
+                    // `start_video`.
                     self.pending_video_start = Some(idx as u32);
+                    // Reset *here*, at click time, not inside `start_video`
+                    // — that's only called once JS has already fetched the
+                    // manifest, init segment, and first media segment,
+                    // which can easily take longer than the 0.4s morph.
+                    // `video_dots_elapsed` increments unconditionally every
+                    // tick (see `advance_video_loading`), so leaving the
+                    // reset that late meant the settled-and-waiting timeout
+                    // check was comparing against whatever stale value had
+                    // accumulated since the *last* reset — potentially
+                    // already past `VIDEO_LOAD_TIMEOUT_SECS` from time
+                    // spent elsewhere in the demo before this click, firing
+                    // the "couldn't load" error almost immediately even
+                    // though the actual fetch was still healthy.
+                    self.video_dots_elapsed = 0.0;
+                    self.video_load_timed_out = false;
                 }
                 (AppState::VideoScreen(idx), AppState::VideoTiles) => {
                     self.stop_video_playback();
@@ -5808,6 +5836,11 @@ mod inner {
                 }
             }
             self.video_dots_elapsed += dt;
+            if settled_waiting {
+                self.video_settled_elapsed += dt;
+            } else {
+                self.video_settled_elapsed = 0.0;
+            }
             if settled_waiting
                 && !self.video_load_timed_out
                 && self.video_dots_elapsed >= VIDEO_LOAD_TIMEOUT_SECS
@@ -5815,7 +5848,15 @@ mod inner {
                 self.video_load_timed_out = true;
                 self.pending_video_cancel = true;
             }
-            let dots_visible = settled_waiting && !self.video_load_timed_out;
+            // Delayed by `VIDEO_DOT_SHOW_DELAY_SECS` from when we *first*
+            // became settled-and-waiting (not from click time, unlike
+            // `video_dots_elapsed`/the timeout above) — playback often
+            // becomes ready within a beat of settling, and showing the
+            // dots immediately in that case reads as a flash right as the
+            // video appears rather than an actual loading indicator.
+            let dots_visible = settled_waiting
+                && !self.video_load_timed_out
+                && self.video_settled_elapsed >= VIDEO_DOT_SHOW_DELAY_SECS;
             let error_visible = settled_waiting && self.video_load_timed_out;
             for (i, &dot) in self.video_loading_dots.iter().enumerate() {
                 if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dot) {
