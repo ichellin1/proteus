@@ -3531,6 +3531,52 @@ mod inner {
             std::mem::take(&mut self.pending_video_cancel)
         }
 
+        /// Debug-only introspection for the video-loading fallback (black
+        /// backdrop / pulsing dots / stretched-poster bug) — call
+        /// `app.debug_video_state()` from devtools and report back the
+        /// string. Not called by index.html itself; exists purely so this
+        /// can be diagnosed on a browser this project's own tooling can't
+        /// drive (Safari/Firefox).
+        #[wasm_bindgen]
+        pub fn debug_video_state(&self) -> String {
+            let idx = match self.state {
+                AppState::VideoScreen(idx) => Some(idx),
+                _ => None,
+            };
+            let tile_alpha = idx.and_then(|i| {
+                self.ui_world
+                    .world
+                    .get::<QuadState>(self.tiles[i])
+                    .map(|qs| qs.color.w)
+            });
+            let has_video_player = idx.is_some_and(|i| {
+                self.ui_world
+                    .world
+                    .get::<VideoPlayer>(self.tiles[i])
+                    .is_some()
+            });
+            let video_t = idx.and_then(|i| {
+                self.ui_world
+                    .world
+                    .get::<VideoCrossfade>(self.tiles[i])
+                    .map(|c| c.video_t)
+            });
+            format!(
+                "state={:?} transitioning={} idx={:?} tile_color_alpha={:?} \
+                 has_video_player={} video_t={:?} playing_video_some={} \
+                 first_frame_shown={:?} video_load_timed_out={}",
+                self.state,
+                self.transition.is_some(),
+                idx,
+                tile_alpha,
+                has_video_player,
+                video_t,
+                self.playing_video.is_some(),
+                self.playing_video.as_ref().map(|p| p.first_frame_shown),
+                self.video_load_timed_out,
+            )
+        }
+
         /// Sizes the pipeline's video texture and attaches `VideoPlayer` to
         /// `tiles[tile_idx]`. Call once `<video>`'s `loadedmetadata` event has
         /// fired, passing its `videoWidth`/`videoHeight`.
