@@ -967,15 +967,26 @@ impl QuadPipeline {
     /// Calling `init_video` a second time replaces both the GPU texture and the
     /// channel, implicitly dropping any previous [`VideoFrameSender`].
     ///
+    /// The new texture is cleared to opaque black immediately — a freshly
+    /// created GPU texture has undefined contents (some backends leave
+    /// leftover VRAM from a previous allocation), so without this the video
+    /// quad would render that garbage, fully opaque, for however long
+    /// playback takes to produce its first real frame.
+    ///
     /// [`consume_video_frame`]: QuadPipeline::consume_video_frame
     pub fn init_video(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         width: u32,
         height: u32,
     ) -> (TextureId, VideoFrameSender) {
         self.video_atlas = Self::create_video_texture(device, width, height);
         self.video_atlas_size = (width, height);
+        let black_frame: Vec<u8> = std::iter::repeat_n([0u8, 0, 0, 255], (width * height) as usize)
+            .flatten()
+            .collect();
+        self.upload_video_frame(queue, &black_frame);
         self.rebuild_atlas_bind_group(device);
         let id = self.texture_registry.register_video(width, height);
 

@@ -367,18 +367,32 @@
             });
         }
 
-        // ── MP4 playback (M9.5) ────────────────────────────────────────────
+        // ── HLS playback (M9.5, upgraded from plain mp4) ────────────────────
         //
         // No decode thread here — the browser's own <video> element is the
         // decoder. Rust owns hit-testing (there's no per-tile DOM element to
         // attach a click listener to), so it signals *when* to start/stop via
-        // take_video_start_tile()/take_video_stop(), polled once per tick();
-        // this side just drives a hidden <video>, extracts decoded frames
-        // onto an offscreen canvas, and pushes the pixels back into wasm.
-        const TILE_VIDEO_SRCS = [
-          'videos/tiger.mp4',
-          'videos/sintel.mp4',
-          'videos/jellyfish.mp4',
+        // take_video_start_tile()/take_video_stop()/take_video_cancel(),
+        // polled once per tick(); this side fetches/parses a simple
+        // single-rendition (no adaptive bitrate) fMP4 HLS manifest, feeds
+        // segments into a <video> element via MediaSource/SourceBuffer, and
+        // — completely unchanged from the old plain-mp4 version — extracts
+        // decoded frames onto an offscreen canvas and pushes the pixels back
+        // into wasm. See videos/make_hls.sh for how the manifests/segments
+        // under videos/hls/ were generated.
+        //
+        // Why not just a plain mp4: even a "faststart" (moov-at-front) mp4
+        // still needs the whole moov atom up front, and the player has no
+        // way to know "how much is enough to start" — the browser's own
+        // buffering heuristic decides. HLS's manifest gives an explicit,
+        // small unit (one ~2s segment) to wait for, so "started playback
+        // after 1 segment" is a real, controllable guarantee rather than a
+        // browser-dependent heuristic — which is what lets the 1-segment
+        // buffer / 30s timeout / cancel behavior below be exact.
+        const TILE_HLS = [
+          { dir: 'videos/hls/tiger',     codecs: 'avc1.64001F,mp4a.40.2' },
+          { dir: 'videos/hls/sintel',    codecs: 'avc1.64001F' },
+          { dir: 'videos/hls/jellyfish', codecs: 'avc1.64001F' },
         ];
 
         const video = document.createElement('video');
@@ -395,8 +409,12 @@
         // Bumped on every start/stop so a stray callback from a video that's
         // no longer current (e.g. the user clicked another tile, or clicked
         // the screen to stop, right as a callback was in flight) is dropped
-        // instead of pushing frames into whatever's playing now.
+        // instead of pushing frames into whatever's playing now. Checked
+        // between every `await` in playHls() below, same idiom as
+        // fetchGalleryHires's AbortController generation guard.
         let playbackGeneration = 0;
+        let hlsAbortController = null;
+        let currentObjectUrl = null;
 
         function pushCurrentFrame() {
           frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
@@ -416,23 +434,135 @@
           }
         }
 
-        function startVideo(tileIdx) {
+        // Minimal single-variant HLS manifest parser — no adaptive bitrate,
+        // so there's no master playlist/variant selection to handle, just
+        // one #EXT-X-MAP init segment and a flat list of #EXTINF segments.
+        function parseHlsManifest(text) {
+          const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+          let initUri = null;
+          const segmentUris = [];
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.startsWith('#EXT-X-MAP:')) {
+              const m = line.match(/URI="([^"]+)"/);
+              if (m) initUri = m[1];
+            } else if (line.startsWith('#EXTINF:')) {
+              const next = lines[i + 1];
+              if (next && !next.startsWith('#')) segmentUris.push(next);
+            }
+          }
+          if (!initUri || segmentUris.length === 0) {
+            throw new Error('HLS manifest: missing init segment or media segments');
+          }
+          return { initUri, segmentUris };
+        }
+
+        async function playHls(tileIdx) {
           playbackGeneration++;
           const generation = playbackGeneration;
-          video.src = TILE_VIDEO_SRCS[tileIdx];
-          video.addEventListener('loadedmetadata', () => {
-            if (generation !== playbackGeneration) return; // superseded before it loaded
+          const controller = new AbortController();
+          hlsAbortController = controller;
+
+          if (currentObjectUrl) {
+            URL.revokeObjectURL(currentObjectUrl);
+            currentObjectUrl = null;
+          }
+
+          const { dir, codecs } = TILE_HLS[tileIdx];
+          const mimeType = `video/mp4; codecs="${codecs}"`;
+          if (!('MediaSource' in window) || !MediaSource.isTypeSupported(mimeType)) {
+            console.error(`HLS: unsupported mime type for tile ${tileIdx}:`, mimeType);
+            return;
+          }
+
+          const mediaSource = new MediaSource();
+          currentObjectUrl = URL.createObjectURL(mediaSource);
+          video.src = currentObjectUrl;
+
+          // Metadata (from the init segment's moov) and the 1-segment
+          // buffer requirement resolve independently and in no guaranteed
+          // order — playback only actually starts once both are in, via
+          // this shared gate, rather than assuming loadedmetadata fires
+          // after any particular fetch.
+          let metadataReady = false;
+          let firstSegmentReady = false;
+          let started = false;
+          function maybeStart() {
+            if (started || !metadataReady || !firstSegmentReady) return;
+            if (generation !== playbackGeneration) return;
+            started = true;
             frameCanvas.width = video.videoWidth;
             frameCanvas.height = video.videoHeight;
             app.start_video(tileIdx, video.videoWidth, video.videoHeight);
             video.play().then(() => frameLoop(generation)).catch(err => {
               console.error('video.play() failed:', err);
             });
+          }
+          video.addEventListener('loadedmetadata', () => {
+            if (generation !== playbackGeneration) return;
+            metadataReady = true;
+            maybeStart();
+          }, { once: true });
+
+          mediaSource.addEventListener('sourceopen', async () => {
+            if (generation !== playbackGeneration) return;
+            try {
+              const sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+              const appendBuffer = (bytes) => new Promise((resolve, reject) => {
+                const onUpdateEnd = () => {
+                  sourceBuffer.removeEventListener('updateend', onUpdateEnd);
+                  resolve();
+                };
+                sourceBuffer.addEventListener('updateend', onUpdateEnd);
+                try {
+                  sourceBuffer.appendBuffer(bytes);
+                } catch (e) {
+                  sourceBuffer.removeEventListener('updateend', onUpdateEnd);
+                  reject(e);
+                }
+              });
+              const fetchBytes = async (uri) => {
+                const res = await fetch(`${dir}/${uri}`, { signal: controller.signal });
+                if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+                return new Uint8Array(await res.arrayBuffer());
+              };
+
+              const manifestRes = await fetch(`${dir}/stream.m3u8`, { signal: controller.signal });
+              if (!manifestRes.ok) throw new Error(`${manifestRes.status} ${manifestRes.statusText}`);
+              const { initUri, segmentUris } = parseHlsManifest(await manifestRes.text());
+              if (generation !== playbackGeneration) return;
+
+              await appendBuffer(await fetchBytes(initUri));
+              if (generation !== playbackGeneration) return;
+
+              // First media segment buffered — the "1 segment buffer
+              // before playback" requirement.
+              await appendBuffer(await fetchBytes(segmentUris[0]));
+              if (generation !== playbackGeneration) return;
+              firstSegmentReady = true;
+              maybeStart();
+
+              // Remaining segments stream in the background — short clips
+              // (10-21s at ~2s/segment) so this finishes in a handful of
+              // fetches, well within playback.
+              for (let i = 1; i < segmentUris.length; i++) {
+                if (generation !== playbackGeneration) return;
+                await appendBuffer(await fetchBytes(segmentUris[i]));
+              }
+              if (generation === playbackGeneration && mediaSource.readyState === 'open') {
+                mediaSource.endOfStream();
+              }
+            } catch (err) {
+              if (err.name !== 'AbortError') {
+                console.error(`HLS playback failed for tile ${tileIdx}:`, err);
+              }
+            }
           }, { once: true });
         }
 
         function stopVideo() {
-          playbackGeneration++; // invalidates any in-flight frameLoop callback
+          playbackGeneration++; // invalidates any in-flight frameLoop/playHls callback
+          hlsAbortController?.abort();
           video.pause();
         }
 
@@ -444,8 +574,13 @@
           app.tick(dt);          // dt in milliseconds
 
           const startTile = app.take_video_start_tile();
-          if (startTile !== undefined) startVideo(startTile);
+          if (startTile !== undefined) playHls(startTile);
           if (app.take_video_stop()) stopVideo();
+          // Timed out while still waiting (screen stays put, showing the
+          // error text) — distinct from take_video_stop(): only abort the
+          // in-flight fetch, no generation bump/pause, since Rust hasn't
+          // torn anything down and playback may yet succeed if it's close.
+          if (app.take_video_cancel()) hlsAbortController?.abort();
 
           const gallerySidePx = app.take_gallery_fetch_request();
           if (gallerySidePx !== undefined) fetchGallery(gallerySidePx);
