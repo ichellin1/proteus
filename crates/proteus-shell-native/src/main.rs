@@ -3077,11 +3077,7 @@ impl RenderState {
                 .world
                 .spawn((
                     QuadState {
-                        position: Vec3::new(
-                            (i as f32 - 1.0) * VIDEO_DOT_SPACING_PX,
-                            0.0,
-                            0.51,
-                        ),
+                        position: Vec3::new((i as f32 - 1.0) * VIDEO_DOT_SPACING_PX, 0.0, 0.51),
                         size: Vec2::new(VIDEO_DOT_SIZE_PX, VIDEO_DOT_SIZE_PX),
                         rotation: 0.0,
                         scale: 1.0,
@@ -8295,7 +8291,11 @@ impl RenderState {
             },
         };
         let backdrop_visible = video_idx.is_some();
-        if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(self.video_backdrop) {
+        if let Some(mut vis) = self
+            .ui_world
+            .world
+            .get_mut::<Visibility>(self.video_backdrop)
+        {
             vis.visible = backdrop_visible;
         }
         if let Some(idx) = video_idx {
@@ -8305,7 +8305,11 @@ impl RenderState {
                 .get::<QuadState>(self.tiles[idx])
                 .cloned()
                 .unwrap_or_default();
-            if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.video_backdrop) {
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.video_backdrop)
+            {
                 qs.position.x = tile_state.position.x;
                 qs.position.y = tile_state.position.y;
                 qs.size = tile_state.size;

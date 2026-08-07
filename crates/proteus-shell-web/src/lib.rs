@@ -2761,11 +2761,7 @@ mod inner {
                     .world
                     .spawn((
                         QuadState {
-                            position: Vec3::new(
-                                (i as f32 - 1.0) * VIDEO_DOT_SPACING_PX,
-                                0.0,
-                                0.51,
-                            ),
+                            position: Vec3::new((i as f32 - 1.0) * VIDEO_DOT_SPACING_PX, 0.0, 0.51),
                             size: Vec2::new(VIDEO_DOT_SIZE_PX, VIDEO_DOT_SIZE_PX),
                             rotation: 0.0,
                             scale: 1.0,
@@ -5583,7 +5579,9 @@ mod inner {
             let in_video_screen = matches!(self.state, AppState::VideoScreen(_));
             let video_idx = match self.transition.as_ref() {
                 Some(t) => match (t.from, t.to) {
-                    (from, AppState::VideoScreen(idx)) if !matches!(from, AppState::VideoScreen(_)) => {
+                    (from, AppState::VideoScreen(idx))
+                        if !matches!(from, AppState::VideoScreen(_)) =>
+                    {
                         Some(idx)
                     }
                     _ => None,
@@ -5632,8 +5630,7 @@ mod inner {
                     vis.visible = dots_visible;
                 }
                 if dots_visible {
-                    let phase = (self.video_dots_elapsed
-                        - i as f32 * VIDEO_DOT_PULSE_STAGGER_SECS)
+                    let phase = (self.video_dots_elapsed - i as f32 * VIDEO_DOT_PULSE_STAGGER_SECS)
                         / VIDEO_DOT_PULSE_PERIOD_SECS
                         * std::f32::consts::TAU;
                     let alpha = VIDEO_DOT_ALPHA_MIN

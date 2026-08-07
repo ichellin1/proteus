@@ -1005,7 +1005,9 @@ impl QuadPipeline {
     /// [`init_video`]: QuadPipeline::init_video
     pub fn consume_video_frame(&self, queue: &wgpu::Queue) -> bool {
         let guard = self.video_rx.lock().unwrap();
-        let Some(rx) = guard.as_ref() else { return false };
+        let Some(rx) = guard.as_ref() else {
+            return false;
+        };
         // After suspend_video() the texture is a 1×1 placeholder.  Uploading a
         // full-resolution frame into it would hit the debug_assert in
         // upload_video_frame and corrupt GPU memory.  Skip until resume_video()
