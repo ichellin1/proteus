@@ -1,6 +1,6 @@
 # Proteus
 
-Proteus is a cross-platform UI framework written in Rust. Its defining idea: **UI components are metamorphic.** They do not navigate to new screens or swap out for different components — they *transform* into them. A button can become a list, a list item can become a video player, and the transition between forms is a first-class, visually continuous experience. Rendering is GPU-native via wgpu — **WebGL2** on the web (via WASM, with automatic **WebGPU** upgrade where available) and **Vulkan / Metal / DirectX 12** on native platforms.
+Proteus is a cross-platform UI framework written in Rust. Its defining idea: **UI components are metamorphic.** They do not load into new screens or swap out for different components — they *transform* into them. A button can become a list, a list item can become a video player, and the transition between forms is a first-class, visually continuous experience. Rendering is GPU-native via wgpu — **WebGL2** on the web (via WASM, with automatic **WebGPU** upgrade where available) and **Vulkan / Metal / DirectX 12** on native platforms.
 
 ## Read First
 
@@ -20,11 +20,12 @@ crates/
   proteus-shell-native/ # Layer 3: native windowing shell (winit)
 ```
 
-## Build & Run
+## Reference Demo 
+The **[reference demo](https://ichellin1.github.io/proteus/)** — See Proteus in action while three sections that demonstrate video playback, a photo gallery, and other framework examples.
 
-The reference demo — three sections (video playback, a photo gallery, and interactive framework
-examples) reached from one splash screen, everything morphing rather than navigating — runs on
-both shells from the same `proteus-ui`/`proteus-render` core.
+## Build & Run Reference Demo
+
+The reference demo runs on both shells from the same `proteus-ui`/`proteus-render` core.
 
 See **[GETTING_STARTED.md](./GETTING_STARTED.md)** for dependency installation, demo-asset
 setup, and full run/test instructions for both shells. Quick version, once dependencies and

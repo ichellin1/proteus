@@ -262,7 +262,7 @@ opacity cascade being ignored during transition bakes, and a general "bake ignor
 pitfall worked around with a reusable coordinator-entity pattern). See PLANNING.md for the full
 DoD and what shipped.
 
-## M11.4 — Host Demo on GitHub Pages *(off critical path)*
+## M11.4 — Host Demo on GitHub Pages *(off critical path - complete)*
 
 Building and running the demo locally is fine for a developer already comfortable with the
 Rust/wasm toolchain — it shuts out anyone else visiting the project. Goal: a fully working,
