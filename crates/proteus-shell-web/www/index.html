@@ -73,6 +73,9 @@
 
         const app = await ProteusApp.init('proteus-canvas');
         status.textContent = 'Running';
+        // Exposed for devtools debugging — e.g. app.debug_video_state()
+        // while diagnosing the video-loading fallback cross-browser.
+        window.app = app;
 
         // Handle canvas resize (keeps logical pixels in sync with CSS layout).
         const canvas = document.getElementById('proteus-canvas');
