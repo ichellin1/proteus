@@ -2156,7 +2156,7 @@ Closes the two gaps M11.1 explicitly deferred, once M11.2's capacity work is ava
 
 ---
 
-### M11.4 — Host Demo on GitHub Pages *(off critical path — nearly complete)*
+### M11.4 — Host Demo on GitHub Pages *(off critical path — complete)*
 
 Building and running the demo locally (`cargo run`, or `wasm-pack build` plus a local server) is
 fine for a developer already comfortable with the Rust/wasm toolchain — it shuts out anyone else
@@ -2204,7 +2204,7 @@ a browser.
   button's flow works, including the picsum.photos network fetch from a real HTTPS origin. Surfaced
   a few latency issues not visible when hosting locally (real network conditions vs. localhost) —
   tracked as a fast-follow, not a blocker on this milestone's own scope
-- [ ] Linked from the main repo's README (or wherever's appropriate) so a visitor can actually find it
+- [x] Linked from the main repo's README (or wherever's appropriate) so a visitor can actually find it
 
 <details>
 <summary>Original draft (superseded — kept for context)</summary>
