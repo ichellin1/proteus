@@ -829,6 +829,20 @@ mod inner {
     /// as `TILE_CORNER_RADIUS_DARK`/`TILE_CORNER_RADIUS`.
     const SCREEN_CORNER_RADIUS_DARK: f32 = 18.0;
 
+    /// Video screen loading dots (see `video_backdrop`'s doc) — small and
+    /// subtle by design, unlike the much larger 19-frame `loading_logo`
+    /// animation used for the Photo Gallery fetch, which would look clunky
+    /// at video-screen scale.
+    const VIDEO_DOT_SIZE_PX: f32 = 12.0;
+    const VIDEO_DOT_SPACING_PX: f32 = 28.0;
+    /// Full pulse cycle duration per dot.
+    const VIDEO_DOT_PULSE_PERIOD_SECS: f32 = 1.2;
+    /// Phase offset between adjacent dots — what makes the pulse read as a
+    /// left-to-right sequence rather than all 3 dots pulsing in unison.
+    const VIDEO_DOT_PULSE_STAGGER_SECS: f32 = 0.15;
+    const VIDEO_DOT_ALPHA_MIN: f32 = 0.25;
+    const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
+
     /// The video screen shape, sized to `SCREEN_WIDTH_FRACTION` of the
     /// current canvas width at a 720p aspect ratio. Recomputed (not cached)
     /// each time a tiles→screen transition starts, so a resize between visits
@@ -838,8 +852,10 @@ mod inner {
     /// attached, `QuadState.color` multiplies the sampled video texture (see
     /// `proteus_ui::video`), so a black target would render real video frames
     /// as solid black. Before the first pushed frame arrives the video
-    /// texture is zero-initialized (transparent), so the screen is briefly
-    /// see-through rather than a black card — an acceptable startup blip.
+    /// texture is zero-initialized (transparent), so this quad alone would
+    /// be briefly see-through — `video_backdrop` (a separate quad, just
+    /// behind this one) is what actually keeps the screen looking like a
+    /// black card instead of empty space during that gap.
     fn video_screen_quad(canvas_width: f32, canvas_height: f32) -> QuadState {
         let uncapped_height = canvas_width * SCREEN_WIDTH_FRACTION * SCREEN_ASPECT;
         // Never let the screen (vertically centered) overlap the top-left
@@ -1252,6 +1268,27 @@ mod inner {
         tile_overlays: [Entity; 3],
         /// Per-tile title label — a `Text` child of `tiles[i]` (M10).
         tile_labels: [Entity; 3],
+        /// Opaque black backdrop behind the video screen — independent, not
+        /// `ChildOf` any tile, reused across all 3 (only one plays at a
+        /// time). `video_screen_quad`'s own `color` can't be black (it
+        /// multiplies the sampled video texture, so a black target would
+        /// render real frames as solid black — see its own doc) — before
+        /// the first decoded frame arrives that texture is
+        /// zero-initialized/transparent, so without a separate backing
+        /// layer the screen briefly looks broken (just a border around
+        /// empty space) rather than a plain black card. Sits just behind
+        /// the tile/screen quad's own z (0.5) — see `advance_video_loading`.
+        video_backdrop: Entity,
+        /// Three small loading dots, centered on the video screen, pulsing
+        /// in sequence — shown only while settled on `VideoScreen` with no
+        /// frame shown yet (see `advance_video_loading`).
+        /// Independent/absolute, always at world (0,0)-ish (the video
+        /// screen is always centered), reused across all 3 tiles.
+        video_loading_dots: [Entity; 3],
+        /// Elapsed time (seconds) driving the loading dots' pulse phase —
+        /// reset to 0 each time `start_video` starts a new video, so the
+        /// sequence always begins at dot 0 rather than an arbitrary phase.
+        video_dots_elapsed: f32,
         /// Home/back nav icons, top-left — `nav_icons[0]` = home, `[1]` = back.
         nav_icons: [Entity; 2],
         /// "Selected" home icon art — a `Quad` child of `nav_icons[0]`, alpha
@@ -1498,6 +1535,13 @@ mod inner {
     struct PlayingVideo {
         tile_idx: usize,
         texture_id: TextureId,
+        /// Set once `push_video_frame` has actually uploaded a decoded
+        /// frame — decode/buffering over the network can take a second or
+        /// more (worse on a slower connection on the hosted build), and
+        /// before this flips true the video texture is still its
+        /// zero-initialized placeholder. Drives `advance_video_loading`'s
+        /// loading-dots visibility.
+        first_frame_shown: bool,
     }
 
     #[wasm_bindgen]
@@ -2695,6 +2739,46 @@ mod inner {
                     .id();
             }
 
+            // Video screen loading backdrop + dots (see `video_backdrop`'s
+            // doc for the "briefly looks broken" bug this closes).
+            // Independent, spawned once and reused across all 3 tiles —
+            // geometry/visibility driven entirely by
+            // `advance_video_loading`, called every tick.
+            let video_backdrop = ui_world
+                .world
+                .spawn((
+                    QuadState {
+                        position: Vec3::new(0.0, 0.0, 0.49),
+                        color: Vec4::new(0.0, 0.0, 0.0, 1.0),
+                        ..Default::default()
+                    },
+                    Lifecycle::Idle,
+                    Visibility::HIDDEN,
+                ))
+                .id();
+            let video_loading_dots: [Entity; 3] = std::array::from_fn(|i| {
+                ui_world
+                    .world
+                    .spawn((
+                        QuadState {
+                            position: Vec3::new(
+                                (i as f32 - 1.0) * VIDEO_DOT_SPACING_PX,
+                                0.0,
+                                0.51,
+                            ),
+                            size: Vec2::new(VIDEO_DOT_SIZE_PX, VIDEO_DOT_SIZE_PX),
+                            rotation: 0.0,
+                            scale: 1.0,
+                            anchor: Vec2::new(0.5, 0.5),
+                            color: violet(),
+                            corner_radius: VIDEO_DOT_SIZE_PX / 2.0,
+                        },
+                        Lifecycle::Idle,
+                        Visibility::HIDDEN,
+                    ))
+                    .id()
+            });
+
             // Photo gallery grid — "tile w/o label" recipe (border + hover
             // glow, no overlay-tint/title-label children, unlike the video
             // tiles above). Placeholder geometry; `layout_gallery_tiles`
@@ -3115,6 +3199,9 @@ mod inner {
                 tiles,
                 tile_overlays,
                 tile_labels,
+                video_backdrop,
+                video_loading_dots,
+                video_dots_elapsed: 0.0,
                 nav_icons,
                 home_icon_selected,
                 home_icon_dark,
@@ -3228,6 +3315,7 @@ mod inner {
             self.advance_stress_button_hover(dt);
             self.advance_stress_button_fade(dt);
             self.advance_stress_warning_visibility();
+            self.advance_video_loading(dt);
             self.advance_stress_test(dt);
             self.advance_demo(dt);
             self.advance_nav_icons(dt);
@@ -3405,15 +3493,23 @@ mod inner {
             self.playing_video = Some(PlayingVideo {
                 tile_idx: tile_idx as usize,
                 texture_id,
+                first_frame_shown: false,
             });
+            // Fresh pulse phase each time, so the sequence always starts
+            // from dot 0 rather than whatever phase the clock happened to
+            // be at.
+            self.video_dots_elapsed = 0.0;
         }
 
         /// Uploads one decoded RGBA frame (`width×height×4` bytes, matching
         /// whatever `start_video` was called with) straight to the video
         /// texture. Call once per `<video>` `requestVideoFrameCallback`.
+        /// Latches `first_frame_shown` — drives `advance_video_loading`'s
+        /// loading-dots visibility.
         #[wasm_bindgen]
         pub fn push_video_frame(&mut self, rgba: &[u8]) {
-            if self.playing_video.is_some() {
+            if let Some(playing) = self.playing_video.as_mut() {
+                playing.first_frame_shown = true;
                 self.ui_world
                     .world
                     .resource::<QuadPipeline>()
@@ -4391,14 +4487,16 @@ mod inner {
                 (None, AppState::Splash) => 0.0,
                 _ => 1.0,
             };
-            // "back" only ever fades in once idle on the video screen or an
-            // example detail screen — clicking home from either skips
-            // straight to a `(_, Home)` transition
-            // (`start_screen_to_nav`/`start_detail_to_home`), which falls
-            // into the `_` arm below without needing a `then_home` flag.
+            // "back" only ever fades in once idle on the video screen, an
+            // example detail screen, or the enlarged gallery image —
+            // clicking home from any of these skips straight to a
+            // `(_, Home)` transition (`start_screen_to_nav`/
+            // `start_detail_to_home`/direct-to-home), which falls into the
+            // `_` arm below without needing a `then_home` flag.
             let back_target: f32 = match (&self.transition, self.state) {
                 (None, AppState::VideoScreen(_)) => 1.0,
                 (None, AppState::ExampleDetail(_)) => 1.0,
+                (None, AppState::GalleryImage(_)) => 1.0,
                 _ => 0.0,
             };
             let targets = [home_target, back_target];
@@ -5172,7 +5270,9 @@ mod inner {
                 AppState::GalleryImage(idx) => {
                     if clicked.contains(&self.nav_icons[0]) {
                         self.begin_transition(AppState::GalleryImage(idx), AppState::Home);
-                    } else if clicked.contains(&self.gallery_enlarged_base) {
+                    } else if clicked.contains(&self.gallery_enlarged_base)
+                        || clicked.contains(&self.nav_icons[1])
+                    {
                         self.begin_transition(AppState::GalleryImage(idx), AppState::Gallery);
                     }
                 }
@@ -5441,6 +5541,108 @@ mod inner {
         fn stop_video_playback(&mut self) {
             self.stop_video();
             self.pending_video_stop = true;
+        }
+
+        /// Drives `video_backdrop`/`video_loading_dots` every tick — called
+        /// unconditionally, same idiom as `advance_stress_warning_visibility`.
+        ///
+        /// `video_backdrop` is shown while entering `VideoScreen` and once
+        /// settled there, but *not* while leaving it. Note that
+        /// `self.state` only flips to/from `VideoScreen` once a transition
+        /// fully completes (see `advance_demo`) — so while an outbound
+        /// transition is in progress, `self.state` is STILL
+        /// `VideoScreen(idx)` for its entire duration. That means
+        /// `self.transition` must be checked *first* and take priority
+        /// over `self.state`, not the other way around: if we matched on
+        /// `self.state` first, the leaving case would incorrectly fall
+        /// into the `VideoScreen(idx) => Some(idx)` arm for the whole
+        /// outbound morph, exactly reproducing the bug this is meant to
+        /// fix. `start_screen_to_tiles`/`start_screen_to_nav` are 1→N
+        /// `OneToNRequest` *slice* transitions where the real tile entity's
+        /// own `QuadState` is never touched again once the group transition
+        /// takes over — only the virtual slices animate, toward 3 different
+        /// destinations — so there's no single shape for the backdrop to
+        /// keep tracking. Rather than sit there as a static, mismatched
+        /// full-screen rectangle (or fade out over the transition, which
+        /// still reads as lingering/wrong), it simply disappears the
+        /// instant the exit transition starts, the same moment the tile
+        /// itself stops being a plain full-screen shape.
+        ///
+        /// While visible, it doesn't snap straight to the full screen size
+        /// — it mirrors `tiles[video_idx]`'s own *live* `QuadState` every
+        /// frame (position/size/scale/corner_radius), so during the inbound
+        /// morph it always exactly underlies whatever shape the tile
+        /// currently has, rather than appearing full-size behind a
+        /// still-small tile.
+        ///
+        /// `video_loading_dots` show only once fully settled in
+        /// `VideoScreen` (`self.transition.is_none()`) with no frame shown
+        /// yet (`!playing_video.first_frame_shown`) — pulsing via a
+        /// phase-staggered sine wave per dot, the sequential "chase" look.
+        fn advance_video_loading(&mut self, dt: f32) {
+            let in_video_screen = matches!(self.state, AppState::VideoScreen(_));
+            let video_idx = match self.transition.as_ref() {
+                Some(t) => match (t.from, t.to) {
+                    (from, AppState::VideoScreen(idx)) if !matches!(from, AppState::VideoScreen(_)) => {
+                        Some(idx)
+                    }
+                    _ => None,
+                },
+                None => match self.state {
+                    AppState::VideoScreen(idx) => Some(idx),
+                    _ => None,
+                },
+            };
+            let backdrop_visible = video_idx.is_some();
+            if let Some(mut vis) = self
+                .ui_world
+                .world
+                .get_mut::<Visibility>(self.video_backdrop)
+            {
+                vis.visible = backdrop_visible;
+            }
+            if let Some(idx) = video_idx {
+                let tile_state = self
+                    .ui_world
+                    .world
+                    .get::<QuadState>(self.tiles[idx])
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(mut qs) = self
+                    .ui_world
+                    .world
+                    .get_mut::<QuadState>(self.video_backdrop)
+                {
+                    qs.position.x = tile_state.position.x;
+                    qs.position.y = tile_state.position.y;
+                    qs.size = tile_state.size;
+                    qs.scale = tile_state.scale;
+                    qs.corner_radius = tile_state.corner_radius;
+                }
+            }
+
+            let ready = self
+                .playing_video
+                .as_ref()
+                .is_some_and(|p| p.first_frame_shown);
+            let dots_visible = self.transition.is_none() && in_video_screen && !ready;
+            self.video_dots_elapsed += dt;
+            for (i, &dot) in self.video_loading_dots.iter().enumerate() {
+                if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dot) {
+                    vis.visible = dots_visible;
+                }
+                if dots_visible {
+                    let phase = (self.video_dots_elapsed
+                        - i as f32 * VIDEO_DOT_PULSE_STAGGER_SECS)
+                        / VIDEO_DOT_PULSE_PERIOD_SECS
+                        * std::f32::consts::TAU;
+                    let alpha = VIDEO_DOT_ALPHA_MIN
+                        + (VIDEO_DOT_ALPHA_MAX - VIDEO_DOT_ALPHA_MIN) * (0.5 + 0.5 * phase.sin());
+                    if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(dot) {
+                        qs.color.w = alpha;
+                    }
+                }
+            }
         }
 
         /// Forces all three nav buttons' `Visibility` and, when shown, their

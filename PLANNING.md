@@ -2156,7 +2156,7 @@ Closes the two gaps M11.1 explicitly deferred, once M11.2's capacity work is ava
 
 ---
 
-### M11.4 — Host Demo on GitHub Pages *(off critical path — not started)*
+### M11.4 — Host Demo on GitHub Pages *(off critical path — nearly complete)*
 
 Building and running the demo locally (`cargo run`, or `wasm-pack build` plus a local server) is
 fine for a developer already comfortable with the Rust/wasm toolchain — it shuts out anyone else
@@ -2196,12 +2196,14 @@ a browser.
   itself never had a hard dependency on M11.3 landing first.
 
 **Definition of done:**
-- [ ] `.github/workflows/pages.yml` builds the web shell (`wasm-pack build` → upload Pages
+- [x] `.github/workflows/pages.yml` builds the web shell (`wasm-pack build` → upload Pages
   artifact → deploy), triggered on relevant pushes to `main` and manually
-- [ ] GitHub Pages source set to "GitHub Actions" on the repo, serving the demo at a real, public URL
-- [ ] The hosted build verified end to end in a real browser with no local setup — every nav
-  button's flow works, including the picsum.photos network fetch from a real HTTPS origin (should
-  behave identically to local testing; worth a real check rather than an assumption)
+- [x] GitHub Pages source set to "GitHub Actions" on the repo, serving the demo at
+  `https://ichellin1.github.io/proteus/`
+- [x] The hosted build verified end to end in a real browser with no local setup — every nav
+  button's flow works, including the picsum.photos network fetch from a real HTTPS origin. Surfaced
+  a few latency issues not visible when hosting locally (real network conditions vs. localhost) —
+  tracked as a fast-follow, not a blocker on this milestone's own scope
 - [ ] Linked from the main repo's README (or wherever's appropriate) so a visitor can actually find it
 
 <details>
