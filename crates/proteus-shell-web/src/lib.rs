@@ -5780,6 +5780,31 @@ mod inner {
                     {
                         qs.color.w = if ready { 1.0 } else { 0.0 };
                     }
+                    if ready {
+                        // `VideoCrossfade.video_t`'s only other driver,
+                        // `advance_tiles_to_screen_fade`, runs *during* the
+                        // 0.4s geometry morph only — it assumes loading
+                        // finishes within that window, true for local mp4
+                        // playback (the architecture this predates) but no
+                        // longer reliably true now that a real network
+                        // fetch is involved: `ready` commonly lands *after*
+                        // the morph has already settled, and nothing else
+                        // ever advances `video_t` again from there — it
+                        // would stay stuck at whatever it was initialized
+                        // to (0.0, i.e. 100% poster art) forever, even with
+                        // a valid decoded frame sitting right there. Force
+                        // it to 1.0 the instant we're ready and settled —
+                        // the "reveal" motion is already provided by the
+                        // alpha fade-in above, so a second crossfade
+                        // animation here would be redundant, not missing.
+                        if let Some(mut crossfade) = self
+                            .ui_world
+                            .world
+                            .get_mut::<VideoCrossfade>(self.tiles[idx])
+                        {
+                            crossfade.video_t = 1.0;
+                        }
+                    }
                 }
             }
             self.video_dots_elapsed += dt;
