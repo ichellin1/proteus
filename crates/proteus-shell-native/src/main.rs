@@ -927,7 +927,7 @@ const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
 /// How long to wait for the first playable video frame before giving up and
 /// showing `VIDEO_LOAD_ERROR_TEXT` instead of the loading dots — same
 /// "elapsed timer → inline error" shape as `GALLERY_FETCH_TIMEOUT`.
-const VIDEO_LOAD_TIMEOUT_SECS: f32 = 30.0;
+const VIDEO_LOAD_TIMEOUT_SECS: f32 = 15.0;
 const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
 /// How long to sit settled-and-waiting before the loading dots actually
 /// show — playback often becomes ready within a beat of settling, and
