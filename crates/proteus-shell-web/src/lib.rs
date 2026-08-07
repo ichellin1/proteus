@@ -843,6 +843,12 @@ mod inner {
     const VIDEO_DOT_ALPHA_MIN: f32 = 0.25;
     const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
 
+    /// How long to wait for the first playable video frame before giving up
+    /// and showing `VIDEO_LOAD_ERROR_TEXT` instead of the loading dots —
+    /// same "elapsed timer → inline error" shape as `GALLERY_FETCH_TIMEOUT`.
+    const VIDEO_LOAD_TIMEOUT_SECS: f32 = 30.0;
+    const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
+
     /// The video screen shape, sized to `SCREEN_WIDTH_FRACTION` of the
     /// current canvas width at a 720p aspect ratio. Recomputed (not cached)
     /// each time a tiles→screen transition starts, so a resize between visits
@@ -1272,12 +1278,16 @@ mod inner {
         /// `ChildOf` any tile, reused across all 3 (only one plays at a
         /// time). `video_screen_quad`'s own `color` can't be black (it
         /// multiplies the sampled video texture, so a black target would
-        /// render real frames as solid black — see its own doc) — before
-        /// the first decoded frame arrives that texture is
-        /// zero-initialized/transparent, so without a separate backing
-        /// layer the screen briefly looks broken (just a border around
-        /// empty space) rather than a plain black card. Sits just behind
-        /// the tile/screen quad's own z (0.5) — see `advance_video_loading`.
+        /// render real frames as solid black — see its own doc);
+        /// `QuadPipeline::init_video` now clears that texture to opaque
+        /// black up front too (a fresh GPU texture otherwise has undefined
+        /// contents — see its doc), but this backdrop still earns its keep
+        /// during the inbound morph itself: it mirrors the tile's *live*
+        /// geometry every frame (see `advance_video_loading`) so the
+        /// screen never looks broken (a bare border around empty space)
+        /// mid-transition, before the crossfade even reaches the now-black
+        /// video texture. Sits just behind the tile/screen quad's own z
+        /// (0.5).
         video_backdrop: Entity,
         /// Three small loading dots, centered on the video screen, pulsing
         /// in sequence — shown only while settled on `VideoScreen` with no
@@ -1288,7 +1298,29 @@ mod inner {
         /// Elapsed time (seconds) driving the loading dots' pulse phase —
         /// reset to 0 each time `start_video` starts a new video, so the
         /// sequence always begins at dot 0 rather than an arbitrary phase.
+        /// Also doubles as the "how long have we been waiting" clock
+        /// `advance_video_loading` checks against `VIDEO_LOAD_TIMEOUT_SECS`.
         video_dots_elapsed: f32,
+        /// Latches once `video_dots_elapsed` crosses
+        /// `VIDEO_LOAD_TIMEOUT_SECS` with no frame shown yet — swaps the
+        /// loading dots for `video_error_text` (see `advance_video_loading`).
+        /// Reset to `false` each time `start_video` starts a new video.
+        video_load_timed_out: bool,
+        /// Inline "couldn't load" message, centered on the video screen —
+        /// shown only once `video_load_timed_out` latches, same idea as
+        /// `gallery_error_text`.
+        video_error_text: Entity,
+        /// Set once when `video_load_timed_out` latches — mirrors
+        /// `pending_gallery_hires_cancel`'s shape: JS polls
+        /// `take_video_cancel()` once per `tick()` and, on `true`, aborts
+        /// whatever HLS segment fetch is in flight so a timed-out load
+        /// stops burning bandwidth in the background. Distinct from
+        /// `pending_video_stop` — that one fires when the user actually
+        /// navigates away from `VideoScreen` (full Rust-side teardown
+        /// already done by the time it flips); this fires while *staying*
+        /// on `VideoScreen` to show the error, so no Rust-side component
+        /// cleanup should happen here.
+        pending_video_cancel: bool,
         /// Home/back nav icons, top-left — `nav_icons[0]` = home, `[1]` = back.
         nav_icons: [Entity; 2],
         /// "Selected" home icon art — a `Quad` child of `nav_icons[0]`, alpha
@@ -2774,6 +2806,22 @@ mod inner {
                     ))
                     .id()
             });
+            // Shown instead of the dots once `video_load_timed_out`
+            // latches — same z as the dots (never visible simultaneously,
+            // so no stacking concern).
+            let video_error_text = ui_world
+                .world
+                .spawn((
+                    QuadState {
+                        position: Vec3::new(0.0, 0.0, 0.51),
+                        color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                        ..Default::default()
+                    },
+                    Lifecycle::Idle,
+                    Visibility::HIDDEN,
+                    Text::new(VIDEO_LOAD_ERROR_TEXT, 18.0).with_color(white()),
+                ))
+                .id();
 
             // Photo gallery grid — "tile w/o label" recipe (border + hover
             // glow, no overlay-tint/title-label children, unlike the video
@@ -3198,6 +3246,9 @@ mod inner {
                 video_backdrop,
                 video_loading_dots,
                 video_dots_elapsed: 0.0,
+                video_load_timed_out: false,
+                video_error_text,
+                pending_video_cancel: false,
                 nav_icons,
                 home_icon_selected,
                 home_icon_dark,
@@ -3468,6 +3519,18 @@ mod inner {
             std::mem::replace(&mut self.pending_video_stop, false)
         }
 
+        /// Returns `true` once, the first `tick()` after a video load timed
+        /// out (`VIDEO_LOAD_TIMEOUT_SECS` elapsed with no frame shown) —
+        /// unlike `take_video_stop`, no Rust-side cleanup has happened here
+        /// (the screen stays on `VideoScreen`, now showing
+        /// `video_error_text`); this just tells JS to abort whatever HLS
+        /// segment fetch is still in flight so a failed load stops burning
+        /// bandwidth in the background.
+        #[wasm_bindgen]
+        pub fn take_video_cancel(&mut self) -> bool {
+            std::mem::take(&mut self.pending_video_cancel)
+        }
+
         /// Sizes the pipeline's video texture and attaches `VideoPlayer` to
         /// `tiles[tile_idx]`. Call once `<video>`'s `loadedmetadata` event has
         /// fired, passing its `videoWidth`/`videoHeight`.
@@ -3477,7 +3540,7 @@ mod inner {
                 .ui_world
                 .world
                 .resource_mut::<QuadPipeline>()
-                .init_video(&self.device, width, height);
+                .init_video(&self.device, &self.queue, width, height);
             // `_sender` (the BYOV channel's sending half) goes unused on
             // wasm32 — `push_video_frame` uploads directly instead of routing
             // through the channel, since blocking on a full bounded channel
@@ -3493,8 +3556,10 @@ mod inner {
             });
             // Fresh pulse phase each time, so the sequence always starts
             // from dot 0 rather than whatever phase the clock happened to
-            // be at.
+            // be at — also doubles as this attempt's "waited how long"
+            // clock, so it resets the timeout countdown too.
             self.video_dots_elapsed = 0.0;
+            self.video_load_timed_out = false;
         }
 
         /// Uploads one decoded RGBA frame (`width×height×4` bytes, matching
@@ -5575,6 +5640,14 @@ mod inner {
         /// `VideoScreen` (`self.transition.is_none()`) with no frame shown
         /// yet (`!playing_video.first_frame_shown`) — pulsing via a
         /// phase-staggered sine wave per dot, the sequential "chase" look.
+        /// Once `video_dots_elapsed` crosses `VIDEO_LOAD_TIMEOUT_SECS`
+        /// while still waiting, `video_load_timed_out` latches (also
+        /// flagging `pending_video_cancel` so JS aborts the in-flight HLS
+        /// fetch) and `video_error_text` takes the dots' place — both
+        /// share the same "settled, still waiting" gate, so leaving
+        /// `VideoScreen` (or the video finally becoming ready, however
+        /// unlikely after a 30s wait) hides whichever one was showing the
+        /// same way.
         fn advance_video_loading(&mut self, dt: f32) {
             let in_video_screen = matches!(self.state, AppState::VideoScreen(_));
             let video_idx = match self.transition.as_ref() {
@@ -5623,8 +5696,17 @@ mod inner {
                 .playing_video
                 .as_ref()
                 .is_some_and(|p| p.first_frame_shown);
-            let dots_visible = self.transition.is_none() && in_video_screen && !ready;
+            let settled_waiting = self.transition.is_none() && in_video_screen && !ready;
             self.video_dots_elapsed += dt;
+            if settled_waiting
+                && !self.video_load_timed_out
+                && self.video_dots_elapsed >= VIDEO_LOAD_TIMEOUT_SECS
+            {
+                self.video_load_timed_out = true;
+                self.pending_video_cancel = true;
+            }
+            let dots_visible = settled_waiting && !self.video_load_timed_out;
+            let error_visible = settled_waiting && self.video_load_timed_out;
             for (i, &dot) in self.video_loading_dots.iter().enumerate() {
                 if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dot) {
                     vis.visible = dots_visible;
@@ -5639,6 +5721,13 @@ mod inner {
                         qs.color.w = alpha;
                     }
                 }
+            }
+            if let Some(mut vis) = self
+                .ui_world
+                .world
+                .get_mut::<Visibility>(self.video_error_text)
+            {
+                vis.visible = error_visible;
             }
         }
 

@@ -924,6 +924,12 @@ const VIDEO_DOT_PULSE_STAGGER_SECS: f32 = 0.15;
 const VIDEO_DOT_ALPHA_MIN: f32 = 0.25;
 const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
 
+/// How long to wait for the first playable video frame before giving up and
+/// showing `VIDEO_LOAD_ERROR_TEXT` instead of the loading dots — same
+/// "elapsed timer → inline error" shape as `GALLERY_FETCH_TIMEOUT`.
+const VIDEO_LOAD_TIMEOUT_SECS: f32 = 30.0;
+const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
+
 /// The video screen shape, sized to `SCREEN_WIDTH_FRACTION` of the current
 /// window width at a 720p aspect ratio. Recomputed (not cached) each time a
 /// tiles→screen transition starts, so a resize between visits isn't stale.
@@ -1426,12 +1432,15 @@ struct RenderState {
     /// `ChildOf` any tile, reused across all 3 (only one plays at a time).
     /// `video_screen_quad`'s own `color` can't be black (it multiplies the
     /// sampled video texture, so a black target would render real frames as
-    /// solid black — see its own doc) — before the first decoded frame
-    /// arrives that texture is zero-initialized/transparent, so without a
-    /// separate backing layer the screen briefly looks broken (just a
-    /// border around empty space) rather than a plain black card. Sits
-    /// just behind the tile/screen quad's own z (0.5) — see
-    /// `advance_video_loading`.
+    /// solid black — see its own doc); `QuadPipeline::init_video` now
+    /// clears that texture to opaque black up front too (a fresh GPU
+    /// texture otherwise has undefined contents — see its doc), but this
+    /// backdrop still earns its keep during the inbound morph itself: it
+    /// mirrors the tile's *live* geometry every frame (see
+    /// `advance_video_loading`) so the screen never looks broken (a bare
+    /// border around empty space) mid-transition, before the crossfade
+    /// even reaches the now-black video texture. Sits just behind the
+    /// tile/screen quad's own z (0.5).
     video_backdrop: Entity,
     /// Three small loading dots, centered on the video screen, pulsing in
     /// sequence — shown only while settled on `VideoScreen` with no frame
@@ -1441,8 +1450,19 @@ struct RenderState {
     video_loading_dots: [Entity; 3],
     /// Elapsed time (seconds) driving the loading dots' pulse phase — reset
     /// to 0 each time `start_video_playback` starts a new video, so the
-    /// sequence always begins at dot 0 rather than an arbitrary phase.
+    /// sequence always begins at dot 0 rather than an arbitrary phase. Also
+    /// doubles as the "how long have we been waiting" clock `advance_video_loading`
+    /// checks against `VIDEO_LOAD_TIMEOUT_SECS`.
     video_dots_elapsed: f32,
+    /// Latches once `video_dots_elapsed` crosses `VIDEO_LOAD_TIMEOUT_SECS`
+    /// with no frame shown yet — swaps the loading dots for
+    /// `video_error_text` (see `advance_video_loading`). Reset to `false`
+    /// each time `start_video_playback` starts a new video.
+    video_load_timed_out: bool,
+    /// Inline "couldn't load" message, centered on the video screen —
+    /// shown only once `video_load_timed_out` latches, same idea as
+    /// `gallery_error_text`.
+    video_error_text: Entity,
     /// Home/back nav icons, top-left — `nav_icons[0]` = home, `[1]` = back.
     nav_icons: [Entity; 2],
     /// "Selected" home icon art — a `Quad` child of `nav_icons[0]`, alpha
@@ -3090,6 +3110,22 @@ impl RenderState {
                 ))
                 .id()
         });
+        // Shown instead of the dots once `video_load_timed_out` latches —
+        // same z as the dots (never visible simultaneously, so no
+        // stacking concern).
+        let video_error_text = ui_world
+            .world
+            .spawn((
+                QuadState {
+                    position: Vec3::new(0.0, 0.0, 0.51),
+                    color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+                    ..Default::default()
+                },
+                Lifecycle::Idle,
+                Visibility::HIDDEN,
+                Text::new(VIDEO_LOAD_ERROR_TEXT, 18.0).with_color(white()),
+            ))
+            .id();
 
         // Photo gallery grid — "tile w/o label" recipe (border + hover glow,
         // no overlay-tint/title-label children, unlike the video tiles
@@ -3605,6 +3641,8 @@ impl RenderState {
             video_backdrop,
             video_loading_dots,
             video_dots_elapsed: 0.0,
+            video_load_timed_out: false,
+            video_error_text,
             nav_icons,
             home_icon_selected,
             home_icon_dark,
@@ -8186,9 +8224,20 @@ impl RenderState {
     /// dimensions, sizes the pipeline's video texture to match, attaches
     /// `VideoPlayer` so `collect_instances` samples from it, and spawns the
     /// decode thread. Missing/unreadable files degrade gracefully — logs a
-    /// warning and leaves the tile showing the video screen's zero-initialized
-    /// (transparent) texture, with no playback.
+    /// warning and returns before `playing_video` is ever set, so
+    /// `advance_video_loading` just sees `ready` stay false forever and
+    /// falls through to `VIDEO_LOAD_TIMEOUT_SECS`/`video_error_text` like
+    /// any other stalled load.
     fn start_video_playback(&mut self, clicked_idx: usize) {
+        // Reset up front, before the probe can early-return — this is a
+        // fresh attempt's "waited how long" clock (see
+        // `advance_video_loading`) regardless of whether the file turns
+        // out to be readable, and it doubles as the dots' pulse phase, so
+        // it always starts from dot 0 rather than whatever phase/elapsed
+        // value a previous attempt left behind.
+        self.video_dots_elapsed = 0.0;
+        self.video_load_timed_out = false;
+
         let path = std::path::Path::new(TILE_VIDEO_PATHS[clicked_idx]);
         let dims = match mp4_player::probe(path) {
             Ok(dims) => dims,
@@ -8202,7 +8251,7 @@ impl RenderState {
             .ui_world
             .world
             .resource_mut::<QuadPipeline>()
-            .init_video(&self.device, dims.width, dims.height);
+            .init_video(&self.device, &self.queue, dims.width, dims.height);
 
         self.ui_world
             .world
@@ -8217,9 +8266,6 @@ impl RenderState {
             handle,
             first_frame_shown: false,
         });
-        // Fresh pulse phase each time, so the sequence always starts from
-        // dot 0 rather than whatever phase the clock happened to be at.
-        self.video_dots_elapsed = 0.0;
     }
 
     /// Stops whatever video is currently playing (M9.5): signals the decode
@@ -8275,7 +8321,13 @@ impl RenderState {
     /// `video_loading_dots` show only once fully settled in `VideoScreen`
     /// (`self.transition.is_none()`) with no frame shown yet
     /// (`!playing_video.first_frame_shown`) — pulsing via a phase-staggered
-    /// sine wave per dot, the sequential "chase" look.
+    /// sine wave per dot, the sequential "chase" look. Once
+    /// `video_dots_elapsed` crosses `VIDEO_LOAD_TIMEOUT_SECS` while still
+    /// waiting, `video_load_timed_out` latches and `video_error_text`
+    /// takes the dots' place — both share the same "settled, still
+    /// waiting" gate, so leaving `VideoScreen` (or the video finally
+    /// becoming ready, however unlikely after a 30s wait) hides whichever
+    /// one was showing the same way.
     fn advance_video_loading(&mut self, dt: f32) {
         let in_video_screen = matches!(self.state, AppState::VideoScreen(_));
         let video_idx = match self.transition.as_ref() {
@@ -8322,8 +8374,16 @@ impl RenderState {
             .playing_video
             .as_ref()
             .is_some_and(|p| p.first_frame_shown);
-        let dots_visible = self.transition.is_none() && in_video_screen && !ready;
+        let settled_waiting = self.transition.is_none() && in_video_screen && !ready;
         self.video_dots_elapsed += dt;
+        if settled_waiting
+            && !self.video_load_timed_out
+            && self.video_dots_elapsed >= VIDEO_LOAD_TIMEOUT_SECS
+        {
+            self.video_load_timed_out = true;
+        }
+        let dots_visible = settled_waiting && !self.video_load_timed_out;
+        let error_visible = settled_waiting && self.video_load_timed_out;
         for (i, &dot) in self.video_loading_dots.iter().enumerate() {
             if let Some(mut vis) = self.ui_world.world.get_mut::<Visibility>(dot) {
                 vis.visible = dots_visible;
@@ -8338,6 +8398,13 @@ impl RenderState {
                     qs.color.w = alpha;
                 }
             }
+        }
+        if let Some(mut vis) = self
+            .ui_world
+            .world
+            .get_mut::<Visibility>(self.video_error_text)
+        {
+            vis.visible = error_visible;
         }
     }
 

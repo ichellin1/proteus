@@ -7,6 +7,9 @@
 dist/
 pkg/
 
+# don't commit design assets now
+design/
+
 # Editor
 .vscode/
 .idea/
@@ -21,3 +24,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Scripts
+make_hls.sh
