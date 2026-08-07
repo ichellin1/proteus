@@ -5697,6 +5697,27 @@ mod inner {
                 .as_ref()
                 .is_some_and(|p| p.first_frame_shown);
             let settled_waiting = self.transition.is_none() && in_video_screen && !ready;
+            // Hide the tile's own art (its poster `BakedImage`, or garbage
+            // if `VideoCrossfade` was never attached at all — see doc
+            // above) once settled, for as long as we're waiting —
+            // otherwise it renders stretched to the video screen's aspect
+            // ratio, in front of `video_backdrop` (z 0.49 < the tile's own
+            // 0.5), defeating the whole black-fallback/dots design the
+            // instant loading is slow enough for the gap to actually show
+            // (HLS's real network latency makes this common, unlike the
+            // old local/direct-mp4 path where this window was rarely wide
+            // enough to notice). Restored the instant `ready` flips true —
+            // same z, same geometry, just the real video showing through
+            // again. `stop_video` restores it unconditionally too, for the
+            // "user backs out before ready" case this alone doesn't cover.
+            if let Some(idx) = video_idx {
+                if self.transition.is_none() {
+                    if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.tiles[idx])
+                    {
+                        qs.color.w = if ready { 1.0 } else { 0.0 };
+                    }
+                }
+            }
             self.video_dots_elapsed += dt;
             if settled_waiting
                 && !self.video_load_timed_out
@@ -6544,8 +6565,29 @@ mod inner {
         /// Stops whatever video is currently playing: removes `VideoPlayer`
         /// from its tile and releases the video texture's GPU memory.
         /// Rust-side cleanup only — `take_video_stop` separately tells JS to
-        /// pause the actual `<video>` element. A no-op if nothing is playing.
+        /// pause the actual `<video>` element. The teardown itself is a
+        /// no-op if nothing was playing (e.g. the load hadn't finished
+        /// yet) — but the tile-alpha restore below always runs regardless,
+        /// unconditionally, before that early return.
         fn stop_video(&mut self) {
+            // Undo `advance_video_loading`'s "hide the tile's own art while
+            // waiting" override (see its doc) — this must happen up front,
+            // unconditionally, because `self.playing_video` can still be
+            // `None` here (the load never got far enough to set it) even
+            // though the override was already applied; skipping it in that
+            // case would leave the tile invisible. Uses `self.state`
+            // rather than `playing_video.tile_idx` for the same reason —
+            // it's the one that's guaranteed set. Also must run before any
+            // exit path bakes a Slice snapshot
+            // (`start_screen_to_tiles`/`start_screen_to_nav`, called right
+            // after this returns) — otherwise a reverse morph started
+            // mid-load would carry the hidden alpha into the baked
+            // snapshot.
+            if let AppState::VideoScreen(idx) = self.state {
+                if let Some(mut qs) = self.ui_world.world.get_mut::<QuadState>(self.tiles[idx]) {
+                    qs.color.w = 1.0;
+                }
+            }
             let Some(playing) = self.playing_video.take() else {
                 return;
             };
