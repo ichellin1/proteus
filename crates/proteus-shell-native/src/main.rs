@@ -8532,6 +8532,45 @@ impl RenderState {
         {
             crossfade.video_t = ease_in_out_quad(t);
         }
+        // Fade the clicked tile's own art to fully transparent over the
+        // same duration as the geometry morph, revealing `video_backdrop`
+        // (already mirroring this tile's live geometry every frame — see
+        // `advance_video_loading`) — same easing as `video_t`/the morph
+        // itself so it reads as one motion, not a separate effect.
+        // Without this, the poster art (or, once `VideoCrossfade` happens
+        // to already be attached, its crossfade toward the — pre-cleared
+        // black, until a real frame lands — video texture) stays fully
+        // opaque for the whole entering morph and only snaps to
+        // transparent the instant it settles (`advance_video_loading`
+        // takes over from there), reading as an abrupt pop rather than a
+        // fade. `VideoCrossfade` often isn't even attached yet at this
+        // point — HLS's `start_video` calls back well after the morph on
+        // a slow connection — so relying on that alone isn't reliable
+        // regardless of easing. The reverse (screen→tiles) morph doesn't
+        // get this: Slice splits bake a frozen snapshot up front, so
+        // there's no live art to fade in the first place, and it wasn't
+        // reported as looking wrong.
+        //
+        // Gated on `!ready` — on a fast connection the video can already
+        // be playing for real before the morph even finishes, in which
+        // case this must NOT touch alpha: fading a live, already-visible
+        // frame out (then `advance_video_loading` snapping it back to 1.0
+        // the instant the transition settles next tick) would introduce a
+        // one-frame flicker on exactly the fast/happy path that never had
+        // a problem to begin with.
+        let ready = self
+            .playing_video
+            .as_ref()
+            .is_some_and(|p| p.first_frame_shown);
+        if !ready {
+            if let Some(mut qs) = self
+                .ui_world
+                .world
+                .get_mut::<QuadState>(self.tiles[clicked_idx])
+            {
+                qs.color.w = 1.0 - ease_in_out_quad(t);
+            }
+        }
 
         let fade_duration = BUTTON_TILES_MORPH_DURATION * 0.5;
         let fade_t = (elapsed / fade_duration).clamp(0.0, 1.0);
