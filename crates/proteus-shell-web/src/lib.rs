@@ -164,7 +164,7 @@ mod inner {
         (next_random_u32(state) as f32) / (u32::MAX as f32)
     }
 
-    const BORDER_WIDTH: f32 = 5.0;
+    const BORDER_WIDTH: f32 = 3.0;
 
     /// Seconds to wait before the entry fade begins.
     const INTRO_DELAY: f32 = 1.0;
