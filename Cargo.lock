@@ -2148,6 +2148,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-sdk"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.29.3",
+ "pollster",
+ "proteus-render",
+ "proteus-ui",
+ "wgpu",
+]
+
+[[package]]
 name = "proteus-shell-native"
 version = "0.1.0"
 dependencies = [

@@ -2383,25 +2383,60 @@ per-entity "declared state" mechanism this narrowly duplicates is M12.3's `prote
 
 ---
 
-#### M12.3 — Generic Rust App API *(critical path — not started)*
+#### M12.3 — Generic Rust App API *(critical path — complete)*
 
-`proteus-sdk` (new crate): Phase A's `component()`/`signal()`/`texture()` surface, implemented in
-Rust for the first time, on top of M12.1/M12.2's real primitives. This is the reusable core —
-usable directly by native Rust apps (M12.5 builds the shared demo crate against it), and the thing
-M12.4 wraps 1:1 for JS.
+`proteus-sdk` (new crate, Layer 2.5): Phase A's `component()`/`signal()`/`texture()` surface,
+implemented in Rust for the first time, on top of M12.1/M12.2's real primitives. This is the
+reusable core — usable directly by native Rust apps (M12.5 builds the shared demo crate against
+it), and the thing M12.4 wraps 1:1 for JS.
+
+**Rust adaptation of Phase A's JS-oriented sketch:** Rust has no implicit shared mutable state, so
+`Handle`/`SignalHandle` stay thin `Copy` identity tokens and their behavioral methods take
+`&mut Proteus` explicitly (`button.on_click(&mut app, |app| { ... })`) rather than capturing it
+implicitly the way `button.onClick(() => ...)` does in JS.
+
+**Two gaps M12.1/M12.2 scope-noted as "M12.3's job" are closed here:** `signal.set([to, from],
+config)` needs no explicit target in Phase A's sketch — a private `DeclaredGeometry` component,
+captured by `component()` at creation time, lets `SignalHandle::set` resolve `to`'s target
+automatically instead of requiring the caller to pass one (M12.1's lower-level
+`proteus_ui::signal::set` still does, by design — see its own doc). `SignalHandle::on_dropped`
+(Tier 2 of M12.1's two-tier `DroppedSignals` reporting) is wired through the same
+callback-dispatch mechanism built for `Handle`'s events.
+
+**`texture()`'s scope is narrower than Phase A's original "independent resource" framing, and
+that's deliberate.** M11's `TextureRef` ref-counting is entity-scoped (`ComponentHooks` on a
+*component's* insert/replace/remove), not a standalone resource with its own lifecycle the way
+Phase A originally sketched (`heroImage.free()` on a texture created independently of any
+component). `texture(id)` wraps an already-registered `TextureId` for inspection only — `.id()`,
+`.state()`. Actually freeing a texture happens through `Handle::free_resources()` on whichever
+entity references it (removing its `TextureRef` lets M11's existing hook decref correctly) —
+`TextureHandle` intentionally has no `.free()`. Real texture registration/decode (turning bytes
+into a `main_atlas` region) stays a shell/GPU concern for now, matching today's `Image`/`Text`/
+`bake_system` boundary — not Post-V1, but not necessarily this crate's job either: `bake_system`
+(M10.5) proves composite baking can be a generic `proteus-ui` system reaching `GpuContext`/
+`QuadPipeline` as resources with no shell involvement, and the same shape plausibly works for
+text/image baking too; the owning milestone gets decided when M12.5 needs it for real.
 
 **Definition of done:**
-- [ ] `component()` builder: geometry, sparse interaction states, `children`, `bake`, returns a
-      thin `Handle`
-- [ ] `signal()`/`signal(owner)` + `.set([to, from], config)` wrapping M12.1's registry/dispatch
-- [ ] `texture()` wrapping M11's `TextureRegistry` via `TextureRef` — `.free()`, ref counting
-- [ ] `Handle` methods: `.id()`, `.onClick`/`.onPress`/etc. (Rust closures), `.addChild`/
-      `.removeChild`, `.destroy()`/`.freeResources()`
-- [ ] `proteus::get(id)` returns a `ComponentData`-shaped Rust struct (geometry, state, visible,
-      children, transition base/target/current/progress)
-- [ ] Crate-level integration test: a small multi-component app (button → list, at minimum)
-      built using only `proteus-sdk`'s public API, no direct `proteus-ui`/`bevy_ecs` calls
-- [ ] `cargo fmt`/`cargo clippy -D warnings` clean
+- [x] `component()` builder: geometry, sparse interaction states, `children`, `bake`, returns a
+      thin `Handle` (`crates/proteus-sdk/src/spec.rs`, `src/app.rs`)
+- [x] `signal()`/`signal(owner)` + `.set(app, to, from, config, interruptible)` wrapping M12.1's
+      registry/dispatch, resolving `to`'s target from `DeclaredGeometry` automatically
+- [x] `texture()` wrapping M11's `TextureRegistry` for inspection (`.id()`, `.state()`); freeing
+      happens via `Handle::free_resources()`, not a `TextureHandle::free()` — see the scope note
+      above for why
+- [x] `Handle` methods: `.id()`, `.on_click`/`.on_hover_enter`/`.on_hover_exit`/`.on_press`/
+      `.on_release`/`.on_focus`/`.on_blur`/`.on_drag` (Rust closures), `.add_child`/
+      `.remove_child`, `.destroy()`/`.free_resources()`
+- [x] `SignalHandle::on_dropped` — persistent handler, filtered to the owning signal's own drops
+- [x] `Proteus::get(handle)` returns a `ComponentData`-shaped Rust struct (geometry, state,
+      visible, children, transition base/target/current/progress)
+- [x] 14 crate-level integration tests in `crates/proteus-sdk/tests/app.rs` — a button → list app
+      built using only `proteus-sdk`'s public API (one GPU-backed test for `free_resources()`,
+      skipped gracefully with no adapter, matching `proteus-ui/tests/static_bake.rs`'s convention)
+- [x] `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-features -- -D warnings`
+      clean across the whole workspace; full existing suite (194 tests elsewhere) unaffected
+- [x] `README.md`'s crate structure diagram updated with the new crate
 
 ---
 
