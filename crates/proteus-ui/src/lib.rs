@@ -45,7 +45,11 @@ pub use hierarchy::{
 };
 pub use image::{BakedImage, Image};
 pub use input::{quad_contains, HoveredEntity, Interactable, InteractionEvents, PointerInput};
-pub use schedule::ProteusWorld;
+pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
+pub use signal::{
+    create_signal, destroy_signal, set as set_signal, signal_dispatch_system, DropReason,
+    DroppedSignals, OwnedSignals, SignalId, SignalRegistry, TransitionDropped,
+};
 pub use text::{BakedText, Text};
 pub use texture_ref::TextureRef;
 pub use topology::{
