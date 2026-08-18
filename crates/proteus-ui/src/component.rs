@@ -141,6 +141,39 @@ impl Default for Visibility {
 }
 
 // ---------------------------------------------------------------------------
+// Disabled / TransitioningConfig — M12.2 interaction gating
+// ---------------------------------------------------------------------------
+
+/// Marks an entity as disabled: present but not interactive.
+///
+/// `hit_test_system` (`input.rs`) excludes `Disabled` entities from hit-testing
+/// entirely — no hover/press/click/focus events fire for them, regardless of
+/// `TransitioningConfig`. `interaction::interaction_style_system` separately
+/// resolves the `disabled` style from `InteractionDef` whenever this marker is
+/// present, independent of hit-testing — so a disabled control can still show
+/// its dimmed/disabled look.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct Disabled;
+
+/// Per-entity opt-in to receiving input/navigation events while `Transitioning`.
+///
+/// Both default to `false` (Phase B: "Both default off" — the framework's safe
+/// default is no interaction mid-morph, customizable by the application
+/// designer). An entity that is `Lifecycle::Transitioning` and either lacks
+/// this component or has `allow_input: false` is excluded entirely from
+/// `hit_test_system`'s candidate loop, same as `Virtual`/hidden entities.
+///
+/// `allow_navigation` is accepted here for forward-compatibility with the
+/// full Phase B design but has no behavioral effect yet — directional/tab
+/// navigation is still `stub_navigation_system` (`schedule.rs`), so nothing
+/// consults this field today.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct TransitioningConfig {
+    pub allow_input: bool,
+    pub allow_navigation: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Virtual — render-only marker
 // ---------------------------------------------------------------------------
 

@@ -2340,29 +2340,46 @@ resource, not to collecting the drops themselves.
 
 ---
 
-#### M12.2 — Interaction States & Handler Events *(critical path — not started)*
+#### M12.2 — Interaction States & Handler Events *(critical path — complete)*
 
-The rest of what M7's DoD deferred to M12: `Interactable` today is a bare marker
+The rest of what M7's DoD deferred to M12: `Interactable` was a bare marker
 (`crates/proteus-ui/src/input.rs`) with a comment reading "callbacks will be added in M10 when the
-TypeScript SDK defines the developer-facing API" (stale — that's this milestone now). No
-per-state style overrides exist, no `onPress`/`onRelease`/`onFocus`/`onBlur`/`onDrag`, no
-`allowInput`/`allowNavigation` gating.
+TypeScript SDK defines the developer-facing API" (stale — this milestone). No per-state style
+overrides existed, no `onPress`/`onRelease`/`onFocus`/`onBlur`/`onDrag`, no `allowInput`/
+`allowNavigation` gating.
+
+**Design decisions resolving ambiguity the DoD left open** (full reasoning in code doc comments):
+`Disabled` > `Pressed` > `Focused` > `Hover` > `Default` precedence when more than one is true at
+once; a style mini-transition never fights a live `Lifecycle::Transitioning` signal-driven morph
+(`interaction_style_system` skips such an entity entirely that frame, catching up once it returns
+to `Idle`); gating excludes a `Transitioning`-without-`allow_input` or `Disabled` entity from
+`hit_test_system`'s candidate loop entirely (click-through, not just event-suppressed); click
+moves focus to a different entity but clicking empty space does not blur. `Lifecycle` still has
+only `Idle`/`Transitioning` (no `Entering`, per M12.1's own research), so gating is scoped to
+`Transitioning` only. The "declared" rest state a style override resolves against is captured
+locally on `InteractionState` the first frame an `InteractionDef` entity is seen — the general
+per-entity "declared state" mechanism this narrowly duplicates is M12.3's `proteus-sdk` job.
 
 **Definition of done:**
-- [ ] `InteractionDef`/`InteractionState` components: sparse per-state (`hover`/`pressed`/
+- [x] `InteractionDef`/`InteractionState` components: sparse per-state (`hover`/`pressed`/
       `focused`/`disabled`) `QuadState` overrides, undeclared properties inherit from `default`
-- [ ] State changes drive a mini-transition through the existing `ActiveTransition` machinery, not
+      (`crates/proteus-ui/src/interaction.rs`)
+- [x] State changes drive a mini-transition through the existing `ActiveTransition` machinery, not
       an instant snap — matches Phase A: "every state change is a potential mini-transition"
-- [ ] Full handler event set fires as real per-frame events (`InteractionEvents`-style resources):
+      (bridges to `TransitionRequest`/`transition_setup_system`, same as M12.1's signal dispatch)
+- [x] Full handler event set fires as real per-frame events (`InteractionEvents`-style resources):
       `pressed`, `released`, `focused`, `blurred`, `dragged` (delta), alongside the existing
-      `clicked`/`hover_entered`/`hover_exited`
-- [ ] `FocusState` resource: click-to-focus at minimum (directional/tab navigation stays a
-      documented stub — `stub_navigation_system` — no V1 demo needs it)
-- [ ] `TransitioningConfig { allow_input, allow_navigation }` component gates interaction/
-      navigation events while an entity is `Transitioning`/`Entering`, both default off per Phase B
-- [ ] Integration tests in `crates/proteus-ui/tests/interaction_systems.rs` matching the existing
-      per-system test-file convention
-- [ ] `cargo fmt`/`cargo clippy -D warnings` clean
+      `clicked`/`hover_entered`/`hover_exited` (`crates/proteus-ui/src/input.rs`)
+- [x] `FocusState` resource: click-to-focus (directional/tab navigation stays a documented stub —
+      `stub_navigation_system` — no V1 demo needs it)
+- [x] `TransitioningConfig { allow_input, allow_navigation }` component gates interaction events
+      while an entity is `Transitioning`, both default off per Phase B (`allow_navigation` accepted
+      for forward-compat, inert until real navigation exists)
+- [x] 17 new integration tests in `crates/proteus-ui/tests/interaction_systems.rs`; full existing
+      suite (170 tests across the crate, including `tests/hit_test.rs` unaffected by the additive
+      `Option`/`Has` query params) still green
+- [x] `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-features -- -D warnings`
+      clean across the whole workspace
 
 ---
 
