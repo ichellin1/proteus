@@ -292,12 +292,12 @@ M12.6 is the TypeScript-facing proof, off critical path. See PLANNING.md's M12 e
 reasoning, including why the reference demo itself ends up built once in Rust rather than rebuilt
 in TypeScript (a scope decision made explicitly, revising this milestone's original DoD wording).
 
-### M12.1 — Signal Registry & Command Queue *(critical path)*
+### M12.1 — Signal Registry & Command Queue *(critical path — complete)*
 
 The `SignalRegistry`/`signal::set()`/`CommandQueue` machinery PLANNING.md's Phase B specified and
 M7 explicitly deferred here. Pure `proteus-ui` ECS work — no new crate, no shell changes.
 
-### M12.2 — Interaction States & Handler Events *(critical path)*
+### M12.2 — Interaction States & Handler Events *(critical path — complete)*
 
 The rest of what M7 deferred: per-state style overrides (hover/pressed/focused/disabled) actually
 driving `QuadState`, the full handler event set (`onPress`/`onRelease`/`onFocus`/`onBlur`/

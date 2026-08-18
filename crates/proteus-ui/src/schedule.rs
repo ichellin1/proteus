@@ -6,6 +6,7 @@
 //! ```text
 //! flush_commands       drain deferred mutations from last tick (CommandQueue, M12.1)
 //! input                process pointer / keyboard events  [stub M2]
+//! interaction_style    resolve hover/press/focus/disabled → mini-transition (M12.2)
 //! navigation           directional focus movement         [stub M2]
 //! signal_dispatch      pending signal::set() calls → TransitionRequest (M12.1)
 //! transition_setup     TransitionRequest → ActiveTransition
@@ -27,7 +28,10 @@ use bevy_ecs::schedule::ApplyDeferred;
 
 use crate::bake::bake_system;
 use crate::hierarchy::{opacity_system, visibility_system};
-use crate::input::{hit_test_system, HoveredEntity, InteractionEvents, PointerInput};
+use crate::input::{
+    hit_test_system, FocusState, HoveredEntity, InteractionEvents, PointerInput, PressedEntity,
+};
+use crate::interaction::interaction_style_system;
 use crate::signal::{self, register_signal_hooks, signal_dispatch_system};
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
@@ -52,6 +56,9 @@ pub enum ProteusSet {
     FlushCommands,
     /// Process pointer and keyboard input events.
     Input,
+    /// Resolve hover/pressed/focused/disabled precedence into a style
+    /// mini-transition (M12.2).
+    InteractionStyle,
     /// Handle directional and tab navigation.
     Navigation,
     /// Drain pending `signal::set()` calls into `TransitionRequest` components
@@ -168,6 +175,8 @@ impl ProteusWorld {
         world.init_resource::<PointerInput>();
         world.init_resource::<InteractionEvents>();
         world.init_resource::<HoveredEntity>();
+        world.init_resource::<PressedEntity>();
+        world.init_resource::<FocusState>();
         world.init_resource::<CommandQueue>();
         signal::init_resources(&mut world);
 
@@ -241,6 +250,7 @@ pub fn build_schedule() -> Schedule {
         (
             ProteusSet::FlushCommands,
             ProteusSet::Input,
+            ProteusSet::InteractionStyle,
             ProteusSet::Navigation,
             ProteusSet::SignalDispatch,
             ProteusSet::TransitionSetup,
@@ -269,6 +279,8 @@ pub fn build_schedule() -> Schedule {
 
     // M7: real hit-test system replaces the input stub.
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
+    // M12.2: resolves this frame's hit-test output into interaction styling.
+    schedule.add_systems(interaction_style_system.in_set(ProteusSet::InteractionStyle));
     // Stub systems — hold their slot until real implementations land.
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
     // M12.1: real signal dispatch replaces the (never-existent) stub for this slot.

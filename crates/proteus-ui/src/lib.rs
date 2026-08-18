@@ -22,6 +22,7 @@ pub mod effects;
 pub mod hierarchy;
 pub mod image;
 pub mod input;
+pub mod interaction;
 pub mod schedule;
 pub mod signal;
 pub mod text;
@@ -37,14 +38,22 @@ pub use bevy_ecs::prelude::Entity;
 pub use collect::{
     collect_entity_instances, collect_instances, quad_state_to_instance, BakedTexture,
 };
-pub use component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
+pub use component::{
+    Disabled, Lifecycle, QuadState, TransitionRequest, TransitioningConfig, Virtual, Visibility,
+};
 pub use effects::{Border, DropShadow, Glow};
 pub use hierarchy::{
     opacity_system, resolve_world_position, resolve_world_position_query, visibility_system,
     EffectiveOpacity, EffectiveVisibility, Opacity,
 };
 pub use image::{BakedImage, Image};
-pub use input::{quad_contains, HoveredEntity, Interactable, InteractionEvents, PointerInput};
+pub use input::{
+    quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, PointerInput,
+    PressedEntity,
+};
+pub use interaction::{
+    interaction_style_system, InteractionDef, InteractionState, InteractionStateKind, StyleOverride,
+};
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use signal::{
     create_signal, destroy_signal, set as set_signal, signal_dispatch_system, DropReason,
