@@ -16,6 +16,7 @@ crates/
   proteus-gpu/          # Layer 0: wgpu device abstraction
   proteus-render/       # Layer 1: scene graph, instanced render pipeline, transition pipeline
   proteus-ui/           # Layer 2: metamorphic component model, transition topologies
+  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/signal/texture)
   proteus-shell-web/    # Layer 3: WebGL2/WebGPU WASM shell, TypeScript bridge
   proteus-shell-native/ # Layer 3: native windowing shell (winit)
 ```

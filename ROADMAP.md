@@ -303,7 +303,7 @@ The rest of what M7 deferred: per-state style overrides (hover/pressed/focused/d
 driving `QuadState`, the full handler event set (`onPress`/`onRelease`/`onFocus`/`onBlur`/
 `onDrag`), and the `allowInput`/`allowNavigation` transition-config gates. Still pure `proteus-ui`.
 
-### M12.3 — Generic Rust App API *(critical path)*
+### M12.3 — Generic Rust App API *(critical path — complete)*
 
 `proteus-sdk` (new crate): the ergonomic `component()`/`signal()`/`texture()` surface Phase A
 designed, built once in Rust on top of M12.1/M12.2's real primitives — a `Handle` type, closure-

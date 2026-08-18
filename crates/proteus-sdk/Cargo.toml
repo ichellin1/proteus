@@ -1,0 +1,19 @@
+[package]
+name = "proteus-sdk"
+description = "Layer 2.5: generic app-authoring API (component/signal/texture) over proteus-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proteus-ui = { path = "../proteus-ui" }
+proteus-render = { path = "../proteus-render" }
+bevy_ecs = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]
+# wgpu/pollster: headless-GPU integration test for free_resources(), same
+# pattern as crates/proteus-ui/tests/static_bake.rs.
+wgpu = { workspace = true }
+pollster = { workspace = true }
