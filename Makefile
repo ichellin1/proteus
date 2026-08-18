@@ -1,7 +1,7 @@
 # Proteus — developer convenience targets.
 # Run `make install-hooks` once after cloning to wire up the git hooks.
 
-.PHONY: install-hooks check fmt clippy test build-web serve-web
+.PHONY: install-hooks check fmt clippy test build-web serve-web build-sdk-web
 
 ## Wire up the git hooks from scripts/git-hooks/ into .git/hooks/.
 install-hooks:
@@ -32,3 +32,14 @@ build-web:
 ## Serve the web demo locally (requires Python 3).
 serve-web: build-web
 	python3 -m http.server 8080 --directory crates/proteus-shell-web/www
+
+## Build the proteus-sdk npm package: wasm-pack (--target bundler, unlike
+## build-web's --target web — this ships as an npm-installable package for
+## bundler-based projects, not a zero-build-step demo page) then tsc.
+## Requires: cargo install wasm-pack; npm install (once) in crates/proteus-sdk-web/ts
+build-sdk-web:
+	wasm-pack build crates/proteus-sdk-web \
+	  --target bundler \
+	  --out-dir ts/pkg \
+	  --release
+	cd crates/proteus-sdk-web/ts && npm run build

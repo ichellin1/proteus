@@ -30,6 +30,18 @@ use crate::Proteus;
 pub struct Handle(pub(crate) Entity);
 
 impl Handle {
+    /// Wrap an existing entity as a `Handle` — the inverse of [`Handle::id`].
+    /// For callers (e.g. `proteus-sdk-web`, M12.4) that receive an entity id
+    /// through some other channel — a `component()` spec's `children` field
+    /// crossing the wasm boundary as `Entity::to_bits()` values, say — and
+    /// need to turn it back into a real `Handle` to call `add_child`/etc. on.
+    /// Does not check that `entity` is actually alive; passing a stale or
+    /// foreign entity behaves exactly like passing a stale `Handle` obtained
+    /// any other way (methods no-op or `Proteus::get` returns `None`).
+    pub fn from_entity(entity: Entity) -> Self {
+        Self(entity)
+    }
+
     /// The underlying ECS entity — an escape hatch for callers that need to
     /// reach `proteus-ui`/`bevy_ecs` directly (e.g. attaching
     /// `proteus_ui::component::Disabled`, not yet exposed as a `Handle`
@@ -196,6 +208,14 @@ impl SignalHandle {
 pub struct TextureHandle(pub(crate) TextureId);
 
 impl TextureHandle {
+    /// Wrap an existing texture id. Equivalent to [`crate::Proteus::texture`]
+    /// (which just does this, ignoring `self`) but usable without a
+    /// `Proteus` reference in hand — e.g. `proteus-sdk-web` (M12.4)
+    /// reconstructing one from an id that crossed the wasm boundary.
+    pub fn from_texture_id(id: TextureId) -> Self {
+        Self(id)
+    }
+
     pub fn id(&self) -> TextureId {
         self.0
     }

@@ -1,0 +1,22 @@
+[package]
+name = "proteus-sdk-web"
+description = "Layer 2.5 (web): thin wasm-bindgen bridge over proteus-sdk's generic app API"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+proteus-sdk = { path = "../proteus-sdk" }
+proteus-ui = { path = "../proteus-ui" }
+proteus-render = { path = "../proteus-render" }
+bevy_ecs = { workspace = true }
+glam = { workspace = true }
+slotmap = { workspace = true }
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+serde = { workspace = true }
+serde-wasm-bindgen = { workspace = true }

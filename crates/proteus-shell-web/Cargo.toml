@@ -1,6 +1,6 @@
 [package]
 name = "proteus-shell-web"
-description = "Layer 3: WebGL2/WebGPU WASM shell, TypeScript bridge"
+description = "Layer 3: WebGL2/WebGPU WASM shell (reference demo)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

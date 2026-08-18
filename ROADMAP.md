@@ -310,7 +310,7 @@ designed, built once in Rust on top of M12.1/M12.2's real primitives — a `Hand
 based callbacks, `proteus::get(id)` returning `ComponentData`, composite/children declaration,
 `bake: true`. Usable directly by native Rust apps; the thing M12.4 wraps 1:1 for JS.
 
-### M12.4 — WASM Bridge & TypeScript SDK Package *(critical path)*
+### M12.4 — WASM Bridge & TypeScript SDK Package *(critical path — complete)*
 
 `proteus-sdk-web` (new crate): a thin wasm-bindgen wrapper of `proteus-sdk`. Then the hand-authored
 TypeScript layer on top — typed `ComponentData` interfaces, convenience conversions, `requestAnimationFrame`
