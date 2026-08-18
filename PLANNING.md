@@ -1259,6 +1259,47 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   developer-facing API is TypeScript. A developer release without a polished TS SDK would only
   serve Rust consumers — too narrow for a public release. M12 stays on the critical path.
 
+- [x] **M12 split into M12.1–M12.6** (audit done at M12's start, same discipline as M10.5/M10.6's
+  and M11.1–M11.4's retroactive naming). The gap was bigger than "wrap an existing API in
+  TypeScript": `signal.rs` was a one-line stub ("to be implemented in Phase E"), `Interactable` a
+  bare marker with no per-state styles or callbacks, `FocusMap`/navigation still no-op stubs — all
+  items M7's own DoD explicitly deferred to M12. Beyond that, there was no generic
+  component/signal/texture API in *any* language: `proteus-shell-native/src/main.rs` and
+  `proteus-shell-web/src/lib.rs` (~8700 and ~8860 lines) each independently hand-roll the same
+  9-screen reference demo, with no shared abstraction between them — discovered during M12
+  planning research and confirmed worth fixing as part of M12 rather than after it, per discussion
+  with the project owner.
+
+  **Revises this milestone's original DoD wording.** The literal line "the reference demo... is
+  rebuilt end-to-end in TypeScript using only the SDK" assumed the demo's canonical form would
+  become a TypeScript program. The decided target architecture instead treats the demo as **one
+  shared Rust app, built once against the new generic Rust API (`proteus-sdk`, M12.3) and compiled
+  for both shells** — native links it directly, wasm compiles it for web — eliminating the
+  duplication rather than reproducing the demo a second time in a second language. The TypeScript
+  SDK (M12.4) still gets built in full per the original DoD (typed, no `any`, npm-publishable,
+  real texture-handle wrapper); it's a wrapper for third-party developers authoring *new* apps in
+  TS, not the vehicle for rebuilding the reference demo. M12.6 (off critical path) is where the
+  TS-SDK-proof gets built — a smaller app, not the full 9-screen demo — closing the spirit of the
+  original DoD line without the duplication its literal wording implied.
+
+  **Ordering rationale:** M12.1 (signal registry + `CommandQueue`) and M12.2 (interaction states +
+  full handler events) close the M7-deferred ECS gaps everything else needs underneath it — pure
+  `proteus-ui` work, no new crate. M12.3 (`proteus-sdk`) is the ergonomic Rust API Phase A actually
+  designed, buildable for the first time once M12.1/M12.2 give it real primitives to wrap. M12.4 is
+  a thin wasm-bindgen bridge plus a hand-written TypeScript convenience layer over M12.3 — no new
+  ECS logic. M12.5 (the shared demo crate) is the highest-risk step — retiring ~17,500 lines of
+  duplicated hand-rolled demo code across two files — so it goes last and additively: the shared
+  crate is built and verified before either existing `main.rs`/`lib.rs` is cut over, and cutover is
+  a distinct, explicitly-confirmed step, not bundled into "build the crate." M12.6 doesn't block
+  M13 on its own (M13 already wants ≥3 examples beyond the reference demo; this can double as one),
+  so it's off critical path, after M12.4.
+
+  **Deferred, not scoped into any M12.x:** letting a TypeScript-authored app's *declarative* parts
+  (component trees, signal/transition wiring) run natively too, without a full TS→Rust code
+  transpiler — tractable only if those parts end up expressible as serializable data rather than
+  arbitrary code; arbitrary callback bodies would need an embedded JS engine to run natively,
+  defeating the point. Noted in Post-V1; not designed further here.
+
 - [x] **M0 updated to include CI as an exit criterion.** GitHub Actions (cargo test, cargo clippy,
   cargo fmt --check, wasm-pack build) must be green before M0 is considered complete. CI configured
   late means regressions accumulate; CI from M0 keeps the bar clean from the start.
@@ -2229,22 +2270,192 @@ a browser.
 
 ### M12 — TypeScript SDK *(critical path)*
 
-A developer builds the full interactive reference demo in TypeScript without touching Rust.
+A generic app-authoring API — everything Phase A of this document designed (`component()`,
+`signal()`, `texture()`, handles, `proteus.get(id)`) — built for real, in Rust first, then wrapped
+for TypeScript. Split into six sub-milestones (M12.1–M12.6); see Phase D's "M12 split into
+M12.1–M12.6" entry above for the full audit, the revised scope (the reference demo ends up built
+once in Rust, shared across shells, rather than rebuilt a second time in TypeScript), and the
+ordering rationale. This entry's own DoD is the sum of its sub-milestones'.
+
+**Definition of done:** the union of M12.1–M12.5's DoD items (M12.6 is off critical path and not
+required for M12 itself to be considered done) — in short: `signal()`/`CommandQueue` real
+(M12.1); interaction states, full handler events, `allowInput`/`allowNavigation` real (M12.2); a
+generic Rust app API usable directly by native Rust code (M12.3); a fully-typed, npm-publishable
+TypeScript SDK wrapping it, with real convenience conversions and a real texture-handle wrapper
+over M11 (M12.4); and the reference demo built once against the generic API and running,
+unduplicated, on both shells (M12.5).
+
+---
+
+#### M12.1 — Signal Registry & Command Queue *(critical path — complete)*
+
+Closes the two ECS-level gaps M7's own DoD explicitly deferred to M12: `signal.rs` was a one-line
+stub, and no `CommandQueue`/deferred-mutation mechanism existed anywhere. Both are pure `proteus-ui`
+work — no new crate, no shell changes.
+
+**Approach:** `SignalRegistry` (a `slotmap`-backed resource, same key pattern as
+`proteus-render`'s `TextureId`) holds registered signals with optional owner entities;
+`OwnedSignals` + a despawn `ComponentHooks::on_remove` hook (mirroring `texture_ref.rs`'s
+`TextureRef` ref-counting hook) destroys an owned signal automatically when its owner despawns.
+`signal::set()` enqueues a `PendingSignalSet` rather than mutating the `World` synchronously — a
+new `signal_dispatch_system`, in a new `ProteusSet::SignalDispatch` stage (between `Navigation` and
+`TransitionSetup`), drains the queue each frame, validates each request, and — for anything that
+validates — inserts the existing `component::TransitionRequest` onto the target entity, bridging
+to the already-correct `transition_setup_system` rather than duplicating its logic. `CommandQueue`
+(a `Vec<Box<dyn FnOnce(&mut World) + Send + Sync>>` resource) is drained by a new
+`flush_commands_system`, chained immediately before the schedule's pre-existing `ApplyDeferred` in
+`ProteusSet::FlushCommands`.
+
+**Scope note:** `signal::set()`'s `target: QuadState` argument is caller-supplied, matching what
+`TransitionRequest` already requires. Resolving it automatically from a component's own *declared*
+rest state (the no-extra-argument shape `signal.set([to.id(), from.id()])` implies in Phase A's
+sketch) needs a place to store that declared state per entity — a component-declaration concept
+that belongs to M12.3's `proteus-sdk`, not to this ECS-level primitive.
+
+**`TransitionDropped` reporting:** always populated (`DroppedSignals` resource, drained
+per-frame), not gated behind `cfg(debug_assertions)` — cheap, matches
+`CompletedTransitions`/`InteractionEvents`'s existing convention in this crate.  PLANNING.md's
+original two-tier dev-automatic/release-opt-in *handler* distinction is a cost concern about
+per-signal callback dispatch, which belongs to the SDK layer (M12.3+) built on top of this
+resource, not to collecting the drops themselves.
 
 **Definition of done:**
-- [ ] TypeScript SDK is publishable to npm (package.json, build output, types)
-- [ ] All public types fully declared — no `any`, complete IntelliSense in VS Code
-- [ ] The full interactive reference demo (from M7) is rebuilt end-to-end in TypeScript using only
-  the SDK — no raw wasm-bindgen output consumed directly
-- [ ] All public APIs documented with usage examples (inline JSDoc minimum)
-- [ ] Convenience conversions handled by the SDK: degrees→radians, hex/named colors→RGBA,
-  top-left coordinate mode option for root components
-- [ ] `proteus.get(id)` returns a fully typed `ComponentData` interface (no raw `JsValue`)
-- [ ] The SDK wires `requestAnimationFrame` → `proteus.tick()` automatically by default;
-  manual tick control is available for custom render loop integration
-- [ ] The SDK's texture handle (`proteus.texture()`) is a real wrapper over M11's reference
-  counting and eviction, not a stub — `heroImage.free()`, `.state()`, `.onEvicted()`/`.onRestored()`
-  all do what Phase B specifies
+- [x] `SignalRegistry`: `create`/`destroy`/`exists`/`owner`, owned vs. unowned signals
+- [x] Owned signal destroyed automatically when its owner entity despawns
+      (`crates/proteus-ui/tests/signal_systems.rs::owned_signal_destroyed_when_owner_despawned`)
+- [x] `signal::set()` inserts a `TransitionRequest` on `to`, snapshotting `from`'s current
+      `QuadState` as the origin, on the next `ProteusWorld::update()` — not synchronously
+- [x] `from` goes `Visibility { visible: false }` as part of a valid dispatch (Phase B: "the morph
+      is the exit")
+- [x] Drop reasons implemented and tested: `SignalNotFound`, `EntityNotFound` (`to` or `from`),
+      `EntityNotVisible` (`from` hidden), `AlreadyTransitioning` (no `interruptible`)
+- [x] `interruptible: true` on an already-`Transitioning` `to` retargets via the existing
+      mid-flight-snapshot path (`from_state: None`), not a fresh restart from `from`
+- [x] `CommandQueue::push`/`flush_commands_system`: FIFO application, queue empty after flush,
+      runs before the schedule's pre-existing `ApplyDeferred`
+- [x] 17 new integration tests in `crates/proteus-ui/tests/signal_systems.rs`; full existing
+      suite (129 tests across the crate) still green
+- [x] `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-features -- -D warnings`
+      clean across the whole workspace
+
+---
+
+#### M12.2 — Interaction States & Handler Events *(critical path — not started)*
+
+The rest of what M7's DoD deferred to M12: `Interactable` today is a bare marker
+(`crates/proteus-ui/src/input.rs`) with a comment reading "callbacks will be added in M10 when the
+TypeScript SDK defines the developer-facing API" (stale — that's this milestone now). No
+per-state style overrides exist, no `onPress`/`onRelease`/`onFocus`/`onBlur`/`onDrag`, no
+`allowInput`/`allowNavigation` gating.
+
+**Definition of done:**
+- [ ] `InteractionDef`/`InteractionState` components: sparse per-state (`hover`/`pressed`/
+      `focused`/`disabled`) `QuadState` overrides, undeclared properties inherit from `default`
+- [ ] State changes drive a mini-transition through the existing `ActiveTransition` machinery, not
+      an instant snap — matches Phase A: "every state change is a potential mini-transition"
+- [ ] Full handler event set fires as real per-frame events (`InteractionEvents`-style resources):
+      `pressed`, `released`, `focused`, `blurred`, `dragged` (delta), alongside the existing
+      `clicked`/`hover_entered`/`hover_exited`
+- [ ] `FocusState` resource: click-to-focus at minimum (directional/tab navigation stays a
+      documented stub — `stub_navigation_system` — no V1 demo needs it)
+- [ ] `TransitioningConfig { allow_input, allow_navigation }` component gates interaction/
+      navigation events while an entity is `Transitioning`/`Entering`, both default off per Phase B
+- [ ] Integration tests in `crates/proteus-ui/tests/interaction_systems.rs` matching the existing
+      per-system test-file convention
+- [ ] `cargo fmt`/`cargo clippy -D warnings` clean
+
+---
+
+#### M12.3 — Generic Rust App API *(critical path — not started)*
+
+`proteus-sdk` (new crate): Phase A's `component()`/`signal()`/`texture()` surface, implemented in
+Rust for the first time, on top of M12.1/M12.2's real primitives. This is the reusable core —
+usable directly by native Rust apps (M12.5 builds the shared demo crate against it), and the thing
+M12.4 wraps 1:1 for JS.
+
+**Definition of done:**
+- [ ] `component()` builder: geometry, sparse interaction states, `children`, `bake`, returns a
+      thin `Handle`
+- [ ] `signal()`/`signal(owner)` + `.set([to, from], config)` wrapping M12.1's registry/dispatch
+- [ ] `texture()` wrapping M11's `TextureRegistry` via `TextureRef` — `.free()`, ref counting
+- [ ] `Handle` methods: `.id()`, `.onClick`/`.onPress`/etc. (Rust closures), `.addChild`/
+      `.removeChild`, `.destroy()`/`.freeResources()`
+- [ ] `proteus::get(id)` returns a `ComponentData`-shaped Rust struct (geometry, state, visible,
+      children, transition base/target/current/progress)
+- [ ] Crate-level integration test: a small multi-component app (button → list, at minimum)
+      built using only `proteus-sdk`'s public API, no direct `proteus-ui`/`bevy_ecs` calls
+- [ ] `cargo fmt`/`cargo clippy -D warnings` clean
+
+---
+
+#### M12.4 — WASM Bridge & TypeScript SDK Package *(critical path — not started)*
+
+`proteus-sdk-web` (new crate): a thin wasm-bindgen wrapper of `proteus-sdk`, exposing the same
+generic vocabulary to JS (closures stored for callbacks). Then the hand-authored TypeScript layer
+on top, and real npm packaging — this is where the milestone's original "publishable to npm,
+fully typed" DoD items actually land.
+
+**Definition of done:**
+- [ ] `proteus-sdk-web` 1:1 wraps `proteus-sdk`'s public surface via `#[wasm_bindgen]`
+- [ ] Hand-authored `.ts` source: no `any` anywhere, full `ComponentData` interfaces
+- [ ] Convenience conversions: degrees→radians, hex/named colors→RGBA, top-left coordinate mode
+      option for root components
+- [ ] `requestAnimationFrame` → `tick()` wired automatically by default; manual tick control
+      available for custom render-loop integration
+- [ ] Texture handle is a real wrapper over M11/M12.3's ref counting and eviction — `.free()`,
+      `.state()`, `.onEvicted()`/`.onRestored()` all do what Phase B specifies, not stubs
+- [ ] Real `package.json` (name/scope, repository, keywords, `exports` map, semver) — not the bare
+      wasm-pack-generated one — plus `tsconfig.json` and a build step producing `dist/`
+- [ ] All public APIs documented (JSDoc minimum)
+- [ ] `tsc --noEmit` type-check step added to CI (`ci.yml`); `actions/setup-node` + npm install
+      added alongside it
+- [ ] Package reaches a publishable state (`npm pack`/`npm publish --dry-run` succeeds); does
+      **not** actually run `npm publish` — that is a separate, explicitly-confirmed step
+
+---
+
+#### M12.5 — Shared Reference-Demo Crate *(critical path — not started)*
+
+The actual "one app, both shells" deliverable, and the highest-risk step in M12: a new
+`crates/proteus-demo` crate, built once against `proteus-sdk` (M12.3), reproducing the 9-screen
+reference demo (`Splash`/`Home`/`VideoTiles`/`VideoScreen`/`Loading`/`Gallery`/`GalleryImage`/
+`ExamplesHome`/`ExampleDetail` — all 3 transition topologies, M10 composition, M10.5 baking, M9
+video, M9.7 images, M4 text, M8/M8.6 shader effects) — replacing the currently hand-duplicated
+logic in `proteus-shell-native/src/main.rs` (~8728 lines) and `proteus-shell-web/src/lib.rs`
+(~8861 lines).
+
+**Approach — additive, cutover as a separate explicit step:** build and verify `proteus-demo`
+fully before touching either existing shell file. Both `main.rs` and `lib.rs` shrink to thin
+platform glue (window/canvas setup, asset I/O from disk vs. `fetch`, event forwarding, tick-loop
+driving) that link `proteus-demo` — but that shrinking, and deleting the old duplicated logic, is
+its own confirmed step once the new path is proven working end to end, not bundled into "the crate
+compiles."
+
+**Definition of done:**
+- [ ] `crates/proteus-demo` reproduces all 9 screens and their transitions, built only against
+      `proteus-sdk`
+- [ ] Compiles natively (linked by a slimmed `proteus-shell-native`) and to wasm (linked by a
+      slimmed `proteus-shell-web`) from the same source, no `#[cfg(target_arch = "wasm32")]`
+      branches inside `proteus-demo` itself beyond what `proteus-sdk` already needs
+- [ ] M6 visual regression tests still pass on both targets
+- [ ] Old duplicated demo logic removed from `main.rs`/`lib.rs` only after the above is verified —
+      a distinct, reviewed step, not silently folded into the crate's initial build
+- [ ] Live GitHub Pages demo (M11.4) still works after cutover
+- [ ] `cargo fmt`/`cargo clippy -D warnings` clean
+
+---
+
+#### M12.6 — TypeScript Example App *(off critical path — can begin after M12.4)*
+
+The TS-SDK-proof the original M12 DoD wording implied, scoped down: a smaller app (not the full
+9-screen reference demo — e.g. button → list → detail) built purely in TypeScript against the
+M12.4 package, with no Rust authored. Proves the SDK is real and usable for a third-party
+developer without duplicating the full reference demo a third time.
+
+**Definition of done:**
+- [ ] A working example app, `.ts` source only, importing only the published SDK package
+- [ ] Demonstrates at least one of each transition topology (1→1, 1→N, N→1)
+- [ ] Can double as one of M13's required ≥3 examples — placed under `examples/` if so
 
 ---
 
@@ -2294,6 +2505,9 @@ Planned future work, not part of the V1 scope:
 - Embedded systems demo — running the native shell on constrained hardware (Android TV, Raspberry
   Pi 4) to validate the framework outside desktop-class GPUs
 - Dogfooding — build a personal website using Proteus and publish it on GitHub Pages
+- TypeScript-authored apps running natively without a code transpiler (raised during M12
+  planning) — see ROADMAP.md's Post-V1 entry for the full reasoning on why this is tractable only
+  if `proteus-sdk`'s declarative parts end up serializable as data
 
 ---
 

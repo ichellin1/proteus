@@ -42,6 +42,7 @@ M13 Developer Release
 - **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1 (complete)
 - **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2 (complete)
 - **M11.4 — Host Demo on GitHub Pages** — conceptually after M11.3, no hard dependency
+- **M12.6 — TypeScript Example App** — can begin after M12.4
 
 **Cross-shell parity is a standing requirement, not a milestone.** Every milestone's definition of
 done is implicitly "works identically on the native and web shells" unless stated otherwise —
@@ -275,10 +276,60 @@ DoD and open decisions.
 
 ## M12 — TypeScript SDK *(critical path)*
 
-A developer builds the full interactive reference demo in TypeScript without touching Rust.
-Fully typed (no `any`), documented, publishable to npm. All convenience conversions handled
-(degrees, hex colors, top-left coordinate mode). This is the primary developer-facing API. The
-SDK's texture handle is a real wrapper over M11's reference counting and eviction, not a stub.
+A generic app-authoring API — `component()`, `signal()`, `texture()`, and everything Phase A of
+PLANNING.md designed — built for the first time, in Rust, then wrapped for TypeScript. Fully typed
+(no `any`), documented, publishable to npm. All convenience conversions handled (degrees, hex
+colors, top-left coordinate mode). The TypeScript SDK's texture handle is a real wrapper over
+M11's reference counting and eviction, not a stub.
+
+**Split into six sub-milestones** (audit done alongside M11.4 handoff): the gap turned out to be
+much bigger than "wrap an existing API in TypeScript" — `signal.rs` was still a one-line stub,
+`Interactable` a bare marker with no per-state styles or callbacks, and there was no generic
+component/signal/texture API in *any* language yet, only ~17,500 lines of hand-duplicated,
+demo-specific Rust across `proteus-shell-native`'s and `proteus-shell-web`'s independent
+reimplementations of the same reference demo. M12.1–M12.5 close that gap in dependency order;
+M12.6 is the TypeScript-facing proof, off critical path. See PLANNING.md's M12 entry for the full
+reasoning, including why the reference demo itself ends up built once in Rust rather than rebuilt
+in TypeScript (a scope decision made explicitly, revising this milestone's original DoD wording).
+
+### M12.1 — Signal Registry & Command Queue *(critical path)*
+
+The `SignalRegistry`/`signal::set()`/`CommandQueue` machinery PLANNING.md's Phase B specified and
+M7 explicitly deferred here. Pure `proteus-ui` ECS work — no new crate, no shell changes.
+
+### M12.2 — Interaction States & Handler Events *(critical path)*
+
+The rest of what M7 deferred: per-state style overrides (hover/pressed/focused/disabled) actually
+driving `QuadState`, the full handler event set (`onPress`/`onRelease`/`onFocus`/`onBlur`/
+`onDrag`), and the `allowInput`/`allowNavigation` transition-config gates. Still pure `proteus-ui`.
+
+### M12.3 — Generic Rust App API *(critical path)*
+
+`proteus-sdk` (new crate): the ergonomic `component()`/`signal()`/`texture()` surface Phase A
+designed, built once in Rust on top of M12.1/M12.2's real primitives — a `Handle` type, closure-
+based callbacks, `proteus::get(id)` returning `ComponentData`, composite/children declaration,
+`bake: true`. Usable directly by native Rust apps; the thing M12.4 wraps 1:1 for JS.
+
+### M12.4 — WASM Bridge & TypeScript SDK Package *(critical path)*
+
+`proteus-sdk-web` (new crate): a thin wasm-bindgen wrapper of `proteus-sdk`. Then the hand-authored
+TypeScript layer on top — typed `ComponentData` interfaces, convenience conversions, `requestAnimationFrame`
+auto-wiring, the real texture-handle wrapper — plus real npm packaging (package.json, tsconfig,
+build → `dist/`, a `tsc --noEmit` CI step). Stops short of `npm publish`.
+
+### M12.5 — Shared Reference-Demo Crate *(critical path)*
+
+The actual "one app, both shells" deliverable: the 9-screen reference demo, built once against
+`proteus-sdk`, replacing the hand-duplicated logic in `proteus-shell-native/src/main.rs` and
+`proteus-shell-web/src/lib.rs`. Both shells shrink to thin platform glue (window/canvas setup,
+asset I/O, event forwarding) linking this one crate. Highest-risk step in M12 — done additively,
+old demo code kept working until the new path is verified, cutover an explicit separate step.
+
+### M12.6 — TypeScript Example App *(off critical path — can begin after M12.4)*
+
+A smaller app (not the full reference demo) built purely in TypeScript against the M12.4 SDK, no
+Rust authored — proves the TS SDK is real and usable for a third-party developer. Doesn't block
+M13 on its own; can double as one of M13's required ≥3 examples.
 
 ## M13 — Developer Release
 
@@ -425,3 +476,11 @@ Planned future work, not part of the V1 scope:
   depending on M10's composition/hierarchy work
 - **Embedded systems demo** — native shell on Android TV / Raspberry Pi 4
 - **Dogfooding** — build a personal website using Proteus and publish it on GitHub Pages
+- **TypeScript-authored apps running natively without a code transpiler** — raised during M12
+  planning. Not a full TS→Rust compiler (arbitrary callback bodies would need an embedded JS
+  engine to run natively, defeating the point of a native Rust core). Tractable only if
+  `proteus-sdk`'s declarative parts (component trees, signal/transition wiring) end up
+  serializable as data — then a TS app's structure could ship as data and run on a native Rust
+  interpreter with zero transpilation, leaving only imperative callback bodies as JS-only platform
+  glue. Not designed further; revisit if/when M12.3's `proteus-sdk` shape makes it obviously easy
+  or obviously hard.

@@ -4,9 +4,10 @@
 //! full system order from Phase B of PLANNING.md:
 //!
 //! ```text
-//! flush_commands       drain deferred mutations from last tick
+//! flush_commands       drain deferred mutations from last tick (CommandQueue, M12.1)
 //! input                process pointer / keyboard events  [stub M2]
 //! navigation           directional focus movement         [stub M2]
+//! signal_dispatch      pending signal::set() calls → TransitionRequest (M12.1)
 //! transition_setup     TransitionRequest → ActiveTransition
 //! transition_tick      advance t, lerp QuadState
 //! transition_complete  t=1.0 → fire event, restore Idle
@@ -27,6 +28,7 @@ use bevy_ecs::schedule::ApplyDeferred;
 use crate::bake::bake_system;
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{hit_test_system, HoveredEntity, InteractionEvents, PointerInput};
+use crate::signal::{self, register_signal_hooks, signal_dispatch_system};
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
@@ -52,6 +54,9 @@ pub enum ProteusSet {
     Input,
     /// Handle directional and tab navigation.
     Navigation,
+    /// Drain pending `signal::set()` calls into `TransitionRequest` components
+    /// (M12.1).
+    SignalDispatch,
     /// Convert `TransitionRequest` components into `ActiveTransition`.
     TransitionSetup,
     /// Advance `t`, lerp `QuadState`.
@@ -78,6 +83,53 @@ pub enum ProteusSet {
     BakeFlush,
     /// Build the GPU instance buffer and submit the draw call.
     Render,
+}
+
+// ---------------------------------------------------------------------------
+// CommandQueue — deferred mutation for re-entrancy safety (M12.1)
+// ---------------------------------------------------------------------------
+
+/// A deferred mutation, boxed so [`CommandQueue`] can hold arbitrary closures.
+///
+/// `Sync` (in addition to `Send`) is required because `bevy_ecs::Resource`
+/// itself requires it — the queue is never actually accessed from more than
+/// one thread at once, but the bound has to be satisfied for `CommandQueue`
+/// to be a `Resource` at all. Closures that only capture plain data
+/// (`Entity`, `SignalId`, `QuadState`, ...) satisfy it automatically.
+type BoxedCommand = Box<dyn FnOnce(&mut World) + Send + Sync>;
+
+/// Deferred-mutation queue for re-entrant callback safety (PLANNING.md Phase
+/// B's `CommandQueue`).
+///
+/// Interaction callbacks (M12.2) and, later, Rust/JS SDK closures (M12.3/4)
+/// run *during* a system's execution — they don't have `&mut World` access,
+/// and mutating the `World` mid-schedule-run (e.g. calling
+/// [`crate::signal::set`] from inside `hit_test_system`) would be unsound.
+/// Push a closure here instead; [`flush_commands_system`] (runs first, in
+/// [`ProteusSet::FlushCommands`]) drains and applies every queued mutation at
+/// the start of the next frame, before any other system runs.
+#[derive(Resource, Default)]
+pub struct CommandQueue {
+    pending: Vec<BoxedCommand>,
+}
+
+impl CommandQueue {
+    /// Queue a mutation to run against the `World` at the start of next frame.
+    pub fn push(&mut self, cmd: impl FnOnce(&mut World) + Send + Sync + 'static) {
+        self.pending.push(Box::new(cmd));
+    }
+}
+
+/// Drains [`CommandQueue`] and applies every mutation in FIFO order.
+///
+/// Runs before the pre-existing `ApplyDeferred` in [`ProteusSet::FlushCommands`]
+/// — so a queued closure that itself uses `Commands` still gets its deferred
+/// writes flushed before `Input` runs.
+pub fn flush_commands_system(world: &mut World) {
+    let pending = std::mem::take(&mut world.resource_mut::<CommandQueue>().pending);
+    for cmd in pending {
+        cmd(world);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,11 +168,16 @@ impl ProteusWorld {
         world.init_resource::<PointerInput>();
         world.init_resource::<InteractionEvents>();
         world.init_resource::<HoveredEntity>();
+        world.init_resource::<CommandQueue>();
+        signal::init_resources(&mut world);
 
         // M11: TextureRef's ref-counting hooks must be registered before any
         // TextureRef component can exist in an archetype — bevy_ecs panics
         // otherwise. Doing this here, at world construction, guarantees that.
         register_texture_ref_hooks(&mut world);
+        // M12.1: same requirement, same reasoning, for OwnedSignals's
+        // despawn-cleanup hook.
+        register_signal_hooks(&mut world);
 
         // --- Schedule ---
         let schedule = build_schedule();
@@ -185,6 +242,7 @@ pub fn build_schedule() -> Schedule {
             ProteusSet::FlushCommands,
             ProteusSet::Input,
             ProteusSet::Navigation,
+            ProteusSet::SignalDispatch,
             ProteusSet::TransitionSetup,
             ProteusSet::TransitionTick,
             ProteusSet::TransitionComplete,
@@ -199,13 +257,22 @@ pub fn build_schedule() -> Schedule {
             .chain(),
     );
 
-    // Drain bevy_ecs deferred commands that accumulated during the last frame.
-    schedule.add_systems(ApplyDeferred.in_set(ProteusSet::FlushCommands));
+    // M12.1: drain CommandQueue (re-entrant callback mutations) first, then
+    // drain bevy_ecs's own deferred Commands that accumulated during the
+    // last frame — a queued closure that itself uses Commands still needs
+    // this second flush.
+    schedule.add_systems(
+        (flush_commands_system, ApplyDeferred)
+            .chain()
+            .in_set(ProteusSet::FlushCommands),
+    );
 
     // M7: real hit-test system replaces the input stub.
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     // Stub systems — hold their slot until real implementations land.
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
+    // M12.1: real signal dispatch replaces the (never-existent) stub for this slot.
+    schedule.add_systems(signal_dispatch_system.in_set(ProteusSet::SignalDispatch));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
 
     // M10.5: real bake system replaces the stub. Writes via Commands

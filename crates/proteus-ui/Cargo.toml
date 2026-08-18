@@ -14,6 +14,8 @@ serde = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+# SignalId (M12.1) — same slotmap-key pattern proteus-render's TextureId already uses.
+slotmap = { workspace = true }
 
 [dev-dependencies]
 # Integration tests construct World and glam types directly, and reference
