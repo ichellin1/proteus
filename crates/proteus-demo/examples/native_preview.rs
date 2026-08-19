@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use bevy_ecs::prelude::{Entity, Without};
 use glam::Vec2;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -22,7 +23,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use proteus_demo::Demo;
-use proteus_render::{validate_atlas_config, AtlasConfig, GpuContext, QuadPipeline};
+use proteus_render::{validate_atlas_config, AtlasConfig, FontAtlas, GpuContext, QuadPipeline};
+use proteus_ui::{BakedText, Text, TextureRef};
 
 fn main() {
     env_logger::init();
@@ -109,7 +111,66 @@ struct State {
     queue: wgpu::Queue,
     surface_config: wgpu::SurfaceConfiguration,
     demo: Demo,
+    font_atlas: FontAtlas,
     last_frame: std::time::Instant,
+}
+
+/// Rasterizes and uploads any `Text` component that doesn't have a
+/// `BakedText` yet — mirrors what `proteus-shell-native`/`-web` each
+/// hand-roll today (`bake_pending_text`). `proteus-sdk`/`Demo` don't do this
+/// themselves (see `proteus-demo`'s crate-root doc: baking stays a shell
+/// concern), so a harness that wants to actually *see* text has to do it,
+/// same as any other host application would.
+fn bake_pending_text(
+    world: &mut bevy_ecs::world::World,
+    font_atlas: &mut FontAtlas,
+    queue: &wgpu::Queue,
+) {
+    let pending: Vec<(Entity, Text)> = {
+        let mut query = world.query_filtered::<(Entity, &Text), Without<BakedText>>();
+        query.iter(world).map(|(e, t)| (e, t.clone())).collect()
+    };
+
+    for (entity, text) in pending {
+        let Some(glyphs) =
+            font_atlas.rasterize_text_tracked(&text.content, text.size_px, text.letter_spacing_px)
+        else {
+            continue;
+        };
+
+        let (uv, texture_id) = {
+            let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
+                return;
+            };
+            let Some(texture_id) =
+                pipeline
+                    .texture_registry
+                    .register_static(glyphs.width, glyphs.height, false)
+            else {
+                continue;
+            };
+            let placement = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(queue, placement, &glyphs.rgba_pixels);
+            let uv = pipeline
+                .texture_registry
+                .main_atlas_uv(texture_id)
+                .expect("just registered");
+            (uv, texture_id)
+        };
+
+        world.entity_mut(entity).insert((
+            BakedText {
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
+                pixel_size: [glyphs.width as f32, glyphs.height as f32],
+            },
+            TextureRef(texture_id),
+        ));
+    }
 }
 
 impl State {
@@ -210,6 +271,7 @@ impl State {
             queue,
             surface_config,
             demo,
+            font_atlas: FontAtlas::with_embedded_font(),
             last_frame: std::time::Instant::now(),
         }
     }
@@ -236,12 +298,13 @@ impl State {
     fn render(&mut self) {
         let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = std::time::Instant::now();
-        self.demo.tick(dt);
-        // Content that mutates Visibility outside the normal tick()
-        // schedule (future migration steps' settle()-style logic) needs
-        // this before instances are collected — see
-        // Proteus::refresh_cascades's doc. Harmless no-op with zero content.
-        self.demo.app_mut().refresh_cascades();
+        self.demo.tick(dt); // Demo::tick already calls refresh_cascades internally.
+
+        bake_pending_text(
+            self.demo.app_mut().world_mut(),
+            &mut self.font_atlas,
+            &self.queue,
+        );
 
         let instances = proteus_ui::collect_instances(self.demo.app_mut().world_mut());
 

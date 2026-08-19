@@ -17,6 +17,7 @@ glam = { workspace = true }
 # design — see crate root docs).
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
+bevy_ecs = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
