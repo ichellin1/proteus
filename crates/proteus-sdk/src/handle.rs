@@ -14,11 +14,28 @@ use bevy_ecs::prelude::Entity;
 use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
-use proteus_ui::{BakedComposite, BakedImage, BakedText, SignalId, TextureRef, TransitionConfig};
+use proteus_ui::{
+    BakedComposite, BakedImage, BakedText, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
+    OneToNRequest, QuadState, SignalId, SplitStrategy, TextureRef, TransitionConfig,
+};
 
 use crate::app::DeclaredGeometry;
 use crate::callback::EventKind;
 use crate::Proteus;
+
+/// Resolve `entity`'s declared rest geometry — the `DeclaredGeometry`
+/// `component()` captured at creation time if present, else its current
+/// live `QuadState`, else a default. Shared by the group-transition
+/// methods below; `SignalHandle::set` (which predates this helper) does the
+/// same resolution inline.
+fn declared_geometry(app: &Proteus, entity: Entity) -> QuadState {
+    app.world
+        .world
+        .get::<DeclaredGeometry>(entity)
+        .map(|d| d.0.clone())
+        .or_else(|| app.world.world.get::<QuadState>(entity).cloned())
+        .unwrap_or_default()
+}
 
 // ---------------------------------------------------------------------------
 // Handle
@@ -84,6 +101,66 @@ impl Handle {
 
     pub fn on_drag(&self, app: &mut Proteus, cb: impl FnMut(&mut Proteus, Vec2) + 'static) {
         app.callbacks.register_drag(self.0, Box::new(cb));
+    }
+
+    /// Split this component into `targets` — a 1→N group transition
+    /// (Phase B's 1→N topology). Each target's geometry is resolved
+    /// automatically from its own `component()`-declared rest state,
+    /// mirroring [`SignalHandle::set`]. Not signal-mediated — unlike 1→1
+    /// transitions, `proteus-ui`'s group-transition machinery
+    /// (`one_to_n_setup_system`) was never routed through the signal system
+    /// (M12.1's scope was 1→1 only), so this inserts the request directly,
+    /// the same way `proteus-ui`'s own demo callers always have.
+    ///
+    /// This component (the source) is hidden by the underlying system once
+    /// the transition completes — no separate visibility call needed.
+    pub fn split_to(
+        &self,
+        app: &mut Proteus,
+        targets: &[Handle],
+        config: TransitionConfig,
+        strategy: SplitStrategy,
+    ) {
+        let group_targets = targets
+            .iter()
+            .map(|h| GroupTarget {
+                entity: h.0,
+                state: declared_geometry(app, h.0),
+            })
+            .collect();
+        app.world.world.entity_mut(self.0).insert(OneToNRequest {
+            targets: group_targets,
+            default_config: config,
+            child_behavior: None,
+            strategy,
+        });
+    }
+
+    /// Merge `sources` into this component — an N→1 group transition
+    /// (Phase B's N→1 topology). See [`Handle::split_to`]'s doc for why
+    /// this isn't signal-mediated. `sources` are hidden immediately by the
+    /// underlying system (`n_to_one_setup_system`) — "the morph is the
+    /// exit," same convention as 1→1 signals.
+    pub fn merge_from(
+        &self,
+        app: &mut Proteus,
+        sources: &[Handle],
+        config: TransitionConfig,
+        layout: MergeLayout,
+    ) {
+        let group_sources = sources
+            .iter()
+            .map(|h| GroupSource {
+                entity: h.0,
+                state: declared_geometry(app, h.0),
+            })
+            .collect();
+        app.world.world.entity_mut(self.0).insert(NToOneRequest {
+            sources: group_sources,
+            default_config: config,
+            child_behavior: None,
+            layout,
+        });
     }
 
     /// Parent `child` to this component — `child`'s `QuadState` becomes

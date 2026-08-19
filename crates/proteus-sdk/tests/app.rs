@@ -473,3 +473,78 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
         "region should be freeable once free_resources decremented the ref count to zero"
     );
 }
+
+// ---------------------------------------------------------------------------
+// split_to() / merge_from() — group transitions (M12.5 Step 2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let target_geometry = QuadState {
+        color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+        ..quad_at(300.0, 0.0)
+    };
+    let target1 = app.component(ComponentSpec::new(target_geometry.clone()));
+    let target2 = app.component(ComponentSpec::new(QuadState {
+        color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+        ..quad_at(400.0, 0.0)
+    }));
+
+    source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
+    app.tick(1.0);
+
+    let source_data = app.get(source).unwrap();
+    assert!(
+        !source_data.visible,
+        "source must be hidden once the 1\u{2192}N transition starts"
+    );
+
+    let target1_data = app.get(target1).unwrap();
+    assert_eq!(target1_data.geometry.color, target_geometry.color);
+    assert_eq!(target1_data.geometry.position, target_geometry.position);
+    assert!(
+        target1_data.transition.is_none(),
+        "target's transition should have settled within this one large-dt tick"
+    );
+}
+
+#[test]
+fn merge_from_hides_sources_and_settles_destination_to_its_declared_geometry() {
+    use proteus_sdk::MergeLayout;
+
+    let mut app = Proteus::new();
+    let source1 = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let source2 = app.component(ComponentSpec::new(quad_at(100.0, 0.0)));
+    let dest_geometry = QuadState {
+        color: Vec4::new(1.0, 0.0, 1.0, 1.0),
+        ..quad_at(500.0, 0.0)
+    };
+    let dest = app.component(ComponentSpec::new(dest_geometry.clone()));
+
+    dest.merge_from(
+        &mut app,
+        &[source1, source2],
+        cfg(0.1),
+        MergeLayout::Horizontal,
+    );
+    app.tick(1.0);
+
+    let source1_data = app.get(source1).unwrap();
+    assert!(
+        !source1_data.visible,
+        "sources must be hidden once the N\u{2192}1 transition starts"
+    );
+    let source2_data = app.get(source2).unwrap();
+    assert!(!source2_data.visible);
+
+    let dest_data = app.get(dest).unwrap();
+    assert_eq!(dest_data.geometry.color, dest_geometry.color);
+    assert!(
+        dest_data.visible,
+        "destination must be revealed once the merge completes"
+    );
+}

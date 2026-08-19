@@ -35,11 +35,12 @@ pub use spec::ComponentSpec;
 
 // Re-exported so callers can build `QuadState`/`StyleOverride`/
 // `TransitionConfig` values, pick an easing function, inspect a signal
-// drop's reason, and construct the visual/content components
-// `ComponentSpec::text`/`image`/`border`/`glow`/`drop_shadow` take — all
-// without a direct `proteus-ui` dependency of their own.
+// drop's reason, construct the visual/content components
+// `ComponentSpec::text`/`image`/`border`/`glow`/`drop_shadow` take, and pick
+// a strategy/layout for `Handle::split_to`/`merge_from`'s group
+// transitions — all without a direct `proteus-ui` dependency of their own.
 pub use proteus_ui::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, Border, DropReason,
-    DropShadow, Glow, Image, InteractionStateKind, QuadState, StyleOverride, Text,
-    TransitionConfig, TransitionDropped,
+    DropShadow, Glow, Image, InteractionStateKind, MergeLayout, QuadState, SplitStrategy,
+    StyleOverride, Text, TransitionConfig, TransitionDropped, Visibility,
 };
