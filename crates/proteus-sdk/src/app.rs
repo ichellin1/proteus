@@ -84,6 +84,22 @@ impl Proteus {
             self.world.world.entity_mut(entity).insert(Baked);
         }
 
+        if let Some(text) = spec.text {
+            self.world.world.entity_mut(entity).insert(text);
+        }
+        if let Some(image) = spec.image {
+            self.world.world.entity_mut(entity).insert(image);
+        }
+        if let Some(border) = spec.border {
+            self.world.world.entity_mut(entity).insert(border);
+        }
+        if let Some(glow) = spec.glow {
+            self.world.world.entity_mut(entity).insert(glow);
+        }
+        if let Some(drop_shadow) = spec.drop_shadow {
+            self.world.world.entity_mut(entity).insert(drop_shadow);
+        }
+
         for child in spec.children {
             self.world.world.entity_mut(child.0).insert(ChildOf(entity));
         }
