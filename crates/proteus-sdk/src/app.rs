@@ -240,6 +240,25 @@ impl Proteus {
             .position = pos;
     }
 
+    /// Re-runs just the `Visibility`→`EffectiveVisibility` and `Opacity`→
+    /// `EffectiveOpacity` cascades — not the full per-frame `tick()` (no
+    /// input/transition/bake re-run). Wraps
+    /// `proteus_ui::ProteusWorld::refresh_cascades`, which isn't otherwise
+    /// reachable: `Proteus` only exposes the raw `bevy_ecs::World` via
+    /// `world`/`world_mut`, not the `ProteusWorld` wrapper itself.
+    ///
+    /// `tick()`'s own cascade pass (part of the normal schedule) reflects
+    /// `Visibility`/`Opacity` as they stood *before* this frame's
+    /// application logic ran. Application code that mutates `Visibility`
+    /// directly after `tick()` returns (e.g. a state-machine `settle()` step
+    /// hiding/revealing components) needs a second cascade pass before
+    /// rendering, or the mutation renders one frame late — call this after
+    /// all such per-frame mutations, immediately before reading instances
+    /// for rendering.
+    pub fn refresh_cascades(&mut self) {
+        self.world.refresh_cascades();
+    }
+
     pub fn pointer_pressed(&mut self) {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = true;
