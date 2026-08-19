@@ -1,12 +1,14 @@
 //! [`ComponentSpec`] — the builder [`crate::Proteus::component`] takes.
 
-use proteus_ui::{QuadState, StyleOverride};
+use proteus_ui::{Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text};
 
 use crate::handle::Handle;
 
 /// Declares a component: its rest geometry, sparse per-state style overrides
 /// (Phase A: "only the properties that change for a given state need to be
-/// declared"), children, and whether it should be permanently baked.
+/// declared"), children, whether it should be permanently baked, and any of
+/// the visual/content components (`Text`/`Image`/`Border`/`Glow`/
+/// `DropShadow`) it should carry from the moment it's spawned.
 #[derive(Debug, Clone, Default)]
 pub struct ComponentSpec {
     pub(crate) geometry: QuadState,
@@ -16,6 +18,11 @@ pub struct ComponentSpec {
     pub(crate) disabled: Option<StyleOverride>,
     pub(crate) children: Vec<Handle>,
     pub(crate) bake: bool,
+    pub(crate) text: Option<Text>,
+    pub(crate) image: Option<Image>,
+    pub(crate) border: Option<Border>,
+    pub(crate) glow: Option<Glow>,
+    pub(crate) drop_shadow: Option<DropShadow>,
 }
 
 impl ComponentSpec {
@@ -71,6 +78,46 @@ impl ComponentSpec {
     /// contract.
     pub fn bake(mut self) -> Self {
         self.bake = true;
+        self
+    }
+
+    /// Render a single line of text on this component (M4). Rasterized and
+    /// baked into `main_atlas` by whichever bake path the host application
+    /// drives — `proteus-sdk` doesn't do this itself yet (see
+    /// `proteus_ui::text`'s module doc: baking is currently a shell
+    /// responsibility, not a scheduled system).
+    pub fn text(mut self, text: Text) -> Self {
+        self.text = Some(text);
+        self
+    }
+
+    /// Attach a static image (M9.7), given its already-loaded bytes. Like
+    /// `.text()`, actually decoding/baking the bytes into `main_atlas` is
+    /// driven by the host application, not `proteus-sdk` itself.
+    pub fn image(mut self, image: Image) -> Self {
+        self.image = Some(image);
+        self
+    }
+
+    /// Draw an SDF-based border around this component.
+    pub fn border(mut self, border: Border) -> Self {
+        self.border = Some(border);
+        self
+    }
+
+    /// Draw a soft radial glow behind this component. Mutually exclusive
+    /// with `.drop_shadow()` at the shader level — if both are set, the
+    /// drop shadow wins (matches `proteus_ui::effects`'s existing behavior;
+    /// this builder doesn't add its own validation on top of that).
+    pub fn glow(mut self, glow: Glow) -> Self {
+        self.glow = Some(glow);
+        self
+    }
+
+    /// Draw an SDF-based drop shadow behind this component. See `.glow()`
+    /// for the mutual-exclusivity note.
+    pub fn drop_shadow(mut self, shadow: DropShadow) -> Self {
+        self.drop_shadow = Some(shadow);
         self
     }
 

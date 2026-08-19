@@ -82,6 +82,68 @@ fn remove_child_with_destroy_despawns_it() {
 }
 
 // ---------------------------------------------------------------------------
+// text() / image() / border() / glow() / drop_shadow() — M12.5 Step 0
+// ---------------------------------------------------------------------------
+
+#[test]
+fn component_spec_attaches_text_image_border_glow_and_drop_shadow() {
+    use proteus_sdk::{Border, DropShadow, Glow, Image, Text};
+
+    let mut app = Proteus::new();
+    let handle = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .text(Text::new("Hello", 16.0))
+            .image(Image::new(vec![0u8; 4]))
+            .border(Border::new(2.0, Vec4::ONE))
+            .drop_shadow(DropShadow::new(Vec2::new(2.0, 2.0), 4.0)),
+    );
+
+    assert_eq!(
+        app.world()
+            .get::<Text>(handle.id())
+            .map(|t| t.content.clone()),
+        Some("Hello".to_string()),
+        "text() should attach a real Text component"
+    );
+    assert!(
+        app.world().get::<Image>(handle.id()).is_some(),
+        "image() should attach a real Image component"
+    );
+    assert!(
+        app.world().get::<Border>(handle.id()).is_some(),
+        "border() should attach a real Border component"
+    );
+    assert!(
+        app.world().get::<DropShadow>(handle.id()).is_some(),
+        "drop_shadow() should attach a real DropShadow component"
+    );
+
+    // Glow and DropShadow are mutually exclusive at the shader level — a
+    // second component built with only .glow() (no .drop_shadow()) should
+    // carry Glow, proving the builder itself doesn't silently drop it.
+    let glowing =
+        app.component(ComponentSpec::new(quad_at(300.0, 0.0)).glow(Glow::new(8.0, Vec4::ONE)));
+    assert!(
+        app.world().get::<Glow>(glowing.id()).is_some(),
+        "glow() should attach a real Glow component when DropShadow isn't also set"
+    );
+}
+
+#[test]
+fn component_spec_without_optional_components_attaches_none_of_them() {
+    use proteus_sdk::{Border, DropShadow, Glow, Image, Text};
+
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    assert!(app.world().get::<Text>(handle.id()).is_none());
+    assert!(app.world().get::<Image>(handle.id()).is_none());
+    assert!(app.world().get::<Border>(handle.id()).is_none());
+    assert!(app.world().get::<Glow>(handle.id()).is_none());
+    assert!(app.world().get::<DropShadow>(handle.id()).is_none());
+}
+
+// ---------------------------------------------------------------------------
 // on_click and friends — persistent, not one-shot
 // ---------------------------------------------------------------------------
 
