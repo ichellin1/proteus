@@ -1,0 +1,24 @@
+[package]
+name = "proteus-demo"
+description = "The shared, shell-agnostic reference demo — built once against proteus-sdk, linked by both proteus-shell-native and proteus-shell-web (M12.5)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proteus-sdk = { path = "../proteus-sdk" }
+glam = { workspace = true }
+
+[dev-dependencies]
+# Only needed by examples/native_preview.rs — a visual harness for manually
+# confirming each M12.5 migration step, not part of this crate's own public
+# API (rendering itself stays a shell/host concern, per proteus-sdk's own
+# design — see crate root docs).
+proteus-render = { path = "../proteus-render" }
+proteus-ui = { path = "../proteus-ui" }
+wgpu = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
