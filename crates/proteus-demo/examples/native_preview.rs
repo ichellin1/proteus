@@ -24,7 +24,41 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use proteus_demo::Demo;
 use proteus_render::{validate_atlas_config, AtlasConfig, FontAtlas, GpuContext, QuadPipeline};
-use proteus_ui::{BakedText, Text, TextureRef};
+use proteus_sdk::{Proteus, TextureHandle};
+use proteus_ui::{BakedImage, BakedText, Image, Text, TextureRef};
+
+/// `proteus-shell-native::LOGO_FRAME_COUNT` — see `bake_logo_frames`'s doc.
+const LOGO_FRAME_COUNT: usize = 19;
+/// `proteus-shell-native::LOGO_FRAME_MAX_SIDE` — source frame art (208×288)
+/// is noticeably larger than the mark's on-screen footprint, so it's
+/// downscaled before packing into `main_atlas`, same reasoning as any other
+/// baked image.
+const LOGO_FRAME_MAX_SIDE: u32 = 220;
+/// `proteus-shell-native::MAX_TILE_IMAGE_SIDE` — real photos routinely
+/// arrive far larger than any on-screen footprint this demo needs; cap
+/// before packing into `main_atlas` (2048×2048, shared with baked text).
+/// Also used for the background — see that constant's own doc.
+const MAX_IMAGE_SIDE: u32 = 400;
+
+/// `images/logo/frame-01.png` … `frame-19.png`. Points at
+/// `proteus-shell-native`'s existing asset directory rather than
+/// duplicating the files — this harness previews `proteus-demo`'s content,
+/// it doesn't own canonical demo assets (that reconciliation is Step 9's
+/// cutover, once both shells actually link this crate).
+fn logo_frame_path(n: usize) -> std::path::PathBuf {
+    std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../proteus-shell-native/images/logo"
+    ))
+    .join(format!("frame-{n:02}.png"))
+}
+
+/// `images/bg/ocean-blur.jpg` — see `logo_frame_path`'s doc for why this
+/// points at `proteus-shell-native`'s own asset directory.
+const BG_IMAGE_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../proteus-shell-native/images/bg/ocean-blur.jpg"
+);
 
 fn main() {
     env_logger::init();
@@ -104,6 +138,67 @@ impl ApplicationHandler for PreviewApp {
     }
 }
 
+/// Pre-bakes all 19 logo animation frames into `main_atlas`, eternal — they
+/// must survive the whole idle loop, not just whichever frame is currently
+/// referenced (see the eviction-safety note on
+/// `TextureRegistry::register_static`), so unlike `bake_pending_text` this
+/// can't use a lazy per-entity register/evict path. Mirrors
+/// `proteus-shell-native`'s own identical pre-bake loop. Missing/unreadable
+/// frames degrade gracefully — same convention as any other image asset.
+fn bake_logo_frames(app: &mut Proteus, queue: &wgpu::Queue) -> Vec<TextureHandle> {
+    let mut frames = Vec::with_capacity(LOGO_FRAME_COUNT);
+    for n in 1..=LOGO_FRAME_COUNT {
+        let path = logo_frame_path(n);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                log::warn!("logo frame {n}: could not read {path:?}: {e}");
+                continue;
+            }
+        };
+        let decoded = match proteus_render::decode_image(&bytes) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                log::warn!("logo frame {n}: could not decode {path:?}: {e}");
+                continue;
+            }
+        };
+        let decoded = proteus_render::resize_to_fit(decoded, LOGO_FRAME_MAX_SIDE);
+
+        let texture_id = {
+            let Some(mut pipeline) = app.world_mut().get_resource_mut::<QuadPipeline>() else {
+                return frames;
+            };
+            let Some(texture_id) =
+                pipeline
+                    .texture_registry
+                    .register_static(decoded.width, decoded.height, true)
+            else {
+                log::warn!(
+                    "logo frame {n}: main_atlas full — could not register {}x{}",
+                    decoded.width,
+                    decoded.height,
+                );
+                continue;
+            };
+            let placement = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(queue, placement, &decoded.rgba_pixels);
+            texture_id
+        };
+        frames.push(app.texture(texture_id));
+    }
+    if frames.is_empty() {
+        log::warn!(
+            "logo animation: no frames loaded from {:?} — button renders as a blank transparent quad",
+            logo_frame_path(1).parent().unwrap()
+        );
+    }
+    frames
+}
+
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -167,6 +262,71 @@ fn bake_pending_text(
                 uv_scale: uv.uv_scale,
                 page: uv.page,
                 pixel_size: [glyphs.width as f32, glyphs.height as f32],
+            },
+            TextureRef(texture_id),
+        ));
+    }
+}
+
+/// Decodes and uploads any `Image` component that doesn't have a
+/// `BakedImage` yet — the generic counterpart to `bake_pending_text`, for
+/// any entity carrying raw image bytes (currently just the background;
+/// tile/gallery images arrive in later M12.5 steps). Mirrors
+/// `proteus-shell-native::bake_pending_images` minus its gallery-specific
+/// center-crop handling, not needed by anything this harness shows yet.
+fn bake_pending_images(world: &mut bevy_ecs::world::World, queue: &wgpu::Queue) {
+    let pending: Vec<(Entity, std::sync::Arc<[u8]>)> = {
+        let mut query = world.query_filtered::<(Entity, &Image), Without<BakedImage>>();
+        query
+            .iter(world)
+            .map(|(e, img)| (e, img.bytes.clone()))
+            .collect()
+    };
+
+    for (entity, bytes) in pending {
+        let decoded = match proteus_render::decode_image(&bytes) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                log::warn!("bake_pending_images: entity {entity:?}: {e}");
+                continue;
+            }
+        };
+        let decoded = proteus_render::resize_to_fit(decoded, MAX_IMAGE_SIDE);
+
+        let (uv, texture_id) = {
+            let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
+                return;
+            };
+            let Some(texture_id) =
+                pipeline
+                    .texture_registry
+                    .register_static(decoded.width, decoded.height, false)
+            else {
+                log::warn!(
+                    "bake_pending_images: main_atlas full — could not register {}x{} image for entity {entity:?}",
+                    decoded.width,
+                    decoded.height,
+                );
+                continue;
+            };
+            let placement = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(queue, placement, &decoded.rgba_pixels);
+            let uv = pipeline
+                .texture_registry
+                .main_atlas_uv(texture_id)
+                .expect("just registered");
+            (uv, texture_id)
+        };
+
+        world.entity_mut(entity).insert((
+            BakedImage {
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
+                pixel_size: [decoded.width as f32, decoded.height as f32],
             },
             TextureRef(texture_id),
         ));
@@ -257,6 +417,18 @@ impl State {
         });
         demo.app_mut().world_mut().insert_resource(pipeline);
 
+        let logo_frames = bake_logo_frames(demo.app_mut(), &queue);
+        demo.set_logo_frames(logo_frames);
+
+        match std::fs::read(BG_IMAGE_PATH) {
+            Ok(bytes) => demo.set_background_image(bytes),
+            Err(e) => log::warn!("background: could not read {BG_IMAGE_PATH:?}: {e}"),
+        }
+        demo.set_viewport_size(Vec2::new(
+            size.width as f32 / scale_factor,
+            size.height as f32 / scale_factor,
+        ));
+
         log::info!(
             "preview ready — {}x{} px, format {:?}",
             size.width,
@@ -285,14 +457,16 @@ impl State {
         self.surface.configure(&self.device, &self.surface_config);
 
         let scale_factor = self.window.scale_factor() as f32;
+        let logical_size = Vec2::new(
+            size.width as f32 / scale_factor,
+            size.height as f32 / scale_factor,
+        );
         let pipeline = self.demo.app_mut().world_mut().resource::<QuadPipeline>();
         pipeline.set_view_projection(
             &self.queue,
-            QuadPipeline::ortho(
-                size.width as f32 / scale_factor,
-                size.height as f32 / scale_factor,
-            ),
+            QuadPipeline::ortho(logical_size.x, logical_size.y),
         );
+        self.demo.set_viewport_size(logical_size);
     }
 
     fn render(&mut self) {
@@ -305,6 +479,7 @@ impl State {
             &mut self.font_atlas,
             &self.queue,
         );
+        bake_pending_images(self.demo.app_mut().world_mut(), &self.queue);
 
         let instances = proteus_ui::collect_instances(self.demo.app_mut().world_mut());
 

@@ -67,6 +67,19 @@ impl Handle {
         self.0
     }
 
+    /// The baked glyph run's pixel footprint, if this component's `Text` has
+    /// been baked — `None` before baking completes (baking is a shell/host
+    /// responsibility; see `proteus-demo`'s crate-root doc) or if this
+    /// component was never given `.text(...)`. Useful for layout that has to
+    /// wait on a text run's actual measured width (e.g. positioning a label
+    /// next to it) rather than guessing at spawn time.
+    pub fn baked_text_size(&self, app: &Proteus) -> Option<Vec2> {
+        app.world
+            .world
+            .get::<BakedText>(self.0)
+            .map(|b| Vec2::from(b.pixel_size))
+    }
+
     fn on(&self, app: &mut Proteus, kind: EventKind, cb: impl FnMut(&mut Proteus) + 'static) {
         app.callbacks.register(self.0, kind, Box::new(cb));
     }
@@ -200,6 +213,45 @@ impl Handle {
             .remove::<BakedImage>()
             .remove::<BakedText>()
             .remove::<BakedComposite>();
+    }
+
+    /// Show an already-registered texture on this component (replacing
+    /// whatever image/text/composite it previously showed) — the sanctioned
+    /// way to do frame-swap animation off a pre-baked set (e.g. an N-frame
+    /// logo loop a shell baked once at startup): bake every frame up front,
+    /// wrap each with [`crate::Proteus::texture`], then call this once per
+    /// frame-advance with whichever one is current. Looks up `texture`'s
+    /// live placement from the `QuadPipeline` resource each call (mirrors
+    /// [`TextureHandle::state`]), so it reflects eviction/atlas moves
+    /// automatically rather than caching stale UVs.
+    ///
+    /// Returns `false` (no-op) if no `QuadPipeline` resource is installed
+    /// yet, or `texture` is evicted/unknown — same "degrade gracefully"
+    /// convention as the rest of this crate's texture handling.
+    pub fn set_texture(&self, app: &mut Proteus, texture: TextureHandle) -> bool {
+        let Some(pipeline) = app
+            .world
+            .world
+            .get_resource::<proteus_render::QuadPipeline>()
+        else {
+            return false;
+        };
+        let Some(uv) = pipeline.texture_registry.main_atlas_uv(texture.0) else {
+            return false;
+        };
+        let Some((_, width, height)) = pipeline.texture_registry.info(texture.0) else {
+            return false;
+        };
+        app.world.world.entity_mut(self.0).insert((
+            BakedImage {
+                uv_offset: uv.uv_offset,
+                uv_scale: uv.uv_scale,
+                page: uv.page,
+                pixel_size: [width as f32, height as f32],
+            },
+            TextureRef(texture.0),
+        ));
+        true
     }
 }
 
