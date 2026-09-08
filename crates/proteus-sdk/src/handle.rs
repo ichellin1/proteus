@@ -15,8 +15,9 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    BakedComposite, BakedImage, BakedText, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
-    OneToNRequest, QuadState, SignalId, SplitStrategy, TextureRef, TransitionConfig,
+    BakedComposite, BakedImage, BakedText, GroupSource, GroupTarget, Interactable, MergeLayout,
+    NToOneRequest, OneToNRequest, QuadState, SignalId, SplitStrategy, TextureRef, TransitionConfig,
+    TransitionRequest, VideoCrossfade, VideoPlayer,
 };
 
 use crate::app::DeclaredGeometry;
@@ -73,11 +74,199 @@ impl Handle {
     /// component was never given `.text(...)`. Useful for layout that has to
     /// wait on a text run's actual measured width (e.g. positioning a label
     /// next to it) rather than guessing at spawn time.
+    /// Overwrites both the live `QuadState` and the "declared rest
+    /// geometry" `component()` captured at creation time. Plain `QuadState`
+    /// mutation via the `world_mut()` escape hatch only updates the live
+    /// value — group transitions (`split_to`/`merge_from`) resolve a
+    /// target's rest state from the *declared* value (see
+    /// `crate::app::DeclaredGeometry`'s doc), which would otherwise stay
+    /// stuck at whatever `ComponentSpec::geometry` was at spawn time. Needed
+    /// whenever a component's real resting layout can only be computed
+    /// *after* spawn — e.g. a grid cell sized from its label's actual baked
+    /// width, only known once baking completes.
+    pub fn set_declared_geometry(&self, app: &mut Proteus, state: QuadState) {
+        app.world
+            .world
+            .entity_mut(self.0)
+            .insert((state.clone(), DeclaredGeometry(state)));
+    }
+
+    /// Animates this component to `to` over `config`, starting from its
+    /// current live `QuadState` — a 1→1 morph with no other entity
+    /// involved, unlike [`crate::Proteus::signal`]'s owner/target-mediated
+    /// version. Useful for repeatedly re-targeting the *same* entity to a
+    /// fresh ad-hoc destination (e.g. a particle-style effect retriggering
+    /// each idle entity to a new random position) where there's no second
+    /// entity's declared geometry to resolve against. Check
+    /// [`crate::Proteus::get`]'s `transition` field (`None` means idle) to
+    /// know when it's safe to call again.
+    pub fn animate_to(&self, app: &mut Proteus, to: QuadState, config: TransitionConfig) {
+        app.world
+            .world
+            .entity_mut(self.0)
+            .insert(TransitionRequest {
+                to,
+                config,
+                from_state: None,
+            });
+    }
+
+    /// Marks this component as showing the live video feed — the render
+    /// path samples the shell's shared video texture for any entity
+    /// carrying `VideoPlayer`, regardless of *which* video is playing
+    /// (there's only ever one at a time; the shell owns starting/stopping
+    /// the actual decode — see `proteus-demo`'s crate-root doc on what
+    /// stays a shell concern). If this component also has a `BakedImage`
+    /// (e.g. box-cover art, from `.image()`/an injected `Image`),
+    /// `video_t` blends between it (`0.0`) and the video (`1.0`) —
+    /// `1.0` here shows the video immediately, with no crossfade; a caller
+    /// wanting a gradual reveal can animate `video_t` down from there
+    /// itself via the `world_mut()` escape hatch.
+    pub fn start_video(&self, app: &mut Proteus) {
+        app.world
+            .world
+            .entity_mut(self.0)
+            .insert((VideoPlayer, VideoCrossfade { video_t: 1.0 }));
+    }
+
+    /// Reverses [`Handle::start_video`] — back to showing whatever
+    /// `BakedImage`/solid color this component had before.
+    pub fn stop_video(&self, app: &mut Proteus) {
+        app.world
+            .world
+            .entity_mut(self.0)
+            .remove::<VideoPlayer>()
+            .remove::<VideoCrossfade>();
+    }
+
+    /// Updates `video_t` on a component already showing live video — a
+    /// no-op if it isn't (e.g. never [`Handle::start_video`]-ed, or already
+    /// [`Handle::stop_video`]-ed). `start_video` itself always inserts
+    /// `video_t: 1.0` (no crossfade, video shows immediately) — a caller
+    /// wanting a gradual reveal calls this right after to override it back
+    /// down, then ramps it back up over time (e.g. driven by this same
+    /// component's own [`crate::Proteus::get`]`(..).transition.progress`,
+    /// if the reveal is meant to track a geometry morph already running on
+    /// it) — see `start_video`'s own doc.
+    pub fn set_video_crossfade(&self, app: &mut Proteus, video_t: f32) {
+        if let Some(mut crossfade) = app.world.world.get_mut::<VideoCrossfade>(self.0) {
+            crossfade.video_t = video_t;
+        }
+    }
+
+    /// The baked glyph run's pixel footprint, if this component's `Text` has
+    /// been baked — `None` before baking completes (baking is a shell/host
+    /// responsibility; see `proteus-demo`'s crate-root doc) or if this
+    /// component was never given `.text(...)`. Useful for layout that has to
+    /// wait on a text run's actual measured width (e.g. positioning a label
+    /// next to it) rather than guessing at spawn time.
     pub fn baked_text_size(&self, app: &Proteus) -> Option<Vec2> {
         app.world
             .world
             .get::<BakedText>(self.0)
             .map(|b| Vec2::from(b.pixel_size))
+    }
+
+    /// The baked image's pixel footprint, if this component's `Image` has
+    /// been baked — `None` before baking completes (baking is a shell/host
+    /// responsibility; see `proteus-demo`'s crate-root doc) or if this
+    /// component was never given an `Image`. Mirrors
+    /// [`Handle::baked_text_size`]; also useful as a plain "has this image
+    /// finished baking yet" poll (`Some`/`None`) independent of the size
+    /// itself.
+    pub fn baked_image_size(&self, app: &Proteus) -> Option<Vec2> {
+        app.world
+            .world
+            .get::<BakedImage>(self.0)
+            .map(|b| Vec2::from(b.pixel_size))
+    }
+
+    /// Copies whichever baked image `source` currently shows onto this
+    /// component (replacing this component's own `BakedImage`/`TextureRef`,
+    /// same "insert wins" semantics as [`Handle::set_texture`]) — `false`
+    /// (no-op) if `source` has no `BakedImage` yet. `TextureRef`'s ref
+    /// count (M11) is entity-scoped, not texture-scoped, so two entities
+    /// sharing one texture this way is a normal, correctly-counted state,
+    /// not a leak or a double-free waiting to happen.
+    ///
+    /// Useful when one entity needs to *immediately* show what another
+    /// already-baked entity looks like — e.g. a dedicated "enlarged view"
+    /// coordinator entity that a group transition is about to reveal:
+    /// `split_to`/`merge_from`'s reveal only flips `Visibility`, never
+    /// touches a target's own `BakedImage` (see [`Handle::split_to`]'s
+    /// doc), so without a call like this the coordinator would be revealed
+    /// showing nothing at all.
+    pub fn copy_baked_image_from(&self, app: &mut Proteus, source: Handle) -> bool {
+        let Some(baked) = app.world.world.get::<BakedImage>(source.0).cloned() else {
+            return false;
+        };
+        let texture_ref = app.world.world.get::<TextureRef>(source.0).copied();
+        let mut entity = app.world.world.entity_mut(self.0);
+        entity.insert(baked);
+        if let Some(texture_ref) = texture_ref {
+            entity.insert(texture_ref);
+        }
+        true
+    }
+
+    /// Crops this component's current `BakedImage` to a centered square, in
+    /// place — landscape narrows the UV width, portrait narrows the UV
+    /// height, an already-square image is a no-op — by shrinking its UV
+    /// sub-rectangle within `main_atlas`. No new atlas registration and no
+    /// pixel copy: the crop is purely a smaller UV window into the exact
+    /// same uploaded region, so it's essentially free and doesn't consume
+    /// any additional atlas space. `pixel_size` is left as the *original*,
+    /// uncropped value — same convention as [`Handle::baked_text_size`]'s
+    /// doc: it's the decoded image's native size, not resized to track
+    /// whatever crop is currently applied.
+    ///
+    /// `false` (no-op) if this component has no `BakedImage` yet. Useful
+    /// for square display cells (e.g. a photo grid tile) fed from photos of
+    /// varying aspect ratios — crop instead of stretch. Call
+    /// [`Handle::copy_baked_image_from`] onto a separate entity *first* if
+    /// the uncropped frame is needed again later (e.g. an enlarged-view
+    /// coordinator) — this call is destructive to `self`'s own crop state,
+    /// though the underlying atlas pixels are untouched.
+    pub fn center_crop_to_square(&self, app: &mut Proteus) -> bool {
+        let Some(baked) = app.world.world.get::<BakedImage>(self.0).cloned() else {
+            return false;
+        };
+        let (pw, ph) = (baked.pixel_size[0], baked.pixel_size[1]);
+        let mut uv_offset = baked.uv_offset;
+        let mut uv_scale = baked.uv_scale;
+        if pw > ph {
+            let frac = ph / pw;
+            uv_offset[0] += uv_scale[0] * (1.0 - frac) / 2.0;
+            uv_scale[0] *= frac;
+        } else if ph > pw {
+            let frac = pw / ph;
+            uv_offset[1] += uv_scale[1] * (1.0 - frac) / 2.0;
+            uv_scale[1] *= frac;
+        }
+        app.world.world.entity_mut(self.0).insert(BakedImage {
+            uv_offset,
+            uv_scale,
+            page: baked.page,
+            pixel_size: baked.pixel_size,
+        });
+        true
+    }
+
+    /// Marks this component interactive (the default at spawn, unless
+    /// [`crate::ComponentSpec::non_interactive`] was used) or not — a
+    /// runtime toggle for entities whose click/hover eligibility needs to
+    /// change after spawn. `false` removes `Interactable` entirely, the
+    /// same effect `non_interactive()` has at spawn time, just applied
+    /// later; `true` re-adds it. Useful for a mutual-exclusion toggle pair
+    /// where only one of two entities should ever be clickable/hoverable
+    /// at a time (e.g. a light/dark theme switch: only the icon that
+    /// *doesn't* match the current theme should be interactive).
+    pub fn set_interactive(&self, app: &mut Proteus, interactive: bool) {
+        if interactive {
+            app.world.world.entity_mut(self.0).insert(Interactable);
+        } else {
+            app.world.world.entity_mut(self.0).remove::<Interactable>();
+        }
     }
 
     fn on(&self, app: &mut Proteus, kind: EventKind, cb: impl FnMut(&mut Proteus) + 'static) {
@@ -139,6 +328,41 @@ impl Handle {
             .map(|h| GroupTarget {
                 entity: h.0,
                 state: declared_geometry(app, h.0),
+            })
+            .collect();
+        app.world.world.entity_mut(self.0).insert(OneToNRequest {
+            targets: group_targets,
+            default_config: config,
+            child_behavior: None,
+            strategy,
+        });
+    }
+
+    /// [`Handle::split_to`], but with each target's state given explicitly
+    /// instead of resolved from its own declared/live `QuadState` — needed
+    /// whenever the natural `declared_geometry(target)` value would be
+    /// wrong, or (when `self` is *also* one of `targets` — a shape
+    /// splitting back into a group that includes its own slot) unsafe to
+    /// derive: this call is synchronous, but the request it inserts is only
+    /// processed on the *next* tick (see `split_to`'s own doc), so setting
+    /// a target's declared geometry here — [`Handle::set_declared_geometry`]
+    /// writes the live `QuadState` too — would corrupt the very "from"
+    /// snapshot that next-tick processing is about to capture from this
+    /// same entity's live state. Passing the correct state straight through
+    /// sidesteps that footgun entirely, the same flexibility a hand-built
+    /// `GroupTarget` list already has at the `proteus-ui` layer.
+    pub fn split_to_with_states(
+        &self,
+        app: &mut Proteus,
+        targets: &[(Handle, QuadState)],
+        config: TransitionConfig,
+        strategy: SplitStrategy,
+    ) {
+        let group_targets = targets
+            .iter()
+            .map(|(h, state)| GroupTarget {
+                entity: h.0,
+                state: state.clone(),
             })
             .collect();
         app.world.world.entity_mut(self.0).insert(OneToNRequest {

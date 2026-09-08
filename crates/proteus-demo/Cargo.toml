@@ -23,3 +23,7 @@ winit = { workspace = true }
 pollster = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
+# Blocking HTTP client for the gallery fetch example (see
+# examples/native_preview/gallery_fetch.rs) — same version
+# proteus-shell-native's own copy of this logic uses.
+ureq = { version = "2" }

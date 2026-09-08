@@ -192,6 +192,36 @@ fn on_click_does_not_fire_for_a_miss() {
 }
 
 #[test]
+fn non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps() {
+    let mut app = Proteus::new();
+    // A full-viewport-like backdrop, spawned first — the worst case for hit
+    // testing's "last hit wins, matches draw order" tie-break, since a
+    // plain (interactive) version of this would otherwise win over
+    // anything spawned earlier that it happens to overlap.
+    let _backdrop = app.component(
+        ComponentSpec::new(QuadState {
+            size: Vec2::new(2000.0, 2000.0),
+            ..quad_at(0.0, 0.0)
+        })
+        .non_interactive(),
+    );
+    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fired_clone = fired.clone();
+    button.on_click(&mut app, move |_app| fired_clone.set(true));
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+
+    assert!(
+        fired.get(),
+        "non_interactive backdrop must not shadow the button underneath it"
+    );
+}
+
+#[test]
 fn on_drag_reports_deltas_while_pressed() {
     let mut app = Proteus::new();
     let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
@@ -475,6 +505,146 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
 }
 
 // ---------------------------------------------------------------------------
+// copy_baked_image_from() (M12.5 Step 8)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destination() {
+    use proteus_render::TextureId;
+    use proteus_ui::{BakedImage, TextureRef};
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let dest = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
+
+    assert!(
+        !dest.copy_baked_image_from(&mut app, source),
+        "no-op (false) while source has no BakedImage yet"
+    );
+    assert!(app.world().get::<BakedImage>(dest.id()).is_none());
+
+    let baked = BakedImage {
+        uv_offset: [0.1, 0.2],
+        uv_scale: [0.3, 0.4],
+        page: 1,
+        pixel_size: [64.0, 32.0],
+    };
+    app.world_mut()
+        .entity_mut(source.id())
+        .insert((baked.clone(), TextureRef(TextureId::default())));
+
+    assert!(dest.copy_baked_image_from(&mut app, source));
+    assert_eq!(app.world().get::<BakedImage>(dest.id()), Some(&baked));
+    assert_eq!(
+        app.world().get::<TextureRef>(dest.id()),
+        Some(&TextureRef(TextureId::default()))
+    );
+    // The source's own copy is untouched — this only ever writes `dest`.
+    assert_eq!(app.world().get::<BakedImage>(source.id()), Some(&baked));
+}
+
+// ---------------------------------------------------------------------------
+// center_crop_to_square() (M12.5 Step 8 follow-up)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_size_alone() {
+    use proteus_ui::BakedImage;
+
+    let mut app = Proteus::new();
+    let entity = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    assert!(
+        !entity.center_crop_to_square(&mut app),
+        "no-op (false) with no BakedImage yet"
+    );
+
+    // Landscape (200x100, 2:1) — width should narrow to a centered half.
+    app.world_mut().entity_mut(entity.id()).insert(BakedImage {
+        uv_offset: [0.0, 0.0],
+        uv_scale: [1.0, 1.0],
+        page: 2,
+        pixel_size: [200.0, 100.0],
+    });
+    assert!(entity.center_crop_to_square(&mut app));
+    let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
+    assert_eq!(cropped.uv_scale, [0.5, 1.0]);
+    assert_eq!(cropped.uv_offset, [0.25, 0.0]);
+    assert_eq!(cropped.page, 2, "must preserve the atlas page");
+    assert_eq!(
+        cropped.pixel_size,
+        [200.0, 100.0],
+        "pixel_size stays the original, uncropped size"
+    );
+
+    // Portrait (100x200, 1:2) — height should narrow the same way.
+    app.world_mut().entity_mut(entity.id()).insert(BakedImage {
+        uv_offset: [0.0, 0.0],
+        uv_scale: [1.0, 1.0],
+        page: 0,
+        pixel_size: [100.0, 200.0],
+    });
+    entity.center_crop_to_square(&mut app);
+    let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
+    assert_eq!(cropped.uv_scale, [1.0, 0.5]);
+    assert_eq!(cropped.uv_offset, [0.0, 0.25]);
+
+    // Square (100x100) — no-op on the UVs.
+    app.world_mut().entity_mut(entity.id()).insert(BakedImage {
+        uv_offset: [0.1, 0.2],
+        uv_scale: [0.5, 0.5],
+        page: 0,
+        pixel_size: [100.0, 100.0],
+    });
+    entity.center_crop_to_square(&mut app);
+    let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
+    assert_eq!(cropped.uv_scale, [0.5, 0.5]);
+    assert_eq!(cropped.uv_offset, [0.1, 0.2]);
+}
+
+// ---------------------------------------------------------------------------
+// set_interactive() (M12.5.5 — theme toggle)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_interactive_toggles_whether_clicks_land() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fired_clone = fired.clone();
+    button.on_click(&mut app, move |_app| fired_clone.set(true));
+
+    app.pointer_moved(Some(Vec2::new(0.0, 0.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert!(
+        fired.get(),
+        "interactive by default — the click should land"
+    );
+
+    fired.set(false);
+    button.set_interactive(&mut app, false);
+    app.pointer_moved(None);
+    app.tick(1.0);
+    app.pointer_moved(Some(Vec2::new(0.0, 0.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert!(
+        !fired.get(),
+        "set_interactive(false) must make the entity un-clickable"
+    );
+
+    button.set_interactive(&mut app, true);
+    app.pointer_moved(None);
+    app.tick(1.0);
+    app.pointer_moved(Some(Vec2::new(0.0, 0.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert!(fired.get(), "set_interactive(true) must re-enable clicking");
+}
+
+// ---------------------------------------------------------------------------
 // split_to() / merge_from() — group transitions (M12.5 Step 2)
 // ---------------------------------------------------------------------------
 
@@ -547,4 +717,223 @@ fn merge_from_hides_sources_and_settles_destination_to_its_declared_geometry() {
         dest_data.visible,
         "destination must be revealed once the merge completes"
     );
+}
+
+#[test]
+fn set_declared_geometry_updates_what_a_later_split_to_settles_targets_to() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    // Spawned at one geometry (e.g. a placeholder size before its label has
+    // baked), then redeclared to a different one before ever being used as
+    // a transition target — mirrors a grid cell whose real size is only
+    // known after baking.
+    let target = app.component(ComponentSpec::new(quad_at(50.0, 50.0)));
+    let real_geometry = QuadState {
+        color: Vec4::new(0.0, 1.0, 1.0, 1.0),
+        ..quad_at(300.0, 0.0)
+    };
+    target.set_declared_geometry(&mut app, real_geometry.clone());
+
+    source.split_to(&mut app, &[target], cfg(0.1), SplitStrategy::Bake);
+    app.tick(1.0);
+
+    let target_data = app.get(target).unwrap();
+    assert_eq!(target_data.geometry.color, real_geometry.color);
+    assert_eq!(target_data.geometry.position, real_geometry.position);
+}
+
+#[test]
+fn split_to_with_states_uses_the_given_state_not_declared_geometry() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    // A target whose own declared geometry (if `split_to` resolved it the
+    // normal way) would be totally different from the explicit state passed
+    // here — proves the explicit state actually wins.
+    let target = app.component(ComponentSpec::new(quad_at(999.0, 999.0)));
+    let explicit_state = QuadState {
+        color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+        ..quad_at(300.0, 0.0)
+    };
+
+    source.split_to_with_states(
+        &mut app,
+        &[(target, explicit_state.clone())],
+        cfg(0.1),
+        SplitStrategy::Bake,
+    );
+    // Two ticks: the first turns the just-inserted `OneToNRequest` into a
+    // `TransitionRequest` (`one_to_n_setup_system` and `transition_setup_
+    // system` share `ProteusSet::TransitionSetup`, so a request created
+    // this frame isn't picked up as an `ActiveTransition` until the next);
+    // the second settles it (`cfg(0.1)`'s duration is well under this
+    // tick's `dt`).
+    app.tick(1.0);
+    app.tick(1.0);
+
+    let target_data = app.get(target).unwrap();
+    assert_eq!(target_data.geometry.color, explicit_state.color);
+    assert_eq!(target_data.geometry.position, explicit_state.position);
+}
+
+#[test]
+fn split_to_with_states_is_safe_when_the_source_is_also_one_of_the_targets() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    // The self-referential case `split_to_with_states`'s own doc describes:
+    // a shape splitting back into a group that includes its own slot.
+    // `source`'s *current* geometry (the screen-sized shape here) must
+    // survive untouched until the group-transition setup system captures it
+    // as the "from" snapshot on the next tick — this call must not stomp it
+    // the way `set_declared_geometry` would.
+    let source = app.component(ComponentSpec::new(quad_at(500.0, 500.0)));
+    let sibling = app.component(ComponentSpec::new(quad_at(999.0, 999.0)));
+    let own_slot_state = QuadState {
+        color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+        ..quad_at(0.0, 0.0)
+    };
+    let sibling_state = QuadState {
+        color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+        ..quad_at(100.0, 0.0)
+    };
+
+    let before = app.get(source).unwrap().geometry;
+    source.split_to_with_states(
+        &mut app,
+        &[
+            (source, own_slot_state.clone()),
+            (sibling, sibling_state.clone()),
+        ],
+        cfg(0.1),
+        SplitStrategy::Bake,
+    );
+    // Source geometry must be untouched immediately after the call — the
+    // request has only been inserted, not processed yet.
+    assert_eq!(app.get(source).unwrap().geometry.position, before.position);
+
+    // Two ticks — see the sibling test's comment for why.
+    app.tick(1.0);
+    app.tick(1.0);
+
+    // Once settled, the target landed on the explicit state given for it.
+    let source_data = app.get(source).unwrap();
+    assert_eq!(source_data.geometry.color, own_slot_state.color);
+    assert_eq!(source_data.geometry.position, own_slot_state.position);
+    let sibling_data = app.get(sibling).unwrap();
+    assert_eq!(sibling_data.geometry.position, sibling_state.position);
+}
+
+#[test]
+fn animate_to_morphs_a_single_entity_with_no_second_entity_involved() {
+    let mut app = Proteus::new();
+    let particle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let target = QuadState {
+        color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+        ..quad_at(400.0, 0.0)
+    };
+
+    particle.animate_to(&mut app, target.clone(), cfg(0.1));
+    app.tick(1.0);
+
+    let data = app.get(particle).unwrap();
+    assert_eq!(data.geometry.color, target.color);
+    assert_eq!(data.geometry.position, target.position);
+    assert!(
+        data.transition.is_none(),
+        "should have settled within this one large-dt tick"
+    );
+}
+
+#[test]
+fn animate_to_can_retarget_the_same_entity_once_its_prior_transition_settles() {
+    let mut app = Proteus::new();
+    let particle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    particle.animate_to(&mut app, quad_at(100.0, 0.0), cfg(0.1));
+    app.tick(1.0);
+    assert!(app.get(particle).unwrap().transition.is_none());
+
+    let second_target = QuadState {
+        color: Vec4::new(1.0, 1.0, 0.0, 1.0),
+        ..quad_at(200.0, 0.0)
+    };
+    particle.animate_to(&mut app, second_target.clone(), cfg(0.1));
+    app.tick(1.0);
+
+    let data = app.get(particle).unwrap();
+    assert_eq!(data.geometry.position, second_target.position);
+    assert_eq!(data.geometry.color, second_target.color);
+}
+
+// ---------------------------------------------------------------------------
+// start_video() / stop_video() / set_video_crossfade()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn start_video_defaults_to_full_video_no_crossfade() {
+    use proteus_ui::VideoCrossfade;
+
+    let mut app = Proteus::new();
+    let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    tile.start_video(&mut app);
+
+    let video_t = app
+        .world()
+        .get::<VideoCrossfade>(tile.id())
+        .expect("start_video should attach VideoCrossfade")
+        .video_t;
+    assert_eq!(
+        video_t, 1.0,
+        "no crossfade by default — full video immediately"
+    );
+}
+
+#[test]
+fn set_video_crossfade_updates_video_t_while_playing() {
+    use proteus_ui::VideoCrossfade;
+
+    let mut app = Proteus::new();
+    let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    tile.start_video(&mut app);
+
+    tile.set_video_crossfade(&mut app, 0.0);
+    assert_eq!(
+        app.world()
+            .get::<VideoCrossfade>(tile.id())
+            .unwrap()
+            .video_t,
+        0.0
+    );
+
+    tile.set_video_crossfade(&mut app, 0.5);
+    assert_eq!(
+        app.world()
+            .get::<VideoCrossfade>(tile.id())
+            .unwrap()
+            .video_t,
+        0.5
+    );
+}
+
+#[test]
+fn set_video_crossfade_is_a_noop_before_start_video_or_after_stop_video() {
+    use proteus_ui::VideoCrossfade;
+
+    let mut app = Proteus::new();
+    let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    // Never started — nothing to update, and nothing should be created.
+    tile.set_video_crossfade(&mut app, 0.5);
+    assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
+
+    // Started, then stopped — same graceful no-op.
+    tile.start_video(&mut app);
+    tile.stop_video(&mut app);
+    tile.set_video_crossfade(&mut app, 0.5);
+    assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
 }
