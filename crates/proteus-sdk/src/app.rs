@@ -57,19 +57,24 @@ impl Proteus {
 
     /// Declare a new component from `spec`, returning its [`Handle`].
     ///
-    /// Always attaches `Interactable` (cheap; means `.on_click`/etc. work on
-    /// any component without a separate opt-in). `InteractionDef` is only
-    /// attached when `spec` declared at least one style override — otherwise
-    /// there is nothing for `interaction_style_system` to resolve, and
-    /// skipping it avoids a permanently-no-op mini-transition firing on every
-    /// hover/press.
+    /// Attaches `Interactable` by default (cheap; means `.on_click`/etc.
+    /// work on any component without a separate opt-in) unless `spec` opted
+    /// out via `.non_interactive()` — see that method's doc for why passive
+    /// chrome (e.g. a full-window background) needs to. `InteractionDef` is
+    /// only attached when `spec` declared at least one style override —
+    /// otherwise there is nothing for `interaction_style_system` to
+    /// resolve, and skipping it avoids a permanently-no-op mini-transition
+    /// firing on every hover/press.
     pub fn component(&mut self, spec: ComponentSpec) -> Handle {
         let geometry = spec.geometry.clone();
         let entity = self
             .world
             .world
-            .spawn((geometry.clone(), DeclaredGeometry(geometry), Interactable))
+            .spawn((geometry.clone(), DeclaredGeometry(geometry)))
             .id();
+        if !spec.non_interactive {
+            self.world.world.entity_mut(entity).insert(Interactable);
+        }
 
         if spec.has_interaction_styles() {
             self.world.world.entity_mut(entity).insert(InteractionDef {

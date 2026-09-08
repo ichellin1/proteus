@@ -23,6 +23,7 @@ pub struct ComponentSpec {
     pub(crate) border: Option<Border>,
     pub(crate) glow: Option<Glow>,
     pub(crate) drop_shadow: Option<DropShadow>,
+    pub(crate) non_interactive: bool,
 }
 
 impl ComponentSpec {
@@ -118,6 +119,20 @@ impl ComponentSpec {
     /// for the mutual-exclusivity note.
     pub fn drop_shadow(mut self, shadow: DropShadow) -> Self {
         self.drop_shadow = Some(shadow);
+        self
+    }
+
+    /// Opts this component out of `Interactable` entirely.
+    /// `Proteus::component` attaches it to everything by default (so
+    /// `.on_click`/etc. "just work" without a separate opt-in), which is
+    /// wrong for passive chrome like a full-window background: hit-testing
+    /// resolves overlapping candidates by "last hit wins, matches draw
+    /// order" (`proteus_ui::input::hit_test_system`'s own doc), so a quad
+    /// spanning the whole viewport — visited late enough in the query's
+    /// iteration order — can silently swallow clicks meant for a real
+    /// button underneath the cursor.
+    pub fn non_interactive(mut self) -> Self {
+        self.non_interactive = true;
         self
     }
 

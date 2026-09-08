@@ -41,6 +41,6 @@ pub use spec::ComponentSpec;
 // transitions — all without a direct `proteus-ui` dependency of their own.
 pub use proteus_ui::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, Border, DropReason,
-    DropShadow, Glow, Image, InteractionStateKind, MergeLayout, QuadState, SplitStrategy,
+    DropShadow, Glow, Image, InteractionStateKind, MergeLayout, Opacity, QuadState, SplitStrategy,
     StyleOverride, Text, TransitionConfig, TransitionDropped, Visibility,
 };

@@ -105,7 +105,11 @@ pub fn spawn(app: &mut Proteus) -> Splash {
             Text::new(WORDMARK_TEXT, WORDMARK_SIZE_PX)
                 .with_color(Vec4::new(violet().x, violet().y, violet().z, 0.0))
                 .with_letter_spacing(WORDMARK_LETTER_SPACING_PX),
-        ),
+        )
+        // Decorative label, not a click target — see `ComponentSpec::non_interactive`'s
+        // doc for why a stray `Interactable` here could steal a click from
+        // whatever's underneath it.
+        .non_interactive(),
     );
     button.add_child(app, wordmark);
 
