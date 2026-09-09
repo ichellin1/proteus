@@ -1,0 +1,25 @@
+[package]
+name = "proteus-demo"
+description = "The shared, shell-agnostic reference demo — built once against proteus-sdk, linked by both proteus-shell-native and proteus-shell-web (M12.5)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proteus-sdk = { path = "../proteus-sdk" }
+glam = { workspace = true }
+
+[dev-dependencies]
+# Only needed by src/lib.rs's own `#[cfg(test)]` module, for direct
+# component inspection (`BakedImage`, `ActiveTransition`, `Virtual`,
+# `VideoCrossfade`, etc.) beyond what `Proteus::get`'s `ComponentData`
+# exposes — not part of this crate's own public API (rendering itself stays
+# a shell/host concern, per proteus-sdk's own design — see crate root
+# docs). Originally also used by examples/native_preview/ (a visual harness
+# for M12.5's migration, promoted to proteus-shell-native's real main.rs at
+# Step 9's cutover and deleted from here) — wgpu/winit/pollster/env_logger/
+# ureq were that harness's own platform-glue deps and are gone with it.
+proteus-render = { path = "../proteus-render" }
+proteus-ui = { path = "../proteus-ui" }
+bevy_ecs = { workspace = true }

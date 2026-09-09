@@ -142,16 +142,56 @@ const NATURE_PHOTOS: [(u32, u32, u32); 72] = [
 
 /// The actual fetch dimensions for `aspect` (width, height ratio) at a
 /// `side_px` cap: square is `side_px`×`side_px`; otherwise the larger ratio
-/// axis is held at `side_px` and the other scaled down to match, so a
-/// portrait photo is height-constrained and a landscape one
+/// axis is held at (or just under) `side_px` and the other scaled to match,
+/// so a portrait photo is height-constrained and a landscape one
 /// width-constrained.
+///
+/// Doesn't just pin the larger axis at exactly `side_px` and round the
+/// other — searches a small window of slightly-smaller candidates for the
+/// larger axis too (`FETCH_DIMENSIONS_SEARCH_WINDOW`), picking whichever
+/// integer pair's ratio comes closest to the real one. Pinning the larger
+/// axis exactly is the *best* approximation for most real photo aspect
+/// ratios, but for some it isn't — e.g. picsum id 606 (2513×1670,
+/// real ratio 1.50479) requested at a 186px cap: pinning width at exactly
+/// 186 gives (186, 124), ratio 1.5 — off by 0.32%. One pixel narrower,
+/// (185, 123), gives ratio 1.50407 — off by only 0.05%. That 0.32% doesn't
+/// sound like much, but this same real ratio also drives the *hires*
+/// fetch's own request (at a much bigger, and so much more precise, target
+/// size — see `Demo::start_gallery_to_image`'s doc) — picsum's `/id/{id}/
+/// {w}/{h}` endpoint center-crops each request to whatever ratio it's
+/// asked for, so the low-res tile fetch (this function) and the hires
+/// fetch each land on a *slightly different* crop of the same source photo
+/// whenever their two independent roundings of the same real ratio
+/// disagree enough. `Demo::advance_gallery_hires_overlay`'s "box never
+/// moves" fix turns that disagreement into an imperceptible sub-pixel
+/// stretch *in general*, but for a real photo whose ratio happens to round
+/// badly at this resolution (confirmed empirically: id 606 and 798 show a
+/// visible shift the instant hires swaps in; id 582 and 630, whose naive
+/// rounding already lands much closer to their real ratio, don't) it's
+/// visible. This search doesn't eliminate the mismatch (the hires fetch's
+/// own rounding, at its own much bigger scale, still isn't pixel-exact),
+/// but shrinks the low-res side's error enough that it's back under
+/// whatever threshold makes the "box never moves" mitigation actually
+/// work.
+const FETCH_DIMENSIONS_SEARCH_WINDOW: u32 = 6;
+
 fn fetch_dimensions(aspect: (f32, f32), side_px: u32) -> (u32, u32) {
     let (aw, ah) = aspect;
-    if aw >= ah {
-        (side_px, (side_px as f32 * ah / aw).round() as u32)
-    } else {
-        ((side_px as f32 * aw / ah).round() as u32, side_px)
+    let ratio = aw / ah;
+    let mut best = (side_px.max(1), 1u32, f32::INFINITY);
+    for delta in 0..=FETCH_DIMENSIONS_SEARCH_WINDOW.min(side_px.saturating_sub(1)) {
+        let larger = side_px - delta;
+        let (w, h) = if aw >= ah {
+            (larger, ((larger as f32) / ratio).round().max(1.0) as u32)
+        } else {
+            (((larger as f32) * ratio).round().max(1.0) as u32, larger)
+        };
+        let error = (w as f32 / h as f32 - ratio).abs();
+        if error < best.2 {
+            best = (w, h, error);
+        }
     }
+    (best.0, best.1)
 }
 
 /// Spawns a coordinator thread that fans out one fetch thread per image
@@ -227,4 +267,68 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn relative_error(w: u32, h: u32, aspect: (f32, f32)) -> f32 {
+        let real_ratio = aspect.0 / aspect.1;
+        (w as f32 / h as f32 - real_ratio).abs() / real_ratio
+    }
+
+    /// Reported regression: at the gallery grid's ~186px tile cap, photo
+    /// ids 606 (2513×1670) and 798 (4592×3448) visibly shifted content the
+    /// instant their hires fetch swapped in over the low-res stand-in;
+    /// ids 582 (2509×1673) and 630 (2517×1667) — whose *naive* single-axis
+    /// rounding happens to already land close to the real ratio at this
+    /// resolution — never showed it. The fix doesn't need to change 582/630
+    /// at all; it just needs to pull 606/798 down under roughly the same
+    /// relative-error ceiling those two were already living under.
+    #[test]
+    fn fetch_dimensions_keeps_previously_shifting_photos_as_accurate_as_previously_fine_ones() {
+        let side_px = 186;
+        let ceiling = relative_error(
+            fetch_dimensions((2517.0, 1667.0), side_px).0,
+            fetch_dimensions((2517.0, 1667.0), side_px).1,
+            (2517.0, 1667.0),
+        );
+        for aspect in [(2513.0, 1670.0), (4592.0, 3448.0)] {
+            let (w, h) = fetch_dimensions(aspect, side_px);
+            let err = relative_error(w, h, aspect);
+            assert!(
+                err <= ceiling,
+                "{aspect:?} at {side_px}px: relative error {err} exceeds the \
+                 previously-fine-photos' ceiling {ceiling} — ({w}, {h})"
+            );
+        }
+    }
+
+    /// The naive (no-search) approximation for id 606 landed on a ratio
+    /// exactly 1.5 (186×124) — 0.32% off its real 1.50479. Confirms the
+    /// search actually finds a closer pair, not just an equally-bad one.
+    #[test]
+    fn fetch_dimensions_finds_a_closer_ratio_than_pinning_the_larger_axis_exactly() {
+        let aspect = (2513.0, 1670.0);
+        let (w, h) = fetch_dimensions(aspect, 186);
+        assert!(
+            (w, h) != (186, 124),
+            "expected the search to move off the naive (186, 124) pair"
+        );
+        assert!(relative_error(w, h, aspect) < 0.001);
+    }
+
+    #[test]
+    fn fetch_dimensions_never_exceeds_the_side_px_cap() {
+        for aspect in [
+            (2513.0, 1670.0),
+            (4592.0, 3448.0),
+            (1.0, 1.0),
+            (589.0, 1600.0),
+        ] {
+            let (w, h) = fetch_dimensions(aspect, 186);
+            assert!(w <= 186 && h <= 186, "({w}, {h}) exceeds the 186px cap");
+        }
+    }
 }

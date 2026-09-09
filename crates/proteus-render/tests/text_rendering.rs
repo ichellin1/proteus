@@ -6,6 +6,11 @@
 //! `main_atlas_allocator.rs`'s own unit tests for that coverage. GPU-dependent tests
 //! (write_to_main_atlas) live in `headless_render.rs`.
 
+// This is a separate crate root (integration tests compile independently
+// of the library) — see proteus_render::lib.rs's own doc for why
+// chunks_exact_to_as_chunks/unknown_lints are allowed here too.
+#![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+
 use proteus_render::{FontAtlas, EMBEDDED_FONT_BYTES, MAIN_ATLAS_SIZE};
 
 // ---------------------------------------------------------------------------
