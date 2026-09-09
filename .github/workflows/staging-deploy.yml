@@ -1,0 +1,128 @@
+name: Deploy PR preview to staging
+
+# Gives every PR touching the web shell a real, publicly-hosted preview URL
+# with genuine network latency (a real CDN, not localhost) — separate from
+# production entirely: a dedicated repo (ichellin1/proteus-staging), its own
+# GitHub Pages site, no shared workflow/environment with this repo's own
+# .github/workflows/pages.yml. Nothing here can affect the production,
+# resume-linked deployment.
+#
+# Each PR gets its own stable subpath (pr-<number>), so multiple PRs can
+# have live previews at once without clobbering each other, and each new
+# commit re-deploys that same subpath. The `cleanup` job removes it once the
+# PR closes, so the staging repo doesn't accumulate stale builds forever.
+#
+# Requires a one-time, user-set-up secret (`STAGING_REPO_TOKEN`, a
+# fine-grained PAT scoped to just the staging repo with Contents: Read &
+# write) on *this* repo — see the plan doc for exact setup steps. A PR from
+# a fork won't have access to that secret (GitHub's own security model for
+# `pull_request`-triggered workflows) and this workflow will simply fail
+# harmlessly for one; not a concern for a personal project with no outside
+# contributors expected.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - "crates/proteus-gpu/**"
+      - "crates/proteus-render/**"
+      - "crates/proteus-ui/**"
+      - "crates/proteus-shell-web/**"
+      - ".github/workflows/staging-deploy.yml"
+
+concurrency:
+  group: staging-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache wasm-pack binary
+        uses: actions/cache@v4
+        id: cache-wasm-pack
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ubuntu-wasm-pack-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: wasm-pack build (web shell)
+        run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
+
+      - name: Deploy this PR's preview to the staging repo
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.STAGING_REPO_TOKEN }}
+          external_repository: ichellin1/proteus-staging
+          publish_branch: gh-pages
+          publish_dir: crates/proteus-shell-web/www
+          destination_dir: pr-${{ github.event.pull_request.number }}
+          # Without this, each deploy would wholesale-replace the entire
+          # gh-pages branch — wiping out every *other* PR's own subpath.
+          keep_files: true
+
+      - name: Comment the preview URL on the PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = `https://ichellin1.github.io/proteus-staging/pr-${context.issue.number}/`;
+            const marker = "Staging preview:";
+            const body = `🚀 **${marker}** ${url}\n\nRebuilds automatically on every push to this PR. Removed once the PR closes.`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove this PR's staging subdirectory
+        env:
+          STAGING_REPO_TOKEN: ${{ secrets.STAGING_REPO_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${STAGING_REPO_TOKEN}@github.com/ichellin1/proteus-staging.git" staging
+          cd staging
+          if [ -d "pr-${PR_NUMBER}" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            rm -rf "pr-${PR_NUMBER}"
+            git add -A
+            git commit -m "Remove staging preview for closed PR #${PR_NUMBER}"
+            git push
+          else
+            echo "pr-${PR_NUMBER} not found on gh-pages — nothing to remove."
+          fi

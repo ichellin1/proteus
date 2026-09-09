@@ -494,6 +494,19 @@ pub struct Demo {
     /// each time [`Demo::start_tiles_to_screen`] starts a new video.
     /// Mirrors `proteus-shell-native::video_load_timed_out`.
     video_load_timed_out: bool,
+    /// Set the same instant `video_load_timed_out` first latches, drained
+    /// by the shell via [`Demo::take_pending_video_cancel`] — unlike
+    /// `video_load_timed_out` itself (a level, read every tick to decide
+    /// dots-vs-error visibility), this is an edge: exactly one `true` read
+    /// per timeout, telling the shell "abort whatever fetch/decode is still
+    /// in flight, `Demo` hasn't torn anything down (the screen stays on
+    /// `VideoScreen`, now showing the error text), so don't stop playback,
+    /// just stop wasting bandwidth." Native's own local `.mp4`/`ffmpeg`
+    /// decode has no in-flight *fetch* to abort on a timeout, so it never
+    /// needed this — the web shell's real HLS segment fetch does (see
+    /// `proteus-shell-web`'s own former `take_video_cancel`, which this
+    /// mirrors).
+    pending_video_cancel: bool,
     /// How long we've been *continuously* settled-and-waiting (tile not
     /// mid-morph, resting on `VideoScreen`, no frame yet) — unlike
     /// `video_dots_elapsed` (which runs from click time and never resets
@@ -839,6 +852,7 @@ impl Demo {
             video_first_frame_shown: false,
             video_dots_elapsed: 0.0,
             video_load_timed_out: false,
+            pending_video_cancel: false,
             video_settled_elapsed: 0.0,
             pending_tile_reset: None,
             transforms_anim_elapsed: 0.0,
@@ -1443,6 +1457,7 @@ impl Demo {
         self.video_first_frame_shown = false;
         self.video_dots_elapsed = 0.0;
         self.video_load_timed_out = false;
+        self.pending_video_cancel = false;
         self.state = AppState::VideoScreen(idx);
     }
 
@@ -2681,6 +2696,19 @@ impl Demo {
         self.video_first_frame_shown = true;
     }
 
+    /// Drains this tick's pending video-cancel signal — `true` means a load
+    /// just timed out and the shell should abort whatever fetch/decode is
+    /// still in flight for it, *without* stopping/tearing down playback the
+    /// way [`Demo::take_pending_video_stop`] means: `Demo` hasn't given up
+    /// on this tile, it's just showing the error text now instead of
+    /// pulsing dots, and playback may yet succeed if a response is close.
+    /// See `pending_video_cancel`'s own doc for why this exists (native's
+    /// local decode never needed it; the web shell's real network fetch
+    /// does).
+    pub fn take_pending_video_cancel(&mut self) -> bool {
+        std::mem::take(&mut self.pending_video_cancel)
+    }
+
     /// Ends the current run naturally: despawns every entity in bulk and
     /// reports the result via `stress.result_text`. `Text` doesn't support
     /// in-place content changes (see `StressContent::result_text`'s doc),
@@ -3110,6 +3138,7 @@ impl Demo {
             && self.video_dots_elapsed >= video_tiles::VIDEO_LOAD_TIMEOUT_SECS
         {
             self.video_load_timed_out = true;
+            self.pending_video_cancel = true;
         }
         // Delayed by `VIDEO_DOT_SHOW_DELAY_SECS` from when we *first*
         // became settled-and-waiting (not from click time, unlike
@@ -4731,6 +4760,40 @@ mod tests {
                 "dots must be replaced by the error text"
             );
         }
+    }
+
+    #[test]
+    fn video_load_timeout_fires_pending_video_cancel_exactly_once() {
+        // `take_pending_video_cancel` didn't exist before the web shell
+        // needed it (native's local `.mp4` decode has no in-flight fetch to
+        // abort on a timeout) — this locks in the edge-triggered "exactly
+        // once, right when the timeout first latches" contract its own doc
+        // promises, not just a level that stays true forever after.
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+
+        demo.tick(video_tiles::VIDEO_LOAD_TIMEOUT_SECS - 0.5);
+        assert!(
+            !demo.take_pending_video_cancel(),
+            "must not fire before the timeout actually elapses"
+        );
+
+        demo.tick(1.0); // now past VIDEO_LOAD_TIMEOUT_SECS
+        assert!(
+            demo.take_pending_video_cancel(),
+            "must fire the instant it does"
+        );
+        assert!(
+            !demo.take_pending_video_cancel(),
+            "must not fire again on a second drain the same tick"
+        );
+
+        demo.tick(1.0);
+        assert!(
+            !demo.take_pending_video_cancel(),
+            "must not keep firing on every subsequent tick"
+        );
     }
 
     #[test]

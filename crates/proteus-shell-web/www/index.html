@@ -73,8 +73,7 @@
 
         const app = await ProteusApp.init('proteus-canvas');
         status.textContent = 'Running';
-        // Exposed for devtools debugging — e.g. app.debug_video_state()
-        // while diagnosing the video-loading fallback cross-browser.
+        // Exposed for devtools debugging.
         window.app = app;
 
         // Handle canvas resize (keeps logical pixels in sync with CSS layout).
@@ -116,7 +115,7 @@
             if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
             return res.arrayBuffer();
           })
-          .then(buf => app.set_background_dark_image(new Uint8Array(buf)))
+          .then(buf => app.set_background_image_dark(new Uint8Array(buf)))
           .catch(err => console.warn('background dark: could not load:', err));
 
         // ── Box-cover images (M9.7) ────────────────────────────────────────
@@ -146,15 +145,18 @@
         //
         // Border+glyph are baked into the PNGs themselves (Color-light
         // treatment) — same fetch-then-hand-to-wasm pattern as box-cover art.
-        const NAV_ICON_SRCS = ['images/icons/home-idle.png', 'images/icons/back-idle.png'];
-        NAV_ICON_SRCS.forEach((src, iconIdx) => {
+        const NAV_ICON_SRCS = [
+          ['images/icons/home-idle.png', bytes => app.set_nav_home_icon(bytes)],
+          ['images/icons/back-idle.png', bytes => app.set_nav_back_icon(bytes)],
+        ];
+        NAV_ICON_SRCS.forEach(([src, setter]) => {
           fetch(src)
             .then(res => {
               if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
               return res.arrayBuffer();
             })
-            .then(buf => app.set_nav_icon_image(iconIdx, new Uint8Array(buf)))
-            .catch(err => console.warn(`nav icon ${iconIdx}: could not load ${src}:`, err));
+            .then(buf => setter(new Uint8Array(buf)))
+            .catch(err => console.warn(`${src}: could not load:`, err));
         });
 
         // "Selected" home icon art, cross-faded over the idle art above —
@@ -164,16 +166,16 @@
             if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
             return res.arrayBuffer();
           })
-          .then(buf => app.set_home_icon_selected_image(new Uint8Array(buf)))
+          .then(buf => app.set_nav_home_icon_selected(new Uint8Array(buf)))
           .catch(err => console.warn('home icon selected: could not load:', err));
 
         // Color-dark counterparts of the two icons above + the "selected"
         // art, each cross-faded in via `theme_progress`/`home_selected_fade`
         // — see the light/dark theme toggle section below.
         const NAV_ICON_DARK_SRCS = [
-          ['images/icons/home-idle-dark.png', bytes => app.set_home_icon_dark_image(bytes)],
-          ['images/icons/back-idle-dark.png', bytes => app.set_back_icon_dark_image(bytes)],
-          ['images/icons/home-selected-dark.png', bytes => app.set_home_icon_selected_dark_image(bytes)],
+          ['images/icons/home-idle-dark.png', bytes => app.set_nav_home_icon_dark(bytes)],
+          ['images/icons/back-idle-dark.png', bytes => app.set_nav_back_icon_dark(bytes)],
+          ['images/icons/home-selected-dark.png', bytes => app.set_nav_home_icon_selected_dark(bytes)],
         ];
         NAV_ICON_DARK_SRCS.forEach(([src, setter]) => {
           fetch(src)
@@ -195,7 +197,7 @@
             if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
             return res.arrayBuffer();
           })
-          .then(buf => app.set_logo_lockup_image(new Uint8Array(buf)))
+          .then(buf => app.set_nav_logo_lockup(new Uint8Array(buf)))
           .catch(err => console.warn('logo lockup: could not load:', err));
 
         // Color-dark counterpart, cross-faded over the light lockup via
@@ -205,7 +207,7 @@
             if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
             return res.arrayBuffer();
           })
-          .then(buf => app.set_logo_lockup_dark_image(new Uint8Array(buf)))
+          .then(buf => app.set_nav_logo_lockup_dark(new Uint8Array(buf)))
           .catch(err => console.warn('logo lockup dark: could not load:', err));
 
         // ── Light/dark theme toggle — sun/moon icons, top-right ────────────
@@ -217,17 +219,18 @@
         // current for these two, unlike the home icon's independent
         // page-selected state) — same fetch-then-hand-to-wasm pattern.
         //
-        // Sun's mapping looks backwards on purpose: `set_sun_icon_image`
-        // takes the *dark*-theme ring art and `set_sun_icon_dark_image`
-        // takes the *light*-theme solid disc — see that method's doc
-        // comment in lib.rs for why (alpha-over compositing needs the solid
-        // art in the overlay slot to actually occlude anything). Moon's
-        // mapping matches its name as usual.
+        // Sun's mapping looks backwards on purpose: `set_theme_sun_icon`
+        // takes the *dark*-theme ring art and `set_theme_sun_icon_dark`
+        // takes the *light*-theme solid disc — see
+        // `proteus_demo::screens::theme`'s own module doc for why
+        // (alpha-over compositing needs the solid art in the overlay slot
+        // to actually occlude anything). Moon's mapping matches its name
+        // as usual.
         const THEME_ICON_SRCS = [
-          ['images/icons/sun-idle-dark.png', bytes => app.set_sun_icon_image(bytes)],
-          ['images/icons/sun-selected.png', bytes => app.set_sun_icon_dark_image(bytes)],
-          ['images/icons/moon-idle.png', bytes => app.set_moon_icon_image(bytes)],
-          ['images/icons/moon-selected-dark.png', bytes => app.set_moon_icon_dark_image(bytes)],
+          ['images/icons/sun-idle-dark.png', bytes => app.set_theme_sun_icon(bytes)],
+          ['images/icons/sun-selected.png', bytes => app.set_theme_sun_icon_dark(bytes)],
+          ['images/icons/moon-idle.png', bytes => app.set_theme_moon_icon(bytes)],
+          ['images/icons/moon-selected-dark.png', bytes => app.set_theme_moon_icon_dark(bytes)],
         ];
         THEME_ICON_SRCS.forEach(([src, setter]) => {
           fetch(src)
@@ -332,7 +335,7 @@
                 if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
                 return res.arrayBuffer();
               })
-              .then(buf => app.set_gallery_image(idx, new Uint8Array(buf), photoId, aspectW, aspectH))
+              .then(buf => app.set_gallery_tile_image(idx, new Uint8Array(buf), photoId, aspectW, aspectH))
               .catch(err => console.warn(`gallery tile ${idx}: could not load ${url}:`, err));
           }
         }
@@ -340,16 +343,16 @@
         // ── Enlarged gallery image hires fetch ──────────────────────────────
         //
         // Rust signals *when* to fetch (on entering GalleryImage) via
-        // take_gallery_hires_fetch_request(), polled once per tick() below —
+        // take_pending_gallery_hires_fetch(), polled once per tick() below —
         // same "polled take" shape as fetchGallery's own trigger. Requests
         // the *same* photo (same picsum id) at the actual on-screen fitted
         // size Rust computed, not the grid's forced square crop — picsum's
         // id-based endpoint proved pixel-consistent across sizes, so this
         // crossfades in as a straightforward sharpening, never a reframe.
-        // Kept cancellable via AbortController: take_gallery_hires_cancel()
-        // polled the same way tells us the user backed out before this
-        // resolved, so the in-flight network request itself gets cut off,
-        // not just its result discarded.
+        // Kept cancellable via AbortController: take_pending_gallery_hires_
+        // cancel() polled the same way tells us the user backed out before
+        // this resolved, so the in-flight network request itself gets cut
+        // off, not just its result discarded.
         let galleryHiresController = null;
 
         function fetchGalleryHires(request) {
@@ -375,8 +378,8 @@
         // No decode thread here — the browser's own <video> element is the
         // decoder. Rust owns hit-testing (there's no per-tile DOM element to
         // attach a click listener to), so it signals *when* to start/stop via
-        // take_video_start_tile()/take_video_stop()/take_video_cancel(),
-        // polled once per tick(); this side fetches/parses a simple
+        // take_pending_video_start()/take_pending_video_stop()/take_pending_
+        // video_cancel(), polled once per tick(); this side fetches/parses a simple
         // single-rendition (no adaptive bitrate) fMP4 HLS manifest, feeds
         // segments into a <video> element via MediaSource/SourceBuffer, and
         // — completely unchanged from the old plain-mp4 version — extracts
@@ -626,21 +629,22 @@
           lastTs = ts;
           app.tick(dt);          // dt in milliseconds
 
-          const startTile = app.take_video_start_tile();
+          const startTile = app.take_pending_video_start();
           if (startTile !== undefined) playHls(startTile);
-          if (app.take_video_stop()) stopVideo();
+          if (app.take_pending_video_stop()) stopVideo();
           // Timed out while still waiting (screen stays put, showing the
-          // error text) — distinct from take_video_stop(): only abort the
-          // in-flight fetch, no generation bump/pause, since Rust hasn't
-          // torn anything down and playback may yet succeed if it's close.
-          if (app.take_video_cancel()) hlsAbortController?.abort();
+          // error text) — distinct from take_pending_video_stop(): only
+          // abort the in-flight fetch, no generation bump/pause, since Rust
+          // hasn't torn anything down and playback may yet succeed if it's
+          // close.
+          if (app.take_pending_video_cancel()) hlsAbortController?.abort();
 
-          const gallerySidePx = app.take_gallery_fetch_request();
+          const gallerySidePx = app.take_pending_gallery_fetch();
           if (gallerySidePx !== undefined) fetchGallery(gallerySidePx);
 
-          const hiresRequest = app.take_gallery_hires_fetch_request();
+          const hiresRequest = app.take_pending_gallery_hires_fetch();
           if (hiresRequest !== undefined) fetchGalleryHires(hiresRequest);
-          if (app.take_gallery_hires_cancel()) galleryHiresController?.abort();
+          if (app.take_pending_gallery_hires_cancel()) galleryHiresController?.abort();
 
           requestAnimationFrame(frame);
         }
