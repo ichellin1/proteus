@@ -2208,13 +2208,14 @@ dependencies = [
 name = "proteus-shell-web"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "bevy_ecs",
  "console_error_panic_hook",
  "glam 0.29.3",
  "js-sys",
  "log",
- "proteus-gpu",
+ "proteus-demo",
  "proteus-render",
+ "proteus-sdk",
  "proteus-ui",
  "wasm-bindgen",
  "wasm-bindgen-futures",
