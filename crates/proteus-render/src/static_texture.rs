@@ -40,6 +40,17 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, String> {
 /// A no-op wherever alpha is 0 or 255 — i.e. every image before
 /// per-pixel-transparent PNGs existed (opaque photos, `main_atlas`'s white
 /// sentinel).
+// `chunks_exact_mut(4)` below is exactly what clippy's `chunks_exact_to_
+// as_chunks` lint (new as of a stable release newer than every toolchain
+// this workspace has otherwise needed so far) wants written as
+// `as_chunks_mut::<4>().0` instead — a pure style suggestion, not a
+// correctness one, and not worth bumping this crate's effective MSRV for.
+// `unknown_lints` is also allowed here since CI always tracks whatever
+// "stable" currently is (`dtolnay/rust-toolchain@stable`) while a locally
+// installed toolchain can lag behind it — an older clippy that has never
+// heard of `chunks_exact_to_as_chunks` would otherwise turn *this very
+// allow* into a hard error under `-D warnings`.
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 pub fn premultiply_alpha(rgba: &mut [u8]) {
     debug_assert_eq!(
         rgba.len() % 4,

@@ -38,6 +38,12 @@ jobs:
   deploy:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    # Needed for the "comment the preview URL" step below — the default
+    # GITHUB_TOKEN is otherwise read-only for issues/PRs (confirmed the
+    # hard way: the deploy itself succeeded, only the comment 403'd with
+    # "Resource not accessible by integration").
+    permissions:
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
