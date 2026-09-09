@@ -69,6 +69,19 @@ jobs:
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
 
+      - name: Remove wasm-pack's own pkg/.gitignore
+        # wasm-pack always writes a `*` .gitignore into its own output dir
+        # (so consumers don't accidentally commit build output to *their*
+        # repo) — but peaceiris/actions-gh-pages copies this whole
+        # publish_dir into a real git clone of proteus-staging's gh-pages
+        # branch and runs `git add --all` there, and git honors *any*
+        # .gitignore it finds in its own working tree regardless of which
+        # tool wrote it — so that `*` silently excludes the entire pkg/
+        # directory (js/wasm glue included) from every deploy. Confirmed
+        # empirically: three straight deploys each reported success while
+        # actually publishing only index.html/images/videos, never pkg/.
+        run: rm -f crates/proteus-shell-web/www/pkg/.gitignore
+
       - name: Deploy this PR's preview to the staging repo
         uses: peaceiris/actions-gh-pages@v4
         with:
