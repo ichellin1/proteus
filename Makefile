@@ -15,11 +15,15 @@ check: fmt clippy test
 fmt:
 	cargo fmt --all -- --check
 
+## proteus-shell-web is wasm32-only (wgpu::SurfaceTarget::Canvas is
+## #[cfg(web)]-gated), so it's excluded from the host-target pass and
+## checked separately against its real target. Mirrors ci.yml.
 clippy:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 test:
-	cargo test --all
+	cargo test --workspace --exclude proteus-shell-web
 
 ## Build the WebGL2 WASM demo with wasm-pack.
 ## Requires: cargo install wasm-pack
