@@ -276,25 +276,27 @@ struct PendingReveal {
     entities: Vec<Handle>,
 }
 
-/// A `video_tiles` tile whose live `QuadState` needs resetting back to its
-/// resting `tile_quad(idx)` shape, queued by `start_screen_to_tiles`/
-/// `start_screen_to_home` right after they call `split_to` on it.
+/// Marks that `video_tiles`' 3 tiles need resetting back to their resting
+/// shape/appearance (all 3, not just `tile` — see `Demo::
+/// advance_pending_tile_reset`'s own doc for why), queued by
+/// `start_screen_to_tiles`/`start_screen_to_home` right after they call
+/// `split_to`/`split_to_with_states` on `tile`.
 ///
 /// This can't happen synchronously in either of those functions: `split_to`
 /// only *inserts* a request component — the system that actually processes
-/// it (captures the entity's *current* geometry as the group transition's
+/// it (captures `tile`'s *current* geometry as the group transition's
 /// "from" state, then hides it) doesn't run until the *next* tick.
-/// Resetting the geometry immediately would corrupt that capture before it
-/// happens, collapsing the crossfade into an animation from-and-to the same
-/// (already-reset) shape — no visible morph at all, just an instant snap.
-/// `Demo::advance_pending_tile_reset` instead waits until the tile is
-/// actually observed hidden (proof the setup system has already run and
-/// captured the real "from" state), only *then* resets it — safe whether
-/// or not the tile is also one of the split's targets and gets revealed
-/// again later, since a hidden entity's geometry can't be seen anyway.
+/// Resetting `tile`'s geometry immediately would corrupt that capture
+/// before it happens, collapsing the crossfade into an animation
+/// from-and-to the same (already-reset) shape — no visible morph at all,
+/// just an instant snap. `Demo::advance_pending_tile_reset` instead waits
+/// until `tile` is actually observed hidden (proof the setup system has
+/// already run and captured the real "from" state), only *then* resets
+/// everything — safe whether or not `tile` is also one of the split's own
+/// targets and gets revealed again later, since a hidden entity's geometry
+/// can't be seen anyway.
 struct PendingTileReset {
     tile: Handle,
-    idx: usize,
 }
 
 /// One entity registered for the Design-System hover glow/scale treatment
@@ -471,6 +473,35 @@ pub struct Demo {
     /// shell via [`Demo::take_pending_video_stop`], which owns actually
     /// killing the decode thread/releasing the GPU video texture.
     pending_video_stop: bool,
+    /// Whether the shell has confirmed a real decoded frame has actually
+    /// been uploaded for the currently-playing video — set via
+    /// [`Demo::set_video_first_frame_shown`], reset to `false` each time
+    /// [`Demo::start_tiles_to_screen`] starts a new video. Drives
+    /// [`Demo::advance_video_loading`]'s loading-dots visibility, same
+    /// role as `proteus-shell-native::PlayingVideo::first_frame_shown`.
+    video_first_frame_shown: bool,
+    /// Elapsed time (seconds) driving the loading dots' pulse phase — reset
+    /// to 0 each time [`Demo::start_tiles_to_screen`] starts a new video, so
+    /// the sequence always begins at dot 0 rather than an arbitrary phase.
+    /// Also doubles as the "how long have we been waiting" clock
+    /// [`Demo::advance_video_loading`] checks against
+    /// `video_tiles::VIDEO_LOAD_TIMEOUT_SECS`. Mirrors
+    /// `proteus-shell-native::video_dots_elapsed`.
+    video_dots_elapsed: f32,
+    /// Latches once `video_dots_elapsed` crosses `video_tiles::
+    /// VIDEO_LOAD_TIMEOUT_SECS` with no frame shown yet — swaps the loading
+    /// dots for `video_tiles::VideoTiles::error_text`. Reset to `false`
+    /// each time [`Demo::start_tiles_to_screen`] starts a new video.
+    /// Mirrors `proteus-shell-native::video_load_timed_out`.
+    video_load_timed_out: bool,
+    /// How long we've been *continuously* settled-and-waiting (tile not
+    /// mid-morph, resting on `VideoScreen`, no frame yet) — unlike
+    /// `video_dots_elapsed` (which runs from click time and never resets
+    /// early), this resets to 0 the instant that condition stops holding,
+    /// so it always measures just the current wait. Gates the dots'
+    /// `video_tiles::VIDEO_DOT_SHOW_DELAY_SECS` grace period. Mirrors
+    /// `proteus-shell-native::video_settled_elapsed`.
+    video_settled_elapsed: f32,
     /// Set by `start_screen_to_tiles`/`start_screen_to_home` right after they
     /// call `split_to` on a tile — see [`PendingTileReset`]'s doc for why the
     /// reset can't happen synchronously in either of those functions.
@@ -661,6 +692,8 @@ impl Demo {
         }
         hide(&mut app, &[example_detail.stress.warning_text]);
         hide(&mut app, &video_tiles.tiles);
+        hide(&mut app, &[video_tiles.backdrop, video_tiles.error_text]);
+        hide(&mut app, &video_tiles.loading_dots);
         hide(&mut app, &[loading.logo, loading.error_text]);
         hide(&mut app, &gallery.tiles);
         // `fetch_button_label` deliberately stays out of this — it relies
@@ -803,6 +836,10 @@ impl Demo {
             pending_texture_churn: Vec::new(),
             pending_video_start: None,
             pending_video_stop: false,
+            video_first_frame_shown: false,
+            video_dots_elapsed: 0.0,
+            video_load_timed_out: false,
+            video_settled_elapsed: 0.0,
             pending_tile_reset: None,
             transforms_anim_elapsed: 0.0,
             loading_logo_frame_index: 0,
@@ -1128,6 +1165,7 @@ impl Demo {
         self.advance_nav_icons(dt);
         self.advance_tile_hover();
         self.advance_video_crossfade();
+        self.advance_video_loading(dt);
         self.advance_theme(dt);
         // Must run after advance_theme — see this fn's own doc for why.
         self.advance_gallery_error_fade(dt);
@@ -1398,6 +1436,13 @@ impl Demo {
         tile.start_video(&mut self.app);
         tile.set_video_crossfade(&mut self.app, 0.0);
         self.pending_video_start = Some(idx);
+        // Fresh loading-UI state for this visit — see each field's own doc.
+        // Mirrors `proteus-shell-native::start_video_playback`'s identical
+        // resets (its own `first_frame_shown` lives on a freshly-constructed
+        // `PlayingVideo` instead, same effect).
+        self.video_first_frame_shown = false;
+        self.video_dots_elapsed = 0.0;
+        self.video_load_timed_out = false;
         self.state = AppState::VideoScreen(idx);
     }
 
@@ -1420,6 +1465,17 @@ impl Demo {
     /// per-target `state` construction exactly.
     fn start_screen_to_tiles(&mut self, idx: usize) {
         let tile = self.video_tiles.tiles[idx];
+        // Undo `advance_video_loading`'s "hide the tile's own art while
+        // waiting" override *before* `split_to_with_states` bakes its own
+        // "from" snapshot below — otherwise backing out of a still-loading
+        // video would bake the tile's momentarily-invisible alpha into that
+        // snapshot, and the whole outgoing morph back to the grid would show
+        // nothing instead of fading back in. Unconditional (not gated on
+        // `ready`): harmless if the tile was already fully visible. Mirrors
+        // `proteus-shell-native::stop_video_playback`'s identical ordering.
+        if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(tile.id()) {
+            qs.color.w = 1.0;
+        }
         tile.stop_video(&mut self.app);
         self.pending_video_stop = true;
         let targets: Vec<(Handle, QuadState)> = (0..3)
@@ -1437,7 +1493,7 @@ impl Demo {
         );
         // See `PendingTileReset`'s doc for why this can't happen
         // synchronously here.
-        self.pending_tile_reset = Some(PendingTileReset { tile, idx });
+        self.pending_tile_reset = Some(PendingTileReset { tile });
         self.state = AppState::VideoTiles;
     }
 
@@ -1452,6 +1508,11 @@ impl Demo {
     /// Mirrors `proteus-shell-native::start_screen_to_nav`.
     fn start_screen_to_home(&mut self, idx: usize) {
         let tile = self.video_tiles.tiles[idx];
+        // See `start_screen_to_tiles`'s identical restore for why this must
+        // happen before `split_to` bakes its own "from" snapshot below.
+        if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(tile.id()) {
+            qs.color.w = 1.0;
+        }
         tile.stop_video(&mut self.app);
         self.pending_video_stop = true;
         let targets = self.home.nav_buttons;
@@ -1468,7 +1529,7 @@ impl Demo {
         // this same tile as a target (whose reveal, again, only flips
         // `Visibility`, never resyncs geometry). See `PendingTileReset`'s
         // doc for why this can't happen synchronously here.
-        self.pending_tile_reset = Some(PendingTileReset { tile, idx });
+        self.pending_tile_reset = Some(PendingTileReset { tile });
         for (i, &other) in self.video_tiles.tiles.iter().enumerate() {
             if i != idx {
                 self.app
@@ -1923,21 +1984,33 @@ impl Demo {
         }
     }
 
-    /// Resets a tile queued by `start_screen_to_tiles`/`start_screen_to_home`
-    /// back to its resting `tile_quad` shape, but only once it's actually
-    /// observed hidden — proof `one_to_n_setup_system` has already run and
-    /// captured its (still screen-sized) live geometry as the group
+    /// Resets *every* tile back to its resting shape/appearance once
+    /// `start_screen_to_tiles`/`start_screen_to_home`'s queued tile is
+    /// actually observed hidden — proof `one_to_n_setup_system` has already
+    /// run and captured its (still screen-sized) live geometry as the group
     /// transition's "from" state. See [`PendingTileReset`]'s doc for the
     /// full reasoning; this just implements the wait.
     ///
-    /// `tile_quad`'s own `color` is the placeholder tint — real box-cover
-    /// art (once `set_tile_image` attaches it) untints the tile to opaque
-    /// white so the art isn't multiplied by that tint underneath it. A
-    /// bare `*qs = tile_quad(idx)` would discard that and revert to the
-    /// tint even with real art already loaded — real bug, reported
-    /// directly ("tiles keep color tint from the original bg colors").
-    /// Mirrors `proteus-shell-native::settle_tile_geometry`'s own
-    /// `BakedImage`-gated white override exactly.
+    /// Covers all 3 tiles, not just the one that was playing — a split's
+    /// own reveal only flips `Visibility`, it never rewrites a target's
+    /// live `QuadState`/`Border`/`Glow` back to anything (same "reveal
+    /// doesn't touch content" rule [`Handle::copy_baked_image_from`]'s doc
+    /// already covers for `BakedImage`) — the *other two* tiles, faded out
+    /// by `Demo::advance_video_crossfade` while this one was playing (see
+    /// that function's own doc), would otherwise stay stuck at that faded
+    /// alpha forever: reported directly as "the tile backgrounds on the
+    /// non-transitioning tiles are missing" the very first time this fade
+    /// was ported. Mirrors `proteus-shell-native::settle_tile_idle`, called
+    /// for all 3 tiles from `settle(AppState::VideoTiles)`.
+    ///
+    /// `video_tiles::tile_target_state`'s own `color` is `tile_quad`'s
+    /// placeholder tint unless real box-cover art is baked, in which case
+    /// it's untinted opaque white — a bare `tile_quad(idx)` would discard
+    /// that and revert to the tint even with real art already loaded (a
+    /// different real bug, reported directly as "tiles keep color tint
+    /// from the original bg colors"). Mirrors `proteus-shell-
+    /// native::settle_tile_geometry`'s own `BakedImage`-gated white
+    /// override exactly.
     fn advance_pending_tile_reset(&mut self) {
         let Some(reset) = &self.pending_tile_reset else {
             return;
@@ -1946,13 +2019,19 @@ impl Demo {
         if !hidden {
             return;
         }
-        let reset = self.pending_tile_reset.take().unwrap();
-        let mut state = video_tiles::tile_quad(reset.idx);
-        if reset.tile.baked_image_size(&self.app).is_some() {
-            state.color = Vec4::ONE;
-        }
-        if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(reset.tile.id()) {
-            *qs = state;
+        self.pending_tile_reset = None;
+        for (i, tile) in self.video_tiles.tiles.into_iter().enumerate() {
+            let state = video_tiles::tile_target_state(&self.app, tile, i);
+            if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(tile.id()) {
+                *qs = state;
+            }
+            if let Some(mut border) = self.app.world_mut().get_mut::<Border>(tile.id()) {
+                border.color.w = 1.0;
+            }
+            if let Some(mut glow) = self.app.world_mut().get_mut::<Glow>(tile.id()) {
+                glow.radius = 0.0;
+                glow.color.w = 1.0;
+            }
         }
     }
 
@@ -2588,6 +2667,20 @@ impl Demo {
         std::mem::take(&mut self.pending_video_stop)
     }
 
+    /// Tells `Demo` a real decoded video frame has actually landed for the
+    /// currently-playing tile — the shell's own job is just detecting that
+    /// (e.g. `QuadPipeline::consume_video_frame` returning `true`) and
+    /// calling this once; `Demo` has no way to see the GPU texture itself.
+    /// Drives `Demo::advance_video_loading`'s loading-dots/error visibility.
+    /// A no-op call (e.g. after the tile has already moved on) is harmless —
+    /// this just sets a flag `start_tiles_to_screen` resets on the next
+    /// visit anyway. Mirrors `proteus-shell-native`'s own
+    /// `PlayingVideo::first_frame_shown` latch (set the same way, from
+    /// `consume_video_frame`'s return value).
+    pub fn set_video_first_frame_shown(&mut self) {
+        self.video_first_frame_shown = true;
+    }
+
     /// Ends the current run naturally: despawns every entity in bulk and
     /// reports the result via `stress.result_text`. `Text` doesn't support
     /// in-place content changes (see `StressContent::result_text`'s doc),
@@ -2823,32 +2916,241 @@ impl Demo {
     /// .transition` goes `None`), forces `video_t` to `1.0` outright: local
     /// `.mp4` playback (the only kind this crate does — no HLS/network
     /// fetch) decodes its first frame fast enough that it's essentially
-    /// always ready well before the ~0.4s morph itself finishes, unlike
-    /// source's own extra "may still be loading once settled" handling for
-    /// network video (a genuinely slow decode still isn't handled here —
-    /// that's the still-deferred loading-dots/timeout/error UI, tracked as
-    /// F5c in the M12.5.5 plan). Only the *forward* direction gets this:
-    /// `start_screen_to_tiles`'s reverse morph is a baked-slice crossfade
-    /// (a frozen snapshot up front), so there's no *live* video art to fade
-    /// in the first place — `tile.stop_video` already removes
-    /// `VideoCrossfade`/`VideoPlayer` outright before that split starts,
-    /// matching `proteus-shell-native`'s own identical asymmetry (see that
-    /// file's `advance_tiles_to_screen_fade` doc). Called every tick,
-    /// unconditionally — a no-op outside `VideoScreen` (nothing has
-    /// `VideoCrossfade` then) and a no-op on `Handle::set_video_crossfade`'s
-    /// own end once `stop_video` has removed it.
+    /// always ready well before the ~0.4s morph itself finishes in the
+    /// common case; `Demo::advance_video_loading` takes over from there for
+    /// the genuinely-slow-decode case.
+    ///
+    /// While actually mid-morph (not yet settled), also mirrors
+    /// `proteus-shell-native::advance_tiles_to_screen_fade`'s other half —
+    /// checked directly against source after a real, reported bug ("you can
+    /// see the other tiles over the transitioning tile"): this crate's own
+    /// F5d fix only ever ported the `video_t` ramp above, missing two more
+    /// things source's own function does in the same breath:
+    /// - Fades the clicked tile's *own* alpha toward `0.0` in lockstep with
+    ///   `video_t` (`1.0 - eased_t`, gated on `!ready` — a fast decode that's
+    ///   already showing a real frame before the morph even finishes must
+    ///   *not* have this fade it back out, only to have `advance_video_
+    ///   loading` snap it back to `1.0` the instant the transition
+    ///   settles — a one-frame flicker on exactly the path that never had a
+    ///   problem). This is what actually reveals `advance_video_loading`'s
+    ///   `backdrop` starting *during* the morph, not just once settled —
+    ///   without it, the tile stayed fully opaque (showing whatever
+    ///   `VideoCrossfade` blended, poster art or a real frame) for the
+    ///   entire morph and only snapped transparent the instant it settled,
+    ///   reading as an abrupt pop rather than a dissolve.
+    /// - Fades the *other two* tiles' own alpha, `Border.color.w`, and
+    ///   `Glow` (radius forced to `0`, color alpha faded too) toward `0.0`,
+    ///   over *half* the morph's own duration (`fade_t` reaches `1.0` at
+    ///   `raw_t == 0.5`) — without this, the two untouched tiles just sit
+    ///   there fully opaque for the whole morph. Once the growing/settled
+    ///   screen's own opacity is *also* fading toward `0.0` (the point
+    ///   above), z-order between it and the idle siblings stops being
+    ///   enough to hide them on its own — `advance_video_loading`'s
+    ///   `backdrop` is deliberately z-ordered to still occlude these two
+    ///   once faded (see that entity's own doc), but only for the *tracked*
+    ///   tile's footprint; fading the siblings themselves is still needed
+    ///   so they don't just sit there fully visible next to/behind it.
+    ///   `advance_hovers`/`advance_tile_hover` already zero these tiles'
+    ///   hover-only decorations (overlay/label) whenever nothing's actually
+    ///   hovering them, which is always true here (the mouse is over the
+    ///   *clicked* tile) — this only needs to additionally fade each tile's
+    ///   own base appearance.
+    ///
+    /// Only the *forward* direction gets any of this: `start_screen_to_
+    /// tiles`'s reverse morph is a baked-slice crossfade (a frozen snapshot
+    /// up front, and a fresh full-opacity target state for all 3 tiles —
+    /// see `video_tiles::tile_target_state`'s doc), so there's no *live*
+    /// content to fade in the first place, matching source's own identical
+    /// asymmetry. Called every tick, unconditionally — a no-op outside
+    /// `VideoScreen` (nothing has `VideoCrossfade` then) and a no-op on
+    /// `Handle::set_video_crossfade`'s own end once `stop_video` has removed
+    /// it.
     fn advance_video_crossfade(&mut self) {
         let AppState::VideoScreen(idx) = self.state else {
             return;
         };
         let tile = self.video_tiles.tiles[idx];
-        let t = self
+        let raw_t = self
             .app
             .get(tile)
             .and_then(|d| d.transition)
-            .map(|t| ease_in_out_quad(t.progress))
-            .unwrap_or(1.0);
-        tile.set_video_crossfade(&mut self.app, t);
+            .map(|t| t.progress);
+        tile.set_video_crossfade(&mut self.app, raw_t.map(ease_in_out_quad).unwrap_or(1.0));
+
+        let Some(raw_t) = raw_t else {
+            return;
+        };
+        let eased_t = ease_in_out_quad(raw_t);
+
+        if !self.video_first_frame_shown {
+            if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(tile.id()) {
+                qs.color.w = 1.0 - eased_t;
+            }
+        }
+
+        let fade_t = (raw_t * 2.0).min(1.0);
+        let fade_alpha = 1.0 - ease_out_quad(fade_t);
+        for (i, &other) in self.video_tiles.tiles.iter().enumerate() {
+            if i == idx {
+                continue;
+            }
+            if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(other.id()) {
+                qs.color.w = fade_alpha;
+            }
+            if let Some(mut border) = self.app.world_mut().get_mut::<Border>(other.id()) {
+                border.color.w = fade_alpha;
+            }
+            if let Some(mut glow) = self.app.world_mut().get_mut::<Glow>(other.id()) {
+                glow.radius = 0.0;
+                glow.color.w = fade_alpha;
+            }
+        }
+    }
+
+    /// Video screen loading UI: a black backdrop tracking the tile's live
+    /// geometry (so the screen never looks broken mid-morph, before the
+    /// first real frame even lands), 3 phase-staggered pulsing dots once
+    /// settled and still waiting, replaced by inline error text after
+    /// `video_tiles::VIDEO_LOAD_TIMEOUT_SECS`. Runs unconditionally, every
+    /// tick, same as source — every branch below is gated on locally
+    /// computed booleans rather than an early return, so a click away from
+    /// `VideoScreen` mid-wait still correctly hides everything on the very
+    /// next tick. Mirrors `proteus-shell-native::advance_video_loading`
+    /// exactly, with one structural difference: source inspects its own
+    /// hand-rolled `self.transition` to tell "mid-morph" from "settled";
+    /// this crate reads the tile's own `ActiveTransition` component
+    /// directly (`d.transition`, same technique `advance_video_crossfade`
+    /// above already uses) — `self.state` here flips to `VideoScreen(idx)`
+    /// immediately rather than waiting for the morph to settle (see
+    /// `start_tiles_to_screen`'s doc), so it alone already covers what
+    /// source needs its `video_idx`/`self.transition` pair for.
+    fn advance_video_loading(&mut self, dt: f32) {
+        let in_video_screen = matches!(self.state, AppState::VideoScreen(_));
+        let video_idx = match self.state {
+            AppState::VideoScreen(idx) => Some(idx),
+            _ => None,
+        };
+
+        let mid_morph = video_idx.is_some_and(|idx| {
+            self.app
+                .get(self.video_tiles.tiles[idx])
+                .and_then(|d| d.transition)
+                .is_some()
+        });
+
+        let backdrop_visible = video_idx.is_some();
+        self.app
+            .world_mut()
+            .entity_mut(self.video_tiles.backdrop.id())
+            .insert(if backdrop_visible {
+                Visibility::VISIBLE
+            } else {
+                Visibility::HIDDEN
+            });
+        if let Some(idx) = video_idx {
+            if let Some(tile_state) = self.app.get(self.video_tiles.tiles[idx]) {
+                if let Some(mut qs) = self
+                    .app
+                    .world_mut()
+                    .get_mut::<QuadState>(self.video_tiles.backdrop.id())
+                {
+                    qs.position.x = tile_state.geometry.position.x;
+                    qs.position.y = tile_state.geometry.position.y;
+                    // Dynamic, not fixed — see `backdrop_quad`'s own doc
+                    // for why: always the midpoint between the idle tiles'
+                    // z and this tile's own *current* z, so it stays
+                    // strictly behind the tracked tile (whatever point in
+                    // the morph it's currently at) and strictly above the
+                    // untouched idle siblings, throughout the entire morph
+                    // and once settled alike.
+                    qs.position.z = (video_tiles::TILE_Z + tile_state.geometry.position.z) / 2.0;
+                    qs.size = tile_state.geometry.size;
+                    qs.scale = tile_state.geometry.scale;
+                    qs.corner_radius = tile_state.geometry.corner_radius;
+                }
+            }
+        }
+
+        // `ready` mirrors `proteus-shell-native`'s own
+        // `playing_video.is_some_and(|p| p.first_frame_shown)` check.
+        let ready = self.video_first_frame_shown;
+        let settled_waiting = !mid_morph && in_video_screen && !ready;
+
+        // Hide the tile's own art (its poster `BakedImage`, still showing
+        // through `VideoCrossfade` at whatever `t` `advance_video_crossfade`
+        // left it at) once settled, for as long as we're waiting —
+        // otherwise it renders in front of `backdrop` (z 0.505 <
+        // `video_tiles.tiles`' own settled 0.51), defeating the whole
+        // black-fallback/dots design the instant loading is slow enough for
+        // the gap to actually show. Restored the instant `ready` flips
+        // true — same z, same geometry, just the real video showing
+        // through again. `stop_video`'s own callers already restore this
+        // unconditionally too, for the "user backs out before ready" case
+        // this alone doesn't cover.
+        if let Some(idx) = video_idx {
+            if !mid_morph {
+                if let Some(mut qs) = self
+                    .app
+                    .world_mut()
+                    .get_mut::<QuadState>(self.video_tiles.tiles[idx].id())
+                {
+                    qs.color.w = if ready { 1.0 } else { 0.0 };
+                }
+            }
+        }
+
+        self.video_dots_elapsed += dt;
+        if settled_waiting {
+            self.video_settled_elapsed += dt;
+        } else {
+            self.video_settled_elapsed = 0.0;
+        }
+        if settled_waiting
+            && !self.video_load_timed_out
+            && self.video_dots_elapsed >= video_tiles::VIDEO_LOAD_TIMEOUT_SECS
+        {
+            self.video_load_timed_out = true;
+        }
+        // Delayed by `VIDEO_DOT_SHOW_DELAY_SECS` from when we *first*
+        // became settled-and-waiting (not from click time, unlike
+        // `video_dots_elapsed`/the timeout above) — playback often becomes
+        // ready within a beat of settling, and showing the dots
+        // immediately in that case reads as a flash right as the video
+        // appears rather than an actual loading indicator.
+        let dots_visible = settled_waiting
+            && !self.video_load_timed_out
+            && self.video_settled_elapsed >= video_tiles::VIDEO_DOT_SHOW_DELAY_SECS;
+        let error_visible = settled_waiting && self.video_load_timed_out;
+        for (i, &dot) in self.video_tiles.loading_dots.iter().enumerate() {
+            self.app
+                .world_mut()
+                .entity_mut(dot.id())
+                .insert(if dots_visible {
+                    Visibility::VISIBLE
+                } else {
+                    Visibility::HIDDEN
+                });
+            if dots_visible {
+                let phase = (self.video_dots_elapsed
+                    - i as f32 * video_tiles::VIDEO_DOT_PULSE_STAGGER_SECS)
+                    / video_tiles::VIDEO_DOT_PULSE_PERIOD_SECS
+                    * std::f32::consts::TAU;
+                let alpha = video_tiles::VIDEO_DOT_ALPHA_MIN
+                    + (video_tiles::VIDEO_DOT_ALPHA_MAX - video_tiles::VIDEO_DOT_ALPHA_MIN)
+                        * (0.5 + 0.5 * phase.sin());
+                if let Some(mut qs) = self.app.world_mut().get_mut::<QuadState>(dot.id()) {
+                    qs.color.w = alpha;
+                }
+            }
+        }
+        self.app
+            .world_mut()
+            .entity_mut(self.video_tiles.error_text.id())
+            .insert(if error_visible {
+                Visibility::VISIBLE
+            } else {
+                Visibility::HIDDEN
+            });
     }
 
     /// Drives the whole light/dark theme system off `theme_progress` — see
@@ -3904,6 +4206,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn returning_from_video_screen_restores_the_non_playing_tiles_own_box_art_too() {
+        // Regression test for a real, user-reported bug: "the tile
+        // backgrounds on the non-transitioning tiles are missing when
+        // transitioning back from playback to the tiles." Root cause: a
+        // split's own reveal only ever flips `Visibility` — it never
+        // rewrites a target's live `QuadState` — so the *other two* tiles,
+        // faded fully transparent by `Demo::advance_video_crossfade` while
+        // the clicked one was playing, stayed stuck at that alpha forever
+        // once `advance_pending_tile_reset` only ever reset the *clicked*
+        // tile's own `QuadState` (Border/Glow got a fix first, but that
+        // alone wasn't the whole bug — this is the other half).
+        use proteus_ui::BakedImage;
+
+        let mut demo = advance_to_video_tiles();
+        for &tile in &demo.video_tiles.tiles {
+            demo.app
+                .world_mut()
+                .entity_mut(tile.id())
+                .insert(BakedImage {
+                    uv_offset: [0.0, 0.0],
+                    uv_scale: [1.0, 1.0],
+                    page: 0,
+                    pixel_size: [400.0, 600.0],
+                });
+            if let Some(mut qs) = demo.app.world_mut().get_mut::<QuadState>(tile.id()) {
+                qs.color = Vec4::ONE;
+            }
+        }
+
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+        // Fine-grained ticks — matching this file's own convention — so the
+        // fade actually observes the transition mid-flight; a single big
+        // jump completes it before `advance_video_crossfade` ever runs and
+        // never touches the siblings' alpha at all.
+        let mut t = 0.0;
+        while t < 1.0 {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+        assert_eq!(demo.state, AppState::VideoScreen(0));
+        for &idx in &[1usize, 2] {
+            assert_eq!(
+                demo.app
+                    .get(demo.video_tiles.tiles[idx])
+                    .unwrap()
+                    .geometry
+                    .color
+                    .w,
+                0.0,
+                "sanity: the non-playing tiles must actually be faded out at this point"
+            );
+        }
+
+        demo.start_screen_to_tiles(0);
+        demo.tick(0.05);
+        demo.tick(0.05);
+        assert_eq!(demo.state, AppState::VideoTiles);
+        for &idx in &[1usize, 2] {
+            let tile = demo.video_tiles.tiles[idx];
+            assert_eq!(
+                demo.app.get(tile).unwrap().geometry.color,
+                Vec4::ONE,
+                "tile {idx}'s own box art must be visible and untinted again after returning, \
+                 not stuck at whatever alpha it faded to while tile 0 was playing"
+            );
+        }
+    }
+
     /// Regression test for a real bug, reported directly as "z index issues
     /// with tiles and screen": `video_tiles.tiles[0..3]` are all root
     /// entities tied at the exact same z — `collect_instances` breaks that
@@ -4080,6 +4452,308 @@ mod tests {
             Some(1.0),
             "should be fully video once the morph has settled"
         );
+    }
+
+    #[test]
+    fn video_backdrop_tracks_and_stays_between_idle_and_tracked_tile_z_throughout() {
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+
+        // Mid-morph: backdrop is visible and tracking from the very start —
+        // `Demo::advance_video_crossfade` fades the clicked tile's own art
+        // out *during* the morph too (not just once settled), so backdrop
+        // has to be there to receive that fade from the first tick. Its z
+        // must stay strictly between the idle siblings' fixed `TILE_Z` and
+        // the tracked tile's own *current* (still-ramping) z throughout —
+        // see `backdrop_quad`'s own doc for why a fixed z can't do this.
+        let mut t = 0.0;
+        while t < 0.6 {
+            demo.tick(0.05);
+            let idle_z = demo
+                .app
+                .get(demo.video_tiles.tiles[1])
+                .unwrap()
+                .geometry
+                .position
+                .z;
+            let tile = demo.app.get(demo.video_tiles.tiles[0]).unwrap();
+            let backdrop = demo.app.get(demo.video_tiles.backdrop).unwrap();
+            assert!(
+                backdrop.visible,
+                "backdrop must be visible throughout, not just once settled"
+            );
+            assert!(
+                backdrop.geometry.position.z > idle_z,
+                "backdrop z ({}) must stay above the idle siblings' ({idle_z}) throughout",
+                backdrop.geometry.position.z
+            );
+            assert!(
+                backdrop.geometry.position.z < tile.geometry.position.z,
+                "backdrop z ({}) must stay below the tracked tile's own current z ({})",
+                backdrop.geometry.position.z,
+                tile.geometry.position.z
+            );
+            t += 0.05;
+        }
+        assert_eq!(
+            demo.app
+                .get(demo.video_tiles.tiles[0])
+                .unwrap()
+                .geometry
+                .color
+                .w,
+            0.0,
+            "tile's own art must hide once settled with no frame yet, so it can't render in \
+             front of the black backdrop"
+        );
+        let screen_geo = demo.app.get(demo.video_tiles.tiles[0]).unwrap().geometry;
+        let backdrop_geo = demo.app.get(demo.video_tiles.backdrop).unwrap().geometry;
+        assert_eq!(backdrop_geo.size, screen_geo.size);
+        assert_eq!(backdrop_geo.position.x, screen_geo.position.x);
+        assert_eq!(backdrop_geo.position.y, screen_geo.position.y);
+    }
+
+    #[test]
+    fn other_two_tiles_fade_out_during_the_morph_and_are_fully_restored_on_return() {
+        // Regression test for the real, user-reported "you can see the
+        // other tiles over the transitioning tile" bug's actual root cause:
+        // `proteus-shell-native::advance_tiles_to_screen_fade` also fades
+        // the *other two* (non-clicked) tiles' own alpha/Border/Glow out
+        // during the morph — a whole half of that source function this
+        // crate's earlier F5d port had missed entirely. Also checks the
+        // other half of the fix: Border/Glow don't ride the group-
+        // transition's own QuadState interpolation, so returning to
+        // VideoTiles must explicitly restore them (`advance_pending_tile_
+        // reset`) or they'd stay faded forever after the first video.
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+
+        // Partway through the morph: the other two tiles should already be
+        // partly faded (fade reaches 0 at *half* the morph's own progress).
+        demo.tick(0.15);
+        for &idx in &[1usize, 2] {
+            let tile = demo.app.get(demo.video_tiles.tiles[idx]).unwrap();
+            assert!(
+                tile.geometry.color.w < 1.0,
+                "tile {idx} must already be fading out partway through the morph"
+            );
+        }
+
+        // Fully settled: the other two must be fully transparent.
+        let mut t = 0.0;
+        while t < 0.4 {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+        for &idx in &[1usize, 2] {
+            let tile = demo.app.get(demo.video_tiles.tiles[idx]).unwrap();
+            assert_eq!(
+                tile.geometry.color.w, 0.0,
+                "tile {idx} must be fully faded out once settled"
+            );
+        }
+
+        // Back to the grid: every tile's Border/Glow must be fully restored,
+        // not stuck at whatever alpha the fade-out left them at.
+        demo.start_screen_to_tiles(0);
+        let mut t = 0.0;
+        while t < 1.0 {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+        assert_eq!(demo.state, AppState::VideoTiles);
+        for &tile in &demo.video_tiles.tiles {
+            assert_eq!(
+                demo.app.get(tile).unwrap().geometry.color.w,
+                1.0,
+                "tile's own alpha (not just Border/Glow) must be fully restored — a split's own \
+                 reveal never rewrites a target's live QuadState on its own"
+            );
+            let border = demo.app.world().get::<Border>(tile.id()).unwrap();
+            assert_eq!(border.color.w, 1.0, "border alpha must be fully restored");
+            let glow = demo.app.world().get::<Glow>(tile.id()).unwrap();
+            assert_eq!(glow.color.w, 1.0, "glow alpha must be fully restored");
+            assert_eq!(glow.radius, 0.0, "glow radius must be back at rest");
+        }
+    }
+
+    #[test]
+    fn settled_video_backdrop_draws_above_the_idle_sibling_tiles_not_just_below_the_screen() {
+        // Regression test for a real, user-reported bug: once settled and
+        // waiting for the first real frame, the (now fully transparent —
+        // see `advance_video_loading`'s own doc) tile no longer occludes
+        // anything, so whatever `backdrop` doesn't cover shows through. The
+        // two untouched idle sibling tiles sit well inside the settled
+        // screen's much bigger footprint; if `backdrop`'s own z isn't
+        // strictly *above* theirs, they render "in front of" the video
+        // screen the user just opened. See `backdrop_quad`'s own doc for
+        // the full mechanism (this crate's global z-sort vs. source's
+        // draw-in-spawn-order renderer, which never had this problem).
+        let mut demo = advance_to_video_tiles();
+        let idle_z = demo
+            .app
+            .get(demo.video_tiles.tiles[1])
+            .unwrap()
+            .geometry
+            .position
+            .z;
+
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+        let mut t = 0.0;
+        while t < 0.6 {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+        assert_eq!(
+            demo.app
+                .get(demo.video_tiles.tiles[0])
+                .unwrap()
+                .geometry
+                .color
+                .w,
+            0.0,
+            "sanity: must actually be in the transparent waiting state this test targets"
+        );
+
+        let backdrop_z = demo
+            .app
+            .get(demo.video_tiles.backdrop)
+            .unwrap()
+            .geometry
+            .position
+            .z;
+        let screen_z = demo
+            .app
+            .get(demo.video_tiles.tiles[0])
+            .unwrap()
+            .geometry
+            .position
+            .z;
+        assert!(
+            backdrop_z > idle_z,
+            "backdrop (z={backdrop_z}) must draw above the idle siblings (z={idle_z}), or they \
+             show through the now-transparent screen tile"
+        );
+        assert!(
+            backdrop_z < screen_z,
+            "backdrop (z={backdrop_z}) must still draw below the settled screen tile itself \
+             (z={screen_z}), so real content covers it once ready"
+        );
+    }
+
+    #[test]
+    fn video_screen_shows_loading_dots_after_a_short_delay_then_reveals_the_tile_once_ready() {
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+        // Fine-grained ticks past the ~0.4s morph — settled, still waiting.
+        // Coarser ticks would fold the whole grace period into the same
+        // call that crosses the settle boundary, hiding the "not shown
+        // immediately" window this test wants to observe.
+        let mut t = 0.0;
+        while t < 0.45 {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+
+        // Just settled: too soon for the dots (VIDEO_DOT_SHOW_DELAY_SECS
+        // grace period hasn't elapsed since settling).
+        for &dot in &demo.video_tiles.loading_dots {
+            assert!(
+                !demo.app.get(dot).unwrap().visible,
+                "dots must not flash immediately on settling"
+            );
+        }
+
+        let mut t = 0.0;
+        while t < video_tiles::VIDEO_DOT_SHOW_DELAY_SECS + 0.15 {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+        for &dot in &demo.video_tiles.loading_dots {
+            assert!(
+                demo.app.get(dot).unwrap().visible,
+                "dots must show once the grace period elapses"
+            );
+            let alpha = demo.app.get(dot).unwrap().geometry.color.w;
+            assert!(
+                (video_tiles::VIDEO_DOT_ALPHA_MIN..=video_tiles::VIDEO_DOT_ALPHA_MAX)
+                    .contains(&alpha),
+                "dot alpha {alpha} must stay within the pulse's own min/max range"
+            );
+        }
+        assert!(!demo.app.get(demo.video_tiles.error_text).unwrap().visible);
+
+        // First frame lands: tile's real content reappears, dots stop.
+        demo.set_video_first_frame_shown();
+        demo.tick(0.05);
+        assert_eq!(
+            demo.app
+                .get(demo.video_tiles.tiles[0])
+                .unwrap()
+                .geometry
+                .color
+                .w,
+            1.0,
+            "tile must be fully visible again once the first real frame lands"
+        );
+        for &dot in &demo.video_tiles.loading_dots {
+            assert!(
+                !demo.app.get(dot).unwrap().visible,
+                "dots must hide once ready"
+            );
+        }
+    }
+
+    #[test]
+    fn video_screen_shows_an_error_after_the_load_timeout_elapses_with_no_frame() {
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+
+        // `video_dots_elapsed` (the timeout clock) runs from click time, not
+        // from settling — so the whole budget is `VIDEO_LOAD_TIMEOUT_SECS`
+        // from here, independent of however long the morph itself took.
+        demo.tick(video_tiles::VIDEO_LOAD_TIMEOUT_SECS - 0.5);
+        assert!(
+            !demo.app.get(demo.video_tiles.error_text).unwrap().visible,
+            "must not show the error before the timeout actually elapses"
+        );
+
+        demo.tick(1.0); // now past VIDEO_LOAD_TIMEOUT_SECS
+        assert!(demo.app.get(demo.video_tiles.error_text).unwrap().visible);
+        for &dot in &demo.video_tiles.loading_dots {
+            assert!(
+                !demo.app.get(dot).unwrap().visible,
+                "dots must be replaced by the error text"
+            );
+        }
+    }
+
+    #[test]
+    fn leaving_video_screen_while_still_loading_restores_the_tiles_alpha_before_the_split() {
+        // Regression test: backing out of a still-loading video used to
+        // leave the tile's alpha baked at 0 into the outgoing split's own
+        // "from" snapshot — see `start_screen_to_tiles`'s own doc for why.
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+        demo.tick(1.0); // settled, still waiting — tile alpha is 0 here
+
+        demo.start_screen_to_tiles(0);
+        demo.tick(1.0);
+        assert_eq!(demo.state, AppState::VideoTiles);
+        for &tile in &demo.video_tiles.tiles {
+            assert_eq!(
+                demo.app.get(tile).unwrap().geometry.color.w,
+                1.0,
+                "every tile must be fully visible again back on the grid, even one that was \
+                 still mid-load when backed out of"
+            );
+        }
     }
 
     #[test]
