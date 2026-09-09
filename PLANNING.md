@@ -1441,7 +1441,7 @@ this milestone is actually for or what shipped:
 
 ---
 
-### M10 — Component Composition & Hierarchy *(critical path — not started)*
+### M10 — Component Composition & Hierarchy *(critical path — complete)*
 
 Parent/child entity relationships, relative-coordinate `QuadState`, and cascading
 visibility/opacity. Previously described only in ROADMAP.md (as "M5.5"), never added here — see
@@ -1473,27 +1473,30 @@ cascade down the tree via real systems in the existing `ProteusSet::Visibility`/
 Parent transitions carry children by default as a natural consequence of relative coordinates (no
 special-casing needed); children can also transition independently.
 
-**Definition of done:**
-- [ ] A real parent/child entity relationship exists in `proteus-ui` (via `bevy_ecs`'s `ChildOf`/
+**Definition of done — all complete (`41853cc`, "Add Component Composition & Hierarchy (M10),
+fix cross-shell draw order and shell parity"):**
+- [x] A real parent/child entity relationship exists in `proteus-ui` (via `bevy_ecs`'s `ChildOf`/
   `Children`) — a component can declare children, and a child's transform is relative to its
   parent's, not screen coordinates
-- [ ] `stub_visibility_system`/`stub_opacity_system` replaced with real cascade implementations —
+- [x] `stub_visibility_system`/`stub_opacity_system` replaced with real cascade implementations —
   parent `Visibility::HIDDEN` makes the whole subtree inert; parent `opacity` multiplies down
-- [ ] `Text` becomes a true leaf entity with its own identity and `QuadState`, rather than a
+- [x] `Text` becomes a true leaf entity with its own identity and `QuadState`, rather than a
   component bolted onto the same entity as its container (removes the M5 shortcut)
-- [ ] A labeled button is composed as a `Quad` parent containing a `Text` child, demonstrated in
+- [x] A labeled button is composed as a `Quad` parent containing a `Text` child, demonstrated in
   the reference demo (replacing the current single-entity `Text::new(...)` pattern for at least
-  one component)
-- [ ] Parent transitions carry children by default; a child can also transition independently of
+  one component) — `ChildOf` composition now runs throughout the demo (`nav`, `video_tiles`,
+  `background`, `example_detail`), not just one isolated example
+- [x] Parent transitions carry children by default; a child can also transition independently of
   its parent (e.g. cross-fade a label while its container morphs) — both demonstrated with tests
-- [ ] Regression tests: hierarchy construction/teardown, coordinate-space resolution (child world
+  (`child_transitions_independently_of_parent`, `crates/proteus-ui/tests/hierarchy.rs`)
+- [x] Regression tests: hierarchy construction/teardown, coordinate-space resolution (child world
   position/rotation/scale given the parent's current position/rotation/scale + the child's
   relative offset — including a rotated-parent case, not position composition alone),
   visibility/opacity cascade, no entity leaks on parent destroy
-- [ ] `Interactable` children hit-test against their resolved world position, not raw local
+- [x] `Interactable` children hit-test against their resolved world position, not raw local
   coordinates (a correctness fix, not new scope — previously every entity was flat so this never
   came up; event bubbling and oriented/rotated hit-test boxes are explicitly out of scope, see
-  M10.6)
+  M10.6) — `interactable_child_hit_tests_at_world_position`
 
 ---
 
@@ -1811,9 +1814,20 @@ group-transition bake path (`topology.rs`'s `gather_bake_instances`/`bake_one`, 
 `one_to_n_setup_system`/`n_to_one_setup_system`) would need a per-entity check (e.g. for
 `VideoPlayer` at bake time) that skips the snapshot-into-`transition_atlas` step for that specific
 sub-region and leaves its `atlas_page`/UV pointed at `video_atlas` for the transition's duration,
-while everything else around it still bakes normally. Nothing in the reference demo currently
-exercises this path — no `VideoPlayer` entity is ever a source/target of a group transition — so
-there's no existing demo scene to validate against; one would need to be added.
+while everything else around it still bakes normally.
+
+**Note (no longer true as of M12.5):** this paragraph originally said nothing in the reference
+demo exercised this path. It now does — `video_tiles.rs`'s `start_screen_to_tiles` calls
+`split_to_with_states` (a `Slice` `OneToNRequest`) on the clicked tile while its `VideoPlayer`/
+`VideoCrossfade` are still live, and `one_to_n_setup_system` unconditionally hides that source
+entity in favor of a static bake regardless of `SplitStrategy` — confirmed directly, still no
+`VideoPlayer`/`VideoCrossfade` awareness anywhere in `topology.rs`/`bake.rs`. So the gap this
+milestone describes is real and reachable today, it just isn't visually obvious: the "frozen"
+frame is whatever the video looked like the instant before the ~0.6s crossfade-out began, not a
+stale or mismatched one, so nothing looks wrong without deliberately checking for it (e.g. a
+paused/single-frame source, or comparing timestamps across the transition). No test or demo scene
+currently asserts live-updating video specifically *during* this transition — this milestone's own
+work, not a pre-existing scene, would be what adds one.
 
 **Definition of done:**
 - [ ] A `VideoPlayer` entity that is a source or target of a *bake or slice group* transition
@@ -2268,7 +2282,7 @@ a browser.
 
 ---
 
-### M12 — TypeScript SDK *(critical path)*
+### M12 — TypeScript SDK *(critical path — complete)*
 
 A generic app-authoring API — everything Phase A of this document designed (`component()`,
 `signal()`, `texture()`, handles, `proteus.get(id)`) — built for real, in Rust first, then wrapped
@@ -2511,7 +2525,7 @@ before every `npm pack`/`npm publish`, robust to `pkg/` being regenerated at any
 
 ---
 
-#### M12.5 — Shared Reference-Demo Crate *(critical path — not started)*
+#### M12.5 — Shared Reference-Demo Crate *(critical path — complete)*
 
 The actual "one app, both shells" deliverable, and the highest-risk step in M12: a new
 `crates/proteus-demo` crate, built once against `proteus-sdk` (M12.3), reproducing the 9-screen
@@ -2528,17 +2542,30 @@ driving) that link `proteus-demo` — but that shrinking, and deleting the old d
 its own confirmed step once the new path is proven working end to end, not bundled into "the crate
 compiles."
 
-**Definition of done:**
-- [ ] `crates/proteus-demo` reproduces all 9 screens and their transitions, built only against
+**Definition of done — all complete** (staged as M12.5's own 9 content steps, M12.5.5's
+design-fidelity pass, then Step 9's cutover for each shell — native in `4825572`, web in
+`508b8a8`/PR [#1](https://github.com/ichellin1/proteus/pull/1)):
+- [x] `crates/proteus-demo` reproduces all 9 screens and their transitions, built only against
       `proteus-sdk`
-- [ ] Compiles natively (linked by a slimmed `proteus-shell-native`) and to wasm (linked by a
+- [x] Compiles natively (linked by a slimmed `proteus-shell-native`) and to wasm (linked by a
       slimmed `proteus-shell-web`) from the same source, no `#[cfg(target_arch = "wasm32")]`
       branches inside `proteus-demo` itself beyond what `proteus-sdk` already needs
-- [ ] M6 visual regression tests still pass on both targets
-- [ ] Old duplicated demo logic removed from `main.rs`/`lib.rs` only after the above is verified —
-      a distinct, reviewed step, not silently folded into the crate's initial build
-- [ ] Live GitHub Pages demo (M11.4) still works after cutover
-- [ ] `cargo fmt`/`cargo clippy -D warnings` clean
+- [x] M6 visual regression tests still pass on both targets
+- [x] Old duplicated demo logic removed from `main.rs`/`lib.rs` only after the above is verified —
+      a distinct, reviewed step, not silently folded into the crate's initial build (`main.rs`
+      ~8728 lines → thin platform glue; `lib.rs` ~8861 lines → same)
+- [x] Live GitHub Pages demo (M11.4) still works after cutover — confirmed on the real production
+      URL post-merge (`pkg/proteus_shell_web.js`/`.wasm` both serve 200)
+- [x] `cargo fmt`/`cargo clippy -D warnings` clean — `proteus-shell-web` is wasm32-only
+      (`wgpu::SurfaceTarget::Canvas` is `#[cfg(web)]`-gated, confirmed directly in wgpu's own
+      source), so this is now `--workspace --exclude proteus-shell-web` for the host pass plus a
+      separate `-p proteus-shell-web --target wasm32-unknown-unknown` pass — both wired into
+      `scripts/git-hooks/pre-push`, `Makefile`, and `ci.yml`
+
+Also shipped alongside the cutover, not originally scoped here but necessary to actually verify
+it: a dedicated `ichellin1/proteus-staging` repo + `.github/workflows/staging-deploy.yml`, giving
+every PR touching the web shell a real, publicly-hosted preview URL (genuine CDN latency, not
+localhost) without ever touching production's own `pages.yml`/`main`.
 
 ---
 
