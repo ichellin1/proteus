@@ -18,11 +18,13 @@
 //! exactly, including the label's own hardcoded (not theme-blended)
 //! `violet_dark()` — see that constant's own doc for why.
 //!
-//! Still deferred: the loading-dots/timeout/error UI (papering over decode
-//! latency) and the morph-time box-art↔video crossfade polish —
-//! `Handle::start_video` switches a tile to the video feed instantly (see
-//! that method's doc), no gradual reveal. Tracked as F5c/F5d in the M12.5.5
-//! plan.
+//! `VideoScreen`'s loading UI (`backdrop`/`loading_dots`/`error_text`, driven
+//! by `Demo::advance_video_loading`) papers over real decode latency — local
+//! `.mp4` playback via `ffmpeg` still routinely takes "a second or more" to
+//! deliver its first real frame (subprocess spawn + demux/decode warm-up),
+//! not just the network-fetch case this UI was originally built for. Mirrors
+//! `proteus-shell-native::advance_video_loading`/`video_backdrop`/
+//! `video_loading_dots`/`video_error_text` exactly.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -64,6 +66,35 @@ pub const TILE_LABEL_SCREEN_SCALE: f32 = 1.8;
 /// `proteus-shell-native::TILE_OVERLAY_MAX_ALPHA`.
 pub const TILE_OVERLAY_MAX_ALPHA: f32 = 0.5;
 
+/// Video screen loading dots — small and subtle by design, unlike the much
+/// larger 19-frame `loading_logo` animation used for the Photo Gallery
+/// fetch, which would look clunky at video-screen scale. Mirrors
+/// `proteus-shell-native::VIDEO_DOT_SIZE_PX`/`VIDEO_DOT_SPACING_PX`.
+const VIDEO_DOT_SIZE_PX: f32 = 12.0;
+const VIDEO_DOT_SPACING_PX: f32 = 28.0;
+/// Full pulse cycle duration per dot. Mirrors
+/// `proteus-shell-native::VIDEO_DOT_PULSE_PERIOD_SECS`.
+pub const VIDEO_DOT_PULSE_PERIOD_SECS: f32 = 1.2;
+/// Phase offset between adjacent dots — what makes the pulse read as a
+/// left-to-right sequence rather than all 3 dots pulsing in unison. Mirrors
+/// `proteus-shell-native::VIDEO_DOT_PULSE_STAGGER_SECS`.
+pub const VIDEO_DOT_PULSE_STAGGER_SECS: f32 = 0.15;
+pub const VIDEO_DOT_ALPHA_MIN: f32 = 0.25;
+pub const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
+
+/// How long to wait for the first real decoded frame before giving up and
+/// showing `VIDEO_LOAD_ERROR_TEXT` instead of the loading dots — same
+/// "elapsed timer → inline error" shape as `crate::GALLERY_FETCH_TIMEOUT_
+/// SECS`. Mirrors `proteus-shell-native::VIDEO_LOAD_TIMEOUT_SECS`.
+pub const VIDEO_LOAD_TIMEOUT_SECS: f32 = 15.0;
+pub const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
+/// How long to sit settled-and-waiting before the loading dots actually
+/// show — playback often becomes ready within a beat of settling, and
+/// showing the dots immediately in that case reads as a flash rather than a
+/// loading indicator. Mirrors
+/// `proteus-shell-native::VIDEO_DOT_SHOW_DELAY_SECS`.
+pub const VIDEO_DOT_SHOW_DELAY_SECS: f32 = 0.25;
+
 fn violet() -> Vec4 {
     Vec4::new(115.0 / 255.0, 90.0 / 255.0, 204.0 / 255.0, 1.0)
 }
@@ -78,6 +109,12 @@ fn violet_dark() -> Vec4 {
     Vec4::new(182.0 / 255.0, 168.0 / 255.0, 1.0, 1.0)
 }
 
+/// The z every idle tile (and, at the very instant a morph starts, the
+/// clicked one too) rests at — named so `backdrop_quad`'s own dynamic z
+/// (see its doc) can be derived from it directly, instead of duplicating
+/// the literal.
+pub(crate) const TILE_Z: f32 = 0.5;
+
 /// `idx` 0 = left, 1 = center, 2 = right — a fixed centered row, spaced
 /// `TILE_WIDTH + TILE_GAP` center-to-center. Mirrors
 /// `proteus-shell-native::tile_quad` (light treatment only — no
@@ -86,7 +123,7 @@ pub(crate) fn tile_quad(idx: usize) -> QuadState {
     let spacing = TILE_WIDTH + TILE_GAP;
     let x = (idx as f32 - 1.0) * spacing;
     QuadState {
-        position: Vec3::new(x, 0.0, 0.5),
+        position: Vec3::new(x, 0.0, TILE_Z),
         size: Vec2::new(TILE_WIDTH, TILE_HEIGHT),
         rotation: 0.0,
         scale: 1.0,
@@ -138,6 +175,81 @@ fn tile_overlay_quad() -> QuadState {
     }
 }
 
+/// `backdrop`'s spawn-time geometry — position/size/scale/corner_radius get
+/// overwritten every tick by `Demo::advance_video_loading` to track
+/// whichever tile is entering/resting as the video screen — including its
+/// z, which `advance_video_loading` recomputes dynamically every tick
+/// rather than leaving fixed here (see its own doc for the exact formula
+/// and why); this spawn-time value is never actually seen.
+///
+/// **Not** source's fixed `0.49`. Source puts `video_backdrop` "just behind
+/// the tile/screen quad's own z (0.5)", which works there because its own
+/// renderer draws in spawn/insertion order, not a global z-sort — nothing
+/// else nearby ever "wins" a z comparison it isn't part of. This crate's
+/// `collect_instances` sorts *every* root by z globally (see
+/// `video_screen_quad`'s own doc for the tie-break bug that already forced
+/// once), so a fixed `0.49` would sit *below* the two untouched idle
+/// sibling tiles (`video_tiles::TILE_Z`, `0.5`) — normally harmless (the
+/// entering/settled tile, opaque, covers it completely) until source's own
+/// `advance_tiles_to_screen_fade` behavior (ported to `Demo::
+/// advance_video_loading`) fades that tile's own alpha toward 0, both
+/// during the entering morph and while settled-and-waiting for the first
+/// real frame: with the tile partially or fully transparent, the idle
+/// siblings (geometrically inside the much-bigger growing/settled screen's
+/// footprint) would render "in front of" backdrop wherever it should be
+/// covering them — reported directly as "the other tiles are on top of the
+/// one I clicked."
+///
+/// A single *fixed* z above `0.5` doesn't fully fix this either: the
+/// tracked tile's own z is itself sweeping from `TILE_Z` (`0.5`) up to
+/// `video_screen_quad`'s settled `0.51` over the same morph, and backdrop
+/// must stay strictly *behind* whatever that current value is (or it would
+/// wrongly cover the tile's own still-mostly-opaque content early in the
+/// fade) while staying strictly *above* `TILE_Z` throughout (or the idle
+/// siblings show through again). `Demo::advance_video_loading` instead
+/// re-derives it every tick as the midpoint between `TILE_Z` and the
+/// tracked tile's own *current* z — always strictly between the two for
+/// any current z `> TILE_Z`, converging on the same `0.505` this once was
+/// as a static value once the tile settles at `0.51`.
+fn backdrop_quad() -> QuadState {
+    QuadState {
+        position: Vec3::new(0.0, 0.0, TILE_Z),
+        color: Vec4::new(0.0, 0.0, 0.0, 1.0),
+        ..Default::default()
+    }
+}
+
+/// One of the 3 loading dots — `idx` 0/1/2 = left/center/right, spaced
+/// `VIDEO_DOT_SPACING_PX` apart, centered on the video screen. z=0.52 —
+/// *above* this crate's own bumped `video_screen_quad` z (0.51): source
+/// puts these at 0.51, safely above its own unbumped 0.5 screen, but tying
+/// our own already-bumped screen would re-open the exact root z-tie-break
+/// bug `video_screen_quad`'s own doc already fixed once. Mirrors
+/// `proteus-shell-native::video_loading_dots`' geometry.
+fn loading_dot_quad(idx: usize) -> QuadState {
+    QuadState {
+        position: Vec3::new((idx as f32 - 1.0) * VIDEO_DOT_SPACING_PX, 0.0, 0.52),
+        size: Vec2::new(VIDEO_DOT_SIZE_PX, VIDEO_DOT_SIZE_PX),
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: Vec2::new(0.5, 0.5),
+        color: violet(),
+        corner_radius: VIDEO_DOT_SIZE_PX / 2.0,
+    }
+}
+
+/// Same z tier as `loading_dot_quad` (0.52, for the same reason) — never
+/// visible at the same time as the dots (`Demo::advance_video_loading`
+/// gates them on opposite conditions), so no stacking concern between the
+/// two. Mirrors `proteus-shell-native::video_error_text`'s geometry.
+fn error_text_quad() -> QuadState {
+    QuadState {
+        position: Vec3::new(0.0, 0.0, 0.52),
+        color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+        ..Default::default()
+    }
+}
+
 pub struct VideoTiles {
     pub tiles: [Handle; 3],
     /// `ChildOf` the matching `tiles[i]` — see `tile_overlay_quad`'s doc.
@@ -146,6 +258,21 @@ pub struct VideoTiles {
     /// rest, faded in on hover, scaled up via `TILE_LABEL_SCREEN_SCALE`
     /// once resting as the video screen.
     pub tile_labels: [Handle; 3],
+    /// A black card mirroring whichever tile is entering/resting as the
+    /// video screen, sitting just behind it — closes a "briefly see-through
+    /// before the first frame" gap (before `VideoPlayer`'s texture has any
+    /// real content, the video-screen quad alone would show through to
+    /// whatever's behind it). Independent, standalone, reused across all 3
+    /// tiles. Mirrors `proteus-shell-native::video_backdrop`.
+    pub backdrop: Handle,
+    /// Three small loading dots, centered on the video screen, pulsing in
+    /// sequence — shown only while settled on `VideoScreen` with no frame
+    /// shown yet. Mirrors `proteus-shell-native::video_loading_dots`.
+    pub loading_dots: [Handle; 3],
+    /// Inline "couldn't load" message, centered on the video screen — shown
+    /// only once the load has timed out. Mirrors
+    /// `proteus-shell-native::video_error_text`.
+    pub error_text: Handle,
 }
 
 pub fn spawn(app: &mut Proteus) -> VideoTiles {
@@ -189,10 +316,30 @@ pub fn spawn(app: &mut Proteus) -> VideoTiles {
         tiles[idx].add_child(app, label);
         label
     });
+
+    // Video screen loading backdrop + dots (see `backdrop_quad`'s doc for
+    // the "briefly looks broken" bug this closes). Independent, spawned
+    // once and reused across all 3 tiles — geometry/visibility driven
+    // entirely by `Demo::advance_video_loading`, called every tick.
+    let backdrop = app.component(ComponentSpec::new(backdrop_quad()).non_interactive());
+    let loading_dots = std::array::from_fn(|idx| {
+        app.component(ComponentSpec::new(loading_dot_quad(idx)).non_interactive())
+    });
+    // Shown instead of the dots once the load times out — same z as the
+    // dots (never visible simultaneously, so no stacking concern).
+    let error_text = app.component(
+        ComponentSpec::new(error_text_quad())
+            .text(Text::new(VIDEO_LOAD_ERROR_TEXT, 18.0).with_color(Vec4::ONE))
+            .non_interactive(),
+    );
+
     VideoTiles {
         tiles,
         tile_overlays,
         tile_labels,
+        backdrop,
+        loading_dots,
+        error_text,
     }
 }
 

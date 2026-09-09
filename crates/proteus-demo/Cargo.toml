@@ -11,19 +11,15 @@ proteus-sdk = { path = "../proteus-sdk" }
 glam = { workspace = true }
 
 [dev-dependencies]
-# Only needed by examples/native_preview.rs — a visual harness for manually
-# confirming each M12.5 migration step, not part of this crate's own public
-# API (rendering itself stays a shell/host concern, per proteus-sdk's own
-# design — see crate root docs).
+# Only needed by src/lib.rs's own `#[cfg(test)]` module, for direct
+# component inspection (`BakedImage`, `ActiveTransition`, `Virtual`,
+# `VideoCrossfade`, etc.) beyond what `Proteus::get`'s `ComponentData`
+# exposes — not part of this crate's own public API (rendering itself stays
+# a shell/host concern, per proteus-sdk's own design — see crate root
+# docs). Originally also used by examples/native_preview/ (a visual harness
+# for M12.5's migration, promoted to proteus-shell-native's real main.rs at
+# Step 9's cutover and deleted from here) — wgpu/winit/pollster/env_logger/
+# ureq were that harness's own platform-glue deps and are gone with it.
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
 bevy_ecs = { workspace = true }
-wgpu = { workspace = true }
-winit = { workspace = true }
-pollster = { workspace = true }
-env_logger = { workspace = true }
-log = { workspace = true }
-# Blocking HTTP client for the gallery fetch example (see
-# examples/native_preview/gallery_fetch.rs) — same version
-# proteus-shell-native's own copy of this logic uses.
-ureq = { version = "2" }
