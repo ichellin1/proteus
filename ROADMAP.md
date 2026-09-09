@@ -147,8 +147,17 @@ example: native shells out to `ffmpeg` on a background thread; web uses the brow
 
 The harder half of the original live-crossfade problem: a `VideoPlayer` entity swept into a group
 transition (`OneToNRequest`/`NToOneRequest`) still gets its texture frozen into a static snapshot
-for the transition's duration. Narrowed from its original broader scope now that M9.8 covers the
-simpler 1↔1 case. No demo scene currently exercises this path.
+for the transition's duration — `one_to_n_setup_system` unconditionally hides the source entity
+and shows a baked snapshot instead, regardless of `SplitStrategy`, with no `VideoPlayer`/
+`VideoCrossfade` awareness anywhere in `topology.rs`/`bake.rs`. Narrowed from its original broader
+scope now that M9.8 covers the simpler 1↔1 case.
+
+Still genuinely unsolved, but the "no demo scene exercises this path" note above is now stale: the
+reference demo's video-tile↔screen reverse morph (`start_screen_to_tiles`, M12.5) uses exactly this
+combination — a `VideoPlayer`+`VideoCrossfade` entity mid-`Slice` split — and does hit the frozen-
+snapshot gap this milestone describes. It just reads fine in practice, since the frozen frame is
+whatever the video looked like an instant before the ~0.6s crossfade-out started, not a stale or
+mismatched one.
 
 ## M9.7 — Static Image Support *(off critical path — complete)*
 
@@ -162,7 +171,7 @@ Crossfades a single entity's live, still-updating video feed against its own sta
 — the tiles↔screen morph in the reference demo. Built for the plain 1↔1 `TransitionRequest` case,
 which is what the demo actually needed; the harder group-transition case remains M9.6.
 
-## M10 — Component Composition & Hierarchy *(not started)*
+## M10 — Component Composition & Hierarchy *(complete)*
 
 Parent/child entity relationships, relative-coordinate `QuadState` (position, rotation, *and*
 scale all compose down the parent chain — not position alone), and cascading visibility/opacity.
@@ -180,8 +189,8 @@ This is the milestone where:
 - `Interactable` children hit-test correctly against their resolved world position (previously
   every entity was flat, so this never came up)
 
-(Previously numbered M5.5 and scoped as a prerequisite for M7; M7 shipped without it, so it's
-rescheduled here, immediately before the SDK, where it becomes a real blocker.)
+(Previously numbered M5.5 and scoped as a prerequisite for M7; M7 shipped without it, so it was
+rescheduled here, immediately before the SDK, where it became a real blocker.)
 
 ## M10.5 — Static Component Baking *(off critical path — complete)*
 
@@ -274,7 +283,7 @@ demo's images/videos/wasm output actually committed there (unlike this repo, whe
 `www/pkg/` are gitignored on purpose) and GitHub Pages serving it. See PLANNING.md for the full
 DoD and open decisions.
 
-## M12 — TypeScript SDK *(critical path)*
+## M12 — TypeScript SDK *(critical path — complete)*
 
 A generic app-authoring API — `component()`, `signal()`, `texture()`, and everything Phase A of
 PLANNING.md designed — built for the first time, in Rust, then wrapped for TypeScript. Fully typed
@@ -317,7 +326,7 @@ TypeScript layer on top — typed `ComponentData` interfaces, convenience conver
 auto-wiring, the real texture-handle wrapper — plus real npm packaging (package.json, tsconfig,
 build → `dist/`, a `tsc --noEmit` CI step). Stops short of `npm publish`.
 
-### M12.5 — Shared Reference-Demo Crate *(critical path)*
+### M12.5 — Shared Reference-Demo Crate *(critical path — complete)*
 
 The actual "one app, both shells" deliverable: the 9-screen reference demo, built once against
 `proteus-sdk`, replacing the hand-duplicated logic in `proteus-shell-native/src/main.rs` and

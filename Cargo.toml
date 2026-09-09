@@ -12,6 +12,26 @@ members = [
     "crates/proteus-shell-native",
 ]
 
+# `cargo build`/`run`/`test`/`clippy` with no `-p`/`--workspace` operate on
+# these by default, not literally every member — proteus-shell-web can
+# never compile for a host target (wgpu::SurfaceTarget::Canvas is
+# #[cfg(web)]-gated) and pulling it into a plain `cargo run` at the
+# workspace root fails the whole build before it ever gets far enough to
+# notice proteus-shell-native's own `proteus` binary is the one (and only)
+# runnable target in this list — see scripts/git-hooks/pre-push, Makefile,
+# and .github/workflows/ci.yml for the same exclusion applied to clippy/
+# test, plus the wasm32-targeted build/clippy proteus-shell-web still gets
+# there instead.
+default-members = [
+    "crates/proteus-gpu",
+    "crates/proteus-render",
+    "crates/proteus-ui",
+    "crates/proteus-sdk",
+    "crates/proteus-sdk-web",
+    "crates/proteus-demo",
+    "crates/proteus-shell-native",
+]
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
