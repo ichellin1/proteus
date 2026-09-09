@@ -322,13 +322,60 @@
           [1044, 4032, 2268], [1050, 5000, 3333], [1056, 3988, 2720], [1074, 5000, 3333],
         ];
 
+        // The actual fetch dimensions for (aspectW, aspectH) at a sidePx
+        // cap: square is sidePx×sidePx; otherwise the larger ratio axis is
+        // held at (or just under) sidePx and the other scaled to match.
+        //
+        // Doesn't just pin the larger axis at exactly sidePx and round the
+        // other — searches a small window of slightly-smaller candidates
+        // for the larger axis too, picking whichever integer pair's ratio
+        // comes closest to the real one. Pinning the larger axis exactly
+        // is the *best* approximation for most real photo aspect ratios,
+        // but for some it isn't — e.g. picsum id 606 (2513×1670, real
+        // ratio 1.50479) at this 186px cap: pinning width at exactly 186
+        // gives (186, 124), ratio 1.5 — off by 0.32%. One pixel narrower,
+        // (185, 123), gives ratio 1.50407 — off by only 0.05%. That 0.32%
+        // doesn't sound like much, but this same real ratio also drives
+        // the *hires* fetch's own request (at a much bigger, and so much
+        // more precise, target size — see fetchGalleryHires below) —
+        // picsum's /id/{id}/{w}/{h} endpoint center-crops each request to
+        // whatever ratio it's asked for, so the low-res tile fetch (here)
+        // and the hires fetch each land on a *slightly different* crop of
+        // the same source photo whenever their two independent roundings
+        // of the same real ratio disagree enough. Rust's "box never
+        // moves" fix (Demo::advance_gallery_hires_overlay) turns that
+        // disagreement into an imperceptible sub-pixel stretch *in
+        // general*, but for a real photo whose ratio happens to round
+        // badly at this resolution (confirmed empirically: id 606 and 798
+        // show a visible shift the instant hires swaps in; id 582 and
+        // 630, whose naive rounding already lands much closer to their
+        // real ratio, don't) it's visible. This search doesn't eliminate
+        // the mismatch (the hires fetch's own rounding, at its own much
+        // bigger scale, still isn't pixel-exact), but shrinks the low-res
+        // side's error enough that it's back under whatever threshold
+        // makes the "box never moves" mitigation actually work. Mirrors
+        // proteus-shell-native::gallery_fetch::fetch_dimensions.
+        const FETCH_DIMENSIONS_SEARCH_WINDOW = 6;
+
+        function fetchDimensions(aspectW, aspectH, sidePx) {
+          const ratio = aspectW / aspectH;
+          let best = [sidePx, 1, Infinity];
+          for (let delta = 0; delta <= Math.min(FETCH_DIMENSIONS_SEARCH_WINDOW, sidePx - 1); delta++) {
+            const larger = sidePx - delta;
+            const w = aspectW >= aspectH ? larger : Math.round(larger * ratio);
+            const h = aspectH >= aspectW ? larger : Math.round(larger / ratio);
+            const error = Math.abs(w / h - ratio);
+            if (error < best[2]) best = [w, h, error];
+          }
+          return [best[0], best[1]];
+        }
+
         function fetchGallery(sidePx) {
           const nonce = Date.now() >>> 0;
           for (let idx = 0; idx < 12; idx++) {
             const offset = (nonce + idx) >>> 0;
             const [photoId, aspectW, aspectH] = NATURE_PHOTOS[offset % NATURE_PHOTOS.length];
-            const fetchW = aspectW >= aspectH ? sidePx : Math.round(sidePx * aspectW / aspectH);
-            const fetchH = aspectH >= aspectW ? sidePx : Math.round(sidePx * aspectH / aspectW);
+            const [fetchW, fetchH] = fetchDimensions(aspectW, aspectH, sidePx);
             const url = `https://picsum.photos/id/${photoId}/${fetchW}/${fetchH}`;
             fetch(url)
               .then(res => {
