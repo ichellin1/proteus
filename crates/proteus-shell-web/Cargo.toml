@@ -1,6 +1,6 @@
 [package]
 name = "proteus-shell-web"
-description = "Layer 3: WebGL2/WebGPU WASM shell, TypeScript bridge"
+description = "Layer 3: WebGL2/WebGPU WASM shell (reference demo)"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,9 +10,19 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-proteus-gpu = { path = "../proteus-gpu" }
+# M12.5 Step 9: all app/UI logic lives in proteus-demo now (built once
+# against proteus-sdk, also linked by proteus-shell-native) — this crate is
+# just the wasm platform glue around it. proteus-gpu and anyhow were unused
+# even before the cutover (zero references anywhere in src/).
+# wasm-bindgen-futures isn't referenced by name in src/ either, but is a
+# real dependency of wasm-bindgen's own macro-generated glue for `async fn`
+# exports (ProteusApp::init) — confirmed by removing it and hitting
+# `cannot find module or crate` at the macro expansion site.
+proteus-sdk = { path = "../proteus-sdk" }
+proteus-demo = { path = "../proteus-demo" }
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
+bevy_ecs = { workspace = true }
 wgpu = { workspace = true }
 glam = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -22,4 +32,3 @@ wasm-bindgen-futures = { workspace = true }
 log = { workspace = true }
 wasm-logger = { workspace = true }
 console_error_panic_hook = { workspace = true }
-anyhow = { workspace = true }

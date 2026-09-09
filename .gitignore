@@ -7,6 +7,9 @@
 dist/
 pkg/
 
+# Node/npm (crates/proteus-sdk-web/ts/) — unanchored so it matches wherever
+node_modules/
+
 # don't commit design assets now
 design/
 

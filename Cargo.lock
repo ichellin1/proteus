@@ -2113,6 +2113,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "proteus-demo"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.29.3",
+ "proteus-render",
+ "proteus-sdk",
+ "proteus-ui",
+]
+
+[[package]]
 name = "proteus-gpu"
 version = "0.1.0"
 dependencies = [
@@ -2160,16 +2171,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-sdk-web"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.29.3",
+ "js-sys",
+ "proteus-render",
+ "proteus-sdk",
+ "proteus-ui",
+ "serde",
+ "serde-wasm-bindgen",
+ "slotmap",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "proteus-shell-native"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "bevy_ecs",
  "env_logger",
  "glam 0.29.3",
  "log",
  "pollster",
- "proteus-gpu",
+ "proteus-demo",
  "proteus-render",
+ "proteus-sdk",
  "proteus-ui",
  "ureq",
  "wgpu",
@@ -2180,13 +2208,14 @@ dependencies = [
 name = "proteus-shell-web"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "bevy_ecs",
  "console_error_panic_hook",
  "glam 0.29.3",
  "js-sys",
  "log",
- "proteus-gpu",
+ "proteus-demo",
  "proteus-render",
+ "proteus-sdk",
  "proteus-ui",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2477,6 +2506,17 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -11,22 +11,27 @@ name = "proteus"
 path = "src/main.rs"
 
 [dependencies]
-proteus-gpu = { path = "../proteus-gpu" }
+# M12.5 Step 9: all app/UI logic lives in proteus-demo now (built once
+# against proteus-sdk, also linked by proteus-shell-web) — this crate is
+# just the native platform glue around it. proteus-gpu and anyhow were
+# unused even before the cutover (zero references anywhere in src/).
+proteus-sdk = { path = "../proteus-sdk" }
+proteus-demo = { path = "../proteus-demo" }
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
+bevy_ecs = { workspace = true }
 glam = { workspace = true }
 winit = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-anyhow = { workspace = true }
-# Photo gallery demo (M12) — fetches loremflickr.com over HTTP on a
+# Photo gallery demo (M12) — fetches picsum.photos over HTTP on a
 # background thread (see src/gallery_fetch.rs). `ureq` is blocking/sync, so
 # it needs no async runtime — this app otherwise has none. Pinned to major
 # version 2: the 3.x line reworked the API around a different agent/builder
 # shape, and 2.x is confirmed (checked during planning) to follow redirects
-# by default, which loremflickr relies on (it 302s to a CDN host).
+# by default.
 ureq = { version = "2" }
 # MP4 playback (M9.5) — a reference "bring-your-own-player" example that
 # shells out to `ffmpeg`/`ffprobe` (must be on PATH). Only this shell crate

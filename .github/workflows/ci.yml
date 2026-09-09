@@ -37,10 +37,14 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        # proteus-shell-web is wasm32-only (wgpu::SurfaceTarget::Canvas is
+        # #[cfg(web)]-gated) — it can't compile for this job's host target,
+        # so it's excluded here and clippy-checked against wasm32 in the
+        # `wasm` job below instead.
+        run: cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --all
+        run: cargo test --workspace --exclude proteus-shell-web
         env:
           # Force wgpu to use the Vulkan backend so it picks up lavapipe.
           WGPU_BACKEND: vulkan
@@ -52,6 +56,44 @@ jobs:
     # WASM output is platform-independent — one Ubuntu build is sufficient.
     # macOS and Windows runners would produce identical .wasm bytes at 3× the cost.
     name: WASM build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache wasm-pack binary
+        uses: actions/cache@v4
+        id: cache-wasm-pack
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ubuntu-wasm-pack-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Clippy (proteus-shell-web, wasm32)
+        run: cargo clippy -p proteus-shell-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+
+      - name: wasm-pack build (web shell)
+        run: wasm-pack build crates/proteus-shell-web --target web
+
+  sdk-web:
+    # Separate from the `wasm` job above on purpose: proteus-sdk-web builds
+    # with --target bundler (an npm-installable package for bundler-based
+    # projects), not --target web (proteus-shell-web's zero-build-step demo
+    # page) — keeping the jobs apart keeps that distinction visible and
+    # keeps shell-web's build independent of the TS toolchain.
+    name: SDK (wasm + TypeScript)
     runs-on: ubuntu-latest
 
     steps:
@@ -76,5 +118,24 @@ jobs:
         if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: wasm-pack build (web shell)
-        run: wasm-pack build crates/proteus-shell-web --target web
+      - name: wasm-pack build (proteus-sdk-web)
+        run: wasm-pack build crates/proteus-sdk-web --target bundler --out-dir ts/pkg
+
+      - name: Install Node toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: crates/proteus-sdk-web/ts/package-lock.json
+
+      - name: npm install
+        working-directory: crates/proteus-sdk-web/ts
+        run: npm ci
+
+      - name: Type-check
+        working-directory: crates/proteus-sdk-web/ts
+        run: npx tsc --noEmit
+
+      - name: Verify the package is in a publishable shape
+        working-directory: crates/proteus-sdk-web/ts
+        run: npm pack --dry-run

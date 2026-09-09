@@ -2440,29 +2440,74 @@ text/image baking too; the owning milestone gets decided when M12.5 needs it for
 
 ---
 
-#### M12.4 — WASM Bridge & TypeScript SDK Package *(critical path — not started)*
+#### M12.4 — WASM Bridge & TypeScript SDK Package *(critical path — complete)*
 
 `proteus-sdk-web` (new crate): a thin wasm-bindgen wrapper of `proteus-sdk`, exposing the same
-generic vocabulary to JS (closures stored for callbacks). Then the hand-authored TypeScript layer
-on top, and real npm packaging — this is where the milestone's original "publishable to npm,
-fully typed" DoD items actually land.
+generic vocabulary to JS. Then the hand-authored TypeScript layer on top (`ts/`), and real npm
+packaging — this is where the milestone's original "publishable to npm, fully typed" DoD items
+actually land. First TypeScript in this repo.
+
+**Callback storage needed no new machinery.** `proteus-sdk`'s callback methods (`on_click` etc.)
+don't require `Send` — a `js_sys::Function` wrapped in a Rust closure passes straight into them;
+M12.3's own registry does the dispatch work, unchanged.
+
+**Two real bugs were caught by actually running the pipeline (a Node smoke test against a
+`--target nodejs` build, not committed/shipped — the shipped package uses `--target bundler`),
+not assumed correct from a clean `cargo check`:**
+1. Every `Handle`/`SignalHandle`/`TextureHandle` parameter was originally taken *by value*.
+   wasm-bindgen invalidates a JS-side object wrapper once passed by value into an exported
+   function, regardless of `Copy` on the Rust side (`Copy` only governs Rust-side semantics, not
+   the JS↔wasm ownership-transfer convention) — so a `Handle` returned by `component()` could only
+   ever be used once before becoming permanently invalid. Fixed by taking `&Handle`/`&SignalHandle`/
+   `&TextureHandle` everywhere except `destroy`/`signalDestroy`, which deliberately consume (they
+   mirror `proteus-sdk`'s own `Handle::destroy`/`SignalHandle::destroy`, which take `self` by value
+   in Rust too).
+2. `Option<&Handle>` isn't supported by wasm-bindgen (`OptionFromWasmAbi` isn't implemented for
+   reference types) — `signal(owner)` takes a `Handle.id()` value instead, same id-based pattern
+   `ComponentSpec.children` already uses for the same underlying reason.
+3. `serde-wasm-bindgen` encodes a Rust `None` as JS `undefined`, not `null`, by default —
+   `ComponentData.transition`'s TS type was corrected to `TransitionSnapshot | undefined` to match
+   actual runtime behavior (and for consistency with `ProteusApp.get`/`TextureHandle.state`, which
+   already use `undefined` as their own "absent" sentinel).
+
+**`texture()`'s scope stays exactly as narrowed in M12.3** — inspection only (`.id()`, `.state()`),
+no `.free()`. The original DoD line below (`.onEvicted()`/`.onRestored()`) was written before that
+narrowing was decided; M11's `TextureRef` ref-counting is entity-scoped, not an independent
+resource with eviction/restoration callbacks of its own — see M12.3's PLANNING.md entry for the
+full reasoning. Freeing happens via `Handle.freeResources()`, matching `proteus-sdk`.
+
+**`--target bundler`, not `--target web`** (every other wasm-pack invocation in this repo) — this
+crate ships as an `npm install`able package for bundler-based projects, not a zero-build demo page.
+wasm-pack output lives inside `ts/` (`ts/pkg/`, gitignored) rather than as a sibling of it — an npm
+package can't include files outside its own root directory when published, so the TS package and
+its wasm dependency have to share one directory tree. Found a real packaging bug this way too:
+wasm-pack's generated `pkg/.gitignore` (always `*`) was being respected by `npm pack` despite
+`package.json`'s `files` field listing `pkg` explicitly, silently dropping the wasm module from
+the tarball — fixed with a `prepack` script (`rm -f pkg/.gitignore`), which runs automatically
+before every `npm pack`/`npm publish`, robust to `pkg/` being regenerated at any time.
 
 **Definition of done:**
-- [ ] `proteus-sdk-web` 1:1 wraps `proteus-sdk`'s public surface via `#[wasm_bindgen]`
-- [ ] Hand-authored `.ts` source: no `any` anywhere, full `ComponentData` interfaces
-- [ ] Convenience conversions: degrees→radians, hex/named colors→RGBA, top-left coordinate mode
-      option for root components
-- [ ] `requestAnimationFrame` → `tick()` wired automatically by default; manual tick control
-      available for custom render-loop integration
-- [ ] Texture handle is a real wrapper over M11/M12.3's ref counting and eviction — `.free()`,
-      `.state()`, `.onEvicted()`/`.onRestored()` all do what Phase B specifies, not stubs
-- [ ] Real `package.json` (name/scope, repository, keywords, `exports` map, semver) — not the bare
-      wasm-pack-generated one — plus `tsconfig.json` and a build step producing `dist/`
-- [ ] All public APIs documented (JSDoc minimum)
-- [ ] `tsc --noEmit` type-check step added to CI (`ci.yml`); `actions/setup-node` + npm install
-      added alongside it
-- [ ] Package reaches a publishable state (`npm pack`/`npm publish --dry-run` succeeds); does
-      **not** actually run `npm publish` — that is a separate, explicitly-confirmed step
+- [x] `proteus-sdk-web` 1:1 wraps `proteus-sdk`'s public surface via `#[wasm_bindgen]`
+      (`crates/proteus-sdk-web/src/lib.rs`, `handle.rs`, `dto.rs`)
+- [x] Hand-authored `.ts` source: no `any` anywhere, full `ComponentData` interfaces
+      (`crates/proteus-sdk-web/ts/src/{index,types,convert}.ts`)
+- [x] Convenience conversions: degrees→radians, hex/named colors→RGBA, top-left↔world coordinate
+      conversion (`ts/src/convert.ts`) — the raw wasm bridge stays unit-agnostic-free by design
+- [x] `requestAnimationFrame` → `tick()` wired via `ProteusApp.startAnimationLoop()`, returning a
+      stop function; manual `tick()` calls remain available for custom render-loop integration
+- [x] Texture handle wraps M11/M12.3's registry for inspection (`.id()`, `.state()`) — see the
+      scope note above for why `.free()`/`.onEvicted()`/`.onRestored()` aren't part of this
+- [x] Real `package.json` (name, repository, keywords, `exports` map, semver) — not the bare
+      wasm-pack-generated one — plus `tsconfig.json` and a build step (`tsc`) producing `dist/`
+- [x] All public APIs documented (JSDoc)
+- [x] `tsc --noEmit` type-check step added to CI (`ci.yml`'s new `sdk-web` job, separate from the
+      existing `wasm` job); `actions/setup-node` + `npm ci` added alongside it
+- [x] Package reaches a publishable state (`npm pack --dry-run` succeeds, verified both locally
+      and in the new CI job); does **not** actually run `npm publish`
+- [x] End-to-end functional verification beyond "it compiles": a local-only Node smoke test
+      (component → signal → callback → `get()`, both the happy path and a real dropped-signal
+      path) actually exercises the compiled wasm bridge and caught the two real bugs described
+      above
 
 ---
 

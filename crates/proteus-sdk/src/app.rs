@@ -57,19 +57,24 @@ impl Proteus {
 
     /// Declare a new component from `spec`, returning its [`Handle`].
     ///
-    /// Always attaches `Interactable` (cheap; means `.on_click`/etc. work on
-    /// any component without a separate opt-in). `InteractionDef` is only
-    /// attached when `spec` declared at least one style override — otherwise
-    /// there is nothing for `interaction_style_system` to resolve, and
-    /// skipping it avoids a permanently-no-op mini-transition firing on every
-    /// hover/press.
+    /// Attaches `Interactable` by default (cheap; means `.on_click`/etc.
+    /// work on any component without a separate opt-in) unless `spec` opted
+    /// out via `.non_interactive()` — see that method's doc for why passive
+    /// chrome (e.g. a full-window background) needs to. `InteractionDef` is
+    /// only attached when `spec` declared at least one style override —
+    /// otherwise there is nothing for `interaction_style_system` to
+    /// resolve, and skipping it avoids a permanently-no-op mini-transition
+    /// firing on every hover/press.
     pub fn component(&mut self, spec: ComponentSpec) -> Handle {
         let geometry = spec.geometry.clone();
         let entity = self
             .world
             .world
-            .spawn((geometry.clone(), DeclaredGeometry(geometry), Interactable))
+            .spawn((geometry.clone(), DeclaredGeometry(geometry)))
             .id();
+        if !spec.non_interactive {
+            self.world.world.entity_mut(entity).insert(Interactable);
+        }
 
         if spec.has_interaction_styles() {
             self.world.world.entity_mut(entity).insert(InteractionDef {
@@ -82,6 +87,22 @@ impl Proteus {
 
         if spec.bake {
             self.world.world.entity_mut(entity).insert(Baked);
+        }
+
+        if let Some(text) = spec.text {
+            self.world.world.entity_mut(entity).insert(text);
+        }
+        if let Some(image) = spec.image {
+            self.world.world.entity_mut(entity).insert(image);
+        }
+        if let Some(border) = spec.border {
+            self.world.world.entity_mut(entity).insert(border);
+        }
+        if let Some(glow) = spec.glow {
+            self.world.world.entity_mut(entity).insert(glow);
+        }
+        if let Some(drop_shadow) = spec.drop_shadow {
+            self.world.world.entity_mut(entity).insert(drop_shadow);
         }
 
         for child in spec.children {
@@ -222,6 +243,25 @@ impl Proteus {
             .world
             .resource_mut::<proteus_ui::PointerInput>()
             .position = pos;
+    }
+
+    /// Re-runs just the `Visibility`→`EffectiveVisibility` and `Opacity`→
+    /// `EffectiveOpacity` cascades — not the full per-frame `tick()` (no
+    /// input/transition/bake re-run). Wraps
+    /// `proteus_ui::ProteusWorld::refresh_cascades`, which isn't otherwise
+    /// reachable: `Proteus` only exposes the raw `bevy_ecs::World` via
+    /// `world`/`world_mut`, not the `ProteusWorld` wrapper itself.
+    ///
+    /// `tick()`'s own cascade pass (part of the normal schedule) reflects
+    /// `Visibility`/`Opacity` as they stood *before* this frame's
+    /// application logic ran. Application code that mutates `Visibility`
+    /// directly after `tick()` returns (e.g. a state-machine `settle()` step
+    /// hiding/revealing components) needs a second cascade pass before
+    /// rendering, or the mutation renders one frame late — call this after
+    /// all such per-frame mutations, immediately before reading instances
+    /// for rendering.
+    pub fn refresh_cascades(&mut self) {
+        self.world.refresh_cascades();
     }
 
     pub fn pointer_pressed(&mut self) {
