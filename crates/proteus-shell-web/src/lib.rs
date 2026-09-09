@@ -291,6 +291,43 @@ fn bake_gallery_hires_image(demo: &mut Demo, queue: &wgpu::Queue) {
     );
 }
 
+/// Registers each of this tick's Texture Churn updates (see
+/// `Demo::take_pending_texture_churn`'s doc) into `main_atlas` and swaps it
+/// onto its slot — the GPU-touching half of the churn cycle `Demo` itself
+/// can't do (it's headless). Skips a cycle rather than erroring if the atlas
+/// is full even after eviction. Mirrors `proteus-shell-native::
+/// apply_texture_churn`.
+fn apply_texture_churn(demo: &mut Demo, queue: &wgpu::Queue) {
+    for update in demo.take_pending_texture_churn() {
+        let app = demo.app_mut();
+        let texture_id = {
+            let Some(mut pipeline) = app.world_mut().get_resource_mut::<QuadPipeline>() else {
+                return;
+            };
+            let Some(texture_id) =
+                pipeline
+                    .texture_registry
+                    .register_static(update.width, update.height, false)
+            else {
+                log::warn!(
+                    "apply_texture_churn: main_atlas full — could not register {}x{}",
+                    update.width,
+                    update.height,
+                );
+                continue;
+            };
+            let placement = pipeline
+                .texture_registry
+                .main_atlas_region(texture_id)
+                .expect("just registered");
+            pipeline.write_to_main_atlas(queue, placement, &update.rgba);
+            texture_id
+        };
+        let texture = app.texture(texture_id);
+        update.handle.set_texture(app, texture);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Gallery hires request (returned to JS)
 // ---------------------------------------------------------------------------
@@ -563,6 +600,7 @@ impl ProteusApp {
         );
         bake_gallery_hires_image(&mut self.demo, &self.queue);
         bake_pending_images(self.demo.app_mut().world_mut(), &self.queue);
+        apply_texture_churn(&mut self.demo, &self.queue);
 
         let instances = proteus_ui::collect_instances(self.demo.app_mut().world_mut());
 
@@ -772,11 +810,20 @@ impl ProteusApp {
     /// Returns `Some(side_px)` exactly once per `Loading` entry — the
     /// square pixel size JS should request each of the 12 gallery images
     /// at. `None` if nothing changed since the last call.
+    ///
+    /// `request.tile_side_px` is logical and uncapped (see
+    /// `GalleryFetchRequest`'s doc) — capped here at `MAX_IMAGE_SIDE`: the
+    /// same 400px cap `bake_pending_images` bakes tiles at, so a big
+    /// viewport doesn't fetch (and immediately downsample away) far more
+    /// bytes than any tile can ever show. No `scale_factor` multiply first,
+    /// unlike `proteus-shell-native::apply_gallery_fetch` — this shell's
+    /// canvas resolution is already 1:1 CSS pixels (see `ProteusApp::init`'s
+    /// doc), so there's no separate physical-pixel size to convert to.
     #[wasm_bindgen]
     pub fn take_pending_gallery_fetch(&mut self) -> Option<u32> {
         self.demo
             .take_pending_gallery_fetch()
-            .map(|r| r.tile_side_px)
+            .map(|r| r.tile_side_px.min(MAX_IMAGE_SIDE))
     }
 
     /// Attaches a fetched gallery image. Call once per tile, after JS has
@@ -805,13 +852,31 @@ impl ProteusApp {
     /// per `GalleryImage` entry — polled once per `tick()` from
     /// `index.html`, same "polled take" shape as
     /// [`Self::take_pending_gallery_fetch`].
+    ///
+    /// `request.width_px`/`height_px` are logical and uncapped (see
+    /// `GalleryHiresFetchRequest`'s doc) — capped here at
+    /// `GALLERY_LARGE_IMAGE_MAX_SIDE`, proportionally: the *larger* axis
+    /// against the cap, both scaled by that same factor, never clamped
+    /// independently (independent clamping only changes a square request's
+    /// aspect ratio by construction — both axes equal — but silently
+    /// distorts a portrait/landscape one the instant just one axis crosses
+    /// the cap, which would show up as a shift/"different crop" the moment
+    /// hires swaps in over the low-res stand-in — see `Demo::
+    /// start_gallery_to_image`'s doc for the same one-extra-degree-of-
+    /// freedom hazard). No `scale_factor` multiply first — see
+    /// [`Self::take_pending_gallery_fetch`]'s doc for why. Mirrors
+    /// `proteus-shell-native::apply_gallery_hires_fetch`.
     #[wasm_bindgen]
     pub fn take_pending_gallery_hires_fetch(&mut self) -> Option<GalleryHiresFetchRequest> {
         let request = self.demo.take_pending_gallery_hires_fetch()?;
+        let uncapped = (request.width_px as f32).max(request.height_px as f32);
+        let cap_scale = (GALLERY_LARGE_IMAGE_MAX_SIDE as f32 / uncapped).min(1.0);
+        let width = ((request.width_px as f32 * cap_scale).round().max(1.0)) as u32;
+        let height = ((request.height_px as f32 * cap_scale).round().max(1.0)) as u32;
         Some(GalleryHiresFetchRequest {
             tile_idx: request.idx as u32,
-            width: request.width_px,
-            height: request.height_px,
+            width,
+            height,
             photo_id: self.tile_photo_id[request.idx].unwrap_or(0),
         })
     }
