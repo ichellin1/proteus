@@ -16,12 +16,20 @@ crates/
   proteus-gpu/          # Layer 0: wgpu device abstraction
   proteus-render/       # Layer 1: scene graph, instanced render pipeline, transition pipeline
   proteus-ui/           # Layer 2: metamorphic component model, transition topologies
-  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/signal/texture)
+  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/signal/texture) — headless
   proteus-sdk-web/      # Layer 2.5 (web): wasm-bindgen bridge + npm-publishable TypeScript SDK (ts/)
-  proteus-demo/         # Layer 2.5: the shared reference demo, linked by both shells below
+  proteus-runtime/      # Layer 2.75: Renderer + Engine + App/Host/HostServices contracts (M13.1)
+  proteus-demo/         # the shared reference demo (an App), linked by both shells below
   proteus-shell-web/    # Layer 3: WebGL2/WebGPU WASM shell (reference demo)
   proteus-shell-native/ # Layer 3: native windowing shell (winit)
 ```
+
+> **M13 — Application Platform Architecture (in progress):** `proteus-runtime` is the new seam
+> that decouples an application from its platform shell. A `Host` (winit, web, …) owns the GPU
+> surface and frame loop and drives an `Engine` that owns `Proteus`; an application implements the
+> `App` trait instead of forking a shell. The `proteus-host-winit` / `proteus-host-web` crates and
+> the collapse of both shells to thin entry points land across M13.1–M13.3. See
+> [PLANNING.md](./PLANNING.md) § M13.
 
 ## Reference Demo 
 The **[reference demo](https://ichellin1.github.io/proteus/)** — See Proteus in action while three sections that demonstrate video playback, a photo gallery, and other framework examples.

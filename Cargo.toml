@@ -7,6 +7,7 @@ members = [
     "crates/proteus-ui",
     "crates/proteus-sdk",
     "crates/proteus-sdk-web",
+    "crates/proteus-runtime",
     "crates/proteus-demo",
     "crates/proteus-shell-web",
     "crates/proteus-shell-native",
@@ -28,6 +29,7 @@ default-members = [
     "crates/proteus-ui",
     "crates/proteus-sdk",
     "crates/proteus-sdk-web",
+    "crates/proteus-runtime",
     "crates/proteus-demo",
     "crates/proteus-shell-native",
 ]

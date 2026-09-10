@@ -2159,6 +2159,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-runtime"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.29.3",
+ "log",
+ "proteus-render",
+ "proteus-sdk",
+ "proteus-ui",
+ "wgpu",
+]
+
+[[package]]
 name = "proteus-sdk"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "proteus-runtime"
+description = "Layer 2.75: Renderer + Engine + App/Host/HostServices contracts binding headless Proteus to a GPU surface (M13.1)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# proteus-sdk stays headless; this crate is the first layer that knows about
+# the GPU surface. Hosts (proteus-host-winit, proteus-host-web) depend on
+# this crate only — never on proteus-render / proteus-ui directly.
+proteus-sdk = { path = "../proteus-sdk" }
+proteus-render = { path = "../proteus-render" }
+proteus-ui = { path = "../proteus-ui" }
+bevy_ecs = { workspace = true }
+glam = { workspace = true }
+wgpu = { workspace = true }
+log = { workspace = true }

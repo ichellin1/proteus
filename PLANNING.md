@@ -2662,9 +2662,242 @@ web.
 
 #### M13.1 — Core Contracts & Layering
 
-*Status: not started.* `Renderer` primitive (`render(&mut Proteus)` against a handed-in
-`wgpu::Surface`); `Host` / `App` / `HostServices` traits; `Proteus` ownership moves from the app
-to the host. Everything else in M13 depends on this being settled.
+**Status: design approved 2026-09-10; build in progress (step 1 of 5 — `proteus-runtime` scaffolded).**
+The seam every target hangs off: a `Renderer` primitive, an `Engine` that owns `Proteus`, an `App`
+trait an application implements, and `Host` / `HostServices` traits a platform implements.
+Everything else in M13 depends on this.
+
+**Build steps:**
+1. [x] Scaffold `proteus-runtime` — `Renderer` / `Engine` / `App` / `Host` / `HostServices` / `Frame` / `Viewport` / `ProteusConfig` / `TextureRequest` type + trait defs, `todo!()` bodies. Compiles, clippy-clean, in the workspace + default-members.
+2. [ ] `Renderer` — lift the `bake_pending_text` / `bake_pending_images` / `collect_instances` + draw pass out of `proteus-shell-native` verbatim.
+3. [ ] `Engine` + minimal `proteus-host-winit::run` — port the winit event loop.
+4. [ ] `proteus-demo` → `impl App`: `Demo::new` body → `setup`, `advance_*` → `update`, asset setters → `services.load_texture`.
+5. [ ] Collapse `proteus-shell-native/src/main.rs` to a thin `fn main()`; M6 visual regression; `fmt` / `clippy`.
+
+##### The problem, precisely
+
+Through M12 rendering lives entirely *outside* the framework. The `proteus-ui` schedule's `Render`
+stage is `stub_render_system` (does nothing); the real render loop is hand-written in each shell
+and **duplicated between them** — `tick(dt)` → bake pending `Text`/`Image` → apply
+churn/video/gallery-fetch → `proteus_ui::collect_instances(world)` → acquire surface →
+`QuadPipeline::upload_instances` → one render pass → `present`. Each shell also holds a concrete
+`demo: Demo` field and ~20 `Demo`-shaped asset setters (`set_nav_home_icon`, `add_logo_frame`,
+`set_tile_image`, …). `Proteus` neither owns nor references the GPU — the shell reaches into
+`proteus.world_mut()` to `insert_resource` the `QuadPipeline` and `GpuContext` that `bake_system`
+needs. A second app means forking a shell.
+
+##### Layering after M13.1
+
+One new crate, `proteus-runtime` (Layer 2.75), between `proteus-sdk` and the hosts. `proteus-sdk`
+stays deliberately headless — the wasm bridge (`proteus-sdk-web`) wraps it 1:1 and the published TS
+SDK contract depends on that — so the GPU-facing engine pieces get their own crate rather than
+landing in `proteus-sdk`.
+
+```
+proteus-gpu           Layer 0    unchanged
+proteus-render        Layer 1    unchanged — QuadPipeline, atlases, FontAtlas, decode_image, offscreen bake
+proteus-ui            Layer 2    unchanged — headless component model + fixed ECS schedule
+proteus-sdk           Layer 2.5  unchanged — Proteus, Handle, SignalHandle, signals; stays headless
+proteus-runtime       Layer 2.75 NEW — Renderer, Engine, App / Host / HostServices traits, Viewport, ProteusConfig
+proteus-host-winit    Layer 3    NEW (minimal build here — see build scope) — impl Host on winit
+proteus-host-web      Layer 3    M13.2 — impl Host on <canvas> + the ts/ layer
+proteus-shell-native  Layer 4    collapses to a thin `fn main()`
+proteus-shell-web     Layer 4    collapses to a thin wasm entry point
+proteus-demo          an App     `impl App`, linked by both shells (no longer exposes tick/app_mut/set_*)
+proteus-sdk-web       bridge     gains App-hosting on proteus-host-web (wired in M13.2 / M13.8)
+```
+
+`proteus-runtime` depends on `proteus-sdk`, `proteus-render`, `proteus-ui`, `wgpu`. Hosts depend
+on `proteus-runtime` only (never on `proteus-render`/`proteus-ui` directly — those re-export
+through `proteus-runtime` what a host legitimately needs, e.g. `Viewport`).
+
+##### `Renderer` — the render primitive
+
+Owns the `FontAtlas` and the [`ProteusConfig`](#m135--configuration--memory-model). The per-frame
+work currently duplicated in both shells moves here.
+
+```rust
+impl Renderer {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        viewport: Viewport,
+        config: &ProteusConfig,
+    ) -> Self;
+
+    /// Rebuild the orthographic projection for a new viewport. Atlas
+    /// resizing on viewport change is out of scope here (M13.5).
+    fn resize(&mut self, viewport: Viewport);
+
+    /// One frame, against a target the host has already acquired:
+    ///   1. bake pending `Text`   (FontAtlas rasterize → main_atlas)
+    ///   2. bake pending `Image`  (decode_image → resize_to_fit → main_atlas)
+    ///   3. proteus_ui::collect_instances(world)
+    ///   4. QuadPipeline::upload_instances
+    ///   5. encode one render pass into `target`
+    fn render(&mut self, proteus: &mut Proteus, target: &wgpu::TextureView);
+}
+```
+
+- **Surface acquire / reconfigure / `present` stays with the host.** `render` takes an already-acquired `&wgpu::TextureView`. Web GPU-context-loss recovery and `SurfaceError` handling are per-platform and live in the host (M13.2); the `Renderer` never sees a `wgpu::Surface`.
+- **`QuadPipeline` and `GpuContext` stay `World` resources** (as today). `bake_system` already reads both from the world for `childBehavior: 'bake'` / static `Baked` composites; moving the pipeline into the `Renderer` struct would mean threading it back in for every bake. `Renderer::render` reaches them via `proteus.world_mut()`. `Engine::new` is what inserts them now (not the shell — see below).
+- **The generic bake loop moves out of the shells.** Rasterizing `Text` and decoding `Image` into the atlas is not app-specific — only *which bytes* and *what size cap* are. The demo's per-entity quirks (gallery-hires wants a 900px cap vs the grid's 400px; text vs image ordering) become a field on the component: `Image { max_side: Option<u32>, .. }`, set by the app at `component()` time. No renderer special-casing.
+- **`collect_instances` and the `Render` schedule stub are left as-is for M13.1.** Rendering stays a post-`tick` step the `Engine` drives explicitly, not a system inside the schedule. Folding it into the schedule (so `ProteusSet::Render` becomes real) is a plausible later cleanup but is not required to break the shell weld and would entangle the wgpu surface with the otherwise-headless `proteus-ui` schedule.
+
+##### `Engine` — owns `Proteus`, drives the frame
+
+```rust
+pub struct Engine {
+    proteus: Proteus,
+    renderer: Renderer,
+}
+
+impl Engine {
+    /// Construct Proteus + Renderer together and wire them: insert
+    /// GpuContext + QuadPipeline into the world, run App::setup once.
+    fn new(
+        device: &wgpu::Device, queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        viewport: Viewport, config: ProteusConfig,
+        app: &mut dyn App, services: &mut dyn HostServices,
+    ) -> Self;
+
+    /// One frame: App::update → Proteus::tick → Renderer::render.
+    fn frame(&mut self, dt: f32, target: &wgpu::TextureView,
+             app: &mut dyn App, services: &mut dyn HostServices);
+
+    fn resize(&mut self, viewport: Viewport);   // forwards to Renderer + updates the world's viewport resource
+
+    /// Input forwarding — host calls these from its native event stream.
+    /// World-space coords (viewport-center origin, Y-up); the host does the
+    /// window/CSS-pixel → world conversion, exactly as the shells do today.
+    fn pointer_moved(&mut self, pos: Option<Vec2>);
+    fn pointer_pressed(&mut self);
+    fn pointer_released(&mut self);
+}
+```
+
+*"`Proteus` ownership moves from the app to the host"* means: the host holds the `Engine` (which
+holds `Proteus`); the application is a `Box<dyn App>` the `Engine` calls into. Today `Demo` owns
+`Proteus` and the shell owns `Demo`; after M13.1 the ownership is host → `Engine` → `Proteus`, and
+the app owns only its own state.
+
+##### `App` — what an application implements
+
+```rust
+pub trait App {
+    /// Build the initial component tree. Called once by Engine::new, after
+    /// the world + renderer exist. This is where proteus-demo's `Demo::new`
+    /// body goes.
+    fn setup(&mut self, f: &mut Frame);
+
+    /// Optional per-frame application logic, before Proteus::tick runs the
+    /// schedule. Most apps wire everything with signals/callbacks in setup()
+    /// and never implement this. proteus-demo's ~20 `advance_*` steps land
+    /// here.
+    fn update(&mut self, f: &mut Frame, dt: f32) { let _ = (f, dt); }
+}
+
+/// The per-call context handed to `App::setup` / `App::update`.
+pub struct Frame<'a> {
+    pub proteus: &'a mut Proteus,
+    pub services: &'a mut dyn HostServices,
+    pub viewport: Viewport,
+}
+```
+
+`proteus-demo` becomes `struct DemoApp { state: AppState, /* the non-Proteus fields of today's Demo */ }`
+`impl App for DemoApp`. Its `setup` builds the screens and asks the host for assets by key;
+`Demo::app_mut()`, `Demo::set_viewport_size`, and every `set_*` / `take_pending_*` method are
+deleted.
+
+##### `Host` / `HostServices` — the platform seam
+
+`Host` is internal-facing; the application never names it. It is implemented once per platform
+(`proteus-host-winit`, `proteus-host-web`, and post-V1 the M13.7 targets) and is responsible for:
+creating the `wgpu` surface + device/queue, owning the platform's native run loop, translating
+native input into `Engine::pointer_*` calls, reporting the `Viewport` (size, DPI scale, and — M13.2
+— safe-area insets), acquiring/presenting each frame's surface texture, and handling
+`SurfaceError` / GPU-context loss. Because native winit and browser rAF both invert control, the
+shared driver is not a portable `loop {}` — each host provides its own `run<A: App>(app: A)` entry
+that composes the `proteus-runtime` pieces. M13.1 fixes the pieces and their order; the winit and
+web `run` bodies are M13.1 (minimal) and M13.2 respectively.
+
+`HostServices` is passed to the app through `Frame`. M13.1 defines **only** the texture path — the
+one thing the M13.8 POC needs — and leaves fonts, runtime image loading policy, and video to
+[M13.4](#m134--asset--resource-contract):
+
+```rust
+pub trait HostServices {
+    /// Request a texture by platform-agnostic key. Returns a TextureHandle
+    /// immediately; the texture reads as a blank/transparent quad until the
+    /// bytes resolve and are baked (matching today's "asset not loaded yet"
+    /// behavior exactly).
+    fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle;
+}
+
+pub struct TextureRequest {
+    /// Downscale cap before packing into main_atlas. `None` = platform default.
+    pub max_side: Option<u32>,
+}
+```
+
+**Resolution model (decided): placeholder that resolves immediately.** The handle is live the
+instant it is returned; the host fulfils the bytes synchronously where it can (`std::fs::read` on
+native) or asynchronously where it must (`fetch` on web), and the `Renderer`'s pending-`Image`
+bake pass picks the bytes up on a later frame. The app writes no `async` and does no polling — the
+`take_pending_*` inversion in today's shells disappears. A fuller async/loading-state contract
+(progress, failure surfacing, lazy-on-visible) is M13.4.
+
+Native keys resolve against a base directory the host is configured with; web keys resolve against
+a base URL. The mapping table (`"nav/home-idle.png"` → disk path vs URL) is host config, not app
+code.
+
+##### Viewport
+
+`Viewport { logical_size: Vec2, scale_factor: f32, safe_area: Insets }` (safe-area is M13.2 —
+zero on desktop). Today the viewport feeds two consumers: the projection matrix
+(`QuadPipeline::set_view_projection(ortho(w, h))`) and app layout (`Demo::set_viewport_size`).
+After M13.1 the host reports it once to `Engine::resize`; the `Engine` updates the `Renderer`
+projection **and** a `Viewport` world resource the app reads in `update` via `Frame::viewport`.
+Neither the app nor the `Renderer` gets a second copy to keep in sync.
+
+##### Build scope for M13.1
+
+Per M13's scope discipline ("build only what the POC needs"):
+
+- **Build:** `proteus-runtime` — `Renderer`, `Engine`, `App` / `Host` / `HostServices` / `Frame` / `Viewport` / `TextureRequest`, and `ProteusConfig` as a minimal placeholder (full treatment in M13.5).
+- **Build:** a **minimal `proteus-host-winit`** — enough to keep the reference demo running and passing M6 visual regression through the port. The full M13.3 design (windowing-agnostic `Host` for DRM/KMS / SDL2 / mobile, stated GPU floor) stays deferred. Building it here rather than in M13.2 is deliberate: it validates the `App` port without the wasm toolchain in the loop, and the native shell is the cheapest thing to keep green.
+- **Build:** port `proteus-demo` to `impl App`; collapse `proteus-shell-native` to a thin `fn main()`.
+- **Defer to M13.2:** `proteus-host-web`, the `ts/` layer, `proteus-shell-web`'s collapse, GPU-context-loss recovery, safe-area, touch input.
+- **Defer to M13.4:** fonts and video as host services; the gallery/churn asset flows; the async/loading-state contract.
+- **Defer to M13.5:** `ProteusConfig` surfaced through host construction; atlas-sizing strategy.
+
+`proteus-demo`'s video / gallery-fetch / texture-churn paths do **not** get a clean home in M13.1
+— they keep whatever bridging they need on the native side, marked as M13.4 debt, rather than
+blocking this milestone on the full asset contract.
+
+##### Decisions
+
+- [x] **New `proteus-runtime` crate** rather than folding `Renderer`/`Engine` into `proteus-sdk` — keeps `proteus-sdk` headless for the wasm/TS bridge.
+- [x] **`Engine` owns `Proteus` + `Renderer`; the host owns the `Engine`; the app is `dyn App`.** This is the concrete form of "Proteus ownership moves to the host."
+- [x] **`Renderer::render` takes an acquired `&wgpu::TextureView`, not a `wgpu::Surface`.** Surface lifecycle (acquire, reconfigure, present, context-loss) stays host-side.
+- [x] **`QuadPipeline` + `GpuContext` stay `World` resources**, inserted by `Engine::new` (was: the shell). Smallest delta; `bake_system` already depends on them being there.
+- [x] **`collect_instances` stays external to the schedule; the `Render` stub is untouched.** Not required to break the weld.
+- [x] **`HostServices` resolution model: handle returned immediately, bytes resolve later, blank quad until then.** No `async` in app code, no polling.
+- [x] **Per-entity asset quirks (size caps, bake ordering) move onto the component** (`Image.max_side`), not into `Renderer` special cases.
+- [x] **A minimal `proteus-host-winit` is built in M13.1** to keep the reference demo alive during the port; full M13.3 design stays deferred.
+
+##### Definition of done
+
+- [ ] `proteus-runtime` exists with `Renderer`, `Engine`, and the `App` / `Host` / `HostServices` / `Frame` / `Viewport` trait + type defs, documented.
+- [ ] Minimal `proteus-host-winit` implements `Host` and exposes `run<A: App>(app: A)`.
+- [ ] `proteus-demo` is `impl App for DemoApp`; `Demo::tick` / `app_mut` / `set_*` / `take_pending_*` are gone.
+- [ ] `proteus-shell-native` is a thin `fn main()` calling `proteus_host_winit::run(DemoApp::new())`, with the per-frame loop and the ~20 asset setters deleted.
+- [ ] The generic `Text`/`Image` bake loop lives in `Renderer`, deleted from the native shell.
+- [ ] The reference demo still passes M6 visual regression on native.
+- [ ] `cargo fmt` / `cargo clippy -D warnings` clean; the native default-members build and test pass. (Web shell stays on its old path until M13.2 — no wasm regression expected because `proteus-shell-web` is untouched this milestone.)
 
 #### M13.2 — Web Host
 
