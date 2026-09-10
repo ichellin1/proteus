@@ -2662,7 +2662,7 @@ web.
 
 #### M13.1 — Core Contracts & Layering
 
-**Status: design approved 2026-09-10; build in progress (step 2 of 5 — `Renderer` implemented).**
+**Status: design approved 2026-09-10; build in progress (step 3 of 5 — `Engine` + minimal winit host).**
 The seam every target hangs off: a `Renderer` primitive, an `Engine` that owns `Proteus`, an `App`
 trait an application implements, and `Host` / `HostServices` traits a platform implements.
 Everything else in M13 depends on this.
@@ -2670,8 +2670,8 @@ Everything else in M13 depends on this.
 **Build steps:**
 1. [x] Scaffold `proteus-runtime` — `Renderer` / `Engine` / `App` / `Host` / `HostServices` / `Frame` / `Viewport` / `ProteusConfig` / `TextureRequest` type + trait defs, `todo!()` bodies. Compiles, clippy-clean, in the workspace + default-members.
 2. [x] `Renderer` — `new` (creates + world-inserts `QuadPipeline` / `GpuContext`, sets projection, builds `FontAtlas`), `resize`, `render` (bake pending `Text` / `Image` → `collect_instances` → `upload_instances` → one render pass into a handed-in `wgpu::TextureView`). Bake helpers lifted verbatim from `proteus-shell-native` into `proteus-runtime::bake`. `proteus_ui::Image` gained `max_side: Option<u32>` + `with_max_side()` — per-entity downscale cap replacing the shells' hand-ordered "bake this one bigger" passes. `ProteusConfig` gained `clear_color` and `image_max_side`.
-3. [ ] `Engine` + minimal `proteus-host-winit::run` — port the winit event loop.
-4. [ ] `proteus-demo` → `impl App`: `Demo::new` body → `setup`, `advance_*` → `update`, asset setters → `services.load_texture`.
+3. [x] `Engine` — `new` (builds `Proteus` + `Renderer`, runs `App::setup`), `frame` (`Proteus::tick` → `App::update` → `refresh_cascades` → `Renderer::render`; `update` is a **late** hook, matching the M12 demo's reactive per-frame logic), `resize`, `pointer_*`. `HostServices` narrowed to `load_asset(key) -> Option<Arc<[u8]>>` (byte fetch only); `Frame::load_texture` / `load_asset` turn bytes into a `TextureHandle` (it needs the world's pipeline, which the host has no handle to). New crate `proteus-host-winit`: `impl Host`, `run<A: App>(app, RunConfig)`, `DirHostServices` (synchronous dir read), winit event loop + wgpu init lifted from `proteus-shell-native`. `proteus-runtime` re-exports `wgpu` + `glam` so hosts depend on it alone.
+4. [ ] `proteus-demo` → `impl App`: `Demo::new` body → `setup`, `advance_*` → `update`, asset setters → `Frame::load_texture` / `load_asset`.
 5. [ ] Collapse `proteus-shell-native/src/main.rs` to a thin `fn main()`; M6 visual regression; `fmt` / `clippy`.
 
 ##### The problem, precisely
@@ -2993,9 +2993,97 @@ M13.1. Generalizing "app asks the host to run an async job" is M13.4.
 
 #### M13.3 — Native Host (winit)
 
-*Status: not started. Depends on M13.1.* `proteus-host-winit`; `proteus-shell-native` collapses to
-a thin `fn main()`. Windowing-agnostic `Host` trait so a later `proteus-host-drm` (bare DRM/KMS,
-no compositor) or mobile host is a pure addition. GPU floor stated: GLES 3.0 / WebGL2 / Vulkan.
+**Status: design approved 2026-09-10.** The minimal build is folded into M13.1 (steps 3 + 5); the
+rest of M13.3 is optional for V1.
+
+##### What's welded on the native side today
+
+`proteus-shell-native/src/main.rs` is ~1080 lines: a winit `ApplicationHandler` (`ProteusApp` /
+`RenderState`), hand-rolled wgpu init (`Instance::new` → `request_adapter` → `request_device`,
+~60 lines near-identical to the web shell's copy), the per-frame loop, `WindowEvent` →
+`demo.pointer_*` translation with physical → logical → world-space conversion, and ~20
+`Demo`-shaped asset setters. A second native app forks this file.
+
+##### The crate: `proteus-host-winit`
+
+`impl Host for WinitHost` on winit 0.30, depending on `proteus-runtime` only. Everything winit- and
+window-specific:
+
+- the `ApplicationHandler` (`resumed` / `suspended` / `window_event` / `about_to_wait`)
+- window creation + wgpu surface/device init (see "shared GPU init")
+- the frame loop: acquire surface texture → `Engine::frame(dt, &view, app, services)` → `present`, with the `dt` clamp lifted from today's shell
+- `WindowEvent` translation:
+  - `CursorMoved` (physical px) → `/ scale_factor` → world-space centre-origin Y-up → `Engine::pointer_moved`
+  - `MouseInput` → `Engine::pointer_pressed` / `pointer_released`; `CursorLeft` → `pointer_moved(None)`
+  - `Resized` / `ScaleFactorChanged` → reconfigure surface + `Engine::resize`
+  - `KeyboardInput` → navigation (stub — `navigation_system` already is)
+  - `CloseRequested` → exit
+- `suspended` / `resumed`: drop and recreate the surface — a no-op concern on desktop, real on winit's mobile backends, handled from day one
+
+`run<A: App>(app: A)` builds the event loop, the host, an `Engine`, runs `App::setup`, starts the
+loop. Native blocks until the window closes.
+
+##### Windowing-agnostic from day one
+
+The crate is `-winit`, not `-native`, on purpose. The `Host` trait (M13.1: `device()` / `queue()`
+/ `surface_format()` / `viewport()`) leaks no winit types, and `Engine` is driven entirely through
+`pointer_*` / `resize` / `frame` — also winit-free. A later host is a pure addition:
+
+| Host | Surface | Event source | Status |
+|---|---|---|---|
+| `proteus-host-winit` | winit window | `WindowEvent` | **built (minimal) in M13.1 step 3** |
+| `proteus-host-drm` | DRM + GBM + EGL, no compositor | `libinput` / `evdev` | designed in M13.7 |
+| SDL2 / mobile-native | platform surface | platform events | designed in M13.7 |
+
+("DRM" here is Linux's **Direct Rendering Manager** — the kernel GPU/display subsystem — not
+digital-rights anything. Bare embedded devices with no compositor talk to it directly to own the
+whole screen; embedded *with* a compositor already runs on `proteus-host-winit`.) None of these
+touch `proteus-runtime` or the `Host` trait — each provides its own `run` and `impl Host`.
+
+##### Shared GPU init
+
+The `Instance::new` → `request_adapter` → `request_device` sequence, plus the deliberate non-sRGB
+surface-format pick (both shells author colours gamma-space), is currently hand-copied in both
+shells. M13.3 moves it into `proteus-gpu` (`GpuContext::for_surface(&surface) -> GpuContext`), used
+by `proteus-host-winit` and `proteus-host-web` alike.
+
+##### GPU floor
+
+Stated explicitly: **GLES 3.0 / WebGL2 / Vulkan / Metal / D3D12**. The framework targets
+WebGL2-equivalent capability so every host shares one shader + pipeline set
+(`downlevel_webgl2_defaults`-compatible). Native requests `Limits::default()` but the pipeline
+never relies on anything above the floor. A documented constraint, not new code.
+
+##### `proteus-shell-native` collapse
+
+Becomes `fn main() { proteus_host_winit::run(DemoApp::new()) }` — the same work as M13.1 build
+step 5. The native video (`mp4_player`, ffmpeg) and gallery-fetch (`ureq`) glue stays as a
+documented M13.4 shim on the native demo entry, parallel to the web side.
+
+##### Build vs defer
+
+- **Build as M13.1 steps 3 + 5:** minimal `proteus-host-winit` — window, surface, frame loop, pointer input, resize, `ScaleFactorChanged`; `run()`; `proteus-shell-native` collapse. Enough to keep the reference demo running and passing M6.
+- **Build as M13.3 proper (optional for V1):** `suspended` / `resumed` surface recreation, the `proteus-gpu` init consolidation, keyboard event plumbing to the nav stub.
+- **Defer to M13.7 (design only):** `proteus-host-drm`, SDL2, native-mobile hosts.
+- **Defer to M13.4:** native video / gallery as host services.
+
+##### Decisions
+
+- [x] **GPU init consolidates into `proteus-gpu` in M13.3 proper** — not blocking the M13.1 minimal host, but done before it's duplicated three ways once `proteus-host-web` lands.
+- [x] **The minimal M13.1 winit host handles `ScaleFactorChanged`** (cheap; retina Macs hit it on monitor switches) but **defers `suspended` / `resumed` surface recreation** to M13.3 proper (desktop never exercises it).
+- [x] **winit stays a hard dependency of the native shell** for V1 — no feature-gating; `proteus-host-drm` is a separate crate anyway.
+
+##### Definition of done
+
+*Minimal (M13.1 steps 3 + 5):*
+- [ ] `proteus-host-winit` implements `Host`, exposes `run<A: App>(app: A)`.
+- [ ] `proteus-shell-native` is `fn main() { proteus_host_winit::run(DemoApp::new()) }`.
+- [ ] Reference demo runs and passes M6 visual regression on native.
+
+*M13.3 proper (optional for V1):*
+- [ ] `proteus-gpu::GpuContext::for_surface` exists and both hosts use it.
+- [ ] `suspended` / `resumed` recreate the surface.
+- [ ] Keyboard events reach `navigation_system` (still a stub, but wired).
 
 #### M13.4 — Asset & Resource Contract
 

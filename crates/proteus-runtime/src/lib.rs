@@ -22,13 +22,13 @@
 //!
 //! See `PLANNING.md` § M13.1 for the full design and the decisions behind it.
 //!
-//! ## Status: M13.1 step 2 — `Renderer` implemented
+//! ## Status: M13.1 step 3 — `Engine` + minimal `proteus-host-winit`
 //!
-//! [`Renderer`] is real: it owns the font atlas, creates and world-inserts
-//! the `QuadPipeline` / `GpuContext`, and does the bake + collect + draw
-//! pass (lifted from `proteus-shell-native`). [`Engine`] method bodies are
-//! still `todo!()` until step 3 ports the winit event loop into
-//! `proteus-host-winit`.
+//! [`Renderer`] and [`Engine`] are both real, and `proteus-host-winit`
+//! drives an `Engine` from a winit event loop. What remains for M13.1:
+//! step 4 ports `proteus-demo` to [`App`], step 5 collapses
+//! `proteus-shell-native` to a thin `fn main()` and confirms M6 visual
+//! regression.
 
 mod app;
 mod bake;
@@ -48,5 +48,9 @@ pub use services::{HostServices, TextureRequest};
 pub use viewport::{Insets, Viewport};
 
 // Re-exported so a host crate can depend on `proteus-runtime` alone and
-// still name the handful of lower-layer types it legitimately touches.
+// still name the handful of lower-layer types it legitimately touches —
+// including `wgpu` and `glam` at the exact versions this crate builds
+// against, so a host can never drift onto a mismatched copy.
+pub use glam;
 pub use proteus_sdk::{Proteus, TextureHandle};
+pub use wgpu;

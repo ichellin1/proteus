@@ -16,8 +16,67 @@ use std::sync::Arc;
 use bevy_ecs::prelude::{Entity, Without};
 use bevy_ecs::world::World;
 
-use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline};
+use proteus_render::{decode_image, resize_to_fit, FontAtlas, GpuContext, QuadPipeline, TextureId};
+use proteus_sdk::TextureHandle;
 use proteus_ui::{BakedImage, BakedText, Image, Text, TextureRef};
+
+use crate::services::{HostServices, TextureRequest};
+
+/// Fetch an asset's bytes via `services`, decode + downscale, upload to
+/// `main_atlas`, and return a handle. Backs [`Frame::load_texture`].
+///
+/// A missing/undecodable asset, a full atlas, or a missing `QuadPipeline`
+/// all yield a null `TextureHandle` — `Handle::set_texture` and the collect
+/// path both no-op on an unknown id, so the component renders as nothing.
+/// Same graceful degradation the M12 shells' `set_*` asset paths had.
+///
+/// [`Frame::load_texture`]: crate::Frame::load_texture
+pub(crate) fn load_texture(
+    world: &mut World,
+    services: &mut dyn HostServices,
+    key: &str,
+    req: TextureRequest,
+) -> TextureHandle {
+    let null = TextureHandle::from_texture_id(TextureId::default());
+
+    let Some(bytes) = services.load_asset(key) else {
+        log::warn!("load_texture: asset not found: {key}");
+        return null;
+    };
+    let mut decoded = match decode_image(&bytes) {
+        Ok(decoded) => decoded,
+        Err(e) => {
+            log::warn!("load_texture: {key}: {e}");
+            return null;
+        }
+    };
+    if let Some(cap) = req.max_side {
+        decoded = resize_to_fit(decoded, cap);
+    }
+
+    let queue = world.resource::<GpuContext>().queue.clone();
+    let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
+        return null;
+    };
+    let Some(texture_id) =
+        pipeline
+            .texture_registry
+            .register_static(decoded.width, decoded.height, req.eternal)
+    else {
+        log::warn!(
+            "load_texture: {key}: main_atlas full — could not register {}x{}",
+            decoded.width,
+            decoded.height,
+        );
+        return null;
+    };
+    let placement = pipeline
+        .texture_registry
+        .main_atlas_region(texture_id)
+        .expect("just registered");
+    pipeline.write_to_main_atlas(&queue, placement, &decoded.rgba_pixels);
+    TextureHandle::from_texture_id(texture_id)
+}
 
 /// Rasterize and upload every `Text` entity that has no `BakedText` yet.
 pub(crate) fn bake_pending_text(
