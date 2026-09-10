@@ -1,9 +1,11 @@
 //! [`App`] — what an application implements, and [`Frame`], the per-call
 //! context it receives.
 
-use proteus_sdk::Proteus;
+use std::sync::Arc;
 
-use crate::services::HostServices;
+use proteus_sdk::{Proteus, TextureHandle};
+
+use crate::services::{HostServices, TextureRequest};
 use crate::viewport::Viewport;
 
 /// The per-call context handed to [`App::setup`] and [`App::update`].
@@ -18,6 +20,24 @@ pub struct Frame<'a> {
     pub proteus: &'a mut Proteus,
     pub services: &'a mut dyn HostServices,
     pub viewport: Viewport,
+}
+
+impl Frame<'_> {
+    /// Fetch an asset's raw bytes by key (see [`HostServices::load_asset`]).
+    /// Convenience for attaching an [`Image`](proteus_ui::Image) component;
+    /// the [`Renderer`](crate::Renderer) bakes those each frame.
+    pub fn load_asset(&mut self, key: &str) -> Option<Arc<[u8]>> {
+        self.services.load_asset(key)
+    }
+
+    /// Fetch an asset, decode + downscale it, upload it to `main_atlas`, and
+    /// return a [`TextureHandle`] — for a texture shown on more than one
+    /// entity or frame-swapped (an animation set), where an `Image`
+    /// component per use won't do. A missing or undecodable asset yields a
+    /// null handle that renders as nothing.
+    pub fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle {
+        crate::bake::load_texture(self.proteus.world_mut(), self.services, key, req)
+    }
 }
 
 /// A Proteus application.
@@ -36,10 +56,16 @@ pub trait App {
     /// [`Engine::new`]: crate::Engine::new
     fn setup(&mut self, f: &mut Frame);
 
-    /// Per-frame application logic, run before [`Proteus::tick`] advances the
-    /// schedule. Optional — most apps wire everything with signals and
-    /// callbacks in [`setup`](App::setup) and never implement this.
+    /// Per-frame application logic, run **after** [`Proteus::tick`] has
+    /// advanced the schedule and before the frame is rendered — a "late
+    /// update". React to this frame's interaction / transition events here,
+    /// and mutate the world directly if needed; the engine re-runs the
+    /// Visibility/Opacity cascade afterwards. Signals fired here are
+    /// dispatched on the next frame. Optional — an app that wires everything
+    /// with signals and callbacks in [`setup`](App::setup) never needs it.
     /// `proteus-demo`'s `advance_*` steps land here.
+    ///
+    /// [`Proteus::tick`]: proteus_sdk::Proteus::tick
     fn update(&mut self, f: &mut Frame, dt: f32) {
         let _ = (f, dt);
     }

@@ -1,43 +1,49 @@
-//! [`HostServices`] — per-platform asset fulfilment, handed to the [`App`]
+//! [`HostServices`] — per-platform asset fetching, handed to the [`App`]
 //! through [`Frame`].
 //!
-//! M13.1 defines **only** the texture path — the one thing the M13.8
-//! TypeScript POC needs. Fonts, runtime image-loading policy, and video as a
-//! host service are M13.4.
+//! M13.1 defines the **byte-fetch** seam only: the app asks for an asset by
+//! key, the host returns its bytes. Turning bytes into a GPU texture is
+//! [`Frame::load_texture`] (it needs the world's `QuadPipeline`, which the
+//! host has no handle to). Fonts and video as host services, and a richer
+//! return type for assets that arrive later (`fetch` on the web host,
+//! M13.2), are M13.4.
 //!
 //! [`App`]: crate::App
 //! [`Frame`]: crate::Frame
+//! [`Frame::load_texture`]: crate::Frame::load_texture
 
-use proteus_sdk::TextureHandle;
+use std::sync::Arc;
 
-/// Options for a [`HostServices::load_texture`] request.
+/// Options for [`Frame::load_texture`](crate::Frame::load_texture).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TextureRequest {
     /// Downscale cap (longest side, pixels) before packing into `main_atlas`.
-    /// `None` = the host's platform default.
+    /// `None` = pack at native resolution.
     pub max_side: Option<u32>,
+    /// Pin the texture in the atlas for the app's lifetime — never
+    /// LRU-evicted. For assets referenced continuously, e.g. an animation
+    /// frame set that must all stay resident.
+    pub eternal: bool,
 }
 
 /// The asset services a [`Host`] provides to the running [`App`].
 ///
-/// **Resolution model (M13.1 decision): placeholder that resolves
-/// immediately.** [`load_texture`](HostServices::load_texture) returns a live
-/// [`TextureHandle`] synchronously; the host fulfils the bytes on its own
-/// schedule (`std::fs::read` on native, `fetch` on web), and the renderer's
-/// pending-`Image` bake pass picks them up on a later frame. Until then the
-/// component renders as a blank / transparent quad — exactly today's
-/// "asset not loaded yet" behaviour. The app writes no `async` and does no
-/// polling; the `take_pending_*` inversion in the M12 shells disappears.
+/// **Resolution model (M13.1 decision): resolves immediately.** On native,
+/// [`load_asset`](HostServices::load_asset) is a synchronous file read under
+/// a host-configured base directory. The key → path (or URL) mapping is host
+/// configuration, not app code.
 ///
-/// A fuller async / loading-state contract (progress, failure surfacing,
-/// lazy-on-visible) is M13.4.
+/// The web host (M13.2) cannot read synchronously — `fetch` is async — so it
+/// will need a return type that can say "not yet". Generalising this
+/// (progress, failure surfacing, lazy-on-visible, video) is M13.4; M13.1 is
+/// deliberately the narrow synchronous case the native reference demo needs.
 ///
 /// [`Host`]: crate::Host
 /// [`App`]: crate::App
 pub trait HostServices {
-    /// Request a texture by platform-agnostic key (e.g. `"nav/home-idle.png"`).
-    ///
-    /// The key → disk-path / URL mapping is host configuration, not app code.
-    /// Returns immediately; see the trait-level note on the resolution model.
-    fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle;
+    /// Fetch an asset's raw bytes by platform-agnostic key (e.g.
+    /// `"nav/home-idle.png"`). `None` = not found. `Arc` so a caller can
+    /// hold the bytes (e.g. as an [`Image`](proteus_ui::Image) component)
+    /// without copying.
+    fn load_asset(&mut self, key: &str) -> Option<Arc<[u8]>>;
 }

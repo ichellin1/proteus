@@ -2140,6 +2140,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-host-winit"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "pollster",
+ "proteus-runtime",
+ "winit",
+]
+
+[[package]]
 name = "proteus-render"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,16 @@
+[package]
+name = "proteus-host-winit"
+description = "Layer 3: winit + wgpu native host for proteus-runtime (M13.1 minimal / M13.3)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Hosts depend on proteus-runtime only — it re-exports wgpu + glam at the
+# versions it builds against. winit and pollster are this host's own
+# platform concern.
+proteus-runtime = { path = "../proteus-runtime" }
+winit = { workspace = true }
+pollster = { workspace = true }
+log = { workspace = true }
