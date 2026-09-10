@@ -8,7 +8,7 @@ architecture and milestones.
 
 The native shell is currently only built and verified on **macOS**. It's plain `wgpu` +
 `winit` with no macOS-specific code, so Linux/Windows likely work too, but they haven't been
-tested — a cross-platform CI matrix is planned for M13 (see [ROADMAP.md](./ROADMAP.md)). The
+tested — a cross-platform CI matrix is planned for M14 (see [ROADMAP.md](./ROADMAP.md)). The
 web shell runs in any browser with WebGL2 (Chrome, Firefox, Safari) and isn't platform-limited.
 
 ## Install dependencies

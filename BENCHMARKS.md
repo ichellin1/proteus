@@ -93,11 +93,12 @@ This is intentionally naïve — it represents the pattern that most hand-writte
 
 ---
 
-## M13 benchmark: native performance
+## M14 benchmark: native performance
 
-> ⏳ **Pending** — M13 (Developer Release), which carries the native performance benchmark
+> ⏳ **Pending** — M14 (Developer Release), which carries the native performance benchmark
 > requirement in its Definition of Done (moved there when M11 — Native Parity was retired as its
-> own milestone; see [PLANNING.md](./PLANNING.md)).
+> own milestone; renumbered from M13 when M13 became Application Platform Architecture — see
+> [PLANNING.md](./PLANNING.md)).
 
 Instanced rendering on native (Metal / Vulkan / DX12) with bevy_ecs driving the scene graph. Measures frames per second at component counts up to 100 000, and GPU time via `wgpu::QuerySet` timestamp queries.
 
