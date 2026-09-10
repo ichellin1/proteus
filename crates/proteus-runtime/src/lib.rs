@@ -22,13 +22,16 @@
 //!
 //! See `PLANNING.md` § M13.1 for the full design and the decisions behind it.
 //!
-//! ## Status: M13.1 step 1 — contracts only
+//! ## Status: M13.1 step 2 — `Renderer` implemented
 //!
-//! This crate currently defines the types and trait signatures. [`Renderer`]
-//! and [`Engine`] method bodies are `todo!()` until M13.1 steps 2–3 lift the
-//! real per-frame logic out of `proteus-shell-native`.
+//! [`Renderer`] is real: it owns the font atlas, creates and world-inserts
+//! the `QuadPipeline` / `GpuContext`, and does the bake + collect + draw
+//! pass (lifted from `proteus-shell-native`). [`Engine`] method bodies are
+//! still `todo!()` until step 3 ports the winit event loop into
+//! `proteus-host-winit`.
 
 mod app;
+mod bake;
 mod config;
 mod engine;
 mod host;

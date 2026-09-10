@@ -2662,14 +2662,14 @@ web.
 
 #### M13.1 — Core Contracts & Layering
 
-**Status: design approved 2026-09-10; build in progress (step 1 of 5 — `proteus-runtime` scaffolded).**
+**Status: design approved 2026-09-10; build in progress (step 2 of 5 — `Renderer` implemented).**
 The seam every target hangs off: a `Renderer` primitive, an `Engine` that owns `Proteus`, an `App`
 trait an application implements, and `Host` / `HostServices` traits a platform implements.
 Everything else in M13 depends on this.
 
 **Build steps:**
 1. [x] Scaffold `proteus-runtime` — `Renderer` / `Engine` / `App` / `Host` / `HostServices` / `Frame` / `Viewport` / `ProteusConfig` / `TextureRequest` type + trait defs, `todo!()` bodies. Compiles, clippy-clean, in the workspace + default-members.
-2. [ ] `Renderer` — lift the `bake_pending_text` / `bake_pending_images` / `collect_instances` + draw pass out of `proteus-shell-native` verbatim.
+2. [x] `Renderer` — `new` (creates + world-inserts `QuadPipeline` / `GpuContext`, sets projection, builds `FontAtlas`), `resize`, `render` (bake pending `Text` / `Image` → `collect_instances` → `upload_instances` → one render pass into a handed-in `wgpu::TextureView`). Bake helpers lifted verbatim from `proteus-shell-native` into `proteus-runtime::bake`. `proteus_ui::Image` gained `max_side: Option<u32>` + `with_max_side()` — per-entity downscale cap replacing the shells' hand-ordered "bake this one bigger" passes. `ProteusConfig` gained `clear_color` and `image_max_side`.
 3. [ ] `Engine` + minimal `proteus-host-winit::run` — port the winit event loop.
 4. [ ] `proteus-demo` → `impl App`: `Demo::new` body → `setup`, `advance_*` → `update`, asset setters → `services.load_texture`.
 5. [ ] Collapse `proteus-shell-native/src/main.rs` to a thin `fn main()`; M6 visual regression; `fmt` / `clippy`.
@@ -2901,9 +2901,95 @@ blocking this milestone on the full asset contract.
 
 #### M13.2 — Web Host
 
-*Status: not started. Depends on M13.1.* A Rust crate (`proteus-host-web`) + the `ts/` layer.
-Folds in the ex-"canvas renderer on the SDK" idea. Mobile-forced items: DPI, safe-area insets,
-touch→pointer/directional, visibility-pause, GPU context-loss recovery. Built for V1 (the POC).
+**Status: design approved 2026-09-10; build blocked on M13.1 steps 2–5** (the `Renderer` and
+`Engine` must work first — sequencing option A: finish the M13.1 build, then build this).
+
+##### What's welded on the web side today
+
+`proteus-shell-web` is ~990 lines of wasm glue holding a concrete `demo: Demo` and re-implementing
+the same per-frame loop as the native shell (`tick` → bake pending `Text`/`Image` →
+`collect_instances` → acquire canvas surface → draw → present), plus the ~20 `set_*` /
+`add_logo_frame` wasm methods. `www/index.html` is another ~700 lines: `ProteusApp.init(canvasId)`,
+a `ResizeObserver`, mouse listeners, ~40 `fetch(...).then(app.set_*)` asset calls, and the
+`take_pending_*` polling in the rAF loop for video/gallery. The published TS SDK (`proteus-sdk-web`
++ `ts/`) is **headless** — it can build a component tree but cannot render.
+
+##### The crate: `proteus-host-web`
+
+A wasm-bindgen crate, `impl Host for WebHost`, depending on `proteus-runtime` (for `Engine` /
+`Renderer` / `App`) **and `proteus-sdk-web`** (host is purely additive; the headless bridge stays
+usable alone for tests). It owns:
+
+- wgpu on `wgpu::SurfaceTarget::Canvas` — WebGPU with WebGL2 fallback, unchanged from today
+- the rAF-driven loop and the `dt` clamp, lifted from today's shell
+- `ResizeObserver` → `Engine::resize`
+- Pointer Events (`pointerdown` / `pointermove` / `pointerup` / `pointerleave`) → `Engine::pointer_*`, replacing the separate mouse + touch listeners — touch comes for free
+- `visibilitychange` → pause the rAF loop; resume with a clamped `dt` (the clamp lives in the host, not the app)
+- WebGL `webglcontextlost` / WebGPU `device.lost` → tear down `Renderer` + pipeline + surface, recreate, re-bake resident textures
+
+"Folds in the ex-'canvas renderer on the SDK' idea": the renderer is `proteus_runtime::Renderer`
+driven by this host; the TS SDK just gains a `mount()` that starts it.
+
+##### Two front doors
+
+**Rust → web:** `proteus_host_web::run(MyApp::new(), "canvas-id").await` — the app author writes
+`impl App`, compiles their crate to wasm.
+
+**TS → web:** the app author writes `setup` / `update` in TypeScript against the existing
+`proteus-sdk` package; the `ts/` layer adds `mount("canvas-id", { setup, update })`. `mount` calls
+a wasm-bindgen `run(canvasId, jsApp)` in `proteus-host-web`, which wraps the JS `{ setup, update }`
+in a `JsApp` adapter implementing the Rust `App` trait — each call hands the JS side a `ProteusApp`
+(from `proteus-sdk-web`, API identical to today).
+
+**Ownership wrinkle (resolve in the build):** today `proteus_sdk_web::ProteusApp` owns
+`sdk::Proteus` by value; after M13.1 the `Engine` owns it, and wasm-bindgen structs can't hold
+lifetimes. So the JS-facing `ProteusApp` handed into `setup` / `update` becomes a thin view over
+the engine's `Proteus`, valid only for that call — a small real change to `proteus-sdk-web`.
+
+##### Web-specific concerns
+
+| Concern | M13.2 approach |
+|---|---|
+| **DPI** | canvas backing store = `clientWidth × devicePixelRatio`; `Viewport { logical_size: client, scale_factor: dpr }`; renderer projects in logical px, surface configures in physical. **Behavior change — done now:** today's shell is 1:1 CSS px; retina gets sharper. M6 web baselines re-captured as part of this milestone. |
+| **Safe-area** | probe `env(safe-area-inset-*)` → `Viewport.safe_area`; zero on desktop; plumbed, demo need not consume it in V1 |
+| **Input** | Pointer Events only (mouse + touch unified); keyboard / directional nav stays a stub (`navigation_system` already is) — seam noted, not built |
+| **visibility-pause** | host stops rAF when hidden, resumes with clamped `dt` |
+| **context-loss** | the hard case; justifies M13.1's "surface stays host-side". Handles persist across loss; host re-drives `HostServices` to re-fetch and re-bake the atlas |
+
+##### `proteus-shell-web` collapse
+
+Becomes a thin wasm entry (`#[wasm_bindgen] pub async fn start(canvas_id)` →
+`proteus_host_web::run(DemoApp::new(), canvas_id)`). `www/index.html` drops to ~60 lines (canvas +
+`import { start }`). The ~40 `fetch().then(set_*)` calls move into `DemoApp::setup` via
+`HostServices::load_texture`.
+
+**M13.4 debt, explicit:** the HLS video + picsum gallery flows still need JS for the
+network/decode work and `Demo` still polls `take_pending_*` for them. M13.2 keeps those as a small
+documented wasm shim on the web demo entry — parallel to the native side's video/gallery debt from
+M13.1. Generalizing "app asks the host to run an async job" is M13.4.
+
+##### Build vs defer
+
+- **Build:** `proteus-host-web`, the `JsApp` adapter, `ts/` `mount()`, DPI, Pointer Events, visibility-pause, context-loss recovery, `proteus-shell-web` collapse, `www/index.html` shrink, CI wiring (extend the existing `wasm-pack build` + `tsc` jobs).
+- **Defer to M13.4:** video / gallery as host services; the async-job contract.
+- **Defer to M13.6:** Capacitor packaging around this bundle.
+- **Not built:** keyboard / directional nav.
+
+##### Decisions
+
+- [x] **`proteus-host-web` depends on `proteus-sdk-web`** (not the reverse, no shared third crate) — host is additive.
+- [x] **One npm package.** The single `proteus-sdk` package; `mount()` pulls the host wasm in as part of it. More dev-friendly than a separate `@proteus/web-host`.
+- [x] **DPI change lands in M13.2**, with M6 web baselines re-captured — rather than shipping a knowingly-soft web renderer.
+- [x] **Pointer Events replace the mouse + touch listener split.**
+
+##### Definition of done
+
+- [ ] `proteus-host-web` implements `Host`, exposes `run<A: App>` (Rust) and `run(canvasId, jsApp)` (wasm-bindgen).
+- [ ] `ts/` exposes `mount(canvas, { setup, update })`; the `proteus-sdk` npm package re-exports it; `tsc --noEmit` clean.
+- [ ] `proteus-shell-web` is a thin entry; `www/index.html` shrunk; asset loading goes through `HostServices`.
+- [ ] DPI-aware; Pointer Events; visibility-pause; context-loss recovery all working in a real browser (staging preview).
+- [ ] Reference demo passes M6 visual regression on web against re-captured baselines.
+- [ ] `cargo clippy` (wasm target) + `tsc` wired into `ci.yml`; staging deploy green.
 
 #### M13.3 — Native Host (winit)
 
