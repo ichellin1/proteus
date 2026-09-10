@@ -29,7 +29,9 @@ M11 Resource Management
  ↓
 M12 TypeScript SDK
  ↓
-M13 Developer Release
+M13 Application Platform Architecture
+ ↓
+M14 Developer Release
 ```
 
 **Off the critical path** (prerequisites noted, can proceed in parallel once met):
@@ -42,13 +44,11 @@ M13 Developer Release
 - **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1 (complete)
 - **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2 (complete)
 - **M11.4 — Host Demo on GitHub Pages** — conceptually after M11.3, no hard dependency
-- **M12.6 — TypeScript Example App** — can begin after M12.4
-
 **Cross-shell parity is a standing requirement, not a milestone.** Every milestone's definition of
 done is implicitly "works identically on the native and web shells" unless stated otherwise —
 this has been true in practice since M9 and is treated as the default going forward rather than a
 separate parity pass at the end. The narrower concern of native's own cross-*platform* behavior
-(macOS/Linux/Windows via a CI matrix) is checked once, at M13, rather than continuously.
+(macOS/Linux/Windows via a CI matrix) is checked once, at M14, rather than continuously.
 
 ---
 
@@ -291,15 +291,18 @@ PLANNING.md designed — built for the first time, in Rust, then wrapped for Typ
 colors, top-left coordinate mode). The TypeScript SDK's texture handle is a real wrapper over
 M11's reference counting and eviction, not a stub.
 
-**Split into six sub-milestones** (audit done alongside M11.4 handoff): the gap turned out to be
+**Split into five sub-milestones** (audit done alongside M11.4 handoff): the gap turned out to be
 much bigger than "wrap an existing API in TypeScript" — `signal.rs` was still a one-line stub,
 `Interactable` a bare marker with no per-state styles or callbacks, and there was no generic
 component/signal/texture API in *any* language yet, only ~17,500 lines of hand-duplicated,
 demo-specific Rust across `proteus-shell-native`'s and `proteus-shell-web`'s independent
-reimplementations of the same reference demo. M12.1–M12.5 close that gap in dependency order;
-M12.6 is the TypeScript-facing proof, off critical path. See PLANNING.md's M12 entry for the full
-reasoning, including why the reference demo itself ends up built once in Rust rather than rebuilt
-in TypeScript (a scope decision made explicitly, revising this milestone's original DoD wording).
+reimplementations of the same reference demo. M12.1–M12.5 close that gap in dependency order and
+are complete. A TypeScript example app was briefly opened as an M12 follow-on; its audit surfaced
+that the platform shell and the app it runs are welded 1:1, and it grew into its own milestone —
+**M13 — Application Platform Architecture** (the TypeScript proof is now M13.8). See PLANNING.md's
+M12 entry for the full reasoning, including why the reference demo itself ends up built once in
+Rust rather than rebuilt in TypeScript (a scope decision made explicitly, revising this
+milestone's original DoD wording).
 
 ### M12.1 — Signal Registry & Command Queue *(critical path — complete)*
 
@@ -334,24 +337,49 @@ The actual "one app, both shells" deliverable: the 9-screen reference demo, buil
 asset I/O, event forwarding) linking this one crate. Highest-risk step in M12 — done additively,
 old demo code kept working until the new path is verified, cutover an explicit separate step.
 
-### M12.6 — TypeScript Example App *(off critical path — can begin after M12.4)*
+## M13 — Application Platform Architecture *(critical path — design in progress)*
 
-A smaller app (not the full reference demo) built purely in TypeScript against the M12.4 SDK, no
-Rust authored — proves the TS SDK is real and usable for a third-party developer. Doesn't block
-M13 on its own; can double as one of M13's required ≥3 examples.
+Everything through M12 produced a framework with exactly one app — the reference demo — welded 1:1
+to two hand-rolled platform shells (each holding a concrete `demo: Demo` field and ~20
+`Demo`-shaped asset methods; a second app means forking a shell). M13 breaks that apart: a
+reusable **host** (GPU surface + frame loop + asset services) that runs any app, an **app↔host
+contract** an app targets instead of a shell, and a **target map** for browser / native desktop /
+mobile / embedded such that a new platform is a new `impl Host`, never a re-architecture. V1
+release is deliberately delayed for this; what was M13 (Developer Release) is now **M14**.
 
-## M13 — Developer Release
+Only **M13.8 (the TypeScript POC)** is a hard V1 *build*; M13.2 (web host) and part of M13.1
+(contracts) are built because the POC needs them. **M13.3–M13.7 are design deliverables** —
+written into PLANNING.md and approved section by section — with implementation deferred to V2.
+
+The **Rust / TypeScript tradeoff is deliberate and permanent**: Rust compiles to native *and*
+wasm, so a Rust app is portable by compilation with no bridge; TypeScript always needs a JS
+runtime (the wasm bridge everywhere, plus a JS engine wherever it runs). TS is the accessible
+default; Rust is the performance path.
+
+| § | Section | V1 |
+|---|---|---|
+| M13.1 | Core contracts & layering — `Renderer` primitive; `Host` / `App` / `HostServices` traits; host owns `Proteus` | design + trait defs |
+| M13.2 | Web host — Rust crate + `ts/` layer: `run()`, canvas, rAF loop, DPI, safe-area, touch, visibility-pause, context-loss. Rust→web and TS→web both front doors. | **build** |
+| M13.3 | Native host — `proteus-host-winit`; shell → thin `main()`. `Host` trait windowing-agnostic so DRM/KMS, SDL2, mobile slot in later. | design |
+| M13.4 | Asset & resource contract — textures, fonts, runtime loading; video as a host service, codec split hidden per-host | design |
+| M13.5 | Configuration & memory model — `ProteusConfig` through host construction; atlas-sizing for constrained targets | design |
+| M13.6 | Mobile packaging — Capacitor wraps the web bundle (only path for TS logic on iOS); `create-proteus-app` scaffold + template. Write-once web + desktop + mobile. | design + template |
+| M13.7 | Post-V1 target map — native mobile, embedded Linux (DRM/KMS), native smart-TV, `proteus-host-jsengine` (browser-engine-free TS-native), XR. Seams, not code. | design |
+| M13.8 | TypeScript POC (was the ex-M12.6/M12.7 app) — `.ts`-only, published package only, on the M13.2 host, all three topologies. Doubles as an M14 example. | **build** |
+
+## M14 — Developer Release
 
 Documentation, ≥3 complete examples beyond the reference demo, pluggable interpolation interface
 public and documented, CHANGELOG and semantic versioning, contributing guide. An outside developer
 can install the SDK, follow the README, and build a working component with a transition. Also the
-final checkpoint for the macOS/Linux/Windows CI matrix and a last cross-shell parity audit.
+final checkpoint for the macOS/Linux/Windows CI matrix and a last cross-shell parity audit. V1
+ships on the M13 platform architecture.
 
 ---
 
 ## V1 Scope
 
-The following are in scope for V1 and will be complete at M13:
+The following are in scope for V1 and will be complete at M14:
 
 - All three transition topologies (1→1, 1→N, N→1)
 - GPU-native rendering via wgpu — WebGL2 primary, WebGPU auto-upgrade
@@ -362,10 +390,13 @@ The following are in scope for V1 and will be complete at M13:
 - Component composition & hierarchy (M10)
 - Real resource management: reference counting, eviction (M11)
 - TypeScript SDK — the primary developer-facing API (M12)
+- Application platform: a reusable host (browser + native desktop), an app↔host contract, and a
+  TypeScript POC on the web host (M13). The full multi-target map (native mobile, embedded, XR) is
+  *designed* at M13 and *built* post-V1.
 - Native/web shell parity — a standing requirement across all milestones, plus a
-  macOS/Linux/Windows CI matrix for native specifically, checked at M13
+  macOS/Linux/Windows CI matrix for native specifically, checked at M14
 - Visual regression CI (M6)
-- Developer documentation and examples (M13)
+- Developer documentation and examples (M14)
 
 ---
 
@@ -478,18 +509,26 @@ Planned future work, not part of the V1 scope:
   cycle *which region's UV* a component samples via a playhead/frame-delay clock, never re-decoding
   on the steady-state path the way `Video` does. Needs one `TextureId` to own a `Vec` of atlas
   regions (freed together as a unit) — a real structural difference from both existing kinds.
-- **XR shell** — WebXR / OpenXR
+**Platform/host targets — designed at M13.7 against the M13.1 `Host` contract, built here:**
+
+- **Native mobile hosts** — iOS and Android on a real native surface (Metal/Vulkan), for Rust
+  authors and perf-minded apps. TypeScript authors reach mobile in V1 already, via the M13.6
+  Capacitor webview path.
+- **Embedded Linux without a compositor** — `proteus-host-drm` (DRM/KMS + GBM + EGL) for Yocto
+  kiosk / HMI / signage. Embedded *with* a compositor already runs on the M13.3 winit host.
+- **Native smart-TV** — Tizen / webOS / Android TV.
+- **`proteus-host-jsengine`** — a browser-engine-free TypeScript-native desktop host (embeds
+  Deno/Boa/QuickJS); real native GPU for TS authors without a webview.
+- **XR shell** — WebXR / OpenXR.
+- **TypeScript apps' declarative parts running with no JS runtime at all** — tractable only if
+  component trees / signal wiring end up serializable as data, then interpreted by a native Rust
+  host. Distinct from `proteus-host-jsengine` (which runs arbitrary TS callbacks). Not designed
+  further than the M13.7 note.
+
+**Other:**
+
 - **Additional language bindings** — Python, Swift, Kotlin, others
 - **Benchmark tests** — an ongoing performance suite beyond M1's single WASM-boundary measurement
 - **GUI component library** — scrolling lists, grids, forms, and other common patterns, likely
   depending on M10's composition/hierarchy work
-- **Embedded systems demo** — native shell on Android TV / Raspberry Pi 4
 - **Dogfooding** — build a personal website using Proteus and publish it on GitHub Pages
-- **TypeScript-authored apps running natively without a code transpiler** — raised during M12
-  planning. Not a full TS→Rust compiler (arbitrary callback bodies would need an embedded JS
-  engine to run natively, defeating the point of a native Rust core). Tractable only if
-  `proteus-sdk`'s declarative parts (component trees, signal/transition wiring) end up
-  serializable as data — then a TS app's structure could ship as data and run on a native Rust
-  interpreter with zero transpilation, leaving only imperative callback bodies as JS-only platform
-  glue. Not designed further; revisit if/when M12.3's `proteus-sdk` shape makes it obviously easy
-  or obviously hard.

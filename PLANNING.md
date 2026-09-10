@@ -1207,11 +1207,18 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
 
 ### Decided
 
-- [x] **Critical path:** M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M10 → M11 → M12 → M13.
+- [x] **Critical path:** M0 → M1 → M2 → M3 → M4 → M5 → M6 → M7 → M10 → M11 → M12 → M13 → M14.
   Each step is a hard prerequisite for the next. Rendering before transitions, transitions before
   topologies, topologies before demo, regression testing before interactivity, interactivity
   before composition/hierarchy, composition/hierarchy before resource management, resource
-  management before SDK, SDK before developer release.
+  management before SDK, SDK before the application platform, application platform before developer
+  release.
+
+  **M13 (Application Platform Architecture) was inserted post-M12** (see its entry). A TypeScript
+  example app opened as an M12 follow-on surfaced that the platform shell and the app it runs are
+  welded 1:1 — retiring that coupling is a full architecture pass (reusable host, app↔host
+  contract, a target map for web/native/mobile/embedded). V1 release is deliberately delayed for
+  it; what was M13 (Developer Release) is now **M14**.
 
   **Renumbered from an earlier plan** (audit + realignment pass, post-M9.8): what was M5.5
   (Component Composition & Hierarchy, previously described only in ROADMAP.md, never added to
@@ -1241,26 +1248,29 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   milestone: **every milestone's Definition of Done from here forward is implicitly
   cross-shell** (native + web) unless a DoD item says otherwise. What M11's old DoD also covered —
   a CI matrix across macOS/Linux/Windows and platform-specific behavioral differences *within*
-  native itself (not native-vs-web) — is a narrower, still-real concern folded into M13
+  native itself (not native-vs-web) — is a narrower, still-real concern folded into M14
   (Developer Release)'s DoD as a final pre-release check, rather than tracked continuously.
 
 - [x] **Off-critical-path milestones (can run in parallel once their prerequisites are met):**
-  - M8 (Shader Effects) — can begin after M2 (rendering pipeline stable). Does not block M13.
-  - M9 (Video) — can begin after M7 (interactivity needed for meaningful video UX). Does not block M13.
+  - M8 (Shader Effects) — can begin after M2 (rendering pipeline stable). Does not block M14.
+  - M9 (Video) — can begin after M7 (interactivity needed for meaningful video UX). Does not block M14.
   - M10.5 (Static Component Baking) — can begin after M10 (needs its children-walk machinery).
-    Does not block M13.
-  - M10.6 (Oriented Hit-Test Boxes) — can begin after M10. Does not block M13.
+    Does not block M14.
+  - M10.6 (Oriented Hit-Test Boxes) — can begin after M10. Does not block M14.
 
 - [x] **M6 before M7:** visual regression testing is locked in before interactivity is introduced.
   This ensures any rendering regressions introduced during M7 work are caught immediately.
   Changing this order would mean working without a safety net on the most complex milestone.
 
-- [x] **TypeScript SDK (M12) is V1 and required before developer release (M13).** The primary
+- [x] **TypeScript SDK (M12) is V1 and required before developer release (M14).** The primary
   developer-facing API is TypeScript. A developer release without a polished TS SDK would only
   serve Rust consumers — too narrow for a public release. M12 stays on the critical path.
 
-- [x] **M12 split into M12.1–M12.6** (audit done at M12's start, same discipline as M10.5/M10.6's
-  and M11.1–M11.4's retroactive naming). The gap was bigger than "wrap an existing API in
+- [x] **M12 split into M12.1–M12.5** (audit done at M12's start, same discipline as M10.5/M10.6's
+  and M11.1–M11.4's retroactive naming). A TypeScript example app was briefly opened here as a
+  follow-on (M12.6); its audit surfaced the shell↔app coupling problem and it became its own
+  milestone, **M13** (see the note below and M13's entry). The gap was bigger than "wrap an
+  existing API in
   TypeScript": `signal.rs` was a one-line stub ("to be implemented in Phase E"), `Interactable` a
   bare marker with no per-state styles or callbacks, `FocusMap`/navigation still no-op stubs — all
   items M7's own DoD explicitly deferred to M12. Beyond that, there was no generic
@@ -1278,9 +1288,18 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   duplication rather than reproducing the demo a second time in a second language. The TypeScript
   SDK (M12.4) still gets built in full per the original DoD (typed, no `any`, npm-publishable,
   real texture-handle wrapper); it's a wrapper for third-party developers authoring *new* apps in
-  TS, not the vehicle for rebuilding the reference demo. M12.6 (off critical path) is where the
-  TS-SDK-proof gets built — a smaller app, not the full 9-screen demo — closing the spirit of the
-  original DoD line without the duplication its literal wording implied.
+  TS, not the vehicle for rebuilding the reference demo.
+
+  **M12.6/M12.7 opened, then rolled into M13.** A slot was opened after M12.4 for a TypeScript
+  example app (M12.6). Its start-of-milestone audit found the published SDK headless (no renderer)
+  *and*, more fundamentally, that the platform shell and the app it runs are welded 1:1 —
+  `proteus-shell-native`/`proteus-shell-web` each hold a concrete `demo: Demo` field and ~20
+  `Demo`-shaped asset methods, so a second app means forking the shell. That is not a
+  sub-milestone's worth of work — it's a full architecture pass (host abstraction, app↔host
+  contract, a target map for web/native/mobile/embedded). So it became its own milestone: **M13 —
+  Application Platform Architecture** (M13.1–M13.8; the TypeScript POC is M13.8). What was M13
+  (Developer Release) is now **M14**, and V1 release is deliberately delayed for M13. **M12 stands
+  complete at M12.1–M12.5.**
 
   **Ordering rationale:** M12.1 (signal registry + `CommandQueue`) and M12.2 (interaction states +
   full handler events) close the M7-deferred ECS gaps everything else needs underneath it — pure
@@ -1290,9 +1309,8 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   ECS logic. M12.5 (the shared demo crate) is the highest-risk step — retiring ~17,500 lines of
   duplicated hand-rolled demo code across two files — so it goes last and additively: the shared
   crate is built and verified before either existing `main.rs`/`lib.rs` is cut over, and cutover is
-  a distinct, explicitly-confirmed step, not bundled into "build the crate." M12.6 doesn't block
-  M13 on its own (M13 already wants ≥3 examples beyond the reference demo; this can double as one),
-  so it's off critical path, after M12.4.
+  a distinct, explicitly-confirmed step, not bundled into "build the crate." The host abstraction
+  and the TypeScript proof that were briefly M12.6/M12.7 are now **M13** (see its entry).
 
   **Deferred, not scoped into any M12.x:** letting a TypeScript-authored app's *declarative* parts
   (component trees, signal/transition wiring) run natively too, without a full TS→Rust code
@@ -2286,13 +2304,15 @@ a browser.
 
 A generic app-authoring API — everything Phase A of this document designed (`component()`,
 `signal()`, `texture()`, handles, `proteus.get(id)`) — built for real, in Rust first, then wrapped
-for TypeScript. Split into six sub-milestones (M12.1–M12.6); see Phase D's "M12 split into
-M12.1–M12.6" entry above for the full audit, the revised scope (the reference demo ends up built
-once in Rust, shared across shells, rather than rebuilt a second time in TypeScript), and the
-ordering rationale. This entry's own DoD is the sum of its sub-milestones'.
+for TypeScript. Split into five sub-milestones (M12.1–M12.5); see Phase D's "M12 split" entry for
+the full audit, the revised scope (the reference demo ends up built once in Rust, shared across
+shells, rather than rebuilt a second time in TypeScript), and the ordering rationale. A TypeScript
+example app was briefly opened here as M12.6; the audit for it surfaced the shell↔app coupling
+problem and it grew into its own milestone — **M13, Application Platform Architecture** (the
+TypeScript proof is now M13.8).
 
-**Definition of done:** the union of M12.1–M12.5's DoD items (M12.6 is off critical path and not
-required for M12 itself to be considered done) — in short: `signal()`/`CommandQueue` real
+**Definition of done:** the union of M12.1–M12.5's DoD items — in short: `signal()`/`CommandQueue`
+real
 (M12.1); interaction states, full handler events, `allowInput`/`allowNavigation` real (M12.2); a
 generic Rust app API usable directly by native Rust code (M12.3); a fully-typed, npm-publishable
 TypeScript SDK wrapping it, with real convenience conversions and a real texture-handle wrapper
@@ -2569,26 +2589,142 @@ localhost) without ever touching production's own `pages.yml`/`main`.
 
 ---
 
-#### M12.6 — TypeScript Example App *(off critical path — can begin after M12.4)*
+#### M12.6 / M12.7 — rolled into M13
 
-The TS-SDK-proof the original M12 DoD wording implied, scoped down: a smaller app (not the full
-9-screen reference demo — e.g. button → list → detail) built purely in TypeScript against the
-M12.4 package, with no Rust authored. Proves the SDK is real and usable for a third-party
-developer without duplicating the full reference demo a third time.
-
-**Definition of done:**
-- [ ] A working example app, `.ts` source only, importing only the published SDK package
-- [ ] Demonstrates at least one of each transition topology (1→1, 1→N, N→1)
-- [ ] Can double as one of M13's required ≥3 examples — placed under `examples/` if so
+A TypeScript example app was opened here as M12.6 after M12.4. Its start-of-milestone audit found
+the published SDK headless *and* that the platform shell and the app it runs are welded 1:1 (each
+shell holds a concrete `demo: Demo` field and ~20 `Demo`-shaped asset methods — a second app means
+forking the shell). Fixing that is a full architecture pass, not a sub-milestone, so all of it —
+the host abstraction *and* the TypeScript proof — moved to **M13 — Application Platform
+Architecture** (below). M12 stands complete at M12.1–M12.5.
 
 ---
 
-### M13 — Developer Release
+### M13 — Application Platform Architecture
+
+**Status: design in progress — sections land individually.**
+
+*Prereqs: M12 complete. Inserted ahead of Developer Release (now **M14**); V1 release is
+deliberately delayed for this work.*
+
+Everything through M12 produced a framework with exactly one app — the reference demo — welded 1:1
+to two hand-rolled platform shells (`proteus-shell-native`, `proteus-shell-web`), each holding a
+concrete `demo: Demo` field and ~20 `Demo`-shaped asset methods. Writing a second app means forking
+a shell. This milestone breaks that apart:
+
+- a reusable **host** (GPU surface + frame loop + asset services) that runs *any* app;
+- an **app↔host contract** an app targets instead of a shell — `proteus-demo` becomes its first
+  implementor;
+- a **target map** covering browser, native desktop, mobile, and embedded, such that adding a
+  platform later is a new `impl Host`, never a re-architecture.
+
+**Why now, and why it delays V1.** M14 (Developer Release) requires "≥3 examples" and "an outside
+developer builds an app" — both impossible while writing an app means forking a shell. Doing the
+architecture pass now, rather than shipping V1 on the welded shells and retrofitting, also keeps
+the V2 roadmap honest: the post-V1 targets (native mobile, embedded/DRM-KMS, smart-TV, XR, a
+browser-engine-free TypeScript-native host) get designed against a real contract here (M13.7)
+instead of guessed at later.
+
+**Scope discipline.** Only **M13.8 (the TypeScript POC)** is a hard V1 *build*. **M13.2** (web
+host) and enough of **M13.1** (contracts) are built because the POC needs them, and `proteus-demo`
+is ported onto the new contract with both shells collapsed to thin entry points. **M13.3–M13.7 are
+design deliverables** — written into this document, reviewed and approved section by section — with
+implementation deferred to V2 except where V1 already exercises them.
+
+**The Rust / TypeScript tradeoff is deliberate and permanent — not a gap to close.** Rust compiles
+to both native and wasm, so a Rust app is portable across every host by compilation, with no
+bridge. TypeScript compiles to neither and always needs a JavaScript runtime — the wasm bridge in
+every case, plus a JS engine wherever it runs (the browser's, a webview's, or one shipped inside
+the app). TypeScript is the accessible default and carries that overhead everywhere; Rust is the
+performance path. The M13.7 target map reflects this asymmetry by design; it is not a to-do list
+for closing it.
+
+**Sections** (each is a stub below until its design is worked through and approved, then written
+in full):
+
+| § | Section | V1 deliverable |
+|---|---|---|
+| M13.1 | **Core contracts & layering** — `Renderer` primitive; `Host` / `App` / `HostServices` traits; `Proteus` ownership moves to the host. The seam every target hangs off. | design + trait defs (build only what the POC needs) |
+| M13.2 | **Web host** — a Rust crate + the `ts/` layer on top: `run()`, canvas attach, rAF loop, DPI, safe-area, touch, visibility-pause, GPU context-loss recovery. Rust→web and TS→web are both front doors. | design + **build** |
+| M13.3 | **Native host (winit)** — `proteus-host-winit`; `proteus-shell-native` → thin `main()`. The `Host` trait stays windowing-agnostic from day one (the crate is `-winit`, not `-native`) so DRM/KMS, SDL2, and mobile hosts slot in later. | design (build optional for V1) |
+| M13.4 | **Asset & resource contract** — static textures, fonts, runtime loading; **video as a host service** with the `.mp4`/HLS codec split hidden per-host. | design |
+| M13.5 | **Configuration & memory model** — `ProteusConfig` through host construction; atlas-sizing strategy; safe defaults for constrained targets. | design |
+| M13.6 | **Mobile packaging** — Capacitor is the mobile solution: a `create-proteus-app` scaffold + an `examples/` template wrapping the M13.2 web bundle. Write-once across web + desktop + mobile. PWA / Tauri notes. | design + template |
+| M13.7 | **Post-V1 target map** — how native mobile (iOS/Android), embedded Linux (DRM/KMS, no compositor), native smart-TV, a browser-engine-free TypeScript-native host (`proteus-host-jsengine`, embeds a JS engine), and XR each attach to M13.1 with zero re-architecture. Explicit seams, not code. | design |
+| M13.8 | **TypeScript POC** (the app that was briefly M12.7) — `.ts`-only, importing only the published `proteus-sdk`, on the M13.2 host; all three transition topologies; doubles as an M14 example. Validates M13.1 / M13.2 / M13.4 / M13.6. | **build** |
+
+**Definition of done:** M13.1–M13.7 written into this document and approved section by section;
+M13.8 built and green in CI; `proteus-demo` ported onto the M13.1 `App` contract with both shells
+collapsed to thin entry points; the reference demo still passes M6 visual regression on native and
+web.
+
+---
+
+#### M13.1 — Core Contracts & Layering
+
+*Status: not started.* `Renderer` primitive (`render(&mut Proteus)` against a handed-in
+`wgpu::Surface`); `Host` / `App` / `HostServices` traits; `Proteus` ownership moves from the app
+to the host. Everything else in M13 depends on this being settled.
+
+#### M13.2 — Web Host
+
+*Status: not started. Depends on M13.1.* A Rust crate (`proteus-host-web`) + the `ts/` layer.
+Folds in the ex-"canvas renderer on the SDK" idea. Mobile-forced items: DPI, safe-area insets,
+touch→pointer/directional, visibility-pause, GPU context-loss recovery. Built for V1 (the POC).
+
+#### M13.3 — Native Host (winit)
+
+*Status: not started. Depends on M13.1.* `proteus-host-winit`; `proteus-shell-native` collapses to
+a thin `fn main()`. Windowing-agnostic `Host` trait so a later `proteus-host-drm` (bare DRM/KMS,
+no compositor) or mobile host is a pure addition. GPU floor stated: GLES 3.0 / WebGL2 / Vulkan.
+
+#### M13.4 — Asset & Resource Contract
+
+*Status: not started. Depends on M13.1.* How an app requests textures/fonts/video and the host
+fulfils them per-platform (disk / `fetch` / bundle). Video becomes a host service with an
+app-facing API; the `.mp4`-vs-HLS split stays inside each host impl. `proteus-demo`'s
+`take_pending_*` methods are the prototype to generalize.
+
+#### M13.5 — Configuration & Memory Model
+
+*Status: not started. Depends on M13.1.* `ProteusConfig` (atlas sizes, `max_textures`) surfaced
+through host construction with small safe defaults; atlas-sizing strategy for constrained targets
+(the `transition_atlas` 2×-window default is punishing on a 4K/512 MB device).
+
+#### M13.6 — Mobile Packaging
+
+*Status: not started. Depends on M13.2.* Capacitor wraps the M13.2 web bundle in a system WebView
+— the only path for TypeScript app logic on iOS (JIT is WKWebView-only). A `create-proteus-app`
+scaffold + an `examples/` template; one TS codebase → web + desktop (Tauri) + mobile (Capacitor).
+Not framework code — templates and docs.
+
+#### M13.7 — Post-V1 Target Map
+
+*Status: not started. Depends on M13.1, M13.3, M13.4.* Design notes + explicit seams (no
+implementation) for: native mobile hosts (iOS `android-activity`/UIView, Metal/Vulkan); embedded
+Linux without a compositor (`proteus-host-drm`, DRM + GBM + EGL); native smart-TV; a
+browser-engine-free TypeScript-native host (`proteus-host-jsengine` — embeds Deno/Boa/QuickJS,
+desktop-only, gives TS authors real native GPU without a webview); XR (WebXR/OpenXR). Each must
+attach to M13.1's `Host` trait with zero core changes. This section supersedes the scattered
+Post-Release bullets for these targets.
+
+#### M13.8 — TypeScript POC
+
+*Status: not started. Depends on M13.2; `splitTo`/`mergeFrom` bridged in M13.1 or M13.2.* The one
+hard V1 build. `.ts` source only, importing only the published `proteus-sdk` package, its own
+bundler/dev-server config, under a top-level `examples/` directory. Button → list → detail (or
+similar) exercising 1→1, 1→N, N→1. `tsc --noEmit` clean and wired into `ci.yml`. Doubles as one of
+M14's ≥3 examples.
+
+---
+
+### M14 — Developer Release
 
 Documentation, examples, and enough polish for an outside developer to pick up Proteus and build.
-Also the final pre-release checkpoint for concerns that were tracked continuously rather than as
-their own milestone — see the critical path note above on why Native Parity was retired as a
-standalone milestone in favor of an ongoing cross-shell requirement.
+V1 ships on the M13 Application Platform Architecture. Also the final pre-release checkpoint for
+concerns that were tracked continuously rather than as their own milestone — see the critical path
+note above on why Native Parity was retired as a standalone milestone in favor of an ongoing
+cross-shell requirement.
 
 **Definition of done:**
 - [ ] Public documentation: README covers installation, quickstart, and links to full docs;
@@ -2613,7 +2749,9 @@ standalone milestone in favor of an ongoing cross-shell requirement.
 ---
 
 ### Post-Release
-Planned future work, not part of the V1 scope:
+Planned future work, not part of the V1 scope. **Platform/host targets below (native mobile,
+embedded Linux, smart-TV, TypeScript-native, XR) are designed in M13.7 against the M13.1 `Host`
+contract — this section tracks their *implementation*, which is deferred to V2.**
 
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
@@ -2621,17 +2759,25 @@ Planned future work, not part of the V1 scope:
 - Custom shader authoring experience (formal support for developer-written WGSL)
 - Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
 - Transition `direction` and `stagger` — superseded by the `childBehavior` iterator pattern. Developers implement these as iterator functions rather than framework primitives. No separate post-V1 work needed.
-- XR shell (WebXR / OpenXR)
+- XR shell (WebXR / OpenXR) — seam designed in M13.7
+- Native mobile hosts — iOS and Android on a real native surface (Metal/Vulkan), for Rust authors
+  and perf-minded apps; designed in M13.7. (TypeScript authors reach mobile in V1 via the M13.6
+  Capacitor webview path.)
+- `proteus-host-jsengine` — a browser-engine-free TypeScript-native desktop host (embeds
+  Deno/Boa/QuickJS); gives TS authors real native GPU without a webview. Designed in M13.7.
 - Benchmark tests — a proper, ongoing performance benchmark suite beyond M1's single WASM-boundary
   measurement (frame time under load, transition-heavy scenes, large instance counts, etc.)
 - GUI component library — scrolling lists, grids, forms, and other common patterns built on top of
   the core primitives, likely depending on M10's composition/hierarchy work
-- Embedded systems demo — running the native shell on constrained hardware (Android TV, Raspberry
-  Pi 4) to validate the framework outside desktop-class GPUs
+- Embedded systems demo — running on constrained hardware (Android TV, Raspberry Pi 4, Yocto
+  kiosk) to validate the framework outside desktop-class GPUs. Bare-display embedded (DRM/KMS, no
+  compositor) needs `proteus-host-drm`, designed in M13.7; embedded *with* a compositor already
+  works on the M13.3 winit host.
 - Dogfooding — build a personal website using Proteus and publish it on GitHub Pages
-- TypeScript-authored apps running natively without a code transpiler (raised during M12
-  planning) — see ROADMAP.md's Post-V1 entry for the full reasoning on why this is tractable only
-  if `proteus-sdk`'s declarative parts end up serializable as data
+- TypeScript-authored apps' *declarative* parts (component trees, signal wiring) running natively
+  with no JS runtime at all — tractable only if those parts end up serializable as data; distinct
+  from `proteus-host-jsengine` above, which runs arbitrary TS callbacks via an embedded engine.
+  Designed no further than the M13.7 note.
 
 ---
 
