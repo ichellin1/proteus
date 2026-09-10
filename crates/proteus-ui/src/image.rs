@@ -65,16 +65,31 @@ pub struct Image {
     /// extension). `Arc` so the shell's per-frame "already baked?" check
     /// (mirroring `bake_pending_text`) doesn't copy the whole buffer.
     pub bytes: Arc<[u8]>,
+    /// Downscale cap (longest side, pixels) applied before packing into
+    /// `main_atlas`. `None` = pack at native resolution. Per-entity because
+    /// real assets vary wildly in how much on-screen footprint they need —
+    /// a 12-up gallery grid tile and the one enlarged hero view of the same
+    /// photo want very different caps (M13.1: this replaced the shells'
+    /// hand-ordered "bake this one entity bigger" special-case passes).
+    pub max_side: Option<u32>,
 }
 
 impl Image {
     /// `bytes` accepts anything convertible to `Arc<[u8]>` — a `Vec<u8>`
     /// from `std::fs::read`, or a `&[u8]` slice (e.g. from a wasm-bindgen
     /// parameter), without an extra explicit conversion at call sites.
+    /// No downscale cap; see [`Image::with_max_side`].
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
         Self {
             bytes: bytes.into(),
+            max_side: None,
         }
+    }
+
+    /// Set the downscale cap (see [`Image::max_side`]).
+    pub fn with_max_side(mut self, max_side: u32) -> Self {
+        self.max_side = Some(max_side);
+        self
     }
 }
 
