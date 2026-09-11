@@ -22,18 +22,19 @@
 //!
 //! See `PLANNING.md` § M13.1 for the full design and the decisions behind it.
 //!
-//! ## Status: M13.1 steps 4–5 — `proteus-demo` ported, shells adapted
+//! ## Status: M13.5 — `ProteusConfig`'s shape locked
 //!
-//! `proteus_demo::DemoApp` implements [`App`]; `Demo` no longer owns its
-//! `Proteus`. `proteus-shell-native` is a slim winit handler driving an
-//! `Engine` + `DemoApp` (plus M13.4-debt video / gallery / churn shims);
-//! `proteus-shell-web` threads `&mut Proteus` explicitly and keeps its own
-//! hand-rolled loop until M13.2. Awaiting the user's visual review of the
-//! running demo.
+//! `ProteusConfig` is now the single nested config surface (`memory` /
+//! `render` / `frame` / `input` / `transitions` / `text` / `resources` /
+//! `debug` — see [`config`]). Wired in this pass: all of `memory`,
+//! `render.{clear_color,present_mode,power_preference}`, and
+//! `frame.dt_clamp_secs`. Everything else is a real, documented field with a
+//! safe default, plumbed in incrementally as later milestones touch that
+//! area.
 
 mod app;
 mod bake;
-mod config;
+pub mod config;
 mod engine;
 mod host;
 mod renderer;

@@ -16,6 +16,7 @@ use glam::{Vec2, Vec3, Vec4};
 
 use proteus_render::{
     unpack_atlas_page, AtlasConfig, FontAtlas, GpuContext, QuadPipeline, ATLAS_SELECTOR_MAIN,
+    TRANSITION_ATLAS_SIZE,
 };
 use proteus_ui::{
     collect_instances, Baked, BakedComposite, BakedText, Border, ChildOf, ProteusWorld, QuadState,
@@ -139,6 +140,7 @@ fn bake_system_bakes_quad_and_text_composite() {
         wgpu::TextureFormat::Rgba8Unorm,
         64,
         AtlasConfig::default(),
+        TRANSITION_ATLAS_SIZE,
     );
     let mut font_atlas = FontAtlas::with_embedded_font();
 
@@ -306,6 +308,7 @@ fn bake_ref_counts_texture_and_frees_region_on_despawn() {
         wgpu::TextureFormat::Rgba8Unorm,
         64,
         AtlasConfig::default(),
+        TRANSITION_ATLAS_SIZE,
     );
     let mut pw = ProteusWorld::new();
     pw.world.insert_resource(GpuContext {

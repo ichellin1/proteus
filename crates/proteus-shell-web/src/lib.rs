@@ -547,7 +547,14 @@ impl ProteusApp {
         let atlas_config = AtlasConfig::default();
         validate_atlas_config(&device, &atlas_config)
             .map_err(|e| JsValue::from_str(&format!("AtlasConfig: {e}")))?;
-        let pipeline = QuadPipeline::new(&device, &queue, surface_format, 4096, atlas_config);
+        let pipeline = QuadPipeline::new(
+            &device,
+            &queue,
+            surface_format,
+            4096,
+            atlas_config,
+            proteus_render::TRANSITION_ATLAS_SIZE,
+        );
         pipeline.set_view_projection(&queue, QuadPipeline::ortho(width as f32, height as f32));
 
         log::info!(

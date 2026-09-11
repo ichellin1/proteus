@@ -36,6 +36,7 @@ use crate::signal::{self, register_signal_hooks, signal_dispatch_system};
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
+    TransitionAtlasSize,
 };
 use crate::transition::{
     transition_complete_system, transition_setup_system, transition_tick_system,
@@ -178,6 +179,9 @@ impl ProteusWorld {
         world.init_resource::<PressedEntity>();
         world.init_resource::<FocusState>();
         world.init_resource::<CommandQueue>();
+        // M13.5: default until `Engine::new` overwrites it with the real
+        // `ProteusConfig.memory.transition_atlas_size`.
+        world.init_resource::<TransitionAtlasSize>();
         signal::init_resources(&mut world);
 
         // M11: TextureRef's ref-counting hooks must be registered before any

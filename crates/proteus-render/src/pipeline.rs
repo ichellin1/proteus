@@ -39,6 +39,34 @@ pub fn validate_atlas_config(device: &wgpu::Device, config: &AtlasConfig) -> Res
     Ok(())
 }
 
+/// M13.5: same "validate before you build" self-check as
+/// [`validate_atlas_config`], for the two sizing knobs that used to be
+/// hardcoded constants — `transition_atlas_size` (was `TRANSITION_ATLAS_SIZE`)
+/// and `max_instances` (was a bare `QuadPipeline::new` argument with no
+/// upper-bound check at all).
+pub fn validate_render_config(
+    device: &wgpu::Device,
+    transition_atlas_size: u32,
+    max_instances: u32,
+) -> Result<(), String> {
+    let limits = device.limits();
+    if transition_atlas_size > limits.max_texture_dimension_2d {
+        return Err(format!(
+            "transition_atlas_size={transition_atlas_size} exceeds this device's max_texture_dimension_2d={}",
+            limits.max_texture_dimension_2d
+        ));
+    }
+    let instance_buf_bytes = std::mem::size_of::<QuadInstance>() as u64 * max_instances as u64;
+    if instance_buf_bytes > limits.max_buffer_size {
+        return Err(format!(
+            "max_instances={max_instances} needs a {instance_buf_bytes}-byte instance buffer, \
+             exceeding this device's max_buffer_size={}",
+            limits.max_buffer_size
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Atlas sizes
 //
@@ -304,13 +332,16 @@ impl QuadPipeline {
     /// `atlas_config` sizes `main_atlas` (see [`crate::texture_registry::AtlasConfig`]) —
     /// validate it against this device's real limits with [`crate::validate_atlas_config`]
     /// *before* calling this, since a bad config otherwise fails deep inside `create_texture`
-    /// with an opaque wgpu validation panic instead of a clear error.
+    /// with an opaque wgpu validation panic instead of a clear error. `transition_atlas_size`
+    /// sizes `transition_atlas` (M13.5 — was the hardcoded [`TRANSITION_ATLAS_SIZE`] constant);
+    /// callers that don't need a different value can just pass that constant.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         max_instances: u32,
         atlas_config: AtlasConfig,
+        transition_atlas_size: u32,
     ) -> Self {
         // --- Shader ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -480,7 +511,8 @@ impl QuadPipeline {
         });
 
         // --- Atlas textures ---
-        let (main_atlas, transition_atlas) = Self::create_atlases(device, queue, &atlas_config);
+        let (main_atlas, transition_atlas) =
+            Self::create_atlases(device, queue, &atlas_config, transition_atlas_size);
 
         // Video atlas starts as a 1×1 black placeholder.  Call init_video() to
         // allocate a real resolution before uploading frames.
@@ -546,7 +578,7 @@ impl QuadPipeline {
             texture_registry: TextureRegistry::new(atlas_config),
             video_rx: std::sync::Mutex::new(None),
             transition_allocator: crate::transition_atlas::TransitionAtlasAllocator::new(
-                TRANSITION_ATLAS_SIZE,
+                transition_atlas_size,
             ),
         }
     }
@@ -1300,6 +1332,7 @@ impl QuadPipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         config: &AtlasConfig,
+        transition_atlas_size: u32,
     ) -> (wgpu::Texture, wgpu::Texture) {
         let main_atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("main_atlas"),
@@ -1344,8 +1377,8 @@ impl QuadPipeline {
         let transition_atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transition_atlas"),
             size: wgpu::Extent3d {
-                width: DEFAULT_TRANSITION_ATLAS_SIZE,
-                height: DEFAULT_TRANSITION_ATLAS_SIZE,
+                width: transition_atlas_size,
+                height: transition_atlas_size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,

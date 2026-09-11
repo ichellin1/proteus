@@ -63,7 +63,7 @@ pub use text::{BakedText, Text};
 pub use texture_ref::TextureRef;
 pub use topology::{
     ActiveGroupTransition, ChildBehaviorFn, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
-    OneToNRequest, PartOfGroup, SplitStrategy,
+    OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
 };
 pub use transition::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,

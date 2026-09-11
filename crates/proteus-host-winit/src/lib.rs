@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use proteus_runtime::config::RenderConfig;
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
 use proteus_runtime::{App, Engine, Host, HostServices, ProteusConfig, Viewport};
@@ -164,11 +165,9 @@ impl Running {
     }
 
     fn render(&mut self, app: &mut dyn App) {
-        // Clamp to a 20fps-equivalent floor — a long stall (most visibly the
-        // first frame, after GPU warm-up) fed straight into the schedule as
-        // one giant dt blows through short intro animations in a single
-        // tick. Lifted from the M12 native shell.
-        let dt = self.last_frame.elapsed().as_secs_f32().min(0.05);
+        // M13.5: the dt clamp itself now lives in `Engine::frame`
+        // (`ProteusConfig.frame.dt_clamp_secs`) — this host just measures.
+        let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
 
         let frame = match self.surface.get_current_texture() {
@@ -217,7 +216,9 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
                 .expect("failed to create window"),
         );
 
-        let (surface, device, queue, surface_config) = pollster::block_on(init_gpu(window.clone()));
+        let render_cfg = self.config.proteus.render;
+        let (surface, device, queue, surface_config) =
+            pollster::block_on(init_gpu(window.clone(), render_cfg));
 
         let mut services = DirHostServices::new(self.config.asset_dir.clone());
         let viewport = viewport_for(&window, surface_config.width, surface_config.height);
@@ -226,7 +227,7 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
             &queue,
             surface_config.format,
             viewport,
-            self.config.proteus,
+            self.config.proteus.clone(),
             &mut self.app,
             &mut services,
         );
@@ -306,10 +307,12 @@ fn viewport_for(window: &Window, physical_w: u32, physical_h: u32) -> Viewport {
 }
 
 /// wgpu instance / surface / adapter / device setup. Lifted from the M12
-/// native shell; the `proteus-gpu` consolidation (shared with the web host)
-/// is M13.3 proper.
+/// native shell; `render`'s `power_preference` / `present_mode` are M13.5's
+/// wiring (were hardcoded before). The `proteus-gpu` consolidation (shared
+/// with the web host) is M13.3 proper.
 async fn init_gpu(
     window: Arc<Window>,
+    render: RenderConfig,
 ) -> (
     wgpu::Surface<'static>,
     wgpu::Device,
@@ -329,7 +332,7 @@ async fn init_gpu(
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference: render.power_preference,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         })
@@ -366,7 +369,7 @@ async fn init_gpu(
         format: surface_format,
         width: size.width.max(1),
         height: size.height.max(1),
-        present_mode: wgpu::PresentMode::AutoVsync,
+        present_mode: render.present_mode,
         alpha_mode: surface_caps.alpha_modes[0],
         view_formats: vec![],
         desired_maximum_frame_latency: 2,

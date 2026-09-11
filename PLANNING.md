@@ -3096,9 +3096,100 @@ app-facing API; the `.mp4`-vs-HLS split stays inside each host impl. `proteus-de
 
 #### M13.5 — Configuration & Memory Model
 
-*Status: not started. Depends on M13.1.* `ProteusConfig` (atlas sizes, `max_textures`) surfaced
-through host construction with small safe defaults; atlas-sizing strategy for constrained targets
-(the `transition_atlas` 2×-window default is punishing on a 4K/512 MB device).
+**Status: design approved 2026-09-10; the scoped build (option B, below) is complete.**
+
+##### The stub's premise was stale
+
+M13.5 was scoped around "the `transition_atlas` 2×-window default is punishing on a 4K/512 MB
+device" — that was the Phase-B *design*. The code that actually shipped through M13.1 has a
+**fixed 2048² `transition_atlas` (16 MB) that wasn't configurable at all**. So M13.5's real job
+turned out to be broader: make the *whole* config surface — not just memory — explicit, nested,
+and tunable through one `ProteusConfig`, with the memory axis actually wired.
+
+##### GPU memory inventory (pre-M13.5 defaults)
+
+| Allocation | Formula | Default | Configurable before M13.5? |
+|---|---|---|---|
+| `main_atlas` | `page_size² × page_count × 4` | 2048²·4·4 = 64 MB | yes (`AtlasConfig`) |
+| `transition_atlas` | `size² × 4` | 2048²·4 = 16 MB | **no — hardcoded const** |
+| instance buffers ×2 | `~176 × max_instances × 2` | 4096 → ~1.4 MB | `QuadPipeline::new` arg, no config |
+| video atlas | `1280×720×4` | 3.7 MB, only while a video plays | no (not eagerly allocated either) |
+
+##### `ProteusConfig` — the expanded, nested shape
+
+Per the user's direction ("revisit what can be configured — expand it") every hardcoded constant
+and every Phase A/B "the app may want to tune this" note was swept into one config, grouped by
+concern:
+
+```rust
+pub struct ProteusConfig {
+    pub memory:      MemoryConfig,       // main_atlas, transition_atlas_size, max_instances, video
+    pub render:      RenderConfig,       // clear_color, present_mode, power_preference, msaa_samples
+    pub frame:       FrameConfig,        // dt_clamp_secs, tick_while_hidden
+    pub input:       InputConfig,        // focus_input_delay_ms, transitioning_allow_*, click_moves_focus, drag_threshold_px
+    pub transitions: TransitionDefaults, // interaction_style, default_config, custom_easings
+    pub text:        TextConfig,         // default_font, default_size_px
+    pub resources:   ResourceConfig,     // image_max_side, eviction, lazy_load
+    pub debug:       DebugConfig,        // validate_config, report_dropped_transitions, overlay, bake_hints
+}
+```
+
+`ProteusConfig::web()` (== `Default`) is the safe floor — works on every host, WebGL2 included.
+`::desktop()` and `::constrained()` are presets for a native/TV target with headroom and a
+memory-constrained embedded target respectively; both just override `memory`, everything else
+stays at the `web()` default.
+
+**Every field is real, documented, and either wired or explicitly marked "not yet wired — plumbed
+when \<milestone\> touches this area."** The shape doesn't change out from under a caller when a
+later milestone wires up a previously-inert field — only additive.
+
+##### Scope decision: option B
+
+Three ways to land this were on the table — (A) plumb every field now, (B) lock the full shape in
+code now, wire only `memory` + `render.{clear_color,present_mode,power_preference}` +
+`frame.dt_clamp_secs`, rest struct-only, (C) just `memory` + `clear_color`. **Chose B.**
+
+##### What's actually wired
+
+- **`memory`** — all of it, for the first time:
+  - `main_atlas` (page_size/page_count) — was already configurable via `AtlasConfig`, now sits under the nested struct.
+  - `transition_atlas_size` — **newly wired**. `QuadPipeline::new` gained a `transition_atlas_size: u32` parameter (was the hardcoded `TRANSITION_ATLAS_SIZE` const in `create_atlases`/`TransitionAtlasAllocator::new`). `proteus-ui`'s UV-normalisation math (`topology.rs`'s `region_uv`/`region_uv_slices`/`region_uv_grid_slices`, used by the 1→N/N→1 group-transition systems) took a compile-time `TRANSITION_ATLAS_SIZE` before — now reads a new `TransitionAtlasSize` ECS resource (mirrors the `GpuContext`/`QuadPipeline` "world resource set post-hoc by the render layer" pattern), which `Renderer::new` overwrites with the real configured value.
+  - `max_instances` — **newly wired**. Was a bare `QuadPipeline::new` argument with no upper-bound check; now sourced from config and validated.
+  - `video.*` — struct present, **not wired** (see the field docs: `init_video` still takes its own explicit dims from the host per-play; there's no eager allocation for `default_size`/`enabled`/`channel_depth` to gate until M13.4 makes video a host service).
+- **`render.clear_color`** — unchanged from M13.1, moved under the nested struct.
+- **`render.present_mode` / `power_preference`** — **newly wired** into both hosts' `request_adapter`/`SurfaceConfiguration` (previously hardcoded `HighPerformance`/`AutoVsync` in each host).
+- **`frame.dt_clamp_secs`** — **newly wired**, and centralised: `Engine::frame` now applies the clamp itself, so `proteus-host-winit` and `proteus-shell-native` both dropped their own copy of the identical `.min(0.05)`.
+- **`resources.image_max_side`** — unchanged from M13.1, moved under the nested struct.
+- **`debug.validate_config`** — **newly wired**, cheaply: `Renderer::new` always runs the hard sizing checks (`validate_atlas_config` + the new `validate_render_config`, which checks `transition_atlas_size` against `max_texture_dimension_2d` and the instance-buffer byte size against `max_buffer_size`) regardless of this flag — a bad config should never silently proceed. The flag only gates an informational `log::info!` of `ProteusConfig::estimated_gpu_bytes()` at startup.
+
+Everything else — `render.msaa_samples`, `frame.tick_while_hidden`, all of `input`, all of
+`transitions`, all of `text`, `resources.eviction`/`lazy_load`, `debug.report_dropped_transitions`/
+`overlay`/`bake_hints` — is a real field with a safe default and a doc comment naming what will
+consume it and when. None of it is read by any system yet.
+
+##### `constrained()` tradeoffs, documented on the type
+
+`page_size 1024` → no single baked region (image, text run, composite) may exceed 1024px/axis —
+fine for phone/TV UI. `page_count 3` → more LRU eviction churn on a texture-dense screen (the
+registry already degrades gracefully). `transition 1024` → a full-screen 1→N/N→1 bake downsamples
+to 1024²; acceptable on the slower GPU a constrained target usually pairs with.
+
+##### Decisions
+
+- [x] **Full nested `ProteusConfig` shape locked now** (option B) — every field documented, most struct-only, four groups wired.
+- [x] **`Default` = `web()`**, the safe floor; hosts opt up to `::desktop()`.
+- [x] **Presets as constructors** (`::desktop()`, `::constrained()`), not a `TargetClass` enum field — a host can still override individual fields after picking one.
+- [x] **Hard validation always runs; `debug.validate_config` only gates the informational memory-estimate log** — a bad config should never silently proceed regardless of a debug flag.
+- [x] **`transitions.interaction_style`/`default_config` stay struct-only for now** even though an earlier draft called them "V1-wired" — narrowed to option B's explicit four-item wire list rather than expanding scope mid-build.
+
+##### Definition of done
+
+- [x] `ProteusConfig` restructured into `memory`/`render`/`frame`/`input`/`transitions`/`text`/`resources`/`debug`, each a documented type with a safe default.
+- [x] `ProteusConfig::web()` / `::desktop()` / `::constrained()` presets; `ProteusConfig::estimated_gpu_bytes()`.
+- [x] `transition_atlas_size` and `max_instances` threaded through `proteus-render` (`QuadPipeline::new`, `create_atlases`, `TransitionAtlasAllocator`) and `proteus-ui` (`TransitionAtlasSize` resource, `topology.rs`'s UV math, both group-transition setup systems).
+- [x] `validate_render_config` added alongside `validate_atlas_config`; both always run in `Renderer::new`.
+- [x] `present_mode` / `power_preference` wired into `proteus-host-winit` and `proteus-shell-native`; the duplicated `dt` clamp removed from both hosts in favour of `Engine::frame`'s own.
+- [x] `cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -D warnings`, the wasm32 pass, `cargo fmt --check`, and the full test suite (28 test binaries, all green) all pass.
 
 #### M13.6 — Mobile Packaging
 

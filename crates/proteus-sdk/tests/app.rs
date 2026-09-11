@@ -437,7 +437,7 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
 
 #[test]
 fn free_resources_decrefs_and_frees_the_texture_region() {
-    use proteus_render::{AtlasConfig, GpuContext, QuadPipeline};
+    use proteus_render::{AtlasConfig, GpuContext, QuadPipeline, TRANSITION_ATLAS_SIZE};
     use proteus_ui::{BakedComposite, TextureRef};
 
     let Some((device, queue)) = pollster::block_on(make_device()) else {
@@ -454,6 +454,7 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
         wgpu::TextureFormat::Rgba8Unorm,
         64,
         AtlasConfig::default(),
+        TRANSITION_ATLAS_SIZE,
     );
 
     let mut app = Proteus::new();

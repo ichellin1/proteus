@@ -10,7 +10,7 @@
 
 use proteus_render::{
     pack_atlas_page, AtlasConfig, MainAtlasPlacement, QuadInstance, QuadPipeline,
-    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION,
+    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION, TRANSITION_ATLAS_SIZE,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,14 @@ fn headless_quad_renders_to_expected_color() {
     };
 
     // --- Pipeline ---
-    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16, AtlasConfig::default());
+    let mut pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        FORMAT,
+        16,
+        AtlasConfig::default(),
+        TRANSITION_ATLAS_SIZE,
+    );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
     // --- Instance: 32×32 red quad centered at world origin, no corner radius ---
@@ -151,7 +158,14 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         return;
     };
 
-    let mut pipeline = QuadPipeline::new(&device, &queue, FORMAT, 16, AtlasConfig::default());
+    let mut pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        FORMAT,
+        16,
+        AtlasConfig::default(),
+        TRANSITION_ATLAS_SIZE,
+    );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
     // A 4×4 fully-transparent region — every texel is (0,0,0,0), so bilinear
@@ -278,6 +292,7 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
             page_size,
             page_count: 2,
         },
+        TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
