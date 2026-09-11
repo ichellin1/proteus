@@ -84,7 +84,7 @@ use proteus_demo::Demo;
 use proteus_render::{
     validate_atlas_config, AtlasConfig, FontAtlas, GpuContext, QuadPipeline, TextureId,
 };
-use proteus_sdk::TextureHandle;
+use proteus_sdk::{Proteus, TextureHandle};
 use proteus_ui::{BakedImage, BakedText, Image, Text, TextureRef};
 
 // ---------------------------------------------------------------------------
@@ -274,9 +274,9 @@ fn bake_pending_images(world: &mut bevy_ecs::world::World, queue: &wgpu::Queue) 
 /// `bake_pending_images` but resizing to `GALLERY_LARGE_IMAGE_MAX_SIDE`
 /// instead of `MAX_IMAGE_SIDE`. Must run before `bake_pending_images` each
 /// frame — see that function's doc.
-fn bake_gallery_hires_image(demo: &mut Demo, queue: &wgpu::Queue) {
+fn bake_gallery_hires_image(demo: &mut Demo, proteus: &mut Proteus, queue: &wgpu::Queue) {
     let entity = demo.gallery_hires_overlay().id();
-    let world = demo.app_mut().world_mut();
+    let world = proteus.world_mut();
     if world.get::<BakedImage>(entity).is_some() {
         return;
     }
@@ -297,9 +297,9 @@ fn bake_gallery_hires_image(demo: &mut Demo, queue: &wgpu::Queue) {
 /// can't do (it's headless). Skips a cycle rather than erroring if the atlas
 /// is full even after eviction. Mirrors `proteus-shell-native::
 /// apply_texture_churn`.
-fn apply_texture_churn(demo: &mut Demo, queue: &wgpu::Queue) {
+fn apply_texture_churn(demo: &mut Demo, proteus: &mut Proteus, queue: &wgpu::Queue) {
     for update in demo.take_pending_texture_churn() {
-        let app = demo.app_mut();
+        let app = &mut *proteus;
         let texture_id = {
             let Some(mut pipeline) = app.world_mut().get_resource_mut::<QuadPipeline>() else {
                 return;
@@ -367,6 +367,9 @@ pub struct ProteusApp {
     surface_config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// M13.1: `Demo` no longer owns its `Proteus` — this shell does, and
+    /// threads `&mut proteus` into every `Demo` call.
+    proteus: Proteus,
     demo: Demo,
     font_atlas: FontAtlas,
     playing_video: Option<PlayingVideo>,
@@ -410,7 +413,7 @@ impl ProteusApp {
         slots: &mut [Option<TextureHandle>],
         frame_idx: u32,
         bytes: &[u8],
-        set_on_demo: impl FnOnce(&mut Demo, Vec<TextureHandle>),
+        set_on_demo: impl FnOnce(&mut Demo, &mut Proteus, Vec<TextureHandle>),
     ) {
         let frame_idx = frame_idx as usize;
         let decoded = match proteus_render::decode_image(bytes) {
@@ -422,11 +425,7 @@ impl ProteusApp {
         };
         let decoded = proteus_render::resize_to_fit(decoded, LOGO_FRAME_MAX_SIDE);
         let texture_id = {
-            let Some(mut pipeline) = self
-                .demo
-                .app_mut()
-                .world_mut()
-                .get_resource_mut::<QuadPipeline>()
+            let Some(mut pipeline) = self.proteus.world_mut().get_resource_mut::<QuadPipeline>()
             else {
                 return;
             };
@@ -449,11 +448,15 @@ impl ProteusApp {
             pipeline.write_to_main_atlas(&self.queue, placement, &decoded.rgba_pixels);
             texture_id
         };
-        let handle = self.demo.app_mut().texture(texture_id);
+        let handle = self.proteus.texture(texture_id);
         if let Some(slot) = slots.get_mut(frame_idx) {
             *slot = Some(handle);
         }
-        set_on_demo(&mut self.demo, slots.iter().filter_map(|s| *s).collect());
+        set_on_demo(
+            &mut self.demo,
+            &mut self.proteus,
+            slots.iter().filter_map(|s| *s).collect(),
+        );
     }
 }
 
@@ -554,23 +557,29 @@ impl ProteusApp {
             surface_format,
         );
 
-        let mut demo = Demo::new();
-        demo.app_mut().world_mut().insert_resource(GpuContext {
+        // M13.1: `Demo` no longer owns its `Proteus`; this shell owns both
+        // explicitly and threads `&mut proteus` in (until M13.2 moves the web
+        // shell onto `proteus-host-web` / `Engine` proper). It keeps its own
+        // hand-rolled bake + render loop for now.
+        let mut proteus = Proteus::new();
+        let mut demo = Demo::new(&mut proteus);
+        proteus.world_mut().insert_resource(GpuContext {
             device: device.clone(),
             queue: queue.clone(),
         });
-        demo.app_mut().world_mut().insert_resource(pipeline);
+        proteus.world_mut().insert_resource(pipeline);
         // No devicePixelRatio scaling in this shell (see the module doc on
         // `www/index.html`'s own canvas-sizing convention) — canvas
         // resolution *is* CSS/logical pixels 1:1, so `Demo`'s own logical
         // units need no conversion here, unlike native's `scale_factor`.
-        demo.set_viewport_size(Vec2::new(width as f32, height as f32));
+        demo.set_viewport_size(&mut proteus, Vec2::new(width as f32, height as f32));
 
         Ok(Self {
             surface,
             surface_config,
             device,
             queue,
+            proteus,
             demo,
             font_atlas: FontAtlas::with_embedded_font(),
             playing_video: None,
@@ -591,18 +600,18 @@ impl ProteusApp {
         // `Demo::tick` as one giant `dt`, easily enough to blow through
         // Splash's entire delay+fade+hold budget (~3.1s) in a single tick.
         let dt = (dt_ms / 1000.0).min(0.05);
-        self.demo.tick(dt); // Demo::tick already calls refresh_cascades internally.
+        // The engine-style frame, done by hand here (M13.1): tick the
+        // schedule, run the demo's per-frame logic, re-cascade.
+        self.proteus.tick(dt);
+        self.demo.advance(&mut self.proteus, dt);
+        self.proteus.refresh_cascades();
 
-        bake_pending_text(
-            self.demo.app_mut().world_mut(),
-            &mut self.font_atlas,
-            &self.queue,
-        );
-        bake_gallery_hires_image(&mut self.demo, &self.queue);
-        bake_pending_images(self.demo.app_mut().world_mut(), &self.queue);
-        apply_texture_churn(&mut self.demo, &self.queue);
+        bake_pending_text(self.proteus.world_mut(), &mut self.font_atlas, &self.queue);
+        bake_gallery_hires_image(&mut self.demo, &mut self.proteus, &self.queue);
+        bake_pending_images(self.proteus.world_mut(), &self.queue);
+        apply_texture_churn(&mut self.demo, &mut self.proteus, &self.queue);
 
-        let instances = proteus_ui::collect_instances(self.demo.app_mut().world_mut());
+        let instances = proteus_ui::collect_instances(self.proteus.world_mut());
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
@@ -619,11 +628,7 @@ impl ProteusApp {
 
         let view = frame.texture.create_view(&Default::default());
 
-        let mut pipeline = self
-            .demo
-            .app_mut()
-            .world_mut()
-            .resource_mut::<QuadPipeline>();
+        let mut pipeline = self.proteus.world_mut().resource_mut::<QuadPipeline>();
         if !instances.is_empty() {
             pipeline.upload_instances(&self.queue, &instances);
         }
@@ -668,8 +673,7 @@ impl ProteusApp {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.demo
-            .app_mut()
+        self.proteus
             .world_mut()
             .resource::<QuadPipeline>()
             .set_view_projection(
@@ -677,7 +681,7 @@ impl ProteusApp {
                 QuadPipeline::ortho(width as f32, height as f32),
             );
         self.demo
-            .set_viewport_size(Vec2::new(width as f32, height as f32));
+            .set_viewport_size(&mut self.proteus, Vec2::new(width as f32, height as f32));
     }
 
     // ── Pointer event entry points (called from JS) ────────────────────────
@@ -690,28 +694,28 @@ impl ProteusApp {
         let w = self.surface_config.width as f32;
         let h = self.surface_config.height as f32;
         self.demo
-            .pointer_moved(Some(Vec2::new(x - w / 2.0, h / 2.0 - y)));
+            .pointer_moved(&mut self.proteus, Some(Vec2::new(x - w / 2.0, h / 2.0 - y)));
     }
 
     /// Report that the pointer has left the canvas.
     /// Call from `canvas.addEventListener('mouseleave', ...)`.
     #[wasm_bindgen]
     pub fn on_mouse_leave(&mut self) {
-        self.demo.pointer_moved(None);
+        self.demo.pointer_moved(&mut self.proteus, None);
     }
 
     /// Report a primary-button press.
     /// Call from `canvas.addEventListener('mousedown', ...)`.
     #[wasm_bindgen]
     pub fn on_mouse_down(&mut self) {
-        self.demo.pointer_pressed();
+        self.demo.pointer_pressed(&mut self.proteus);
     }
 
     /// Report a primary-button release.
     /// Call from `canvas.addEventListener('mouseup', ...)`.
     #[wasm_bindgen]
     pub fn on_mouse_up(&mut self) {
-        self.demo.pointer_released();
+        self.demo.pointer_released(&mut self.proteus);
     }
 
     // ── Video (real HLS via <video>/MediaSource — see the module doc) ──────
@@ -735,8 +739,7 @@ impl ProteusApp {
         let stopped = self.demo.take_pending_video_stop();
         if stopped {
             if let Some(playing) = self.playing_video.take() {
-                self.demo
-                    .app_mut()
+                self.proteus
                     .world_mut()
                     .resource_mut::<QuadPipeline>()
                     .suspend_video(&self.device, playing.texture_id);
@@ -776,8 +779,7 @@ impl ProteusApp {
             return;
         }
         let (texture_id, _sender) = self
-            .demo
-            .app_mut()
+            .proteus
             .world_mut()
             .resource_mut::<QuadPipeline>()
             .init_video(&self.device, &self.queue, width, height);
@@ -796,8 +798,7 @@ impl ProteusApp {
     #[wasm_bindgen]
     pub fn push_video_frame(&mut self, rgba: &[u8]) {
         if self.playing_video.is_some() {
-            self.demo
-                .app_mut()
+            self.proteus
                 .world_mut()
                 .resource::<QuadPipeline>()
                 .upload_video_frame(&self.queue, rgba);
@@ -842,6 +843,7 @@ impl ProteusApp {
     ) {
         self.tile_photo_id[tile_idx as usize] = Some(photo_id);
         self.demo.set_gallery_tile_image(
+            &mut self.proteus,
             tile_idx as usize,
             bytes.to_vec(),
             Vec2::new(aspect_w, aspect_h),
@@ -894,7 +896,7 @@ impl ProteusApp {
     #[wasm_bindgen]
     pub fn set_gallery_hires_image(&mut self, tile_idx: u32, bytes: &[u8]) {
         self.demo
-            .set_gallery_hires_image(tile_idx as usize, bytes.to_vec());
+            .set_gallery_hires_image(&mut self.proteus, tile_idx as usize, bytes.to_vec());
     }
 
     // ── One-shot asset injection points ─────────────────────────────────
@@ -902,63 +904,78 @@ impl ProteusApp {
     /// Attaches box-cover art to tile `tile_idx`.
     #[wasm_bindgen]
     pub fn set_tile_image(&mut self, tile_idx: u32, bytes: &[u8]) {
-        self.demo.set_tile_image(tile_idx as usize, bytes.to_vec());
+        self.demo
+            .set_tile_image(&mut self.proteus, tile_idx as usize, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_background_image(&mut self, bytes: &[u8]) {
-        self.demo.set_background_image(bytes.to_vec());
+        self.demo
+            .set_background_image(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_background_image_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_background_image_dark(bytes.to_vec());
+        self.demo
+            .set_background_image_dark(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_home_icon(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_home_icon(bytes.to_vec());
+        self.demo
+            .set_nav_home_icon(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_home_icon_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_home_icon_dark(bytes.to_vec());
+        self.demo
+            .set_nav_home_icon_dark(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_home_icon_selected(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_home_icon_selected(bytes.to_vec());
+        self.demo
+            .set_nav_home_icon_selected(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_home_icon_selected_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_home_icon_selected_dark(bytes.to_vec());
+        self.demo
+            .set_nav_home_icon_selected_dark(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_back_icon(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_back_icon(bytes.to_vec());
+        self.demo
+            .set_nav_back_icon(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_back_icon_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_back_icon_dark(bytes.to_vec());
+        self.demo
+            .set_nav_back_icon_dark(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_logo_lockup(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_logo_lockup(bytes.to_vec());
+        self.demo
+            .set_nav_logo_lockup(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_nav_logo_lockup_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_nav_logo_lockup_dark(bytes.to_vec());
+        self.demo
+            .set_nav_logo_lockup_dark(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_theme_sun_icon(&mut self, bytes: &[u8]) {
-        self.demo.set_theme_sun_icon(bytes.to_vec());
+        self.demo
+            .set_theme_sun_icon(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_theme_sun_icon_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_theme_sun_icon_dark(bytes.to_vec());
+        self.demo
+            .set_theme_sun_icon_dark(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_theme_moon_icon(&mut self, bytes: &[u8]) {
-        self.demo.set_theme_moon_icon(bytes.to_vec());
+        self.demo
+            .set_theme_moon_icon(&mut self.proteus, bytes.to_vec());
     }
     #[wasm_bindgen]
     pub fn set_theme_moon_icon_dark(&mut self, bytes: &[u8]) {
-        self.demo.set_theme_moon_icon_dark(bytes.to_vec());
+        self.demo
+            .set_theme_moon_icon_dark(&mut self.proteus, bytes.to_vec());
     }
 
     /// Bakes one frame (1-indexed to match `index.html`'s own
@@ -969,9 +986,13 @@ impl ProteusApp {
     #[wasm_bindgen]
     pub fn add_logo_frame(&mut self, frame_idx: u32, bytes: &[u8]) {
         let mut slots = std::mem::take(&mut self.logo_frames);
-        self.add_frame("logo", &mut slots, frame_idx, bytes, |demo, frames| {
-            demo.set_logo_frames(frames)
-        });
+        self.add_frame(
+            "logo",
+            &mut slots,
+            frame_idx,
+            bytes,
+            |demo, proteus, frames| demo.set_logo_frames(proteus, frames),
+        );
         self.logo_frames = slots;
     }
 
@@ -982,9 +1003,13 @@ impl ProteusApp {
     #[wasm_bindgen]
     pub fn add_logo_frame_dark(&mut self, frame_idx: u32, bytes: &[u8]) {
         let mut slots = std::mem::take(&mut self.logo_frames_dark);
-        self.add_frame("logo dark", &mut slots, frame_idx, bytes, |demo, frames| {
-            demo.set_loading_logo_frames_dark(frames)
-        });
+        self.add_frame(
+            "logo dark",
+            &mut slots,
+            frame_idx,
+            bytes,
+            |demo, _proteus, frames| demo.set_loading_logo_frames_dark(frames),
+        );
         self.logo_frames_dark = slots;
     }
 }

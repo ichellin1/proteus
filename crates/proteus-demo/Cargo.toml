@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 proteus-sdk = { path = "../proteus-sdk" }
+proteus-runtime = { path = "../proteus-runtime" }
 glam = { workspace = true }
 
 [dev-dependencies]
