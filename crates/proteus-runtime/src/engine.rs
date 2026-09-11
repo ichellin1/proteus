@@ -38,6 +38,9 @@ pub struct Engine {
     proteus: Proteus,
     renderer: Renderer,
     viewport: Viewport,
+    /// [`crate::config::FrameConfig::dt_clamp_secs`], read out of `config`
+    /// before it moved into [`Renderer`] — [`Engine::frame`] applies it.
+    dt_clamp_secs: f32,
 }
 
 impl Engine {
@@ -53,6 +56,7 @@ impl Engine {
         app: &mut dyn App,
         services: &mut dyn HostServices,
     ) -> Self {
+        let dt_clamp_secs = config.frame.dt_clamp_secs;
         let mut proteus = Proteus::new();
         let renderer = Renderer::new(
             &mut proteus,
@@ -76,11 +80,14 @@ impl Engine {
             proteus,
             renderer,
             viewport,
+            dt_clamp_secs,
         }
     }
 
     /// One frame — see the module docs for the order. `target` is a surface
-    /// texture view the host has already acquired.
+    /// texture view the host has already acquired. `dt` is clamped to
+    /// [`crate::config::FrameConfig::dt_clamp_secs`] before anything runs —
+    /// hosts no longer need their own copy of that clamp.
     pub fn frame(
         &mut self,
         dt: f32,
@@ -88,6 +95,7 @@ impl Engine {
         app: &mut dyn App,
         services: &mut dyn HostServices,
     ) {
+        let dt = dt.min(self.dt_clamp_secs);
         self.proteus.tick(dt);
 
         {

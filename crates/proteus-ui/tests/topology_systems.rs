@@ -13,7 +13,7 @@ use proteus_ui::{
     topology::{
         group_transition_complete_system, horizontal_slices, n_to_one_setup_system,
         one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout,
-        NToOneRequest, OneToNRequest, SplitStrategy,
+        NToOneRequest, OneToNRequest, SplitStrategy, TransitionAtlasSize,
     },
     transition::{
         linear, transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
@@ -30,6 +30,7 @@ fn make_world() -> World {
     let mut world = World::new();
     world.init_resource::<FrameTime>();
     world.init_resource::<CompletedTransitions>();
+    world.init_resource::<TransitionAtlasSize>();
     world
 }
 

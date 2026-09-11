@@ -52,6 +52,26 @@ use crate::text::{BakedText, Text};
 use crate::transition::{ActiveTransition, TransitionConfig};
 
 // ---------------------------------------------------------------------------
+// TransitionAtlasSize
+// ---------------------------------------------------------------------------
+
+/// The `transition_atlas`'s real pixel dimensions, mirrored into the ECS
+/// world so this module's UV-normalisation math (`region_uv*`) doesn't have
+/// to assume the compile-time default (M13.5: `transition_atlas_size` is now
+/// a [`proteus_runtime::ProteusConfig`] field). `Engine::new` overwrites this
+/// resource with the configured value alongside inserting `QuadPipeline`,
+/// the same "world resource set post-hoc by the render layer" pattern
+/// `GpuContext`/`QuadPipeline` already use.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransitionAtlasSize(pub u32);
+
+impl Default for TransitionAtlasSize {
+    fn default() -> Self {
+        Self(TRANSITION_ATLAS_SIZE)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ChildBehaviorFn
 // ---------------------------------------------------------------------------
 
@@ -471,8 +491,8 @@ pub(crate) fn gather_bake_instances(
 
 /// Normalise a `TransitionRegion` into `(uv_offset, uv_scale)` within
 /// `transition_atlas`.
-fn region_uv(region: &TransitionRegion) -> ([f32; 2], [f32; 2]) {
-    let atlas = TRANSITION_ATLAS_SIZE as f32;
+fn region_uv(region: &TransitionRegion, atlas_size: f32) -> ([f32; 2], [f32; 2]) {
+    let atlas = atlas_size;
     (
         [region.x as f32 / atlas, region.y as f32 / atlas],
         [region.width as f32 / atlas, region.height as f32 / atlas],
@@ -482,8 +502,12 @@ fn region_uv(region: &TransitionRegion) -> ([f32; 2], [f32; 2]) {
 /// Divide a baked region into `n` equal left-to-right UV thirds — the UV-space
 /// counterpart of `horizontal_slices`, used to pair each geometry slice with
 /// its matching crop of the shared bake.
-fn region_uv_slices(region: &TransitionRegion, n: usize) -> Vec<([f32; 2], [f32; 2])> {
-    let atlas = TRANSITION_ATLAS_SIZE as f32;
+fn region_uv_slices(
+    region: &TransitionRegion,
+    n: usize,
+    atlas_size: f32,
+) -> Vec<([f32; 2], [f32; 2])> {
+    let atlas = atlas_size;
     let slice_w = region.width as f32 / n as f32;
     (0..n)
         .map(|i| {
@@ -506,8 +530,9 @@ fn region_uv_grid_slices(
     region: &TransitionRegion,
     cols: usize,
     rows: usize,
+    atlas_size: f32,
 ) -> Vec<([f32; 2], [f32; 2])> {
-    let atlas = TRANSITION_ATLAS_SIZE as f32;
+    let atlas = atlas_size;
     let cell_w = region.width as f32 / cols as f32;
     let cell_h = region.height as f32 / rows as f32;
     (0..rows)
@@ -590,6 +615,7 @@ fn bake_one(
 ///   border, and text on both ends, not a flat-color approximation. If GPU
 ///   resources are unavailable, or a bake fails (atlas full), falls back to
 ///   today's flat-color slice geometry for that virtual.
+#[allow(clippy::too_many_arguments)]
 pub fn one_to_n_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &OneToNRequest, &QuadState)>,
@@ -598,7 +624,9 @@ pub fn one_to_n_setup_system(
     quad_states: Query<&QuadState>,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
+    atlas_size: Res<TransitionAtlasSize>,
 ) {
+    let atlas_size = atlas_size.0 as f32;
     for (source_entity, request, source_state) in query.iter() {
         let n = request.targets.len();
 
@@ -663,9 +691,9 @@ pub fn one_to_n_setup_system(
                         shared_alloc = Some(src_id);
                         from_uv_slices = match request.strategy {
                             SplitStrategy::GridSlice { cols, rows } => {
-                                region_uv_grid_slices(&src_region, cols, rows)
+                                region_uv_grid_slices(&src_region, cols, rows, atlas_size)
                             }
-                            _ => region_uv_slices(&src_region, n),
+                            _ => region_uv_slices(&src_region, n, atlas_size),
                         };
                         target_bakes = request
                             .targets
@@ -721,7 +749,7 @@ pub fn one_to_n_setup_system(
                     let (from_state, to_state, baked_texture) = match (shared_alloc, own_bake) {
                         (Some(_), Some((own_id, own_region))) => {
                             let (from_off, from_scale) = from_uv_slices[i];
-                            let (to_off, to_scale) = region_uv(&own_region);
+                            let (to_off, to_scale) = region_uv(&own_region, atlas_size);
                             // Both ends flattened to a plain white pass-through
                             // quad (no tint) — the baked pixels carry the real
                             // color/text, so the QuadState wrapping them
@@ -830,6 +858,7 @@ pub fn one_to_n_setup_system(
 /// `Option<Res<GpuContext>>`/`Option<ResMut<QuadPipeline>>` graceful
 /// degradation to flat-color slices when GPU resources are unavailable or a
 /// bake fails.
+#[allow(clippy::too_many_arguments)]
 pub fn n_to_one_setup_system(
     mut commands: Commands,
     query: Query<(Entity, &NToOneRequest, &QuadState)>,
@@ -838,7 +867,9 @@ pub fn n_to_one_setup_system(
     quad_states: Query<&QuadState>,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
+    atlas_size: Res<TransitionAtlasSize>,
 ) {
+    let atlas_size = atlas_size.0 as f32;
     for (dest_entity, request, dest_state) in query.iter() {
         let n = request.sources.len();
 
@@ -885,9 +916,9 @@ pub fn n_to_one_setup_system(
                 shared_alloc = Some(dest_id);
                 to_uv_slices = match request.layout {
                     MergeLayout::Grid { cols, rows } => {
-                        region_uv_grid_slices(&dest_region, cols, rows)
+                        region_uv_grid_slices(&dest_region, cols, rows, atlas_size)
                     }
-                    MergeLayout::Horizontal => region_uv_slices(&dest_region, n),
+                    MergeLayout::Horizontal => region_uv_slices(&dest_region, n, atlas_size),
                 };
                 source_bakes = request
                     .sources
@@ -920,7 +951,7 @@ pub fn n_to_one_setup_system(
             let (from_state, to_state, baked_texture) = match (shared_alloc, own_bake) {
                 (Some(_), Some((own_id, own_region))) => {
                     let (to_off, to_scale) = to_uv_slices[i];
-                    let (from_off, from_scale) = region_uv(&own_region);
+                    let (from_off, from_scale) = region_uv(&own_region, atlas_size);
                     // Mirror of `one_to_n_setup_system`'s asymmetric corner
                     // radius handling above, roles swapped: `from_state`
                     // (`source.state`) is one whole, independent source's own

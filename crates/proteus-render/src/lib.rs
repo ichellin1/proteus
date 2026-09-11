@@ -38,8 +38,9 @@ pub use mesh::{
     QUAD_INDICES, QUAD_VERTICES,
 };
 pub use pipeline::{
-    validate_atlas_config, GpuContext, QuadPipeline, VideoFrameSender, DEFAULT_VIDEO_HEIGHT,
-    DEFAULT_VIDEO_WIDTH, MAIN_ATLAS_PAGE_COUNT, MAIN_ATLAS_SIZE, TRANSITION_ATLAS_SIZE,
+    validate_atlas_config, validate_render_config, GpuContext, QuadPipeline, VideoFrameSender,
+    DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH, MAIN_ATLAS_PAGE_COUNT, MAIN_ATLAS_SIZE,
+    TRANSITION_ATLAS_SIZE,
 };
 pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
 pub use texture_registry::{

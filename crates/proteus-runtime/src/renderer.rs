@@ -22,14 +22,11 @@
 
 use proteus_render::{GpuContext, QuadPipeline};
 use proteus_sdk::Proteus;
-use proteus_ui::collect_instances;
+use proteus_ui::{collect_instances, TransitionAtlasSize};
 
 use crate::bake;
 use crate::config::ProteusConfig;
 use crate::viewport::Viewport;
-
-/// Instance-buffer capacity — matches the value both M12 shells used.
-const MAX_INSTANCES: u32 = 4096;
 
 /// See the module docs.
 pub struct Renderer {
@@ -42,7 +39,7 @@ impl Renderer {
     /// Create the `QuadPipeline` + `GpuContext`, insert them into the world,
     /// set the initial projection, and build the font atlas.
     ///
-    /// Panics if `config`'s atlas sizing does not fit the device's reported
+    /// Panics if `config.memory`'s sizing does not fit the device's reported
     /// limits (a `Result` form can come later; the M12 shells also treated
     /// this as fatal).
     pub fn new(
@@ -53,11 +50,35 @@ impl Renderer {
         viewport: Viewport,
         config: ProteusConfig,
     ) -> Self {
-        let atlas = config.atlas_config();
-        proteus_render::validate_atlas_config(device, &atlas)
-            .expect("ProteusConfig atlas sizing must fit the device's reported limits");
+        let mem = &config.memory;
+        proteus_render::validate_atlas_config(device, &mem.main_atlas)
+            .expect("ProteusConfig.memory.main_atlas must fit the device's reported limits");
+        proteus_render::validate_render_config(
+            device,
+            mem.transition_atlas_size,
+            mem.max_instances,
+        )
+        .expect("ProteusConfig.memory sizing must fit the device's reported limits");
+        if config.debug.validate_config {
+            log::info!(
+                "ProteusConfig: ~{:.1} MiB estimated resident GPU memory (main_atlas {}×{}×{}, transition_atlas {}², {} instances)",
+                config.estimated_gpu_bytes() as f64 / (1024.0 * 1024.0),
+                mem.main_atlas.page_size,
+                mem.main_atlas.page_size,
+                mem.main_atlas.page_count,
+                mem.transition_atlas_size,
+                mem.max_instances,
+            );
+        }
 
-        let pipeline = QuadPipeline::new(device, queue, surface_format, MAX_INSTANCES, atlas);
+        let pipeline = QuadPipeline::new(
+            device,
+            queue,
+            surface_format,
+            mem.max_instances,
+            mem.main_atlas,
+            mem.transition_atlas_size,
+        );
         pipeline.set_view_projection(
             queue,
             QuadPipeline::ortho(viewport.logical_size.x, viewport.logical_size.y),
@@ -69,6 +90,7 @@ impl Renderer {
             queue: queue.clone(),
         });
         world.insert_resource(pipeline);
+        world.insert_resource(TransitionAtlasSize(mem.transition_atlas_size));
 
         Self {
             font_atlas: proteus_render::FontAtlas::with_embedded_font(),
@@ -105,7 +127,7 @@ impl Renderer {
         let world = proteus.world_mut();
 
         bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue);
-        bake::bake_pending_images(world, &gpu.queue, self.config.image_max_side);
+        bake::bake_pending_images(world, &gpu.queue, self.config.resources.image_max_side);
 
         let instances = collect_instances(world);
         if !instances.is_empty() {
@@ -127,7 +149,7 @@ impl Renderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(self.config.wgpu_clear_color()),
+                        load: wgpu::LoadOp::Clear(self.config.render.wgpu_clear_color()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

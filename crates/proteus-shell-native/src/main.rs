@@ -304,8 +304,14 @@ impl RenderState {
             scale,
         );
         let config = ProteusConfig {
-            clear_color: CLEAR_COLOR,
-            image_max_side: Some(IMAGE_MAX_SIDE),
+            render: proteus_runtime::config::RenderConfig {
+                clear_color: CLEAR_COLOR,
+                ..Default::default()
+            },
+            resources: proteus_runtime::config::ResourceConfig {
+                image_max_side: Some(IMAGE_MAX_SIDE),
+                ..Default::default()
+            },
             ..ProteusConfig::default()
         };
 
@@ -361,8 +367,9 @@ impl RenderState {
     }
 
     fn render(&mut self) {
-        // Clamp to a 20fps floor — see the M12 shell's own note.
-        let dt = self.last_frame.elapsed().as_secs_f32().min(0.05);
+        // M13.5: the dt clamp itself now lives in `Engine::frame`
+        // (`ProteusConfig.frame.dt_clamp_secs`) — this shell just measures.
+        let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
 
         // ── Pre-render: upload the latest decoded video frame, if any. ──
