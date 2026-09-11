@@ -22,13 +22,14 @@
 //!
 //! See `PLANNING.md` § M13.1 for the full design and the decisions behind it.
 //!
-//! ## Status: M13.1 step 3 — `Engine` + minimal `proteus-host-winit`
+//! ## Status: M13.1 steps 4–5 — `proteus-demo` ported, shells adapted
 //!
-//! [`Renderer`] and [`Engine`] are both real, and `proteus-host-winit`
-//! drives an `Engine` from a winit event loop. What remains for M13.1:
-//! step 4 ports `proteus-demo` to [`App`], step 5 collapses
-//! `proteus-shell-native` to a thin `fn main()` and confirms M6 visual
-//! regression.
+//! `proteus_demo::DemoApp` implements [`App`]; `Demo` no longer owns its
+//! `Proteus`. `proteus-shell-native` is a slim winit handler driving an
+//! `Engine` + `DemoApp` (plus M13.4-debt video / gallery / churn shims);
+//! `proteus-shell-web` threads `&mut Proteus` explicitly and keeps its own
+//! hand-rolled loop until M13.2. Awaiting the user's visual review of the
+//! running demo.
 
 mod app;
 mod bake;

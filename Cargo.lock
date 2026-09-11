@@ -2119,6 +2119,7 @@ dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
  "proteus-render",
+ "proteus-runtime",
  "proteus-sdk",
  "proteus-ui",
 ]
@@ -2213,17 +2214,16 @@ dependencies = [
 name = "proteus-shell-native"
 version = "0.1.0"
 dependencies = [
- "bevy_ecs",
  "env_logger",
  "glam 0.29.3",
  "log",
  "pollster",
  "proteus-demo",
+ "proteus-host-winit",
  "proteus-render",
+ "proteus-runtime",
  "proteus-sdk",
- "proteus-ui",
  "ureq",
- "wgpu",
  "winit",
 ]
 

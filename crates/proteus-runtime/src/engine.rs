@@ -117,6 +117,13 @@ impl Engine {
         &self.proteus
     }
 
+    /// Mutable access to the underlying `Proteus` — for a host that still
+    /// does per-frame work outside the `App` contract (M13.1: the native
+    /// shell's video / gallery / texture-churn shims, pending M13.4).
+    pub fn proteus_mut(&mut self) -> &mut Proteus {
+        &mut self.proteus
+    }
+
     // ── Input forwarding — the host calls these from its native event stream.
     //    Coordinates are world-space (viewport-centre origin, Y-up); the host
     //    does the window/CSS-pixel → world conversion, as the M12 shells do. ─

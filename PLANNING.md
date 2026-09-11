@@ -2662,7 +2662,7 @@ web.
 
 #### M13.1 — Core Contracts & Layering
 
-**Status: design approved 2026-09-10; build in progress (step 3 of 5 — `Engine` + minimal winit host).**
+**Status: design approved 2026-09-10; build complete pending the user's visual review.**
 The seam every target hangs off: a `Renderer` primitive, an `Engine` that owns `Proteus`, an `App`
 trait an application implements, and `Host` / `HostServices` traits a platform implements.
 Everything else in M13 depends on this.
@@ -2671,8 +2671,10 @@ Everything else in M13 depends on this.
 1. [x] Scaffold `proteus-runtime` — `Renderer` / `Engine` / `App` / `Host` / `HostServices` / `Frame` / `Viewport` / `ProteusConfig` / `TextureRequest` type + trait defs, `todo!()` bodies. Compiles, clippy-clean, in the workspace + default-members.
 2. [x] `Renderer` — `new` (creates + world-inserts `QuadPipeline` / `GpuContext`, sets projection, builds `FontAtlas`), `resize`, `render` (bake pending `Text` / `Image` → `collect_instances` → `upload_instances` → one render pass into a handed-in `wgpu::TextureView`). Bake helpers lifted verbatim from `proteus-shell-native` into `proteus-runtime::bake`. `proteus_ui::Image` gained `max_side: Option<u32>` + `with_max_side()` — per-entity downscale cap replacing the shells' hand-ordered "bake this one bigger" passes. `ProteusConfig` gained `clear_color` and `image_max_side`.
 3. [x] `Engine` — `new` (builds `Proteus` + `Renderer`, runs `App::setup`), `frame` (`Proteus::tick` → `App::update` → `refresh_cascades` → `Renderer::render`; `update` is a **late** hook, matching the M12 demo's reactive per-frame logic), `resize`, `pointer_*`. `HostServices` narrowed to `load_asset(key) -> Option<Arc<[u8]>>` (byte fetch only); `Frame::load_texture` / `load_asset` turn bytes into a `TextureHandle` (it needs the world's pipeline, which the host has no handle to). New crate `proteus-host-winit`: `impl Host`, `run<A: App>(app, RunConfig)`, `DirHostServices` (synchronous dir read), winit event loop + wgpu init lifted from `proteus-shell-native`. `proteus-runtime` re-exports `wgpu` + `glam` so hosts depend on it alone.
-4. [ ] `proteus-demo` → `impl App`: `Demo::new` body → `setup`, `advance_*` → `update`, asset setters → `Frame::load_texture` / `load_asset`.
-5. [ ] Collapse `proteus-shell-native/src/main.rs` to a thin `fn main()`; M6 visual regression; `fmt` / `clippy`.
+4. [x] `proteus-demo` → `impl App`. `Demo` no longer owns its `Proteus` — every method threads `&mut Proteus` (a mechanical ~200-site refactor). `DemoApp` (`crates/proteus-demo/src/app.rs`) wraps `Demo`, does the ~20 asset loads via `Frame::load_asset` / `load_texture` in `setup`, runs `Demo::advance` in `update`. The 53 demo tests keep passing via a `Harness` (owns the `Proteus`, derefs to `Demo`). `Demo::tick` → `Demo::advance` (no `Proteus::tick` / `refresh_cascades` — the engine owns both).
+5. [x] Shells adapted. **`proteus-shell-native`** collapsed 1080 → ~470 lines: a slim winit handler driving `Engine` + `DemoApp`; the ~20 asset setters and the duplicated bake loop are gone; video (`mp4_player`/ffmpeg), gallery (`ureq`/picsum) and texture-churn stay as **M13.4-debt shims** polling `Demo::take_pending_*` (a full `fn main()` collapse waits for M13.4). **`proteus-shell-web`** got the minimal keep-compiling edit — owns a `Proteus` explicitly, threads `&mut proteus`, keeps its own hand-rolled bake + render loop until M13.2. `cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -D warnings` + the wasm32 pass + `cargo fmt --check` + `cargo test` (proteus-demo 53, proteus-render M6 headless 3+14, proteus-ui, …) all green.
+
+**Remaining:** the user's visual review of the running native demo (per the standing "the user does visual review" rule) — then M13.1 is done and M13.2 can start.
 
 ##### The problem, precisely
 
