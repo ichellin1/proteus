@@ -25,6 +25,7 @@ import type {
 
 export * from "./types.js";
 export * from "./convert.js";
+export * from "./mount.js";
 
 type PlainCallback = () => void;
 type DragCallback = (delta: { x: number; y: number }) => void;
@@ -182,8 +183,20 @@ export class ProteusApp {
   /** @internal */
   readonly wasmApp: WasmApp;
 
-  constructor() {
-    this.wasmApp = new WasmApp();
+  /**
+   * @param wasmApp Wrap an existing wasm-bindgen app instance instead of
+   * constructing a fresh one — used by {@link mount} (see `mount.ts`),
+   * which receives a `ProteusApp` minted by `proteus-host-web`'s own,
+   * separately-compiled wasm binary rather than this package's own
+   * `pkg/proteus_sdk_web.js`. That's safe to wrap directly: both binaries
+   * compile the identical `#[wasm_bindgen] impl ProteusApp` block, so the
+   * generated classes are structurally identical, and every generated
+   * method call binds to its own module's wasm instance — nothing here
+   * ever crosses between the two. Most callers should omit this and get a
+   * fresh, standalone app.
+   */
+  constructor(wasmApp?: WasmApp) {
+    this.wasmApp = wasmApp ?? new WasmApp();
   }
 
   component(spec: ComponentSpec): Handle {

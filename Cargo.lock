@@ -2141,6 +2141,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-host-web"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "futures-util",
+ "js-sys",
+ "log",
+ "proteus-runtime",
+ "proteus-sdk-web",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
+ "web-sys",
+]
+
+[[package]]
 name = "proteus-host-winit"
 version = "0.1.0"
 dependencies = [
@@ -2231,20 +2247,15 @@ dependencies = [
 name = "proteus-shell-web"
 version = "0.1.0"
 dependencies = [
- "bevy_ecs",
  "console_error_panic_hook",
- "glam 0.29.3",
- "js-sys",
  "log",
  "proteus-demo",
+ "proteus-host-web",
  "proteus-render",
- "proteus-sdk",
- "proteus-ui",
+ "proteus-runtime",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-logger",
- "web-sys",
- "wgpu",
 ]
 
 [[package]]

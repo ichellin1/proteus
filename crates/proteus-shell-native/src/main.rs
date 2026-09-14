@@ -410,8 +410,9 @@ impl RenderState {
         }
 
         // ── Post-frame shims (M13.4 debt): drain Demo::take_pending_*. ──
+        // Texture churn is no longer one of these — DemoApp::update bakes it
+        // directly via Frame::bake_texture now (M13.4 step 1).
         self.apply_video_actions();
-        self.apply_texture_churn();
         self.apply_gallery_fetch(scale);
         self.apply_gallery_hires_fetch(scale);
 
@@ -421,41 +422,7 @@ impl RenderState {
         }
     }
 
-    // ── video / gallery / churn shims — adapted from the M12 native shell ──
-
-    fn apply_texture_churn(&mut self) {
-        let Some(demo) = self.demo_app.demo_mut() else {
-            return;
-        };
-        let updates = demo.take_pending_texture_churn();
-        if updates.is_empty() {
-            return;
-        }
-        let proteus = self.engine.proteus_mut();
-        for update in updates {
-            let texture_id = {
-                let mut pipeline = proteus.world_mut().resource_mut::<QuadPipeline>();
-                let Some(id) =
-                    pipeline
-                        .texture_registry
-                        .register_static(update.width, update.height, false)
-                else {
-                    log::warn!("texture churn: main_atlas full");
-                    continue;
-                };
-                let placement = pipeline
-                    .texture_registry
-                    .main_atlas_region(id)
-                    .expect("just registered");
-                pipeline.write_to_main_atlas(&self.queue, placement, &update.rgba);
-                id
-            };
-            update.handle.set_texture(
-                proteus,
-                proteus_sdk::TextureHandle::from_texture_id(texture_id),
-            );
-        }
-    }
+    // ── video / gallery shims — adapted from the M12 native shell ──
 
     fn apply_video_actions(&mut self) {
         let Some(demo) = self.demo_app.demo_mut() else {

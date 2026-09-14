@@ -41,6 +41,32 @@
 //! `SignalHandle::destroy`, which take `self` by value in Rust too — the
 //! entity is genuinely gone afterward, so consuming the JS wrapper is
 //! correct there.
+//!
+//! ## Shared ownership (M13.2)
+//!
+//! `ProteusApp` wraps `Rc<RefCell<sdk::Proteus>>`, not a bare `sdk::Proteus`.
+//! Before M13.2 this crate was headless and owned the only `Proteus` in
+//! existence, so plain ownership was fine. Now `proteus-host-web` also needs
+//! `&mut Proteus` every frame (to drive `Proteus::tick` and
+//! `proteus_runtime::Renderer::render`) while the *same* `Proteus` is handed
+//! to JS via [`ProteusApp`] — two independent owners of one mutable value is
+//! exactly `Rc<RefCell<_>>`'s job. `ProteusApp` is `Clone` (clones the `Rc`,
+//! not the data) so the host can keep its own handle after passing one to
+//! JS's `setup(app)` callback. [`ProteusApp::from_shared`] /
+//! [`ProteusApp::shared`] are the (non-`#[wasm_bindgen]`, Rust-only) seam a
+//! host crate uses to construct one and get its `Rc` back out — see
+//! `proteus-host-web`'s `JsDriver`.
+//!
+//! Every method borrows for the duration of the call only, never across a
+//! JS re-entrant call — a callback that calls back into another `ProteusApp`
+//! method (e.g. an `onClick` handler calling `.get()`) would otherwise
+//! double-borrow the same `RefCell` and panic. `signal_set`/`on_click`/etc.
+//! all drop their borrow before invoking `proteus-sdk`'s own callback
+//! dispatch machinery for this reason — see each method's borrow scoping
+//! below.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 
@@ -91,13 +117,32 @@ fn wrap_dropped(
 // ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
-pub struct ProteusApp(sdk::Proteus);
+#[derive(Clone)]
+pub struct ProteusApp(Rc<RefCell<sdk::Proteus>>);
+
+/// Rust-only seam for a host crate (`proteus-host-web`) — not part of the JS
+/// API surface. See the module doc's "Shared ownership" section.
+impl ProteusApp {
+    /// Wrap an already-shared `Proteus` — used when a host (not this crate)
+    /// owns the canonical `Rc` and needs to hand JS its own reference-counted
+    /// view of the same value.
+    pub fn from_shared(inner: Rc<RefCell<sdk::Proteus>>) -> Self {
+        ProteusApp(inner)
+    }
+
+    /// The underlying shared `Proteus`, for a host to drive `tick()` /
+    /// `refresh_cascades()` / rendering directly, outside the methods this
+    /// type exposes to JS.
+    pub fn shared(&self) -> Rc<RefCell<sdk::Proteus>> {
+        self.0.clone()
+    }
+}
 
 #[wasm_bindgen]
 impl ProteusApp {
     #[wasm_bindgen(constructor)]
     pub fn new() -> ProteusApp {
-        ProteusApp(sdk::Proteus::new())
+        ProteusApp(Rc::new(RefCell::new(sdk::Proteus::new())))
     }
 
     /// `spec` is a plain JS object matching the `ComponentSpec` TS
@@ -114,7 +159,7 @@ impl ProteusApp {
             let entity = bevy_ecs::prelude::Entity::from_bits(bits as u64);
             spec = spec.child(sdk::Handle::from_entity(entity));
         }
-        Ok(Handle(self.0.component(spec)))
+        Ok(Handle(self.0.borrow_mut().component(spec)))
     }
 
     /// `owner`, if present, is a `Handle.id()` value — not an opaque `Handle`
@@ -129,7 +174,7 @@ impl ProteusApp {
         let owner = owner.map(|bits| {
             sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64))
         });
-        SignalHandle(self.0.signal(owner))
+        SignalHandle(self.0.borrow_mut().signal(owner))
     }
 
     #[wasm_bindgen(js_name = signalSet)]
@@ -143,9 +188,13 @@ impl ProteusApp {
     ) -> Result<(), JsValue> {
         let dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
-        signal
-            .0
-            .set(&mut self.0, to.0, from.0, (&dto).into(), interruptible);
+        signal.0.set(
+            &mut self.0.borrow_mut(),
+            to.0,
+            from.0,
+            (&dto).into(),
+            interruptible,
+        );
         Ok(())
     }
 
@@ -154,12 +203,14 @@ impl ProteusApp {
     /// object after this call is invalid (same as in Rust).
     #[wasm_bindgen(js_name = signalDestroy)]
     pub fn signal_destroy(&mut self, signal: SignalHandle) {
-        signal.0.destroy(&mut self.0);
+        signal.0.destroy(&mut self.0.borrow_mut());
     }
 
     #[wasm_bindgen(js_name = onDropped)]
     pub fn on_dropped(&mut self, signal: &SignalHandle, cb: js_sys::Function) {
-        signal.0.on_dropped(&mut self.0, wrap_dropped(cb));
+        signal
+            .0
+            .on_dropped(&mut self.0.borrow_mut(), wrap_dropped(cb));
     }
 
     #[wasm_bindgen]
@@ -169,7 +220,7 @@ impl ProteusApp {
 
     #[wasm_bindgen(js_name = textureState)]
     pub fn texture_state(&self, handle: &TextureHandle) -> JsValue {
-        match handle.0.state(&self.0) {
+        match handle.0.state(&self.0.borrow()) {
             Some((kind, width, height)) => {
                 let dto = dto::TextureStateDto::from_state(kind, width, height);
                 serde_wasm_bindgen::to_value(&dto).unwrap_or(JsValue::UNDEFINED)
@@ -181,7 +232,7 @@ impl ProteusApp {
     /// Returns `undefined` if `handle` no longer refers to a live component.
     #[wasm_bindgen]
     pub fn get(&self, handle: &Handle) -> JsValue {
-        let Some(data) = self.0.get(handle.0) else {
+        let Some(data) = self.0.borrow().get(handle.0) else {
             return JsValue::UNDEFINED;
         };
         let children_bits: Vec<f64> = data
@@ -193,16 +244,23 @@ impl ProteusApp {
         serde_wasm_bindgen::to_value(&dto).unwrap_or(JsValue::UNDEFINED)
     }
 
+    /// Advance one frame. A host that also owns this `ProteusApp`'s shared
+    /// `Proteus` (via [`ProteusApp::shared`]) — as `proteus-host-web`'s
+    /// `JsDriver` does — drives `tick`/`render` itself instead of calling
+    /// this; it's here for headless/standalone use (Node smoke tests, an app
+    /// with no host at all).
     #[wasm_bindgen]
     pub fn tick(&mut self, dt: f32) {
-        self.0.tick(dt);
+        self.0.borrow_mut().tick(dt);
     }
 
     /// `x`/`y` are **world-space** (viewport-center origin, Y-up) — not
     /// window/CSS pixels. See this crate's top doc.
     #[wasm_bindgen(js_name = pointerMoved)]
     pub fn pointer_moved(&mut self, x: f32, y: f32) {
-        self.0.pointer_moved(Some(glam::Vec2::new(x, y)));
+        self.0
+            .borrow_mut()
+            .pointer_moved(Some(glam::Vec2::new(x, y)));
     }
 
     /// Call when the pointer leaves the window/canvas — distinct from
@@ -210,67 +268,75 @@ impl ProteusApp {
     /// position" as `None`, not a sentinel coordinate.
     #[wasm_bindgen(js_name = pointerLeft)]
     pub fn pointer_left(&mut self) {
-        self.0.pointer_moved(None);
+        self.0.borrow_mut().pointer_moved(None);
     }
 
     #[wasm_bindgen(js_name = pointerPressed)]
     pub fn pointer_pressed(&mut self) {
-        self.0.pointer_pressed();
+        self.0.borrow_mut().pointer_pressed();
     }
 
     #[wasm_bindgen(js_name = pointerReleased)]
     pub fn pointer_released(&mut self) {
-        self.0.pointer_released();
+        self.0.borrow_mut().pointer_released();
     }
 
     #[wasm_bindgen(js_name = onClick)]
     pub fn on_click(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_click(&mut self.0, wrap_plain(cb));
+        handle.0.on_click(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onHoverEnter)]
     pub fn on_hover_enter(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_hover_enter(&mut self.0, wrap_plain(cb));
+        handle
+            .0
+            .on_hover_enter(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onHoverExit)]
     pub fn on_hover_exit(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_hover_exit(&mut self.0, wrap_plain(cb));
+        handle
+            .0
+            .on_hover_exit(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onPress)]
     pub fn on_press(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_press(&mut self.0, wrap_plain(cb));
+        handle.0.on_press(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onRelease)]
     pub fn on_release(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_release(&mut self.0, wrap_plain(cb));
+        handle
+            .0
+            .on_release(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onFocus)]
     pub fn on_focus(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_focus(&mut self.0, wrap_plain(cb));
+        handle.0.on_focus(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onBlur)]
     pub fn on_blur(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_blur(&mut self.0, wrap_plain(cb));
+        handle.0.on_blur(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
     #[wasm_bindgen(js_name = onDrag)]
     pub fn on_drag(&mut self, handle: &Handle, cb: js_sys::Function) {
-        handle.0.on_drag(&mut self.0, wrap_drag(cb));
+        handle.0.on_drag(&mut self.0.borrow_mut(), wrap_drag(cb));
     }
 
     #[wasm_bindgen(js_name = addChild)]
     pub fn add_child(&mut self, parent: &Handle, child: &Handle) {
-        parent.0.add_child(&mut self.0, child.0);
+        parent.0.add_child(&mut self.0.borrow_mut(), child.0);
     }
 
     #[wasm_bindgen(js_name = removeChild)]
     pub fn remove_child(&mut self, parent: &Handle, child: &Handle, destroy: bool) {
-        parent.0.remove_child(&mut self.0, child.0, destroy);
+        parent
+            .0
+            .remove_child(&mut self.0.borrow_mut(), child.0, destroy);
     }
 
     /// Consumes `handle` — matches `proteus-sdk`'s own `Handle::destroy`,
@@ -278,12 +344,12 @@ impl ProteusApp {
     /// the JS `Handle` object after this call is invalid (same as in Rust).
     #[wasm_bindgen]
     pub fn destroy(&mut self, handle: Handle) {
-        handle.0.destroy(&mut self.0);
+        handle.0.destroy(&mut self.0.borrow_mut());
     }
 
     #[wasm_bindgen(js_name = freeResources)]
     pub fn free_resources(&mut self, handle: &Handle) {
-        handle.0.free_resources(&mut self.0);
+        handle.0.free_resources(&mut self.0.borrow_mut());
     }
 }
 

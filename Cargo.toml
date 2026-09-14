@@ -9,6 +9,7 @@ members = [
     "crates/proteus-sdk-web",
     "crates/proteus-runtime",
     "crates/proteus-host-winit",
+    "crates/proteus-host-web",
     "crates/proteus-demo",
     "crates/proteus-shell-web",
     "crates/proteus-shell-native",
@@ -75,6 +76,7 @@ wasm-bindgen = "0.2"
 web-sys = "0.3"
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }  # future::join_all for PreloadedHostServices' concurrent fetches
 console_error_panic_hook = "0.1"  # routes Rust panics to console.error on wasm
 
 # Native windowing

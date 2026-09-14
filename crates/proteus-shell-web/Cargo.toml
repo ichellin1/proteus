@@ -10,24 +10,20 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# M12.5 Step 9: all app/UI logic lives in proteus-demo now (built once
-# against proteus-sdk, also linked by proteus-shell-native) — this crate is
-# just the wasm platform glue around it. proteus-gpu and anyhow were unused
-# even before the cutover (zero references anywhere in src/).
-# wasm-bindgen-futures isn't referenced by name in src/ either, but is a
-# real dependency of wasm-bindgen's own macro-generated glue for `async fn`
-# exports (ProteusApp::init) — confirmed by removing it and hitting
-# `cannot find module or crate` at the macro expansion site.
-proteus-sdk = { path = "../proteus-sdk" }
+# M13.2 collapse: all platform glue (canvas/wgpu setup, rAF loop, DPI,
+# resize, Pointer Events, visibility-pause, context-loss) now lives in
+# proteus-host-web; this crate is just DemoApp wiring + the M13.4-debt
+# video/gallery/texture-churn shim (see src/lib.rs's crate doc) — the same
+# role proteus-shell-native's main.rs plays for the native host.
 proteus-demo = { path = "../proteus-demo" }
+proteus-host-web = { path = "../proteus-host-web" }
 proteus-render = { path = "../proteus-render" }
-proteus-ui = { path = "../proteus-ui" }
-bevy_ecs = { workspace = true }
-wgpu = { workspace = true }
-glam = { workspace = true }
+proteus-runtime = { path = "../proteus-runtime" }
 wasm-bindgen = { workspace = true }
-web-sys = { workspace = true, features = ["Window", "Document", "HtmlCanvasElement", "Navigator"] }
-js-sys = { workspace = true }
+# Not referenced by name in src/, but a real dependency of wasm-bindgen's own
+# macro-generated glue for `async fn` exports (`start`) — confirmed by the
+# pre-M13.2 shell hitting `cannot find module or crate` at the macro
+# expansion site without it.
 wasm-bindgen-futures = { workspace = true }
 log = { workspace = true }
 wasm-logger = { workspace = true }

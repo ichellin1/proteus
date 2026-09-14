@@ -38,6 +38,22 @@ impl Frame<'_> {
     pub fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle {
         crate::bake::load_texture(self.proteus.world_mut(), self.services, key, req)
     }
+
+    /// Bake already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
+    /// directly into `main_atlas` and return a [`TextureHandle`] — the
+    /// bake-alone half of [`Self::load_texture`], for a caller that already
+    /// has bytes in hand (e.g. procedurally generated content) rather than
+    /// an asset key to fetch (M13.4). A full atlas yields a null handle,
+    /// same graceful degradation as [`Self::load_texture`].
+    pub fn bake_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        req: TextureRequest,
+    ) -> TextureHandle {
+        crate::bake::bake_texture(self.proteus.world_mut(), width, height, rgba, req)
+    }
 }
 
 /// A Proteus application.
