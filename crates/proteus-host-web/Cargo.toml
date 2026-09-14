@@ -1,0 +1,32 @@
+[package]
+name = "proteus-host-web"
+description = "Layer 3: WebGPU/WebGL2 wasm host for proteus-runtime (M13.2)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Hosts depend on proteus-runtime only for the Rust-facing App/Host/Engine
+# seam — it re-exports wgpu + glam at the versions it builds against. The
+# TS-facing front door additionally depends on proteus-sdk-web, purely
+# additively (see PLANNING.md's M13.2 decision): the headless bridge stays
+# usable alone.
+proteus-runtime = { path = "../proteus-runtime" }
+proteus-sdk-web = { path = "../proteus-sdk-web" }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Window", "Document", "Element", "HtmlCanvasElement", "Navigator", "DomRect",
+    "ResizeObserver", "ResizeObserverEntry", "ResizeObserverBoxOptions", "ResizeObserverOptions",
+    "PointerEvent", "EventTarget", "AddEventListenerOptions",
+    "VisibilityState", "Request", "RequestInit", "Response",
+] }
+js-sys = { workspace = true }
+futures-util = { workspace = true }
+log = { workspace = true }
+wasm-logger = { workspace = true }
+console_error_panic_hook = { workspace = true }

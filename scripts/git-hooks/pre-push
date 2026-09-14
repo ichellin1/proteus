@@ -6,14 +6,15 @@ set -e
 echo "▶ cargo fmt --check"
 cargo fmt --all -- --check
 
-# proteus-shell-web is wasm32-only (its wgpu::SurfaceTarget::Canvas usage is
-# #[cfg(web)]-gated, i.e. target_arch = "wasm32") — it can never compile for
-# the host target, so it's excluded from the host-target clippy pass and
-# checked separately against its real target instead. Mirrors ci.yml.
-echo "▶ cargo clippy (host, workspace minus proteus-shell-web)"
-cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -- -D warnings
+# proteus-shell-web / proteus-host-web are wasm32-only (wgpu::SurfaceTarget::
+# Canvas usage is #[cfg(web)]-gated, i.e. target_arch = "wasm32") — neither
+# can ever compile for the host target, so both are excluded from the
+# host-target clippy pass and checked separately against their real target
+# instead. Mirrors ci.yml.
+echo "▶ cargo clippy (host, workspace minus proteus-shell-web/proteus-host-web)"
+cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
 
-echo "▶ cargo clippy (proteus-shell-web, wasm32-unknown-unknown)"
-cargo clippy -p proteus-shell-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+echo "▶ cargo clippy (proteus-shell-web + proteus-host-web, wasm32-unknown-unknown)"
+cargo clippy -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 echo "✓ pre-push checks passed"

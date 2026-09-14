@@ -2625,11 +2625,15 @@ the V2 roadmap honest: the post-V1 targets (native mobile, embedded/DRM-KMS, sma
 browser-engine-free TypeScript-native host) get designed against a real contract here (M13.7)
 instead of guessed at later.
 
-**Scope discipline.** Only **M13.8 (the TypeScript POC)** is a hard V1 *build*. **M13.2** (web
-host) and enough of **M13.1** (contracts) are built because the POC needs them, and `proteus-demo`
-is ported onto the new contract with both shells collapsed to thin entry points. **M13.3–M13.7 are
-design deliverables** — written into this document, reviewed and approved section by section — with
-implementation deferred to V2 except where V1 already exercises them.
+**Scope discipline.** **M13.8** (the TypeScript POC) is a hard V1 *build*. **M13.2** (web host) and
+enough of **M13.1** (contracts) are built because the POC needs them, and `proteus-demo` is ported
+onto the new contract with both shells collapsed to thin entry points. **M13.4 (asset & resource
+contract) is also built before V1 ships, not deferred** — its shims (video, gallery fetch, texture
+churn) are real functionality gaps in the framework itself, unlike M13.6's mobile-platform *reach*,
+which is genuinely additive and fine to defer. Proteus doesn't launch with a half-built asset story
+just because the reference demo happens to paper over it with shell-side escape hatches. **M13.3,
+M13.5, M13.6, M13.7 stay design deliverables** — written into this document, reviewed and approved
+section by section — with implementation deferred to V2 except where V1 already exercises them.
 
 **The Rust / TypeScript tradeoff is deliberate and permanent — not a gap to close.** Rust compiles
 to both native and wasm, so a Rust app is portable across every host by compilation, with no
@@ -2647,16 +2651,17 @@ in full):
 | M13.1 | **Core contracts & layering** — `Renderer` primitive; `Host` / `App` / `HostServices` traits; `Proteus` ownership moves to the host. The seam every target hangs off. | design + trait defs (build only what the POC needs) |
 | M13.2 | **Web host** — a Rust crate + the `ts/` layer on top: `run()`, canvas attach, rAF loop, DPI, safe-area, touch, visibility-pause, GPU context-loss recovery. Rust→web and TS→web are both front doors. | design + **build** |
 | M13.3 | **Native host (winit)** — `proteus-host-winit`; `proteus-shell-native` → thin `main()`. The `Host` trait stays windowing-agnostic from day one (the crate is `-winit`, not `-native`) so DRM/KMS, SDL2, and mobile hosts slot in later. | design (build optional for V1) |
-| M13.4 | **Asset & resource contract** — static textures, fonts, runtime loading; **video as a host service** with the `.mp4`/HLS codec split hidden per-host. | design |
+| M13.4 | **Asset & resource contract** — static textures, fonts, runtime loading; **video as a host service** with the `.mp4`/HLS codec split hidden per-host; retires the video/gallery/texture-churn shims on both shells. Real functionality gap, not a platform-reach one — built before V1, not deferred. | design + **build** |
 | M13.5 | **Configuration & memory model** — `ProteusConfig` through host construction; atlas-sizing strategy; safe defaults for constrained targets. | design |
-| M13.6 | **Mobile packaging** — Capacitor is the mobile solution: a `create-proteus-app` scaffold + an `examples/` template wrapping the M13.2 web bundle. Write-once across web + desktop + mobile. PWA / Tauri notes. | design + template |
+| M13.6 | **Mobile packaging** — Capacitor is the mobile solution: a template (not a published CLI) wrapping the M13.2 web bundle. Write-once across web + desktop + mobile. PWA / Tauri notes. **Build deferred to V2 (post-V1)** — this section is the concrete plan only, confirmed additive to M13.1/M13.2. | design only |
 | M13.7 | **Post-V1 target map** — how native mobile (iOS/Android), embedded Linux (DRM/KMS, no compositor), native smart-TV, a browser-engine-free TypeScript-native host (`proteus-host-jsengine`, embeds a JS engine), and XR each attach to M13.1 with zero re-architecture. Explicit seams, not code. | design |
-| M13.8 | **TypeScript POC** (the app that was briefly M12.7) — `.ts`-only, importing only the published `proteus-sdk`, on the M13.2 host; all three transition topologies; doubles as an M14 example. Validates M13.1 / M13.2 / M13.4 / M13.6. | **build** |
+| M13.8 | **TypeScript POC** (the app that was briefly M12.7) — `.ts`-only, importing only the published `proteus-sdk`, on the M13.2 host; all three transition topologies; doubles as an M14 example. Validates M13.1 / M13.2 / M13.4. (M13.6 validation happens once that milestone is actually built, in V2.) | **build** |
 
 **Definition of done:** M13.1–M13.7 written into this document and approved section by section;
-M13.8 built and green in CI; `proteus-demo` ported onto the M13.1 `App` contract with both shells
-collapsed to thin entry points; the reference demo still passes M6 visual regression on native and
-web.
+M13.4 and M13.8 built and green in CI, including `proteus-demo`'s video/gallery/texture-churn
+shims retired on both shells onto M13.4's real contract, not left as documented debt; `proteus-demo`
+ported onto the M13.1 `App` contract with both shells collapsed to thin entry points; the reference
+demo still passes M6 visual regression on native and web.
 
 ---
 
@@ -2903,8 +2908,134 @@ blocking this milestone on the full asset contract.
 
 #### M13.2 — Web Host
 
-**Status: design approved 2026-09-10; build blocked on M13.1 steps 2–5** (the `Renderer` and
-`Engine` must work first — sequencing option A: finish the M13.1 build, then build this).
+**Status: design approved 2026-09-10; build complete and reviewed — no regressions found.** All
+three parts (the `proteus-host-web` crate, the `proteus-shell-web` collapse, the `ts/` `mount()`
+npm wrapper) are done and verified; the user's own visual review of the real browser behavior
+(DPI/Pointer-Events/visibility-pause/video/gallery) found no regressions. The "M6 web baseline
+re-capture" item this section's own design sketch called for turned out to rest on a false
+premise — see the Definition of Done below for what M6 actually is and why the DPI change doesn't
+touch it at all.
+
+**Build part 1 — done:**
+- New crate `proteus-host-web`: `WebSurface` (DPI-aware — canvas backing store =
+  `clientWidth/Height × devicePixelRatio`, `Viewport` in CSS px), a shared `WebLoop<D: FrameDriver>`
+  (one `requestAnimationFrame` loop + `ResizeObserver` + Pointer Events + `visibilitychange` +
+  `webglcontextlost`/`restored`, wired once and reused by both front doors via a small internal
+  `FrameDriver` trait), `run<A: App>` (Rust → web, via the real `Engine`), `mount(canvasId, setup,
+  update)` (TS → web — see the ownership fix below), and `PreloadedHostServices` (see the asset-
+  loading decision below).
+- **Ownership fix landed**: `proteus_sdk_web::ProteusApp` changed from owning `sdk::Proteus`
+  outright to wrapping `Rc<RefCell<sdk::Proteus>>` (`ProteusApp: Clone`, clones the `Rc`). This is
+  what makes `mount()` sound — the host's render-loop driver and the JS-visible `ProteusApp`
+  handed to `setup()` now genuinely share one `Proteus`, each borrowing only for the duration of
+  one call (never held across a re-entrant JS call, which would double-borrow the `RefCell` and
+  panic — see that crate's module doc for the exact scoping rule each method follows).
+  `JsDriver::frame` hand-replicates `Engine::frame`'s exact sequence (`tick` → call JS `update` →
+  `refresh_cascades` → `Renderer::render`) since JS isn't a Rust `App` impl and so can't go through
+  `Engine` itself.
+- **Asset-loading decision, made concrete during the build**: a JS `setup(app)` function has no
+  `Frame`/`load_asset` (that seam is `proteus_runtime::App`-specific) — a JS app fetches and
+  attaches its own assets however it likes; generalizing that is M13.4, not this. For the **Rust**
+  front door (`DemoApp`, which does call `Frame::load_asset`), `HostServices::load_asset` staying
+  synchronous while `fetch` is async is resolved by `PreloadedHostServices::fetch(base_url, keys)`:
+  fetch a known, fixed key list concurrently *before* `Engine::new`/`App::setup` runs, then serve
+  the results synchronously from memory — the same role `DirHostServices` plays for a filesystem,
+  backed by pre-fetched bytes instead of `std::fs::read`.
+- **Scope narrowed from the original design, stated plainly:**
+  - *Safe-area insets*: `Viewport.safe_area` is always `Insets::default()` (zero) — no
+    `env(safe-area-inset-*)` probe yet. Correct on every desktop browser (nothing to report); a
+    real probe is a follow-up.
+  - *Context loss*: `webglcontextlost`/`webglcontextrestored` are listened for; loss logs a
+    warning and halts rendering, restore reconfigures the surface. The original sketch's full
+    "tear down and rebuild everything, re-fetch, re-bake" recovery is **not** implemented — a
+    genuine context loss today requires a page reload. Narrowed rather than half-built.
+- **Verified**: `cargo build`/`clippy --target wasm32-unknown-unknown -D warnings` clean, and a
+  full `wasm-pack build --target web` (real wasm-bindgen linking + `wasm-opt`, not just `cargo
+  check`) succeeds. `proteus-shell-web`/`proteus-host-web` added to the CI/Makefile/pre-push
+  wasm32-only exclusion lists (mirroring the existing `proteus-shell-web` pattern) alongside a new
+  wasm32 clippy pass covering both.
+
+**Build part 2a — done: the `proteus-shell-web` collapse.**
+- `proteus-shell-web` is now a thin wasm entry (`start(canvas_id)`) — see its own crate doc — that
+  fetches every asset key `DemoApp::setup` needs via `PreloadedHostServices::fetch`, then calls
+  `proteus_host_web::run(DemoApp::new(), ...)`. `www/index.html` dropped from ~710 to ~400 lines
+  (not the ~60 the original design sketch guessed — see the shim note below for why) by deleting
+  the ~40 individual `fetch().then(set_*)` asset calls, the `ResizeObserver`, and the mouse-event
+  wiring (all now internal to `proteus-host-web`/`Engine`).
+- **The M13.4-debt shim needed a real extension to `proteus-host-web`'s API, not just
+  `proteus-shell-web`-side code.** The generic `run()` hides its `Engine`/`App` inside the
+  closures driving its internal `requestAnimationFrame` loop — by design, nothing outside needs
+  it. But exactly like native's own M13.4-debt shim (`apply_video_actions` /
+  `apply_gallery_fetch` / `apply_texture_churn` in `proteus-shell-native/main.rs`, reached via
+  `Engine::proteus_mut()` / `DemoApp::demo_mut()`), the web demo's HLS video playback and
+  `picsum.photos` gallery fetch still need JS for the actual network/decode work, and still poll
+  `Demo::take_pending_*` to know when. Unlike native, this shim can't live inside the same
+  Rust-owned per-frame hook — the fetch/`<video>` work has to happen in JS. Resolved by growing
+  `proteus-host-web`: `WebLoop::driver_mut`, `RustDriver::app_mut`/`engine_mut`/`split_mut`, and
+  `run()` now returns the `Rc<RefCell<WebLoop<RustDriver<A, S>>>>` handle instead of `()` (any
+  caller that doesn't need it, like `mount()`, just discards it — the loop keeps running via its
+  own internal clones regardless). `proteus-shell-web` wraps that handle in `WebDemoHandle`, a
+  small wasm-bindgen struct exposing the same `take_pending_video_start` / `set_gallery_tile_image`
+  / `apply_texture_churn` style methods the old shell's `ProteusApp` had, polled once per
+  `www/index.html`'s own `requestAnimationFrame` tick (a second, JS-owned rAF loop alongside
+  `WebLoop`'s Rust-owned one — harmless: both are vsync-paced, so at most one frame of lag).
+  `split_mut` exists because a shim call site needing both `Proteus` (via `Engine`) and `Demo` (via
+  `DemoApp`) in the same expression can't get them from two sequential `&mut self` accessor calls
+  across a crate boundary — the borrow checker can't see the two calls touch disjoint fields, only
+  that a `&mut self` method was compiled from a different crate touches "some non-specific part of
+  self". Real regression avoided, not a design compromise: gallery images (both the grid tiles and
+  the hires overlay) turned out to need *no* manual atlas bake code at all — `Demo::
+  set_gallery_tile_image`/`set_gallery_hires_image` just attach an `Image` component, which the
+  generic `Renderer::render` bake pass already picks up, exactly mirroring what native's own
+  equivalent shim already relies on.
+- **Verified**: `cargo build`/`clippy --target wasm32-unknown-unknown -D warnings` clean for both
+  crates; `cargo fmt --check` and the host-target clippy/test passes stay green; a full `wasm-pack
+  build --target web` succeeds. Loaded the built page in a real browser tab against the demo's own
+  `www/` assets: all 55 preloaded asset keys fetch `200`, the WebGPU adapter initializes, the
+  renderer reports its GPU-memory estimate, status reaches "Running", and a pointer click against
+  the canvas produces no console errors. This confirms the collapse works end-to-end at a
+  technical level; the user's own visual review (per the standing "the user does visual review"
+  convention) — including a fresh look at video/gallery/texture-churn now that they're routed
+  through the new shim — is still the actual acceptance check, not done here.
+
+**Build part 2b — done: the `ts/` `mount()` npm wrapper.** Initially flagged as an unsolved
+cross-module wasm-bindgen problem: `proteus-host-web`'s `mount()` hands `setup`'s callback a
+`proteus_sdk_web::ProteusApp` compiled as part of *`proteus-host-web`'s own* separate wasm binary
+(it depends on `proteus-sdk-web` as an ordinary Rust crate, so that struct's `#[wasm_bindgen]`
+exports get baked into `proteus-host-web`'s own generated JS glue too), while the existing `ts/`
+`ProteusApp`/`Handle` wrapper classes are built against `proteus-sdk-web`'s *own* separate
+`wasm-pack` output — two different wasm modules, each independently generating a JS class for the
+same Rust struct. **Investigated properly instead of assumed, and it turned out fine, not a
+blocker:** built `proteus-host-web` with `--target bundler` into a scratch dir and diffed its
+generated `.d.ts` against `proteus-sdk-web`'s own — identical modulo doc comments (both compile
+the same `#[wasm_bindgen] impl ProteusApp` block). `ProteusApp`'s `.d.ts` declares no `private`
+members (unlike `Handle`/`SignalHandle`/`TextureHandle`, which do, via `private constructor()`) —
+TypeScript only forces nominal/branded comparison on classes with private or protected members, so
+a fully-public class like this one is compared structurally, and `tsc --strict` (matching the
+project's real `tsconfig.json`, `skipLibCheck` included) accepted assigning one module's generated
+`ProteusApp` where the other's was expected with zero cast, confirmed with a throwaway test file
+rather than assumed. Runtime soundness confirmed the same way, not assumed: each generated class
+method closes over a *module-local* `wasm` binding (e.g. `wasm.__wbg_proteusapp_free(ptr, ...)` in
+that module's own `_bg.js`), so a `ProteusApp` minted by one wasm binary always dispatches back
+into that same binary — nothing here ever crosses between the two.
+- `proteus-sdk-web/ts/src/index.ts`'s `ProteusApp` constructor now takes an optional pre-built
+  `wasmApp` (`constructor(wasmApp?: WasmApp)`) instead of always calling `new WasmApp()` — used to
+  wrap the raw object `mount()`'s callback receives.
+- New `proteus-sdk-web/ts/src/mount.ts`: imports the raw wasm `mount` from a second `wasm-pack
+  --target bundler` output, `ts/pkg-host/` (alongside the existing `ts/pkg/` for
+  `proteus-sdk-web` itself — both built from `proteus-host-web`'s and `proteus-sdk-web`'s Cargo
+  crates respectively, both bundled into the one `proteus-sdk` npm package per the "one npm
+  package" decision above), and wraps the raw app it hands `setup` in `new ProteusApp(rawApp)`
+  before calling the caller's own `setup`. Re-exported from `ts/src/index.ts`.
+- `package.json`'s `files` and `prepack` (which strips wasm-pack's own generated `.gitignore`),
+  the root `.gitignore`, the `Makefile`'s `build-sdk-web`, and `ci.yml`'s `sdk-web` job all updated
+  to build and bundle `pkg-host/` alongside `pkg/`.
+- **Verified**: `tsc --noEmit` clean against the real `tsconfig.json`; `npm pack --dry-run`
+  produces a publishable tarball containing both `pkg/` and `pkg-host/` (2.4 MB packed / 6.5 MB
+  unpacked, 21 files).
+
+The M6 web baseline re-capture: see the Definition of Done below — it turned out to be a
+non-issue, not outstanding work.
 
 ##### What's welded on the web side today
 
@@ -2952,7 +3083,7 @@ the engine's `Proteus`, valid only for that call — a small real change to `pro
 
 | Concern | M13.2 approach |
 |---|---|
-| **DPI** | canvas backing store = `clientWidth × devicePixelRatio`; `Viewport { logical_size: client, scale_factor: dpr }`; renderer projects in logical px, surface configures in physical. **Behavior change — done now:** today's shell is 1:1 CSS px; retina gets sharper. M6 web baselines re-captured as part of this milestone. |
+| **DPI** | canvas backing store = `clientWidth × devicePixelRatio`; `Viewport { logical_size: client, scale_factor: dpr }`; renderer projects in logical px, surface configures in physical. **Behavior change — done now:** today's shell is 1:1 CSS px; retina gets sharper. *(This design sketch originally assumed M6 had per-platform pixel baselines that would need re-capturing here — it doesn't; see the M6 section's own DoD entry below for what M6 actually tests and why this change doesn't touch it.)* |
 | **Safe-area** | probe `env(safe-area-inset-*)` → `Viewport.safe_area`; zero on desktop; plumbed, demo need not consume it in V1 |
 | **Input** | Pointer Events only (mouse + touch unified); keyboard / directional nav stays a stub (`navigation_system` already is) — seam noted, not built |
 | **visibility-pause** | host stops rAF when hidden, resumes with clamped `dt` |
@@ -2981,17 +3112,17 @@ M13.1. Generalizing "app asks the host to run an async job" is M13.4.
 
 - [x] **`proteus-host-web` depends on `proteus-sdk-web`** (not the reverse, no shared third crate) — host is additive.
 - [x] **One npm package.** The single `proteus-sdk` package; `mount()` pulls the host wasm in as part of it. More dev-friendly than a separate `@proteus/web-host`.
-- [x] **DPI change lands in M13.2**, with M6 web baselines re-captured — rather than shipping a knowingly-soft web renderer.
+- [x] **DPI change lands in M13.2** — rather than shipping a knowingly-soft web renderer. *(No baseline re-capture needed at all — see the Definition of Done below.)*
 - [x] **Pointer Events replace the mouse + touch listener split.**
 
 ##### Definition of done
 
-- [ ] `proteus-host-web` implements `Host`, exposes `run<A: App>` (Rust) and `run(canvasId, jsApp)` (wasm-bindgen).
-- [ ] `ts/` exposes `mount(canvas, { setup, update })`; the `proteus-sdk` npm package re-exports it; `tsc --noEmit` clean.
-- [ ] `proteus-shell-web` is a thin entry; `www/index.html` shrunk; asset loading goes through `HostServices`.
-- [ ] DPI-aware; Pointer Events; visibility-pause; context-loss recovery all working in a real browser (staging preview).
-- [ ] Reference demo passes M6 visual regression on web against re-captured baselines.
-- [ ] `cargo clippy` (wasm target) + `tsc` wired into `ci.yml`; staging deploy green.
+- [x] `proteus-host-web` exposes `run<A: App, S: HostServices>` (Rust → web) and `mount(canvasId, setup, update)` (TS → web, wasm-bindgen). *(Doesn't actually implement the `Host` trait — `Engine::new`/`frame` take `device`/`queue`/`surface_format`/`viewport` as plain args, same as `proteus-host-winit`'s own `Running` needing it only for its own bookkeeping; not a gap, the original design guessed a shape that turned out unnecessary.)*
+- [x] `ts/` exposes `mount(canvas, { setup, update })` (`proteus-sdk-web/ts/src/mount.ts`); the `proteus-sdk` npm package bundles and re-exports it; `tsc --noEmit` clean; `npm pack --dry-run` publishable (both `pkg/` and the new `pkg-host/` included). See "Build part 2b" for the cross-module wasm-bindgen question this raised and how it resolved.
+- [x] `proteus-shell-web` is a thin entry; `www/index.html` shrunk (~710 → ~400 lines, not ~60 — see "Build part 2a"); asset loading goes through `HostServices`.
+- [x] DPI-aware; Pointer Events; visibility-pause working — confirmed via a real loaded page (adapter init, asset fetches, a pointer click, no console errors). Context-loss recovery stays narrowed-scope (log + halt, not full rebuild — see "Scope narrowed" above). **Still needs the user's own visual review**, not just this technical smoke check.
+- [x] Reference demo passes M6 visual regression on web. **The "re-captured baselines" framing in this section's design sketch was a false premise, corrected on investigation rather than acted on**: M6 (see that milestone's own section) deliberately isn't pixel snapshots at all — "GPU-dependent, non-deterministic across drivers, requires GPU in CI" is the exact reason it tests `collect_instances`'s `Vec<QuadInstance>` output instead, in logical/world units, with zero per-platform baseline artifacts to capture or diff, on native or web. The DPI change (canvas backing store × `devicePixelRatio`) only touches the wgpu surface's physical-pixel configuration — `Viewport.logical_size` (what `collect_instances`'s math actually runs on) is unaffected. `cargo test -p proteus-ui` (part of the `cargo test --workspace` pass already run and green throughout this milestone's build) already *is* "M6 on web" passing, same suite as native — there was never a separate web run to do.
+- [x] `cargo clippy` (wasm target) + `tsc` wired into `ci.yml` (`wasm` job covers `proteus-shell-web`/`proteus-host-web`; `sdk-web` job now builds `pkg-host/` before `tsc`/`npm pack`). Staging deploy — not set up this milestone (no staging environment exists yet for this project).
 
 #### M13.3 — Native Host (winit)
 
@@ -3089,10 +3220,139 @@ documented M13.4 shim on the native demo entry, parallel to the web side.
 
 #### M13.4 — Asset & Resource Contract
 
-*Status: not started. Depends on M13.1.* How an app requests textures/fonts/video and the host
-fulfils them per-platform (disk / `fetch` / bundle). Video becomes a host service with an
-app-facing API; the `.mp4`-vs-HLS split stays inside each host impl. `proteus-demo`'s
-`take_pending_*` methods are the prototype to generalize.
+**Status: design approved 2026-09-14; build required before V1 ships (not deferred); build in
+progress — step 1 of 4 done (texture churn).** Unlike M13.6's mobile-platform *reach*, which is
+additive and fine to add in V2, this section closes real functionality gaps already live in the
+shipped framework — the video, gallery-fetch, and texture-churn shims both shells currently carry
+as `demo_mut()`/`engine.proteus_mut()` escape hatches around the `App`/`Frame` contract, rather
+than going through it. Depends on M13.1.
+
+**Build step 1 — done: texture churn.** `Frame::bake_texture(width, height, rgba, req) ->
+TextureHandle` added (`proteus-runtime/src/app.rs`), backed by a new `crate::bake::bake_texture`
+free function — `crate::bake::load_texture` now calls it after its own fetch+decode instead of
+duplicating the atlas-registration tail, so the two share one code path rather than two copies
+that could drift. `DemoApp::update` (`proteus-demo/src/app.rs`) now drains `Demo::
+take_pending_texture_churn()` and calls `f.bake_texture(...)` + `Handle::set_texture` itself,
+right after `demo.advance(...)` — `Demo` stays exactly as headless as before (still generates the
+synthetic RGBA bytes with zero `Frame`/GPU access of its own), but the shell no longer has to. Both
+shells' `apply_texture_churn` shim methods deleted outright — native's `RenderState` and web's
+`WebDemoHandle` (`www/index.html`'s `applyTextureChurn()` poll call removed too), no `#[allow]`s or
+leftover dead code. **Verified**: `cargo fmt --check`, `cargo clippy -D warnings` clean on both the
+host target and `wasm32-unknown-unknown`, the full test suite (53 `proteus-demo` tests unchanged —
+`Demo`'s own churn-generation logic didn't need to change at all, only who bakes the result), and a
+full `wasm-pack build --target web` + live browser load (WebGPU adapter initializes, renderer
+reports its memory estimate, status reaches "Running", zero console errors).
+
+##### The shims don't share one problem
+
+Investigated each of the three `proteus-demo` shims individually rather than assuming they need
+one uniform fix — they don't:
+
+1. **Texture churn isn't async at all.** `Demo::take_pending_texture_churn` already generates its
+   `Vec<TextureChurnUpdate>` RGBA bytes synchronously, instantly — no I/O, no waiting. The only
+   reason it's a shim is that `Frame`/`HostServices` has no "bake bytes I already have into a
+   texture" method; `Frame::load_texture` only offers *fetch-then-bake*, with no way to skip
+   straight to the bake half when the caller already has bytes in hand.
+2. **Fonts and lazy-bake scheduling aren't gaps needing new design at all.** Both are already
+   fully specified from M13.5 and just never wired: `TextConfig.default_font: FontSource`
+   (`Embedded` / `Bytes(Arc<[u8]>)`) and `ResourceConfig.lazy_load`/`eviction` exist today as
+   config fields whose own doc comments already say "not yet wired." `FontAtlas::new(&[u8])` for
+   custom fonts already exists too. `Renderer::new` just hardcodes `FontAtlas::with_embedded_font()`
+   today instead of reading `config.text.default_font`, and the bake pass bakes every `Image`/
+   `Text` the instant `Renderer::render` sees it regardless of `Visibility`, instead of respecting
+   `lazy_load`. Pure wiring — no contract to design.
+3. **Video and gallery fetch are the real gap.** Genuinely async, unpredictable-timing work that
+   only reaches the screen today via `Demo::take_pending_*` plus shell-side code reaching past
+   `Frame` into `Engine::proteus_mut()`/`DemoApp::demo_mut()` — accessors that had to be added
+   specifically because `HostServices` has no async concept whatsoever.
+
+##### The contract
+
+**Synchronous bake-only path (closes gap 1):**
+`Frame::bake_texture(&mut self, rgba: &[u8], width: u32, height: u32, req: TextureRequest) ->
+TextureHandle` — a mechanical split of `load_texture`'s existing decode/fetch-then-bake internals
+(`crate::bake::load_texture`) into a fetch half and a bake-alone half, the latter newly exposed.
+Retires the texture-churn shim outright: `Demo` calls this directly from inside `App::update`
+instead of queuing an update the shell drains and bakes by hand. No new async machinery, no
+`HostServices` change.
+
+**Font and lazy-load wiring (closes gap 2):** `Renderer::new` matches on `config.text.default_font`
+(`Embedded` → today's call, `Bytes(bytes)` → `FontAtlas::new(&bytes)`); the bake pass checks
+`config.resources.lazy_load` and, if set, skips an `Image`/`Text` entity with `Visibility::HIDDEN`
+until it becomes visible (respecting `eviction: EvictionPolicy::Never` as "don't silently re-bake,
+fail loudly instead" once that path exists). Both fields already validated by
+`validate_render_config`'s M13.5 sibling checks; this is additive wiring, not new validation.
+
+**General async fetch (closes half of gap 3 — gallery):**
+```
+fn fetch_async(&mut self, key_or_url: &str) -> FetchId;
+fn poll_fetches(&mut self) -> Vec<(FetchId, FetchOutcome)>;
+fn cancel_fetch(&mut self, id: FetchId);
+```
+on `HostServices`, thinly re-exposed on `Frame` so an app never needs to reach past it. One shape
+covers two needs that turned out to be the same problem: **lazy-loading** an asset not in the
+`PreloadedHostServices`-style prefetched set, and **arbitrary-URL fetches** like the gallery's
+`picsum.photos` calls — both are "fetch bytes from wherever this host knows how to fetch them, at
+an unpredictable time, poll for the result." `poll_fetches` is called once per `Engine::frame`,
+generalizing the exact "polled take" shape `Demo::take_pending_*` already proved out, just through
+the real contract instead of a shell-specific one. Coexists with `load_asset`/
+`PreloadedHostServices`, doesn't replace either — a host (or app) that knows its full asset set up
+front still has no reason to go through the async path at all.
+
+**Video as its own contract, because it's a stream, not a fetch (closes the other half of gap 3):**
+```
+fn open_video(&mut self, key: &str) -> Box<dyn VideoStream>;
+
+trait VideoStream {
+    fn poll_frame(&mut self) -> Option<VideoFrame>; // None = no new frame yet
+    fn stop(self: Box<Self>);
+}
+struct VideoFrame { width: u32, height: u32, rgba: Arc<[u8]> }
+```
+Deliberately GPU-unaware — keeps `HostServices` impls free of any `proteus-render` dependency,
+matching `DirHostServices`/`PreloadedHostServices` today. `Frame` bridges this to the *already
+host-agnostic, already proven on both platforms* `QuadPipeline::init_video`/`upload_video_frame`/
+`suspend_video` calls via `Frame::play_video(key) -> PlayingVideo` (calls `open_video`, then
+`init_video`) and `Frame::poll_video(&mut PlayingVideo)` (calls `poll_frame`, then
+`upload_video_frame` if a frame landed) — the app calls the latter once per `update`, same
+"shell/app drives the upload, host owns acquisition" split already proven, just relocated onto the
+real contract. Per-codec decode (ffmpeg spawn native, `<video>`/`MediaSource` web) stays entirely
+inside each host's `open_video` impl, per this section's own original framing — `HostServices`
+never sees a codec.
+
+##### What deliberately stays app-specific
+
+`HostServices`/`Frame` generalize the *mechanism* only. `Demo` (or any app) still owns: which
+photo/video to request and when, `GALLERY_FETCH_TIMEOUT_SECS`/`VIDEO_LOAD_TIMEOUT_SECS`-style
+give-up logic, and stashing anything host-agnostic-by-design doesn't track itself (e.g. which
+picsum photo id a tile is currently showing — `Demo` already does this, unchanged). None of that
+moves into the framework; conflating "generalize the fetch" with "generalize the app's own
+business logic about what to fetch" would be over-design.
+
+##### What M13.8 actually exercises
+
+The TS POC (button → list → detail, no video/gallery) only exercises the already-built M13.1
+static-asset path (`load_asset`/`load_texture`), not the new `fetch_async`/`open_video` contract
+this section adds. Real end-to-end verification of the new contract is `proteus-demo`'s own three
+shims migrating onto it, on both shells, with equivalent behavior and the shims deleted — not a
+separate example app.
+
+##### Decisions
+
+- [x] Three separate fixes, not one unified abstraction — the shims didn't share a root cause, so a single "generalized resource" trait would have forced texture churn and video through the same shape for no reason.
+- [x] `fetch_async`/`open_video` are additive to `load_asset`, never a replacement — a host or app with a known, fixed asset set has no reason to pay for async plumbing.
+- [x] Video stays GPU-unaware in `HostServices`; the GPU bridge lives in `Frame`, reusing `QuadPipeline`'s existing, already-proven video-texture calls unchanged.
+- [x] Timeouts and "what to request" logic stay app-level, not framework-level.
+- [x] Built before V1 (not deferred like M13.6) — these are functionality gaps in the framework itself, not platform reach.
+
+##### Definition of done
+
+- [x] `Frame::bake_texture` exists; `proteus-demo`'s texture-churn shim (native and web) migrated onto it; shell-side `register_static`/`write_to_main_atlas`/`Handle::set_texture` shim code deleted.
+- [ ] `TextConfig.default_font` and `ResourceConfig.lazy_load` actually wired into `Renderer::new`/the bake pass.
+- [ ] `HostServices::fetch_async`/`poll_fetches`/`cancel_fetch` implemented for `DirHostServices`, `PreloadedHostServices`, and a JS-facing equivalent for `mount()`-authored apps; `proteus-demo`'s gallery shim migrated onto it on both shells.
+- [ ] `HostServices::open_video`/`VideoStream` implemented per host (ffmpeg native, HLS/MediaSource web); `Frame::play_video`/`poll_video` built; `proteus-demo`'s video shim migrated onto it on both shells.
+- [ ] All `demo_mut()`/`engine.proteus_mut()` escape hatches added during M13.1/M13.2 specifically for these three shims are deleted — if any remain, this milestone isn't actually done.
+- [ ] `cargo clippy -D warnings` (both targets), `cargo fmt --check`, and the full test suite green; reference demo passes M6 visual regression on both shells with identical (not just similar) video/gallery/texture-churn behavior to before.
 
 #### M13.5 — Configuration & Memory Model
 
@@ -3193,10 +3453,85 @@ to 1024²; acceptable on the slower GPU a constrained target usually pairs with.
 
 #### M13.6 — Mobile Packaging
 
-*Status: not started. Depends on M13.2.* Capacitor wraps the M13.2 web bundle in a system WebView
-— the only path for TypeScript app logic on iOS (JIT is WKWebView-only). A `create-proteus-app`
-scaffold + an `examples/` template; one TS codebase → web + desktop (Tauri) + mobile (Capacitor).
-Not framework code — templates and docs.
+**Status: design approved 2026-09-14; build deferred to V2 (post-V1).** Mobile isn't a V1 target —
+this section is a concrete, actionable plan for how it attaches later, confirmed to require zero
+rework of M13.1/M13.2's already-shipped architecture. Depends on M13.2 (the web bundle this wraps).
+
+##### The plan
+
+Capacitor wraps the M13.2 `mount()`-based web bundle — already a plain static build (HTML + JS
+glue + wasm) — in a native WebView shell:
+
+- **iOS**: WKWebView. Not a preference — it's the *only* path for TS app logic on iOS at all,
+  since Apple only permits JIT compilation inside WKWebView; any other embedding strategy for a
+  TS-authored app is a non-starter there.
+- **Android**: the system WebView (Chromium-based on any Android version this project would target).
+
+This needs no new Rust/framework code. Capacitor's own model is `npx cap add ios`/`android`
+generating native shell projects, with `capacitor.config.json`'s `webDir` pointed at the
+bundler's static output — the native shell loads that build from `capacitor://localhost` (iOS) /
+`https://localhost` (Android) instead of a real HTTP origin. Packaging and config, not framework
+work — matching the original stub's own framing.
+
+##### What ships, once actually built (V2)
+
+- **A template, not a published CLI.** `examples/capacitor-starter/` (or similar name), copyable
+  via `degit`/manual clone, not an npm-published `create-proteus-app` package — a published CLI is
+  real ongoing maintenance (version skew against whatever Capacitor/Vite/`proteus-sdk` versions
+  exist when someone runs it) that isn't worth taking on before V1 ships, or possibly ever if the
+  template alone proves sufficient. Upgrading a proven template into a real scaffolding CLI later
+  is itself additive — no design change needed here to support that path if it's ever wanted.
+  Doubles as one of M14's required example apps once built.
+- **Vite as the bundler** — zero-config wasm asset handling, first-class Capacitor community
+  tooling, the ecosystem's own default for "ship one TS app everywhere." M13.8's TS POC should
+  reuse this choice rather than pick separately, so the two examples don't diverge for no reason.
+- **Safe-area handled entirely at the CSS/template layer**, not in Rust: the `<canvas>` sits inside
+  a container sized with `env(safe-area-inset-*)`. See "Why this is safe to defer" below for why
+  this needs no `Viewport.safe_area` change.
+- **PWA and Tauri stay documentation, not built examples** — a short "point `webDir`/`distDir` at
+  the same static build" note for each, matching the original stub's own "PWA / Tauri notes"
+  framing (Tauri reaches *desktop*, not mobile, this way — the "write-once" claim spans web +
+  desktop + mobile only once all three are actually wired, which V2 build is what does that).
+
+##### Known risk, flagged rather than assumed away
+
+Whether `fetch()`-based wasm loading behaves identically under Capacitor's `capacitor://`/
+`https://localhost` custom scheme versus a real HTTP origin hasn't been verified — some
+Capacitor/WebView combinations have historically needed MIME-type or asset-serving config tweaks
+for `.wasm`. This is a **build-time verification risk, not an architecture risk**: if it surfaces,
+the fix is a Capacitor/Vite config change, not a `proteus-host-web`/`proteus-runtime` change.
+Confirming this empirically — on a real iOS Simulator at minimum, Android too if tooling exists at
+build time — belongs in that future milestone's own Definition of Done, not this one's.
+
+##### Why this is safe to defer
+
+Nothing in M13.1's `Host` trait or M13.2's `WebSurface`/`mount()` design assumes a particular
+delivery mechanism (a real HTTP server vs. a bundled WebView) or a nonzero safe-area value — the
+host boundary was already built platform-agnostic, on purpose, before this section existed.
+Specifically for safe-area: `WebSurface::new`/`resize` already size off the canvas element's own
+`getBoundingClientRect()`, and Pointer Events' `offsetX`/`offsetY` are already canvas-relative —
+inset the canvas via CSS and the existing DPI/pointer code picks up the new, smaller, inset size
+and coordinates automatically, with zero Rust change. `Viewport.safe_area` stays
+`Insets::default()` (as M13.2 already left it) and doesn't need to become real for this to work
+correctly. Deferring the actual Capacitor wrapping to V2 costs nothing architecturally.
+
+##### Decisions
+
+- [x] Template, not a published CLI, for the first cut.
+- [x] Vite as the bundler.
+- [x] Safe-area via CSS at the template layer, not a `Viewport.safe_area` probe.
+- [x] PWA/Tauri stay doc notes, no built example, for now.
+- [x] Build deferred to V2 — this milestone delivers the plan only, not working software.
+
+##### Definition of done
+
+- [x] Concrete, actionable plan written above: Capacitor mechanics, bundler choice, safe-area
+  approach, template location and delivery form, the one known verification risk stated plainly.
+- [x] Confirmed the plan requires zero changes to already-shipped M13.1/M13.2 code — additive-only,
+  not "probably fine."
+- [ ] *(V2/post-V1, not this milestone)* Template actually built; `npx cap add ios`/`android`
+  verified booting and rendering on a real simulator/emulator; the wasm-under-custom-scheme risk
+  above resolved one way or the other.
 
 #### M13.7 — Post-V1 Target Map
 
@@ -3251,7 +3586,9 @@ cross-shell requirement.
 ### Post-Release
 Planned future work, not part of the V1 scope. **Platform/host targets below (native mobile,
 embedded Linux, smart-TV, TypeScript-native, XR) are designed in M13.7 against the M13.1 `Host`
-contract — this section tracks their *implementation*, which is deferred to V2.**
+contract — this section tracks their *implementation*, which is deferred to V2. Mobile packaging
+via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
+not V1.**
 
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
@@ -3261,8 +3598,9 @@ contract — this section tracks their *implementation*, which is deferred to V2
 - Transition `direction` and `stagger` — superseded by the `childBehavior` iterator pattern. Developers implement these as iterator functions rather than framework primitives. No separate post-V1 work needed.
 - XR shell (WebXR / OpenXR) — seam designed in M13.7
 - Native mobile hosts — iOS and Android on a real native surface (Metal/Vulkan), for Rust authors
-  and perf-minded apps; designed in M13.7. (TypeScript authors reach mobile in V1 via the M13.6
-  Capacitor webview path.)
+  and perf-minded apps; designed in M13.7.
+- Mobile packaging for TypeScript authors — the Capacitor webview path designed in M13.6 (template
+  + Vite + CSS-only safe-area, confirmed to need zero M13.1/M13.2 rework); not built for V1.
 - `proteus-host-jsengine` — a browser-engine-free TypeScript-native desktop host (embeds
   Deno/Boa/QuickJS); gives TS authors real native GPU without a webview. Designed in M13.7.
 - Benchmark tests — a proper, ongoing performance benchmark suite beyond M1's single WASM-boundary

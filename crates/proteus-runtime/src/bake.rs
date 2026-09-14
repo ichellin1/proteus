@@ -16,39 +16,76 @@ use std::sync::Arc;
 use bevy_ecs::prelude::{Entity, Without};
 use bevy_ecs::world::World;
 
-use proteus_render::{decode_image, resize_to_fit, FontAtlas, GpuContext, QuadPipeline, TextureId};
+use proteus_render::{
+    decode_image, resize_to_fit, DecodedImage, FontAtlas, GpuContext, QuadPipeline, TextureId,
+};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{BakedImage, BakedText, Image, Text, TextureRef};
 
 use crate::services::{HostServices, TextureRequest};
 
-/// Fetch an asset's bytes via `services`, decode + downscale, upload to
-/// `main_atlas`, and return a handle. Backs [`Frame::load_texture`].
+/// Fetch an asset's bytes via `services`, decode, and bake — backs
+/// [`Frame::load_texture`]. The fetch-and-decode half of the work; the actual
+/// atlas registration/upload is [`bake_texture`], shared with
+/// [`Frame::bake_texture`] (M13.4) for a caller that already has pixels in
+/// hand and has no key to fetch (e.g. procedurally generated content).
 ///
-/// A missing/undecodable asset, a full atlas, or a missing `QuadPipeline`
-/// all yield a null `TextureHandle` — `Handle::set_texture` and the collect
-/// path both no-op on an unknown id, so the component renders as nothing.
-/// Same graceful degradation the M12 shells' `set_*` asset paths had.
+/// A missing/undecodable asset yields a null `TextureHandle` — see
+/// [`bake_texture`]'s own doc for the rest of the graceful-degradation story.
 ///
 /// [`Frame::load_texture`]: crate::Frame::load_texture
+/// [`Frame::bake_texture`]: crate::Frame::bake_texture
 pub(crate) fn load_texture(
     world: &mut World,
     services: &mut dyn HostServices,
     key: &str,
     req: TextureRequest,
 ) -> TextureHandle {
-    let null = TextureHandle::from_texture_id(TextureId::default());
-
     let Some(bytes) = services.load_asset(key) else {
         log::warn!("load_texture: asset not found: {key}");
-        return null;
+        return TextureHandle::from_texture_id(TextureId::default());
     };
-    let mut decoded = match decode_image(&bytes) {
+    let decoded = match decode_image(&bytes) {
         Ok(decoded) => decoded,
         Err(e) => {
             log::warn!("load_texture: {key}: {e}");
-            return null;
+            return TextureHandle::from_texture_id(TextureId::default());
         }
+    };
+    bake_texture(
+        world,
+        decoded.width,
+        decoded.height,
+        decoded.rgba_pixels,
+        req,
+    )
+}
+
+/// Bake already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
+/// directly into `main_atlas` and return a handle — the bake-alone half of
+/// [`load_texture`], for a caller that already has bytes in hand instead of
+/// an asset key to fetch (M13.4; backs [`Frame::bake_texture`]). `req.max_side`
+/// still applies, same as `load_texture`'s own downscale.
+///
+/// A full atlas or a missing `QuadPipeline` both yield a null `TextureHandle`
+/// — `Handle::set_texture` and the collect path both no-op on an unknown id,
+/// so the component renders as nothing. Same graceful degradation the M12
+/// shells' `set_*` asset paths had.
+///
+/// [`Frame::bake_texture`]: crate::Frame::bake_texture
+pub(crate) fn bake_texture(
+    world: &mut World,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    req: TextureRequest,
+) -> TextureHandle {
+    let null = TextureHandle::from_texture_id(TextureId::default());
+
+    let mut decoded = DecodedImage {
+        width,
+        height,
+        rgba_pixels: rgba,
     };
     if let Some(cap) = req.max_side {
         decoded = resize_to_fit(decoded, cap);
@@ -64,7 +101,7 @@ pub(crate) fn load_texture(
             .register_static(decoded.width, decoded.height, req.eternal)
     else {
         log::warn!(
-            "load_texture: {key}: main_atlas full — could not register {}x{}",
+            "bake_texture: main_atlas full — could not register {}x{}",
             decoded.width,
             decoded.height,
         );

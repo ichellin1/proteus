@@ -32,13 +32,14 @@
   },
   "files": [
     "dist",
-    "pkg"
+    "pkg",
+    "pkg-host"
   ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "prepack": "rm -f pkg/.gitignore"
+    "prepack": "rm -f pkg/.gitignore pkg-host/.gitignore"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

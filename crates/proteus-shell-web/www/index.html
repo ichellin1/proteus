@@ -29,14 +29,12 @@
 
     canvas {
       display: block;
-      /* Matches proteus-shell-native's default window
-         (`with_inner_size(LogicalSize::new(1280, 800))` in main.rs) so
-         both shells lay out identically at default size — divergent sizes
-         made layouts computed against one shell's window clip/overflow in
-         the other. */
+      /* Matches proteus-shell-native's default window so both shells lay
+         out identically at default size. CSS size only — the backing store
+         resolution (canvas width/height attrs) is set by proteus-host-web
+         itself, at CSS size × devicePixelRatio (M13.2's DPI change). */
       width: 1280px;
       height: 800px;
-      /* Crisp pixels — no browser smoothing */
       image-rendering: pixelated;
     }
 
@@ -51,397 +49,48 @@
 <body>
   <h1>Proteus · Reference Demo</h1>
 
-  <!--
-    Canvas dimensions must match what ProteusApp.init reads via canvas.width / canvas.height.
-    The CSS width/height only controls display size (pixel density handled by devicePixelRatio).
-    For simplicity this demo uses 1:1 logical pixels.
-  -->
-  <canvas id="proteus-canvas" width="1280" height="800"></canvas>
+  <canvas id="proteus-canvas"></canvas>
   <p id="status">Loading…</p>
 
   <script type="module">
     // wasm-pack emits the glue module at pkg/proteus_shell_web.js.
     // Run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
-    import init, { ProteusApp } from './pkg/proteus_shell_web.js';
+    //
+    // M13.2 collapse: canvas/wgpu setup, DPI, resize, Pointer Events,
+    // visibility-pause and the render loop itself now live in
+    // proteus-host-web/Engine — start() below just fetches assets and hands
+    // off to them. What's left here is the M13.4-debt shim: real HLS video
+    // playback and the picsum.photos gallery fetch still need JS (fetch,
+    // <video>/MediaSource — there's no Rust-side equivalent yet), so this
+    // file polls the returned handle once per its own requestAnimationFrame
+    // tick, same "polled take" shape Demo's own API already uses. See
+    // proteus-shell-web/src/lib.rs's crate doc.
+    import init, { start } from './pkg/proteus_shell_web.js';
 
     async function main() {
       const status = document.getElementById('status');
 
       try {
         await init();
-        status.textContent = 'Initialising GPU…';
+        status.textContent = 'Loading assets…';
 
-        const app = await ProteusApp.init('proteus-canvas');
+        const handle = await start('proteus-canvas');
         status.textContent = 'Running';
         // Exposed for devtools debugging.
-        window.app = app;
+        window.proteusHandle = handle;
 
-        // Handle canvas resize (keeps logical pixels in sync with CSS layout).
-        const canvas = document.getElementById('proteus-canvas');
-        const observer = new ResizeObserver(() => {
-          const w = Math.max(1, canvas.clientWidth);
-          const h = Math.max(1, canvas.clientHeight);
-          canvas.width = w;
-          canvas.height = h;
-          app.resize(w, h);
-        });
-        observer.observe(canvas);
-
-        // Wire pointer events → wasm (M7 interactivity).
-        // offsetX/offsetY are in CSS pixels, which match the logical coordinate
-        // system used by hit_test_system (1:1 since canvas resolution = clientWidth).
-        canvas.addEventListener('mousemove',  e => app.on_mouse_move(e.offsetX, e.offsetY));
-        canvas.addEventListener('mouseleave', () => app.on_mouse_leave());
-        canvas.addEventListener('mousedown',  e => { if (e.button === 0) app.on_mouse_down(); });
-        canvas.addEventListener('mouseup',    e => { if (e.button === 0) app.on_mouse_up(); });
-
-        // ── Full-window background image ───────────────────────────────────
-        //
-        // Same fetch-then-hand-to-wasm pattern as box-cover art below —
-        // bake_pending_images() decodes, downsamples, and uploads it.
-        // Fire-and-forget: a failed fetch just leaves BG_COLOR showing.
-        fetch('images/bg/ocean-blur.jpg')
-          .then(res => {
-            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-            return res.arrayBuffer();
-          })
-          .then(buf => app.set_background_image(new Uint8Array(buf)))
-          .catch(err => console.warn('background: could not load:', err));
-
-        // Color-dark counterpart, cross-faded over the light background via
-        // `theme_progress` — see the light/dark theme toggle section below.
-        fetch('images/bg/ocean-blur-dark.jpg')
-          .then(res => {
-            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-            return res.arrayBuffer();
-          })
-          .then(buf => app.set_background_image_dark(new Uint8Array(buf)))
-          .catch(err => console.warn('background dark: could not load:', err));
-
-        // ── Box-cover images (M9.7) ────────────────────────────────────────
-        //
-        // No fetch on the Rust side — bytes are pulled over HTTP here and
-        // handed to wasm via set_tile_image(); bake_pending_images() (run
-        // every tick()) decodes and uploads them to main_atlas from there.
-        // Fire-and-forget: a failed fetch just leaves that tile on its
-        // placeholder TILE_COLORS fill (set_tile_image is simply never
-        // called for it).
-        const TILE_IMAGE_SRCS = [
-          'images/tiger.jpg',
-          'images/sintel.jpg',
-          'images/jellyfish.jpg',
-        ];
-        TILE_IMAGE_SRCS.forEach((src, tileIdx) => {
-          fetch(src)
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => app.set_tile_image(tileIdx, new Uint8Array(buf)))
-            .catch(err => console.warn(`tile ${tileIdx}: could not load ${src}:`, err));
-        });
-
-        // ── Home/back nav icons ──────────────────────────────────────────
-        //
-        // Border+glyph are baked into the PNGs themselves (Color-light
-        // treatment) — same fetch-then-hand-to-wasm pattern as box-cover art.
-        const NAV_ICON_SRCS = [
-          ['images/icons/home-idle.png', bytes => app.set_nav_home_icon(bytes)],
-          ['images/icons/back-idle.png', bytes => app.set_nav_back_icon(bytes)],
-        ];
-        NAV_ICON_SRCS.forEach(([src, setter]) => {
-          fetch(src)
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => setter(new Uint8Array(buf)))
-            .catch(err => console.warn(`${src}: could not load:`, err));
-        });
-
-        // "Selected" home icon art, cross-faded over the idle art above —
-        // same fetch-then-hand-to-wasm pattern.
-        fetch('images/icons/home-selected.png')
-          .then(res => {
-            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-            return res.arrayBuffer();
-          })
-          .then(buf => app.set_nav_home_icon_selected(new Uint8Array(buf)))
-          .catch(err => console.warn('home icon selected: could not load:', err));
-
-        // Color-dark counterparts of the two icons above + the "selected"
-        // art, each cross-faded in via `theme_progress`/`home_selected_fade`
-        // — see the light/dark theme toggle section below.
-        const NAV_ICON_DARK_SRCS = [
-          ['images/icons/home-idle-dark.png', bytes => app.set_nav_home_icon_dark(bytes)],
-          ['images/icons/back-idle-dark.png', bytes => app.set_nav_back_icon_dark(bytes)],
-          ['images/icons/home-selected-dark.png', bytes => app.set_nav_home_icon_selected_dark(bytes)],
-        ];
-        NAV_ICON_DARK_SRCS.forEach(([src, setter]) => {
-          fetch(src)
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => setter(new Uint8Array(buf)))
-            .catch(err => console.warn(`${src}: could not load:`, err));
-        });
-
-        // ── Persistent brand lockup (mark + "PROTEUS" wordmark) ────────────
-        //
-        // Top-left, appears once the splash finishes morphing into Home and
-        // stays up through every other state — same fetch-then-hand-to-wasm
-        // pattern as the icons above.
-        fetch('images/logo/lockup.png')
-          .then(res => {
-            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-            return res.arrayBuffer();
-          })
-          .then(buf => app.set_nav_logo_lockup(new Uint8Array(buf)))
-          .catch(err => console.warn('logo lockup: could not load:', err));
-
-        // Color-dark counterpart, cross-faded over the light lockup via
-        // `theme_progress`.
-        fetch('images/logo/lockup-dark.png')
-          .then(res => {
-            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-            return res.arrayBuffer();
-          })
-          .then(buf => app.set_nav_logo_lockup_dark(new Uint8Array(buf)))
-          .catch(err => console.warn('logo lockup dark: could not load:', err));
-
-        // ── Light/dark theme toggle — sun/moon icons, top-right ────────────
-        //
-        // Each icon is only ever a 2-layer crossfade between its own
-        // permanent light-theme and dark-theme look (see
-        // proteus-shell-native's SUN_ICON_PATH/MOON_ICON_PATH doc comments
-        // for why "selected vs. idle" is fully determined by which theme is
-        // current for these two, unlike the home icon's independent
-        // page-selected state) — same fetch-then-hand-to-wasm pattern.
-        //
-        // Sun's mapping looks backwards on purpose: `set_theme_sun_icon`
-        // takes the *dark*-theme ring art and `set_theme_sun_icon_dark`
-        // takes the *light*-theme solid disc — see
-        // `proteus_demo::screens::theme`'s own module doc for why
-        // (alpha-over compositing needs the solid art in the overlay slot
-        // to actually occlude anything). Moon's mapping matches its name
-        // as usual.
-        const THEME_ICON_SRCS = [
-          ['images/icons/sun-idle-dark.png', bytes => app.set_theme_sun_icon(bytes)],
-          ['images/icons/sun-selected.png', bytes => app.set_theme_sun_icon_dark(bytes)],
-          ['images/icons/moon-idle.png', bytes => app.set_theme_moon_icon(bytes)],
-          ['images/icons/moon-selected-dark.png', bytes => app.set_theme_moon_icon_dark(bytes)],
-        ];
-        THEME_ICON_SRCS.forEach(([src, setter]) => {
-          fetch(src)
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => setter(new Uint8Array(buf)))
-            .catch(err => console.warn(`${src}: could not load:`, err));
-        });
-
-        // ── Animated logo (replaces the old "START" text label) ────────────
-        //
-        // 19-frame hatch-sweep loop (brand/animated-logo, color-light
-        // treatment) standing in for the button's old navy circle. No fetch
-        // on the Rust side — bytes are pulled over HTTP here and handed to
-        // add_logo_frame(), which bakes each one into main_atlas immediately
-        // (eternal, unlike box-cover art). Fire-and-forget, same as the tile
-        // images: a failed fetch just leaves that frame out of the loop.
-        for (let i = 0; i < 19; i++) {
-          const frameIdx = i;
-          const src = `images/logo/frame-${String(frameIdx + 1).padStart(2, '0')}.png`;
-          fetch(src)
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => app.add_logo_frame(frameIdx, new Uint8Array(buf)))
-            .catch(err => console.warn(`logo frame ${frameIdx}: could not load ${src}:`, err));
-        }
-
-        // Color-dark counterpart of the same 19-frame animation — used only
-        // by the Loading screen's theme-crossfaded logo (the splash-only
-        // animation above never has to theme-crossfade).
-        for (let i = 0; i < 19; i++) {
-          const frameIdx = i;
-          const src = `images/logo/frame-${String(frameIdx + 1).padStart(2, '0')}-dark.png`;
-          fetch(src)
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => app.add_logo_frame_dark(frameIdx, new Uint8Array(buf)))
-            .catch(err => console.warn(`logo frame dark ${frameIdx}: could not load ${src}:`, err));
-        }
-
-        // ── Photo gallery (M12) ─────────────────────────────────────────────
-        //
-        // Rust signals *when* to fetch (on entering the Loading state) via
-        // take_gallery_fetch_request(), polled once per tick() below — same
-        // shape as take_video_start_tile(). This function does the actual
-        // network calls: one fetch per image, each with its own .catch() so
-        // one bad image doesn't block the rest — the Rust-side fetch
-        // timeout is what ultimately decides "give up".
-        //
-        // picsum.photos, addressed by a *specific photo id*
-        // (https://picsum.photos/id/{id}/{w}/{h}), not loremflickr.com (used
-        // before this feature) — loremflickr has no stable notion of "the
-        // same photo, bigger": its crop for a given keyword+lock genuinely
-        // shifts with the requested pixel size, confirmed empirically.
-        // picsum's id-based endpoint is a plain crop of one fixed photo, but
-        // a *requested* aspect ratio that doesn't match the photo's own
-        // still means picsum has to decide what to crop away —
-        // NATURE_PHOTOS sidesteps that decision entirely by pairing each
-        // curated id with its own real [width, height] from picsum's
-        // /id/{id}/info endpoint, so every fetch (low-res *and* hires)
-        // requests exactly that photo's native ratio: a plain resize, never
-        // a crop, which is trivially consistent at any output size. picsum
-        // has no keyword search at all, so "nature" is enforced by this
-        // hand-picked, hand-verified list rather than a live query.
-        const NATURE_PHOTOS = [
-          [12, 2500, 1667], [18, 2500, 1667], [54, 3264, 2176], [66, 3264, 2448],
-          [108, 2000, 1333], [114, 3264, 2448], [132, 1600, 1066], [162, 1500, 998],
-          [168, 1920, 1280], [174, 1600, 589], [198, 3456, 2304], [216, 2500, 1667],
-          [222, 1800, 977], [228, 4608, 3456], [282, 5000, 3333], [294, 3753, 2309],
-          [300, 4272, 2848], [324, 3888, 2592], [330, 4272, 2848], [378, 5000, 3333],
-          [384, 5000, 3333], [426, 4272, 2848], [432, 5000, 3333], [450, 4288, 2848],
-          [456, 3823, 2549], [468, 5000, 3337], [474, 4288, 2848], [480, 3888, 2592],
-          [492, 5000, 3324], [498, 5000, 3333], [516, 3008, 2000], [558, 4928, 3264],
-          [564, 2000, 1333], [570, 2509, 1673], [582, 2509, 1673], [588, 2509, 1673],
-          [600, 2509, 1673], [606, 2513, 1670], [612, 2731, 1536], [630, 2517, 1667],
-          [648, 2517, 1667], [654, 2509, 1673], [666, 5000, 3333], [678, 4896, 3264],
-          [684, 3872, 2178], [702, 5000, 3333], [732, 5000, 3333], [738, 2005, 3000],
-          [774, 5000, 3333], [780, 3264, 1830], [798, 4592, 3448], [810, 5000, 3333],
-          [846, 4000, 3000], [852, 3212, 2409], [876, 5000, 3338], [888, 5000, 2813],
-          [894, 5000, 3333], [906, 3840, 2880], [912, 5000, 3333], [918, 3747, 2489],
-          [924, 3000, 2250], [930, 3264, 4912], [960, 3264, 1832], [966, 5000, 3333],
-          [984, 4000, 2248], [990, 5000, 3334], [1002, 4312, 2868], [1020, 4288, 2848],
-          [1044, 4032, 2268], [1050, 5000, 3333], [1056, 3988, 2720], [1074, 5000, 3333],
-        ];
-
-        // The actual fetch dimensions for (aspectW, aspectH) at a sidePx
-        // cap: square is sidePx×sidePx; otherwise the larger ratio axis is
-        // held at (or just under) sidePx and the other scaled to match.
-        //
-        // Doesn't just pin the larger axis at exactly sidePx and round the
-        // other — searches a small window of slightly-smaller candidates
-        // for the larger axis too, picking whichever integer pair's ratio
-        // comes closest to the real one. Pinning the larger axis exactly
-        // is the *best* approximation for most real photo aspect ratios,
-        // but for some it isn't — e.g. picsum id 606 (2513×1670, real
-        // ratio 1.50479) at this 186px cap: pinning width at exactly 186
-        // gives (186, 124), ratio 1.5 — off by 0.32%. One pixel narrower,
-        // (185, 123), gives ratio 1.50407 — off by only 0.05%. That 0.32%
-        // doesn't sound like much, but this same real ratio also drives
-        // the *hires* fetch's own request (at a much bigger, and so much
-        // more precise, target size — see fetchGalleryHires below) —
-        // picsum's /id/{id}/{w}/{h} endpoint center-crops each request to
-        // whatever ratio it's asked for, so the low-res tile fetch (here)
-        // and the hires fetch each land on a *slightly different* crop of
-        // the same source photo whenever their two independent roundings
-        // of the same real ratio disagree enough. Rust's "box never
-        // moves" fix (Demo::advance_gallery_hires_overlay) turns that
-        // disagreement into an imperceptible sub-pixel stretch *in
-        // general*, but for a real photo whose ratio happens to round
-        // badly at this resolution (confirmed empirically: id 606 and 798
-        // show a visible shift the instant hires swaps in; id 582 and
-        // 630, whose naive rounding already lands much closer to their
-        // real ratio, don't) it's visible. This search doesn't eliminate
-        // the mismatch (the hires fetch's own rounding, at its own much
-        // bigger scale, still isn't pixel-exact), but shrinks the low-res
-        // side's error enough that it's back under whatever threshold
-        // makes the "box never moves" mitigation actually work. Mirrors
-        // proteus-shell-native::gallery_fetch::fetch_dimensions.
-        const FETCH_DIMENSIONS_SEARCH_WINDOW = 6;
-
-        function fetchDimensions(aspectW, aspectH, sidePx) {
-          const ratio = aspectW / aspectH;
-          let best = [sidePx, 1, Infinity];
-          for (let delta = 0; delta <= Math.min(FETCH_DIMENSIONS_SEARCH_WINDOW, sidePx - 1); delta++) {
-            const larger = sidePx - delta;
-            const w = aspectW >= aspectH ? larger : Math.round(larger * ratio);
-            const h = aspectH >= aspectW ? larger : Math.round(larger / ratio);
-            const error = Math.abs(w / h - ratio);
-            if (error < best[2]) best = [w, h, error];
-          }
-          return [best[0], best[1]];
-        }
-
-        function fetchGallery(sidePx) {
-          const nonce = Date.now() >>> 0;
-          for (let idx = 0; idx < 12; idx++) {
-            const offset = (nonce + idx) >>> 0;
-            const [photoId, aspectW, aspectH] = NATURE_PHOTOS[offset % NATURE_PHOTOS.length];
-            const [fetchW, fetchH] = fetchDimensions(aspectW, aspectH, sidePx);
-            const url = `https://picsum.photos/id/${photoId}/${fetchW}/${fetchH}`;
-            fetch(url)
-              .then(res => {
-                if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-                return res.arrayBuffer();
-              })
-              .then(buf => app.set_gallery_tile_image(idx, new Uint8Array(buf), photoId, aspectW, aspectH))
-              .catch(err => console.warn(`gallery tile ${idx}: could not load ${url}:`, err));
-          }
-        }
-
-        // ── Enlarged gallery image hires fetch ──────────────────────────────
-        //
-        // Rust signals *when* to fetch (on entering GalleryImage) via
-        // take_pending_gallery_hires_fetch(), polled once per tick() below —
-        // same "polled take" shape as fetchGallery's own trigger. Requests
-        // the *same* photo (same picsum id) at the actual on-screen fitted
-        // size Rust computed, not the grid's forced square crop — picsum's
-        // id-based endpoint proved pixel-consistent across sizes, so this
-        // crossfades in as a straightforward sharpening, never a reframe.
-        // Kept cancellable via AbortController: take_pending_gallery_hires_
-        // cancel() polled the same way tells us the user backed out before
-        // this resolved, so the in-flight network request itself gets cut
-        // off, not just its result discarded.
-        let galleryHiresController = null;
-
-        function fetchGalleryHires(request) {
-          galleryHiresController?.abort();
-          const controller = new AbortController();
-          galleryHiresController = controller;
-          const url = `https://picsum.photos/id/${request.photo_id}/${request.width}/${request.height}`;
-          fetch(url, { signal: controller.signal })
-            .then(res => {
-              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-              return res.arrayBuffer();
-            })
-            .then(buf => app.set_gallery_hires_image(request.tile_idx, new Uint8Array(buf)))
-            .catch(err => {
-              if (err.name !== 'AbortError') {
-                console.warn(`gallery hires tile ${request.tile_idx}: could not load ${url}:`, err);
-              }
-            });
-        }
-
-        // ── HLS playback (M9.5, upgraded from plain mp4) ────────────────────
+        // ── HLS playback (real HLS, not a plain mp4 — see the module doc in
+        // the pre-M13.2 shell for why) ──────────────────────────────────────
         //
         // No decode thread here — the browser's own <video> element is the
-        // decoder. Rust owns hit-testing (there's no per-tile DOM element to
-        // attach a click listener to), so it signals *when* to start/stop via
-        // take_pending_video_start()/take_pending_video_stop()/take_pending_
-        // video_cancel(), polled once per tick(); this side fetches/parses a simple
-        // single-rendition (no adaptive bitrate) fMP4 HLS manifest, feeds
-        // segments into a <video> element via MediaSource/SourceBuffer, and
-        // — completely unchanged from the old plain-mp4 version — extracts
-        // decoded frames onto an offscreen canvas and pushes the pixels back
-        // into wasm. See videos/make_hls.sh for how the manifests/segments
-        // under videos/hls/ were generated.
-        //
-        // Why not just a plain mp4: even a "faststart" (moov-at-front) mp4
-        // still needs the whole moov atom up front, and the player has no
-        // way to know "how much is enough to start" — the browser's own
-        // buffering heuristic decides. HLS's manifest gives an explicit,
-        // small unit (one ~2s segment) to wait for, so "started playback
-        // after 1 segment" is a real, controllable guarantee rather than a
-        // browser-dependent heuristic — which is what lets the 1-segment
-        // buffer / 30s timeout / cancel behavior below be exact.
+        // decoder. Rust owns hit-testing, so it signals *when* to start/stop
+        // via handle.takePendingVideoStart()/Stop()/Cancel(), polled once per
+        // tick(); this side fetches/parses a simple single-rendition (no
+        // adaptive bitrate) fMP4 HLS manifest, feeds segments into a <video>
+        // element via MediaSource/SourceBuffer, and extracts decoded frames
+        // onto an offscreen canvas, pushing the pixels back into wasm via
+        // handle.pushVideoFrame(). See videos/make_hls.sh for how the
+        // manifests/segments under videos/hls/ were generated.
         const TILE_HLS = [
           { dir: 'videos/hls/tiger',     codecs: 'avc1.64001F,mp4a.40.2' },
           { dir: 'videos/hls/sintel',    codecs: 'avc1.64001F' },
@@ -460,25 +109,19 @@
         const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
 
         // Bumped on every start/stop so a stray callback from a video that's
-        // no longer current (e.g. the user clicked another tile, or clicked
-        // the screen to stop, right as a callback was in flight) is dropped
-        // instead of pushing frames into whatever's playing now. Checked
-        // between every `await` in playHls() below, same idiom as
-        // fetchGalleryHires's AbortController generation guard.
+        // no longer current is dropped instead of pushing frames into
+        // whatever's playing now. Checked between every `await` in
+        // playHls() below, same idiom as fetchGalleryHires's
+        // AbortController generation guard.
         let playbackGeneration = 0;
         let hlsAbortController = null;
         let currentObjectUrl = null;
 
         function pushCurrentFrame() {
-          // getImageData throws IndexSizeError on a 0×0 rect — belt and
-          // suspenders alongside the videoWidth/videoHeight guard in
-          // maybeStart() below; shouldn't trigger in practice once that's
-          // in place, but cheap to keep frameLoop from ever calling this
-          // with a stale/unsized canvas.
           if (frameCanvas.width === 0 || frameCanvas.height === 0) return;
           frameCtx.drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
           const { data } = frameCtx.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
-          app.push_video_frame(data);
+          handle.pushVideoFrame(data);
         }
 
         function frameLoop(generation) {
@@ -487,8 +130,6 @@
           if ('requestVideoFrameCallback' in video) {
             video.requestVideoFrameCallback(() => frameLoop(generation));
           } else {
-            // Fallback for browsers without requestVideoFrameCallback
-            // (e.g. older Firefox): just keep pace with rAF instead.
             requestAnimationFrame(() => frameLoop(generation));
           }
         }
@@ -524,16 +165,6 @@
           const controller = new AbortController();
           hlsAbortController = controller;
 
-          // Everything below (constructing the MediaSource, wiring
-          // listeners, `sourceopen`'s own fetch chain — see its own inner
-          // try/catch) is a synchronous prefix inside an async function:
-          // any throw here becomes a rejected promise nobody awaits, i.e.
-          // an easy-to-miss "Uncaught (in promise)" instead of a clear
-          // console.error. Rust's own VIDEO_LOAD_TIMEOUT_SECS fallback
-          // (black backdrop + dots, then the error text) still kicks in
-          // either way since it doesn't depend on this succeeding — this
-          // try/catch is purely so a real failure is diagnosable instead
-          // of silent, not what makes the fallback UI correct.
           try {
             if (currentObjectUrl) {
               URL.revokeObjectURL(currentObjectUrl);
@@ -551,30 +182,21 @@
             currentObjectUrl = URL.createObjectURL(mediaSource);
             video.src = currentObjectUrl;
 
-            // Metadata (from the init segment's moov) and the 1-segment
-            // buffer requirement resolve independently and in no
-            // guaranteed order — playback only actually starts once both
-            // are in, via this shared gate, rather than assuming
-            // loadedmetadata fires after any particular fetch.
             let metadataReady = false;
             let firstSegmentReady = false;
             let started = false;
             function maybeStart() {
               if (started || !metadataReady || !firstSegmentReady) return;
               if (generation !== playbackGeneration) return;
-              // On Safari specifically, loadedmetadata can fire for an
-              // MSE-backed <video> before videoWidth/videoHeight are
-              // actually known (they stay 0 until decoding catches up) —
-              // sizing frameCanvas to 0×0 here would make every later
-              // getImageData() throw IndexSizeError. Bail out and let the
-              // 'resize' listener below re-drive this once real
-              // dimensions land instead of assuming loadedmetadata alone
-              // means they're ready.
+              // Safari can fire loadedmetadata for an MSE-backed <video>
+              // before videoWidth/videoHeight are actually known — bail and
+              // let the 'resize' listener below re-drive this once real
+              // dimensions land.
               if (!(video.videoWidth > 0 && video.videoHeight > 0)) return;
               started = true;
               frameCanvas.width = video.videoWidth;
               frameCanvas.height = video.videoHeight;
-              app.start_video(tileIdx, video.videoWidth, video.videoHeight);
+              handle.startVideo(tileIdx, video.videoWidth, video.videoHeight);
               video.play().then(() => frameLoop(generation)).catch(err => {
                 console.error('video.play() failed:', err);
               });
@@ -585,12 +207,6 @@
               maybeStart();
             };
             video.addEventListener('loadedmetadata', onMetadataMaybeReady, { once: true });
-            // HTMLMediaElement fires 'resize' whenever videoWidth/videoHeight
-            // change (not just on true resizes) — the fallback for when
-            // loadedmetadata fired too early with 0×0. Not `{once: true}`
-            // since maybeStart() itself is idempotent (guarded by `started`)
-            // and re-running onMetadataMaybeReady after it already
-            // succeeded is a harmless no-op.
             video.addEventListener('resize', onMetadataMaybeReady);
 
             mediaSource.addEventListener('sourceopen', async () => {
@@ -621,30 +237,18 @@
                 const { initUri, segmentUris, duration } = parseHlsManifest(await manifestRes.text());
                 if (generation !== playbackGeneration) return;
 
-                // Safari's play() throws IndexSizeError ("The index isn't
-                // in the allowed range") if it's asked to start playback
-                // while MediaSource.duration is still its default NaN —
-                // its internal buffered-range computation needs a real
-                // duration to index into, unlike Chrome/Firefox which
-                // tolerate an unset duration on a MediaSource that isn't
-                // being treated as live. VOD content has one up front
-                // (summed from the manifest's #EXTINF tags), so just set
-                // it before appending anything.
+                // Safari's play() throws IndexSizeError if MediaSource.duration
+                // is still NaN — set it up front from the manifest's #EXTINF sum.
                 mediaSource.duration = duration;
 
                 await appendBuffer(await fetchBytes(initUri));
                 if (generation !== playbackGeneration) return;
 
-                // First media segment buffered — the "1 segment buffer
-                // before playback" requirement.
                 await appendBuffer(await fetchBytes(segmentUris[0]));
                 if (generation !== playbackGeneration) return;
                 firstSegmentReady = true;
                 maybeStart();
 
-                // Remaining segments stream in the background — short
-                // clips (10-21s at ~2s/segment) so this finishes in a
-                // handful of fetches, well within playback.
                 for (let i = 1; i < segmentUris.length; i++) {
                   if (generation !== playbackGeneration) return;
                   await appendBuffer(await fetchBytes(segmentUris[i]));
@@ -669,33 +273,122 @@
           video.pause();
         }
 
-        // Drive the render loop via requestAnimationFrame.
-        let lastTs = null;
-        function frame(ts) {
-          const dt = lastTs !== null ? ts - lastTs : 0;
-          lastTs = ts;
-          app.tick(dt);          // dt in milliseconds
+        // ── Photo gallery ────────────────────────────────────────────────
+        //
+        // Rust signals *when* to fetch via handle.takePendingGalleryFetch(),
+        // polled once per tick() below. picsum.photos, addressed by a
+        // *specific photo id* (https://picsum.photos/id/{id}/{w}/{h}) —
+        // see the pre-M13.2 shell's module doc for why not loremflickr.
+        const NATURE_PHOTOS = [
+          [12, 2500, 1667], [18, 2500, 1667], [54, 3264, 2176], [66, 3264, 2448],
+          [108, 2000, 1333], [114, 3264, 2448], [132, 1600, 1066], [162, 1500, 998],
+          [168, 1920, 1280], [174, 1600, 589], [198, 3456, 2304], [216, 2500, 1667],
+          [222, 1800, 977], [228, 4608, 3456], [282, 5000, 3333], [294, 3753, 2309],
+          [300, 4272, 2848], [324, 3888, 2592], [330, 4272, 2848], [378, 5000, 3333],
+          [384, 5000, 3333], [426, 4272, 2848], [432, 5000, 3333], [450, 4288, 2848],
+          [456, 3823, 2549], [468, 5000, 3337], [474, 4288, 2848], [480, 3888, 2592],
+          [492, 5000, 3324], [498, 5000, 3333], [516, 3008, 2000], [558, 4928, 3264],
+          [564, 2000, 1333], [570, 2509, 1673], [582, 2509, 1673], [588, 2509, 1673],
+          [600, 2509, 1673], [606, 2513, 1670], [612, 2731, 1536], [630, 2517, 1667],
+          [648, 2517, 1667], [654, 2509, 1673], [666, 5000, 3333], [678, 4896, 3264],
+          [684, 3872, 2178], [702, 5000, 3333], [732, 5000, 3333], [738, 2005, 3000],
+          [774, 5000, 3333], [780, 3264, 1830], [798, 4592, 3448], [810, 5000, 3333],
+          [846, 4000, 3000], [852, 3212, 2409], [876, 5000, 3338], [888, 5000, 2813],
+          [894, 5000, 3333], [906, 3840, 2880], [912, 5000, 3333], [918, 3747, 2489],
+          [924, 3000, 2250], [930, 3264, 4912], [960, 3264, 1832], [966, 5000, 3333],
+          [984, 4000, 2248], [990, 5000, 3334], [1002, 4312, 2868], [1020, 4288, 2848],
+          [1044, 4032, 2268], [1050, 5000, 3333], [1056, 3988, 2720], [1074, 5000, 3333],
+        ];
 
-          const startTile = app.take_pending_video_start();
+        // Searches a small window of slightly-smaller candidates for the
+        // larger axis, picking whichever integer pair's ratio comes closest
+        // to the photo's real one — see the pre-M13.2 shell's module doc
+        // (id 606/798 vs. 582/630) for why pinning the larger axis exactly
+        // isn't always the best approximation. Mirrors
+        // proteus-shell-native::gallery_fetch::fetch_dimensions.
+        const FETCH_DIMENSIONS_SEARCH_WINDOW = 6;
+
+        function fetchDimensions(aspectW, aspectH, sidePx) {
+          const ratio = aspectW / aspectH;
+          let best = [sidePx, 1, Infinity];
+          for (let delta = 0; delta <= Math.min(FETCH_DIMENSIONS_SEARCH_WINDOW, sidePx - 1); delta++) {
+            const larger = sidePx - delta;
+            const w = aspectW >= aspectH ? larger : Math.round(larger * ratio);
+            const h = aspectH >= aspectW ? larger : Math.round(larger / ratio);
+            const error = Math.abs(w / h - ratio);
+            if (error < best[2]) best = [w, h, error];
+          }
+          return [best[0], best[1]];
+        }
+
+        function fetchGallery(sidePx) {
+          const nonce = Date.now() >>> 0;
+          for (let idx = 0; idx < 12; idx++) {
+            const offset = (nonce + idx) >>> 0;
+            const [photoId, aspectW, aspectH] = NATURE_PHOTOS[offset % NATURE_PHOTOS.length];
+            const [fetchW, fetchH] = fetchDimensions(aspectW, aspectH, sidePx);
+            const url = `https://picsum.photos/id/${photoId}/${fetchW}/${fetchH}`;
+            fetch(url)
+              .then(res => {
+                if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+                return res.arrayBuffer();
+              })
+              .then(buf => handle.setGalleryTileImage(idx, new Uint8Array(buf), photoId, aspectW, aspectH))
+              .catch(err => console.warn(`gallery tile ${idx}: could not load ${url}:`, err));
+          }
+        }
+
+        // Rust signals *when* to fetch the enlarged view via
+        // handle.takePendingGalleryHiresFetch(), polled the same way.
+        // Requests the *same* photo (same picsum id) at the actual
+        // on-screen fitted size Rust computed. Kept cancellable via
+        // AbortController: handle.takePendingGalleryHiresCancel() polled
+        // the same way tells us the user backed out before this resolved.
+        let galleryHiresController = null;
+
+        function fetchGalleryHires(request) {
+          galleryHiresController?.abort();
+          const controller = new AbortController();
+          galleryHiresController = controller;
+          const url = `https://picsum.photos/id/${request.photo_id}/${request.width}/${request.height}`;
+          fetch(url, { signal: controller.signal })
+            .then(res => {
+              if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+              return res.arrayBuffer();
+            })
+            .then(buf => handle.setGalleryHiresImage(request.tile_idx, new Uint8Array(buf)))
+            .catch(err => {
+              if (err.name !== 'AbortError') {
+                console.warn(`gallery hires tile ${request.tile_idx}: could not load ${url}:`, err);
+              }
+            });
+        }
+
+        // ── The shim's own poll loop ─────────────────────────────────────
+        //
+        // Rust drives Engine::frame (tick/update/render) on its own
+        // requestAnimationFrame loop inside proteus-host-web/WebLoop — this
+        // loop only polls the M13.4-debt handle methods, at most one frame
+        // out of step with Rust's own loop (both are rAF-driven, so in
+        // practice the same vsync tick). Texture churn isn't one of these
+        // anymore — DemoApp::update bakes it directly via Frame::bake_texture
+        // now (M13.4 step 1), same as native.
+        function pollShim() {
+          const startTile = handle.takePendingVideoStart();
           if (startTile !== undefined) playHls(startTile);
-          if (app.take_pending_video_stop()) stopVideo();
-          // Timed out while still waiting (screen stays put, showing the
-          // error text) — distinct from take_pending_video_stop(): only
-          // abort the in-flight fetch, no generation bump/pause, since Rust
-          // hasn't torn anything down and playback may yet succeed if it's
-          // close.
-          if (app.take_pending_video_cancel()) hlsAbortController?.abort();
+          if (handle.takePendingVideoStop()) stopVideo();
+          if (handle.takePendingVideoCancel()) hlsAbortController?.abort();
 
-          const gallerySidePx = app.take_pending_gallery_fetch();
+          const gallerySidePx = handle.takePendingGalleryFetch();
           if (gallerySidePx !== undefined) fetchGallery(gallerySidePx);
 
-          const hiresRequest = app.take_pending_gallery_hires_fetch();
+          const hiresRequest = handle.takePendingGalleryHiresFetch();
           if (hiresRequest !== undefined) fetchGalleryHires(hiresRequest);
-          if (app.take_pending_gallery_hires_cancel()) galleryHiresController?.abort();
+          if (handle.takePendingGalleryHiresCancel()) galleryHiresController?.abort();
 
-          requestAnimationFrame(frame);
+          requestAnimationFrame(pollShim);
         }
-        requestAnimationFrame(frame);
+        requestAnimationFrame(pollShim);
 
       } catch (err) {
         console.error('Proteus init error:', err);

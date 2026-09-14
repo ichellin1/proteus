@@ -4,9 +4,16 @@
 //! loading the M12 shells used to hand-roll: every `set_*` call now pulls
 //! bytes from the host via [`Frame::load_asset`] / [`Frame::load_texture`].
 //!
+//! Texture churn is baked here too (M13.4 step 1): `Demo` still only
+//! generates the synthetic RGBA bytes and queues them (it stays headless,
+//! with no `Frame`/GPU access of its own, on purpose — see its own
+//! crate-root doc), but `DemoApp::update` — which does have `Frame` — drains
+//! and bakes them via [`Frame::bake_texture`] instead of leaving that to a
+//! shell-side shim reaching past `Frame` into `Engine::proteus_mut()`.
+//!
 //! The native video (`.mp4` / ffmpeg) and gallery (`picsum` fetch) flows are
 //! **not** here yet — they stay a thin shell shim (`Demo::take_pending_*`)
-//! until M13.4 makes them host services.
+//! until M13.4's remaining steps make them host services too.
 
 use proteus_runtime::{App, Frame, TextureRequest};
 
@@ -30,8 +37,9 @@ impl DemoApp {
     }
 
     /// The wrapped [`Demo`] once `setup` has run — for a host still driving
-    /// the M13.4-debt video / gallery / texture-churn shims (`take_pending_*`)
-    /// outside the `App` contract. `None` before the first frame.
+    /// the M13.4-debt video / gallery shims (`take_pending_*`) outside the
+    /// `App` contract. `None` before the first frame. Texture churn no
+    /// longer needs this — see this module's own crate doc.
     pub fn demo_mut(&mut self) -> Option<&mut Demo> {
         self.demo.as_mut()
     }
@@ -52,8 +60,18 @@ impl App for DemoApp {
     }
 
     fn update(&mut self, f: &mut Frame, dt: f32) {
-        if let Some(demo) = self.demo.as_mut() {
-            demo.advance(f.proteus, dt);
+        let Some(demo) = self.demo.as_mut() else {
+            return;
+        };
+        demo.advance(f.proteus, dt);
+        for update in demo.take_pending_texture_churn() {
+            let texture = f.bake_texture(
+                update.width,
+                update.height,
+                update.rgba,
+                TextureRequest::default(),
+            );
+            update.handle.set_texture(f.proteus, texture);
         }
     }
 }
