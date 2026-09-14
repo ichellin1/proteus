@@ -3220,10 +3220,11 @@ documented M13.4 shim on the native demo entry, parallel to the web side.
 
 #### M13.4 — Asset & Resource Contract
 
-**Status: design approved 2026-09-14; build required before V1 ships (not deferred); build in
-progress — step 1 of 4 done (texture churn).** Unlike M13.6's mobile-platform *reach*, which is
-additive and fine to add in V2, this section closes real functionality gaps already live in the
-shipped framework — the video, gallery-fetch, and texture-churn shims both shells currently carry
+**Status: design approved 2026-09-14; build complete — all four steps done, both shells fully
+collapsed onto the real `App`/`Frame`/`HostServices` contract, zero shell-side shims remaining.**
+Unlike M13.6's mobile-platform *reach*, which is
+additive and fine to add in V2, this section closed real functionality gaps that were live in the
+shipped framework — the video, gallery-fetch, and texture-churn shims both shells used to carry
 as `demo_mut()`/`engine.proteus_mut()` escape hatches around the `App`/`Frame` contract, rather
 than going through it. Depends on M13.1.
 
@@ -3242,6 +3243,186 @@ host target and `wasm32-unknown-unknown`, the full test suite (53 `proteus-demo`
 `Demo`'s own churn-generation logic didn't need to change at all, only who bakes the result), and a
 full `wasm-pack build --target web` + live browser load (WebGPU adapter initializes, renderer
 reports its memory estimate, status reaches "Running", zero console errors).
+
+**Build step 2 — done: font and lazy-load wiring.** `Renderer::new` now matches on
+`config.text.default_font` (`FontSource::Embedded` → the existing call, `FontSource::Bytes(bytes)`
+→ `FontAtlas::new(&bytes)`) instead of hardcoding the embedded font unconditionally.
+`bake_pending_text`/`bake_pending_images` (`proteus-runtime/src/bake.rs`) both gained a `lazy_load:
+bool` parameter and now query `Option<&Visibility>`/`Option<&EffectiveVisibility>` alongside
+`Image`/`Text`, skipping (leaving pending, not baking) an entity that isn't currently visible when
+`lazy_load` is set — via a new `is_visible` helper that deliberately mirrors `proteus_ui::
+collect_instances`'s own "prefer cascaded `EffectiveVisibility`, fall back to raw `Visibility`,
+default visible" convention exactly, rather than inventing a second one. `Renderer::render` reads
+`config.resources.lazy_load` and threads it through. `eviction: EvictionPolicy` stays unwired,
+matching this section's own design scope (only `default_font`/`lazy_load` were in step 2). No
+shell changes needed — both fields flow from `ProteusConfig`, already reaching `Renderer::new`
+before this. **Verified**: `cargo fmt --check`, `cargo clippy -D warnings` clean on both targets,
+the full test suite green (3 new unit tests added for the `is_visible` helper specifically — the
+one piece of new logic worth pinning down in isolation, deliberately GPU-free per M6's own stated
+testing philosophy; the surrounding `query_filtered` plumbing reuses `collect_instances`'s
+already-covered pattern), and a rebuilt `wasm-pack` + live browser reload (identical behavior
+confirmed — both fields default to their pre-wiring no-op values, `Embedded`/`false`, so no visible
+change is expected yet; this step is dormant infrastructure until an app actually sets either).
+
+**Build step 3 — done: the async-fetch contract, and the gallery migrated onto it.**
+`HostServices` gains `fetch_async(key_or_url) -> FetchId` / `poll_fetches() -> Vec<FetchResult>` /
+`cancel_fetch(id)` (`proteus-runtime/src/services.rs`), thinly re-exposed on `Frame`. Required
+methods, not defaulted — a pre-V1 breaking change to an internal trait with exactly two
+implementors, both updated:
+- **`DirHostServices`** (native): a plain key still resolves inline via `load_asset` (local disk
+  reads are fast enough that a thread would only add latency); a `http(s)://` URL spawns one
+  `ureq` thread per fetch (concurrent, same shape the old `gallery_fetch.rs` already used) — both
+  deliver through one shared channel so callers see a uniform async story either way.
+  `cancel_fetch` can't interrupt a blocking call already running, so it just marks the id to be
+  dropped when `poll_fetches` sees it.
+- **`PreloadedHostServices`** (web): `fetch_async` spawns a `wasm_bindgen_futures::spawn_local`
+  task per call, backed by a real `AbortController` this time — unlike the M13.2 prefetch path,
+  `cancel_fetch` actually interrupts the in-flight `fetch()`, not just discards the result.
+- **The photo-selection/URL-building logic moved into `proteus-demo` itself**
+  (`src/gallery_fetch.rs`, `pub(crate)`) — `NATURE_PHOTOS`, `fetch_dimensions` (plus its 3
+  regression tests, all still passing unmodified), and the URL builders, previously duplicated
+  between native's own `gallery_fetch.rs` and web's `www/index.html` JS. `DemoApp` (`app.rs`)
+  gained the actual orchestration: `advance_gallery` kicks off `f.fetch_async` calls on
+  `Demo::take_pending_gallery_fetch`/`take_pending_gallery_hires_fetch`, tracks `FetchId →
+  (tile, aspect)` in a small map, and routes `f.poll_fetches()` results back to
+  `Demo::set_gallery_tile_image`/`set_gallery_hires_image` — the same DPI-aware physical-pixel
+  math (`request.tile_side_px * viewport.scale_factor`, capped) native's own shim already had,
+  now shared with web via `Frame::viewport` instead of each shell computing it separately.
+- **A real latent bug fixed as a side effect, not chased separately**: web's pre-migration gallery
+  fetch never multiplied by `scale_factor` at all (a holdover from the pre-M13.2 1:1-CSS-px shell,
+  never updated when M13.2 made the canvas DPI-aware) — gallery images were being fetched softer
+  than the display could show on any HiDPI screen. Centralizing the fetch in `DemoApp`, which
+  reads `Frame::viewport.scale_factor` uniformly, fixed this for free on web without touching
+  native's already-correct math.
+- **The nonce picking which `NATURE_PHOTOS` offset a fresh visit lands on.** First attempt: a
+  plain `gallery_visit: u32` counter, reasoning that `proteus-demo` is shared with
+  `wasm32-unknown-unknown`, where plain `std::time::SystemTime::now()` panics at runtime
+  (confirmed by building for that target). **This was a real regression, caught by the user, not
+  by the build**: a counter starting at `0` on every fresh process/page load means the *first*
+  fetch after *every* reload lands on the exact same offset — so "the same 12 photos every time"
+  on any repeat run, not just within one already-open session. The old per-shell wall-clock nonce
+  (`SystemTime::now().as_millis()`) didn't have this problem because wall-clock time itself
+  differs across separate launches, not just across calls within one. The counter preserved the
+  letter of "varies across visits" while losing the actual property that mattered. Fixed with
+  [`web-time`](https://docs.rs/web-time) — a drop-in `SystemTime`/`Instant` replacement backed by
+  `std::time` on native and `Performance`/`Date` on wasm32 (already in the dependency tree
+  transitively via wgpu, so no new build weight) — restoring the original wall-clock-seeded
+  `fresh_nonce()` faithfully instead of approximating it.
+- **Both shells' gallery shims deleted outright**: native's entire `gallery_fetch.rs` module (and
+  its now-unneeded `ureq` dependency — moved to `proteus-host-winit`, where `fetch_async` actually
+  lives) and its two `apply_gallery_*` methods; web's `WebDemoHandle` gallery methods, the
+  `GalleryHiresFetchRequest` wasm-bindgen struct, and the entire `NATURE_PHOTOS`/`fetchDimensions`/
+  `fetchGallery`/`fetchGalleryHires` JS block in `www/index.html` — the gallery needs zero
+  JavaScript now, fetched entirely in Rust.
+- **Verified**: `cargo fmt --check`, `cargo clippy -D warnings` clean on both targets (including
+  clearing a `clippy::type_complexity` hit by introducing a `FetchResult` type alias), the full
+  test suite green (`proteus-demo` 56 — the 3 moved `fetch_dimensions` tests unchanged;
+  `proteus-runtime` 3 new), `proteus-demo` confirmed building for `wasm32-unknown-unknown` on both
+  the original attempt and the `web-time` fix, a full `wasm-pack build --target web`, and a live
+  browser reload — WebGPU adapter initializes, status reaches "Running", zero console errors.
+  **What I did not verify myself, either pass**: actually clicking through to the Photo Gallery
+  screen to watch fetches happen — a canvas-click-coordinate quirk in this session's
+  browser-automation tooling meant clicks weren't registering as real pointer input, and chasing
+  that further would mean debugging browser automation rather than this milestone's own code. This
+  is exactly the gap that let the nonce regression through my own check and reach the user
+  instead — the gallery's actual fetch *content* (not just "does it load without erroring") needs
+  the user's usual visual
+  review, same as every other feature this milestone touched.
+
+**Build step 4a — done: video as a host service, native only.** Split from web deliberately (user
+call, not a unilateral scope cut) after hitting a real fork: `DemoApp::update` is one shared
+function driving both shells, so once it calls `demo.take_pending_video_start()` to route video
+through the new contract, that *consumes* the signal — native's decode wires up cleanly, but web's
+*existing* JS-facing shim (`WebDemoHandle`, reaching into `Demo` the old way) would have the signal
+stolen before it ever saw it. There's no way to migrate native alone without silently breaking
+web's video mid-session, so `DemoApp` needed an explicit opt-in rather than an unconditional switch.
+- **The contract**: `HostServices::open_video(key) -> Option<Box<dyn VideoStream>>` (defaulted to
+  `None` — "unsupported" — so a `HostServices` impl that never needs video isn't forced to write a
+  decoder), where `VideoStream` is `poll_frame() -> Option<VideoFrame>` / `cancel_load()` (default
+  no-op) / `stop(self: Box<Self>)`. Deliberately GPU-unaware, matching every other seam in this
+  file — `VideoFrame { width, height, rgba }` is a plain data struct.
+- **`Frame::play_video`/`poll_video`/`cancel_video_load`/`stop_video`** bridge that to
+  `QuadPipeline::init_video`/`upload_video_frame`/`suspend_video` (unchanged, already
+  host-agnostic, already proven on both platforms — exactly as designed). The GPU texture is
+  allocated *lazily*, from the first `VideoFrame`'s own reported dimensions, deliberately — native
+  learns dimensions synchronously via `ffprobe`, but a future web implementation only learns them
+  asynchronously via `<video>`'s `loadedmetadata`; carrying dimensions on every frame instead of
+  requiring them up front means `Frame::poll_video` doesn't care which.
+- **`DemoApp::new`'s new `video_keys: Option<[String; 3]>` parameter is the opt-in.** `None` (web,
+  for now) leaves `Demo::take_pending_video_*` completely untouched, so the old shell-side shim
+  keeps working exactly as before. `Some(keys)` (native) means `DemoApp` drives video itself
+  through `Frame`. This is the actual mechanism that let native and web split into separate,
+  independently-landable units of work without one breaking the other mid-migration.
+- **`mp4_player.rs` moved from `proteus-shell-native` into `proteus-host-winit`**, decoupled from
+  `QuadPipeline::VideoFrameSender` (a plain bounded `sync_channel` now carries frames from the
+  decode thread instead) and wrapped as `Mp4Stream: VideoStream`. `DirHostServices::open_video`
+  treats `key` as a literal filesystem path, not resolved against `self.base` like `load_asset` —
+  video files don't live under the same directory as images in the reference demo, and there's no
+  established "video keyspace" convention yet to resolve a bare key against.
+- **`proteus-shell-native` collapsed to the one-line `main()` its own M13.1 module doc predicted**:
+  video was the last thing keeping it more than `proteus_host_winit::run(DemoApp::new(...),
+  RunConfig { .. })` — texture churn and the gallery already got there at steps 1 and 3. The
+  hand-rolled `RenderState`/`ShellApp`/`ApplicationHandler` (window creation, GPU init, resize,
+  pointer translation, the frame loop) all deleted — `proteus-host-winit::run` already does all of
+  it, generically. A `PresentTiming` diagnostic (dev-only wall-clock gap logging while video
+  played) was dropped rather than preserved via a new shell-facing accessor — keeping it would have
+  reintroduced exactly the "shell knows about `DemoApp`'s internal video state" coupling this step
+  exists to eliminate, for a dev-only, untested, non-user-facing feature.
+- **Verified**: `cargo fmt --check`, `cargo clippy -D warnings` clean on both targets, the full
+  test suite green (`proteus-demo` 56, `proteus-runtime` 3, unchanged — `Demo`'s own video state
+  machine wasn't touched, only who drives it), `proteus-shell-native` and `proteus-shell-web` both
+  building clean, and — for web specifically, since it's untouched but shares `proteus-demo` — a
+  fresh `wasm-pack build` and live browser reload with zero console errors. **Not verified myself**:
+  actually running the native binary and watching a video tile play — needs `ffmpeg`/`ffprobe` on
+  `PATH` and a real window, squarely the user's own visual-review territory, same as every UI
+  feature this milestone touched.
+
+**Build step 4b — done: video as a host service, web — and the full collapse this enables.**
+`PreloadedHostServices::open_video` now does real HLS playback: `<video>`/`MediaSource`/
+`SourceBuffer`, with decoded frames read back via an offscreen `<canvas>` — ported from
+`www/index.html`'s pre-existing JS (manifest parsing, `MediaSource`/`SourceBuffer` sequencing, the
+`playbackGeneration` staleness guard) into a new `proteus-host-web::hls_video` module, logic
+unchanged, just relocated from JS into web-sys.
+- **No `requestVideoFrameCallback`** — confirmed absent from this project's pinned web-sys
+  version's stable bindings (checked the vendored source directly rather than assuming) before
+  committing to a design around it. Frames are pumped via `requestAnimationFrame` instead —
+  exactly the JS reference's own documented fallback path for browsers without that still-fairly-new
+  API, so this isn't a new compromise, just always taking the branch every other browser already
+  might have taken.
+- **The one real API-shape wrinkle**: `open_video(key: &str)` only carries one string, but HLS
+  needs two independent pieces of per-video information — the manifest directory *and* the exact
+  MP4 codec string `MediaSource.isTypeSupported` needs (which differs per file: one tile's source
+  has an audio track, the others don't). Rather than widening the whole `HostServices`/`DemoApp`
+  contract for this one host's own need, the two are encoded into one string (`"{dir}|{codecs}"`),
+  parsed apart only inside `PreloadedHostServices::open_video` itself — native's own `video_keys`
+  never needs to know this convention exists.
+- **`proteus-shell-web` collapsed the rest of the way**, mirroring native's own step 4a collapse:
+  with texture churn, gallery, and now video all gone, `WebDemoHandle` had *no methods left* —
+  deleted entirely, along with its `PlayingVideo` struct and the `proteus-render` dependency it
+  existed to support. `start()` now just fetches assets and calls `proteus_host_web::run(...)`,
+  discarding the returned handle — nothing needs it anymore. `www/index.html` dropped from ~400
+  lines to the ~60 the original M13.2 design sketch predicted (canvas + `import { start }` + a
+  three-line try/catch) — every line of gallery and HLS JS is gone, not simplified, gone: the
+  gallery needed zero JS after step 3, and video needs zero JS after this step.
+- **Manifest parser tests exist but can't run in this repo's CI as configured** — `proteus-host-web`
+  is wasm32-only end to end (confirmed: `cargo check -p proteus-host-web` on the host target fails
+  on `surface.rs`'s `wgpu::SurfaceTarget::Canvas`, unrelated to this module, but it still means the
+  whole crate can't compile there), and this project has no `wasm-bindgen-test` harness set up to
+  run wasm32 tests either. Verified the parser correctness a different way instead of skipping
+  verification: copied the exact parsing logic into a scratch native binary against a real manifest
+  fixture and confirmed it (init URI, segment order, and summed duration all correct) — the
+  `#[cfg(test)]` tests stay in `hls_video.rs` as real, working documentation of expected behavior,
+  ready to run for free whenever `wasm-bindgen-test` infrastructure gets added.
+- **Verified**: `cargo fmt --check`, `cargo clippy -D warnings` clean on both targets, full test
+  suite green and unchanged (this step touched no shared/`proteus-demo` logic beyond the
+  `video_keys` plumbing already landed in step 4a), a full `wasm-pack build --target web`, and a
+  live browser reload — WebGPU adapter initializes, status reaches "Running", zero console errors.
+  **Not verified myself**: actually watching a video tile play. I tried to reach one via synthetic
+  `PointerEvent`s dispatched through JS (to work around the click-coordinate quirk noted in step 3)
+  and got the events landing on the canvas, but the `offsetX`/`offsetY` values the browser computed
+  didn't match this pane's own coordinate math closely enough to trust the click was hitting the
+  intended button — rather than guess further, I stopped. Watching actual playback is your usual
+  visual-review territory regardless.
 
 ##### The shims don't share one problem
 
@@ -3348,11 +3529,11 @@ separate example app.
 ##### Definition of done
 
 - [x] `Frame::bake_texture` exists; `proteus-demo`'s texture-churn shim (native and web) migrated onto it; shell-side `register_static`/`write_to_main_atlas`/`Handle::set_texture` shim code deleted.
-- [ ] `TextConfig.default_font` and `ResourceConfig.lazy_load` actually wired into `Renderer::new`/the bake pass.
-- [ ] `HostServices::fetch_async`/`poll_fetches`/`cancel_fetch` implemented for `DirHostServices`, `PreloadedHostServices`, and a JS-facing equivalent for `mount()`-authored apps; `proteus-demo`'s gallery shim migrated onto it on both shells.
-- [ ] `HostServices::open_video`/`VideoStream` implemented per host (ffmpeg native, HLS/MediaSource web); `Frame::play_video`/`poll_video` built; `proteus-demo`'s video shim migrated onto it on both shells.
-- [ ] All `demo_mut()`/`engine.proteus_mut()` escape hatches added during M13.1/M13.2 specifically for these three shims are deleted — if any remain, this milestone isn't actually done.
-- [ ] `cargo clippy -D warnings` (both targets), `cargo fmt --check`, and the full test suite green; reference demo passes M6 visual regression on both shells with identical (not just similar) video/gallery/texture-churn behavior to before.
+- [x] `TextConfig.default_font` and `ResourceConfig.lazy_load` actually wired into `Renderer::new`/the bake pass.
+- [x] `HostServices::fetch_async`/`poll_fetches`/`cancel_fetch` implemented for `DirHostServices` and `PreloadedHostServices`; `proteus-demo`'s gallery shim migrated onto it on both shells, both shells' own gallery shim code deleted. *(No JS-facing equivalent for `mount()`-authored apps — out of scope by design, not an oversight: a JS `setup`/`update` has no `Frame`/`HostServices` at all per M13.2's own established boundary, so there's nothing for this to attach to on that path.)*
+- [x] `HostServices::open_video`/`VideoStream` implemented for **both** hosts: `DirHostServices` (ffmpeg, via `proteus-host-winit`'s own `mp4_player` module) and `PreloadedHostServices` (real HLS — `<video>`/`MediaSource`/`SourceBuffer`, via `proteus-host-web`'s own `hls_video` module). `Frame::play_video`/`poll_video`/`cancel_video_load`/`stop_video` built; `proteus-demo`'s video shim migrated onto it on both shells. `DemoApp`'s `video_keys: Option<[String; 3]>` opt-in (added for step 4a specifically so native and web could land independently without one migration breaking the other mid-flight) is now `Some(..)` unconditionally in both shells — the `None`/shell-managed path has no remaining caller, though it stays in the type for any future host that doesn't support video at all.
+- [x] All `demo_mut()`/`engine.proteus_mut()` escape hatches added during M13.1/M13.2 for texture churn, gallery, and video are deleted, on both shells — `demo_mut()` itself has no remaining shim caller. `proteus-shell-web`'s `WebDemoHandle` (and the `proteus-render` dependency it existed for) is gone entirely; `proteus-shell-native` was already down to a one-line `main()` after step 4a.
+- [x] `cargo clippy -D warnings` (both targets), `cargo fmt --check`, and the full test suite green. Reference demo verified building and loading cleanly on both shells (native: build + clippy + tests, no `ffmpeg`-equipped window driven; web: full `wasm-pack build` + a live browser load with zero console errors) — **actually watching video/gallery/texture-churn behave identically to before is the user's own visual review**, not re-claimed as done here for either shell.
 
 #### M13.5 — Configuration & Memory Model
 

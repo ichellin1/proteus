@@ -2118,10 +2118,12 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
+ "log",
  "proteus-render",
  "proteus-runtime",
  "proteus-sdk",
  "proteus-ui",
+ "web-time",
 ]
 
 [[package]]
@@ -2163,6 +2165,7 @@ dependencies = [
  "log",
  "pollster",
  "proteus-runtime",
+ "ureq",
  "winit",
 ]
 
@@ -2231,16 +2234,10 @@ name = "proteus-shell-native"
 version = "0.1.0"
 dependencies = [
  "env_logger",
- "glam 0.29.3",
  "log",
- "pollster",
  "proteus-demo",
  "proteus-host-winit",
- "proteus-render",
  "proteus-runtime",
- "proteus-sdk",
- "ureq",
- "winit",
 ]
 
 [[package]]
@@ -2251,7 +2248,6 @@ dependencies = [
  "log",
  "proteus-demo",
  "proteus-host-web",
- "proteus-render",
  "proteus-runtime",
  "wasm-bindgen",
  "wasm-bindgen-futures",

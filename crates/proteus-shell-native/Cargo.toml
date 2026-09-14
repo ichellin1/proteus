@@ -11,28 +11,13 @@ name = "proteus"
 path = "src/main.rs"
 
 [dependencies]
-# M12.5 Step 9: all app/UI logic lives in proteus-demo now (built once
-# against proteus-sdk, also linked by proteus-shell-web) — this crate is
-# just the native platform glue around it. proteus-gpu and anyhow were
-# unused even before the cutover (zero references anywhere in src/).
-proteus-sdk = { path = "../proteus-sdk" }
+# M13.4 step 4a: this crate collapsed to a one-line `main()` — window/GPU
+# setup, the frame loop, pointer/resize handling, and now video (`.mp4` via
+# ffmpeg, moved into proteus-host-winit's own mp4_player module) all live in
+# proteus_host_winit::run. All app/UI logic lives in proteus-demo (built
+# once, also linked by proteus-shell-web).
 proteus-demo = { path = "../proteus-demo" }
-proteus-render = { path = "../proteus-render" }
 proteus-runtime = { path = "../proteus-runtime" }
 proteus-host-winit = { path = "../proteus-host-winit" }
-glam = { workspace = true }
-winit = { workspace = true }
-pollster = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-# Photo gallery demo (M12) — fetches picsum.photos over HTTP on a
-# background thread (see src/gallery_fetch.rs). `ureq` is blocking/sync, so
-# it needs no async runtime — this app otherwise has none. Pinned to major
-# version 2: the 3.x line reworked the API around a different agent/builder
-# shape, and 2.x is confirmed (checked during planning) to follow redirects
-# by default.
-ureq = { version = "2" }
-# MP4 playback (M9.5) — a reference "bring-your-own-player" example that
-# shells out to `ffmpeg`/`ffprobe` (must be on PATH). Only this shell crate
-# knows about MP4/ffmpeg; proteus-render/proteus-ui only see the generic
-# VideoFrameSender channel (see src/mp4_player.rs).

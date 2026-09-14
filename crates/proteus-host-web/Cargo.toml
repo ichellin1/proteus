@@ -24,6 +24,12 @@ web-sys = { workspace = true, features = [
     "ResizeObserver", "ResizeObserverEntry", "ResizeObserverBoxOptions", "ResizeObserverOptions",
     "PointerEvent", "EventTarget", "AddEventListenerOptions",
     "VisibilityState", "Request", "RequestInit", "Response",
+    "AbortController", "AbortSignal",
+    # M13.4 step 4b: real HLS playback (<video>/MediaSource/SourceBuffer,
+    # canvas pixel readback) — see src/hls_video.rs.
+    "HtmlElement", "HtmlVideoElement", "HtmlMediaElement", "CssStyleDeclaration",
+    "MediaSource", "MediaSourceReadyState", "SourceBuffer", "Url",
+    "CanvasRenderingContext2d", "ImageData", "Node",
 ] }
 js-sys = { workspace = true }
 futures-util = { workspace = true }

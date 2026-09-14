@@ -3,9 +3,10 @@
 
 use std::sync::Arc;
 
+use proteus_render::{GpuContext, QuadPipeline, TextureId};
 use proteus_sdk::{Proteus, TextureHandle};
 
-use crate::services::{HostServices, TextureRequest};
+use crate::services::{FetchId, FetchResult, HostServices, TextureRequest, VideoStream};
 use crate::viewport::Viewport;
 
 /// The per-call context handed to [`App::setup`] and [`App::update`].
@@ -54,6 +55,97 @@ impl Frame<'_> {
     ) -> TextureHandle {
         crate::bake::bake_texture(self.proteus.world_mut(), width, height, rgba, req)
     }
+
+    /// Start an async fetch (see [`HostServices::fetch_async`]). Thin
+    /// pass-through so app code never needs to reach past `Frame` into
+    /// `self.services` directly.
+    pub fn fetch_async(&mut self, key_or_url: &str) -> FetchId {
+        self.services.fetch_async(key_or_url)
+    }
+
+    /// Drain completed fetches (see [`HostServices::poll_fetches`]). Call
+    /// once per frame.
+    pub fn poll_fetches(&mut self) -> Vec<FetchResult> {
+        self.services.poll_fetches()
+    }
+
+    /// Cancel an in-flight fetch (see [`HostServices::cancel_fetch`]).
+    pub fn cancel_fetch(&mut self, id: FetchId) {
+        self.services.cancel_fetch(id)
+    }
+
+    /// Start playing video `key` (see [`HostServices::open_video`]). `None`
+    /// if the host couldn't open it. No GPU texture is allocated yet — the
+    /// first [`Self::poll_video`] call that actually receives a frame does
+    /// that lazily, from that frame's own reported dimensions (sound
+    /// whether the host knows dimensions synchronously, e.g. native's
+    /// `ffprobe`, or only learns them asynchronously, e.g. the web host's
+    /// `<video>` `loadedmetadata`).
+    pub fn play_video(&mut self, key: &str) -> Option<PlayingVideo> {
+        let stream = self.services.open_video(key)?;
+        Some(PlayingVideo {
+            stream,
+            texture_id: None,
+        })
+    }
+
+    /// Poll `playing` for a new frame and upload it if one landed. Returns
+    /// `true` iff a frame was actually uploaded this call — e.g. to drive a
+    /// loading indicator until the first real frame shows, mirroring what
+    /// `QuadPipeline::consume_video_frame`'s own return value used to signal
+    /// before this seam existed. Call once per frame while `playing` is live.
+    pub fn poll_video(&mut self, playing: &mut PlayingVideo) -> bool {
+        let Some(frame) = playing.stream.poll_frame() else {
+            return false;
+        };
+        let world = self.proteus.world_mut();
+        let (device, queue) = {
+            let gpu = world.resource::<GpuContext>();
+            (gpu.device.clone(), gpu.queue.clone())
+        };
+        let mut pipeline = world.resource_mut::<QuadPipeline>();
+        if playing.texture_id.is_none() {
+            let (texture_id, _sender) =
+                pipeline.init_video(&device, &queue, frame.width, frame.height);
+            // `_sender` (the BYOV channel's sending half `QuadPipeline` used
+            // before this seam existed) goes unused — `playing.stream`
+            // already delivers frames directly, so `upload_video_frame`
+            // below is called straight from here instead of routing through
+            // that channel. See `QuadPipeline::init_video`'s own doc.
+            playing.texture_id = Some(texture_id);
+        }
+        pipeline.upload_video_frame(&queue, &frame.rgba);
+        true
+    }
+
+    /// Best-effort: abort `playing`'s *initial* load without fully stopping
+    /// (see [`VideoStream::cancel_load`]).
+    pub fn cancel_video_load(&mut self, playing: &mut PlayingVideo) {
+        playing.stream.cancel_load();
+    }
+
+    /// Stop `playing`: releases the decode stream and, if a GPU texture was
+    /// ever allocated for it, suspends it via `QuadPipeline::suspend_video`.
+    pub fn stop_video(&mut self, playing: PlayingVideo) {
+        playing.stream.stop();
+        if let Some(texture_id) = playing.texture_id {
+            let world = self.proteus.world_mut();
+            let device = world.resource::<GpuContext>().device.clone();
+            world
+                .resource_mut::<QuadPipeline>()
+                .suspend_video(&device, texture_id);
+        }
+    }
+}
+
+/// A video stream handed to the app by [`Frame::play_video`] — advance it
+/// each frame via [`Frame::poll_video`]. Opaque: the only thing an app does
+/// with one is pass it back into `Frame`'s own video methods.
+pub struct PlayingVideo {
+    stream: Box<dyn VideoStream>,
+    /// `None` until the first frame lands and `Frame::poll_video` allocates
+    /// the GPU texture from its dimensions.
+    texture_id: Option<TextureId>,
 }
 
 /// A Proteus application.

@@ -4,20 +4,34 @@
 //! loading the M12 shells used to hand-roll: every `set_*` call now pulls
 //! bytes from the host via [`Frame::load_asset`] / [`Frame::load_texture`].
 //!
-//! Texture churn is baked here too (M13.4 step 1): `Demo` still only
-//! generates the synthetic RGBA bytes and queues them (it stays headless,
-//! with no `Frame`/GPU access of its own, on purpose — see its own
-//! crate-root doc), but `DemoApp::update` — which does have `Frame` — drains
-//! and bakes them via [`Frame::bake_texture`] instead of leaving that to a
-//! shell-side shim reaching past `Frame` into `Engine::proteus_mut()`.
+//! Texture churn (M13.4 step 1), the photo gallery (M13.4 step 3), and video
+//! on hosts that have migrated it (M13.4 step 4a, native only so far — see
+//! [`DemoApp::new`]'s own doc) are all baked/fetched/played here now too:
+//! `Demo` still only generates the synthetic RGBA bytes / requests *that*
+//! something happen (it stays headless, with no `Frame`/GPU/network access
+//! of its own, on purpose — see its own crate-root doc), but `DemoApp::
+//! update` — which does have `Frame` — drains those requests and does the
+//! actual work via [`Frame::bake_texture`]/[`Frame::fetch_async`]/
+//! [`Frame::play_video`] instead of leaving it to a shell-side shim reaching
+//! past `Frame` into `Engine::proteus_mut()`. Which photo to fetch and how
+//! to build its URL is [`crate::gallery_fetch`] — shared here instead of
+//! duplicated per shell, now that there's one real async-fetch primitive
+//! both shells can drive identically.
 //!
-//! The native video (`.mp4` / ffmpeg) and gallery (`picsum` fetch) flows are
-//! **not** here yet — they stay a thin shell shim (`Demo::take_pending_*`)
-//! until M13.4's remaining steps make them host services too.
+//! **Video on the web host is not here yet** (M13.4 step 4b) — HLS decode
+//! needs `<video>`/`MediaSource`, which has no Rust-side implementation as
+//! of this pass; it's tracked as its own, separately-scoped unit of work in
+//! `PLANNING.md` § M13.4 given its size, not silently deferred. Until then
+//! the web shell keeps driving video the old way, through `demo_mut()` +
+//! `Demo::take_pending_video_*` — see [`DemoApp::new`]'s doc for exactly how
+//! this module stays out of that host's way.
 
-use proteus_runtime::{App, Frame, TextureRequest};
+use std::collections::HashMap;
 
-use crate::Demo;
+use proteus_runtime::{App, FetchId, Frame, TextureRequest};
+
+use crate::screens::gallery::TILE_COUNT as GALLERY_TILE_COUNT;
+use crate::{gallery_fetch, Demo};
 
 /// Source frame art (208×288) is larger than the mark's on-screen footprint;
 /// downscale before packing. Matches the M12 shells' `LOGO_FRAME_MAX_SIDE`.
@@ -26,28 +40,186 @@ const LOGO_FRAME_MAX_SIDE: u32 = 220;
 /// Number of frames in each (light / dark) logo hatch-sweep set.
 const LOGO_FRAME_COUNT: u32 = 19;
 
+/// Matches the M12 shells' own `MAX_TILE_IMAGE_SIDE`/`MAX_IMAGE_SIDE` cap for
+/// a gallery grid tile — a big viewport shouldn't fetch far more bytes than
+/// a ~186px tile can ever show.
+const MAX_TILE_IMAGE_SIDE_PX: f32 = 400.0;
+
+/// Matches the M12 shells' own `GALLERY_LARGE_IMAGE_MAX_SIDE` — the one
+/// place a bigger image is the whole point, so its own, higher cap.
+const GALLERY_LARGE_IMAGE_MAX_SIDE_PX: f32 = 900.0;
+
+/// What a completed [`Frame::fetch_async`] result routes back to — looked up
+/// by [`FetchId`] as fetches complete, since gallery fetches aren't the only
+/// possible use of `fetch_async`/`poll_fetches` in principle (any future
+/// caller's own ids simply won't be in this map and are ignored).
+enum PendingGalleryFetch {
+    Tile(usize, glam::Vec2),
+    Hires(usize),
+}
+
 /// The reference demo, ready to hand to a host's `run()`.
 pub struct DemoApp {
     demo: Option<Demo>,
+    /// Which picsum photo id each tile's low-res fetch landed on — reused
+    /// to fetch the *same* photo bigger when it's enlarged. `Demo` itself
+    /// never tracks this (it only knows aspect ratios, not photo ids).
+    tile_photo_id: [Option<u32>; GALLERY_TILE_COUNT],
+    gallery_fetches: HashMap<FetchId, PendingGalleryFetch>,
+    /// The single in-flight hires fetch, if any — at most one at a time,
+    /// same invariant the M12 shells' own single-slot channel had. Tracked
+    /// separately from `gallery_fetches` (which also holds this same id)
+    /// purely so `take_pending_gallery_hires_cancel` has something to look
+    /// up without scanning the map for a `Hires` entry.
+    hires_fetch: Option<FetchId>,
+    /// `None` on a host that hasn't migrated video onto `HostServices::
+    /// open_video` yet (the web host, until M13.4 step 4b) — `advance_video`
+    /// then leaves `Demo::take_pending_video_*` completely alone so a
+    /// shell-side shim can keep polling them directly, exactly as before
+    /// M13.4. `Some([left, center, right])` (native) means this module
+    /// drives video itself through `Frame`, resolved by whatever keyspace
+    /// that host's own `HostServices::open_video` expects (native: literal
+    /// filesystem paths).
+    video_keys: Option<[String; 3]>,
+    playing_video: Option<proteus_runtime::PlayingVideo>,
 }
 
 impl DemoApp {
-    pub fn new() -> Self {
-        Self { demo: None }
+    /// `video_keys`: see the field's own doc — `None` until a host migrates
+    /// video onto the real contract.
+    pub fn new(video_keys: Option<[String; 3]>) -> Self {
+        Self {
+            demo: None,
+            tile_photo_id: [None; GALLERY_TILE_COUNT],
+            gallery_fetches: HashMap::new(),
+            hires_fetch: None,
+            video_keys,
+            playing_video: None,
+        }
     }
 
     /// The wrapped [`Demo`] once `setup` has run — for a host still driving
-    /// the M13.4-debt video / gallery shims (`take_pending_*`) outside the
-    /// `App` contract. `None` before the first frame. Texture churn no
-    /// longer needs this — see this module's own crate doc.
+    /// the M13.4-debt video shim (`take_pending_*`) outside the `App`
+    /// contract (currently: the web host only). `None` before the first
+    /// frame. Texture churn and the gallery no longer need this — see this
+    /// module's own crate doc.
     pub fn demo_mut(&mut self) -> Option<&mut Demo> {
         self.demo.as_mut()
+    }
+
+    /// Kicks off / drains this frame's video, on a host that's migrated it
+    /// (see `video_keys`'s own doc) — a no-op otherwise. Split out of
+    /// `update` purely for readability — not part of the `App` trait.
+    fn advance_video(&mut self, demo: &mut Demo, f: &mut Frame) {
+        let Some(video_keys) = &self.video_keys else {
+            return;
+        };
+
+        if let Some(idx) = demo.take_pending_video_start() {
+            if let Some(old) = self.playing_video.take() {
+                f.stop_video(old);
+            }
+            self.playing_video = f.play_video(&video_keys[idx]);
+        }
+
+        if demo.take_pending_video_stop() {
+            if let Some(playing) = self.playing_video.take() {
+                f.stop_video(playing);
+            }
+        }
+
+        if demo.take_pending_video_cancel() {
+            if let Some(playing) = self.playing_video.as_mut() {
+                f.cancel_video_load(playing);
+            }
+        }
+
+        if let Some(playing) = self.playing_video.as_mut() {
+            if f.poll_video(playing) {
+                demo.set_video_first_frame_shown();
+            }
+        }
+    }
+
+    /// Kicks off / drains this frame's gallery fetches. Split out of
+    /// `update` purely for readability — not part of the `App` trait.
+    fn advance_gallery(&mut self, demo: &mut Demo, f: &mut Frame) {
+        let scale = f.viewport.scale_factor;
+
+        if let Some(request) = demo.take_pending_gallery_fetch() {
+            let nonce = gallery_fetch::fresh_nonce();
+            let side_px = ((request.tile_side_px as f32 * scale).min(MAX_TILE_IMAGE_SIDE_PX))
+                .round()
+                .max(1.0) as u32;
+            for idx in 0..GALLERY_TILE_COUNT {
+                let (url, photo_id, aspect) = gallery_fetch::tile_fetch_url(nonce, idx, side_px);
+                self.tile_photo_id[idx] = Some(photo_id);
+                let id = f.fetch_async(&url);
+                self.gallery_fetches
+                    .insert(id, PendingGalleryFetch::Tile(idx, aspect));
+            }
+        }
+
+        if let Some(request) = demo.take_pending_gallery_hires_fetch() {
+            if let Some(old) = self.hires_fetch.take() {
+                f.cancel_fetch(old);
+                self.gallery_fetches.remove(&old);
+            }
+            match self.tile_photo_id[request.idx] {
+                Some(photo_id) => {
+                    let physical_w = request.width_px as f32 * scale;
+                    let physical_h = request.height_px as f32 * scale;
+                    let cap_scale =
+                        (GALLERY_LARGE_IMAGE_MAX_SIDE_PX / physical_w.max(physical_h)).min(1.0);
+                    let width = (physical_w * cap_scale).round().max(1.0) as u32;
+                    let height = (physical_h * cap_scale).round().max(1.0) as u32;
+                    let url = gallery_fetch::hires_fetch_url(photo_id, width, height);
+                    let id = f.fetch_async(&url);
+                    self.gallery_fetches
+                        .insert(id, PendingGalleryFetch::Hires(request.idx));
+                    self.hires_fetch = Some(id);
+                }
+                None => log::warn!("gallery hires: tile {} has no known photo id", request.idx),
+            }
+        }
+
+        if demo.take_pending_gallery_hires_cancel() {
+            if let Some(old) = self.hires_fetch.take() {
+                f.cancel_fetch(old);
+                self.gallery_fetches.remove(&old);
+            }
+        }
+
+        for (id, bytes) in f.poll_fetches() {
+            let Some(kind) = self.gallery_fetches.remove(&id) else {
+                continue;
+            };
+            match kind {
+                PendingGalleryFetch::Tile(idx, aspect) => match bytes {
+                    Some(bytes) => {
+                        demo.set_gallery_tile_image(f.proteus, idx, bytes.to_vec(), aspect)
+                    }
+                    None => log::warn!("gallery tile {idx}: fetch failed"),
+                },
+                PendingGalleryFetch::Hires(idx) => {
+                    if self.hires_fetch == Some(id) {
+                        self.hires_fetch = None;
+                    }
+                    match bytes {
+                        Some(bytes) => demo.set_gallery_hires_image(f.proteus, idx, bytes.to_vec()),
+                        None => log::warn!("gallery hires {idx}: fetch failed"),
+                    }
+                }
+            }
+        }
     }
 }
 
 impl Default for DemoApp {
+    /// Defaults to shell-managed video (`None`) — a host opts into
+    /// `HostServices`-driven video explicitly via [`Self::new`].
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -60,7 +232,7 @@ impl App for DemoApp {
     }
 
     fn update(&mut self, f: &mut Frame, dt: f32) {
-        let Some(demo) = self.demo.as_mut() else {
+        let Some(mut demo) = self.demo.take() else {
             return;
         };
         demo.advance(f.proteus, dt);
@@ -73,6 +245,9 @@ impl App for DemoApp {
             );
             update.handle.set_texture(f.proteus, texture);
         }
+        self.advance_gallery(&mut demo, f);
+        self.advance_video(&mut demo, f);
+        self.demo = Some(demo);
     }
 }
 

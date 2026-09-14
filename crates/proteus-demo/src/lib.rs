@@ -38,6 +38,7 @@
 //! each shell calls with bytes/frames it fetched its own way.
 
 mod app;
+mod gallery_fetch;
 mod screens;
 
 pub use app::DemoApp;

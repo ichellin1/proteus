@@ -1,15 +1,16 @@
 //! Reference "bring your own player" example: decodes an `.mp4` file by
-//! shelling out to `ffmpeg`/`ffprobe` on a background thread, and feeds the
-//! resulting RGBA frames into [`proteus_render::QuadPipeline`]'s generic
-//! `VideoFrameSender` channel.
+//! shelling out to `ffmpeg`/`ffprobe` on a background thread, delivering
+//! RGBA frames through a [`proteus_runtime::VideoStream`] impl (M13.4 step
+//! 4a — moved here from `proteus-shell-native`'s own former copy of this
+//! file now that video is a real `HostServices` seam instead of a
+//! shell-side shim).
 //!
-//! `proteus-render`/`proteus-ui` know nothing about MP4, ffmpeg, or any
-//! codec — they only see [`VideoFrameSender`], a plain `Vec<u8>` channel
-//! (see M9 in PLANNING.md). This module is *one* way to produce frames for
-//! that channel. Swapping in an HLS player, a different decoder, or a
-//! hardware path means writing a different module with this same shape —
-//! spawn a thread (or task), decode, call `sender.send(rgba)` — not
-//! touching the framework.
+//! `proteus-render`/`proteus-ui`/`proteus-runtime` know nothing about MP4,
+//! ffmpeg, or any codec — they only see [`VideoStream`], a small trait with
+//! one non-blocking `poll_frame`. Swapping in a different decoder or a
+//! hardware path means writing a different [`HostServices::open_video`]
+//! implementation with this same shape — spawn a thread (or task), decode,
+//! deliver frames — not touching the framework.
 //!
 //! Decoding, container demuxing, B-frame reordering, and real-time pacing
 //! are all delegated to `ffmpeg` itself (`-re` reads the input at its native
@@ -21,28 +22,29 @@
 //!
 //! Audio is not decoded; this is video-only playback, matching what the
 //! reference demo's video screen needs.
+//!
+//! [`HostServices::open_video`]: proteus_runtime::HostServices::open_video
 
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use proteus_render::VideoFrameSender;
+use proteus_runtime::{VideoFrame, VideoStream};
 
 /// Coded dimensions of an mp4 file's video stream.
 #[derive(Copy, Clone, Debug)]
-pub struct VideoDimensions {
-    pub width: u32,
-    pub height: u32,
+struct VideoDimensions {
+    width: u32,
+    height: u32,
 }
 
 /// Reads `path`'s video stream dimensions via `ffprobe` — container metadata
-/// only, no frame data decoded. Call this before `QuadPipeline::init_video`
-/// so the texture is sized correctly, then pass the same dimensions to
-/// [`spawn`].
-pub fn probe(path: &Path) -> Result<VideoDimensions, String> {
+/// only, no frame data decoded.
+fn probe(path: &Path) -> Result<VideoDimensions, String> {
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -79,18 +81,46 @@ pub fn probe(path: &Path) -> Result<VideoDimensions, String> {
     Ok(VideoDimensions { width, height })
 }
 
-/// Handle to a running decode thread.
-pub struct PlaybackHandle {
+/// A running `.mp4` decode — the [`VideoStream`] this module hands back
+/// from [`open`].
+pub struct Mp4Stream {
     stop_flag: Arc<AtomicBool>,
     child: Arc<Mutex<Option<Child>>>,
     join_handle: Option<JoinHandle<()>>,
+    rx: Receiver<Vec<u8>>,
+    width: u32,
+    height: u32,
 }
 
-impl PlaybackHandle {
-    /// Signal the decode thread to stop, kill the `ffmpeg` child process
-    /// immediately (rather than waiting for it to notice the stop flag
-    /// between frames), and block until the thread exits.
-    pub fn stop(mut self) {
+impl VideoStream for Mp4Stream {
+    fn poll_frame(&mut self) -> Option<VideoFrame> {
+        // Drain to the latest frame — if more than one arrived since the
+        // last call (e.g. the render loop fell behind the decoder for a
+        // tick), everything but the freshest is discarded. Mirrors
+        // `QuadPipeline::consume_video_frame`'s identical pre-M13.4 policy.
+        let mut latest: Option<Vec<u8>> = None;
+        let mut drained = 0u32;
+        while let Ok(frame) = self.rx.try_recv() {
+            latest = Some(frame);
+            drained += 1;
+        }
+        if drained > 1 {
+            log::debug!(
+                "mp4_player: {} stale frame(s) discarded (render loop behind decoder)",
+                drained - 1
+            );
+        }
+        latest.map(|rgba| VideoFrame {
+            width: self.width,
+            height: self.height,
+            rgba: Arc::from(rgba),
+        })
+    }
+
+    /// Kills the `ffmpeg` child immediately (rather than waiting for it to
+    /// notice the stop flag between frames) and blocks until the decode
+    /// thread exits.
+    fn stop(mut self: Box<Self>) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
@@ -101,51 +131,56 @@ impl PlaybackHandle {
     }
 }
 
-/// Decode `path`'s video stream on a background thread via `ffmpeg`, sending
-/// RGBA frames to `sender` paced at the source's native frame rate (`ffmpeg
-/// -re`). Loops back to the start at end-of-file — playback only stops when
-/// [`PlaybackHandle::stop`] is called.
-///
-/// `width`/`height` must be the same [`VideoDimensions`] `probe` returned for
-/// this file (i.e. whatever `QuadPipeline::init_video` was called with) —
-/// `ffmpeg` is asked to scale its output to exactly this size.
-pub fn spawn(path: PathBuf, sender: VideoFrameSender, width: u32, height: u32) -> PlaybackHandle {
+/// Probe `path` and, if that succeeds, spawn a background thread decoding it
+/// via `ffmpeg` — looping back to the start at end-of-file; playback only
+/// stops when [`VideoStream::stop`] is called. `None` (logged) if `ffprobe`
+/// fails, matching [`HostServices::open_video`](proteus_runtime::HostServices::open_video)'s
+/// own "couldn't even start" convention.
+pub fn open(path: PathBuf) -> Option<Mp4Stream> {
+    let dims = match probe(&path) {
+        Ok(dims) => dims,
+        Err(e) => {
+            log::warn!("mp4_player: {path:?}: {e}");
+            return None;
+        }
+    };
+
+    // Bounded to 2 frames: one frame of lookahead; `send` blocks when the
+    // decode loop is ahead, providing natural backpressure — same shape
+    // `QuadPipeline::VideoFrameSender` used before this seam existed.
+    let (tx, rx) = sync_channel(2);
     let stop_flag = Arc::new(AtomicBool::new(false));
     let child_slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let thread_stop = stop_flag.clone();
     let thread_child_slot = child_slot.clone();
+    let (width, height) = (dims.width, dims.height);
     let join_handle = std::thread::Builder::new()
         .name("mp4-decode".into())
-        .spawn(move || {
-            decode_loop(
-                &path,
-                &sender,
-                width,
-                height,
-                &thread_stop,
-                &thread_child_slot,
-            )
-        })
+        .spawn(move || decode_loop(&path, &tx, width, height, &thread_stop, &thread_child_slot))
         .expect("failed to spawn mp4 decode thread");
-    PlaybackHandle {
+
+    Some(Mp4Stream {
         stop_flag,
         child: child_slot,
         join_handle: Some(join_handle),
-    }
+        rx,
+        width,
+        height,
+    })
 }
 
 /// Replays `path` from the start each time `ffmpeg` reaches end-of-file,
 /// until `stop` is set or a hard error occurs (logged, then the thread exits).
 fn decode_loop(
     path: &Path,
-    sender: &VideoFrameSender,
+    tx: &SyncSender<Vec<u8>>,
     width: u32,
     height: u32,
     stop: &AtomicBool,
     child_slot: &Mutex<Option<Child>>,
 ) {
     while !stop.load(Ordering::Relaxed) {
-        if let Err(e) = decode_once(path, sender, width, height, stop, child_slot) {
+        if let Err(e) = decode_once(path, tx, width, height, stop, child_slot) {
             log::warn!("mp4_player: {path:?}: {e}");
             return;
         }
@@ -157,7 +192,7 @@ fn decode_loop(
 /// `width`×`height`×4-byte chunk read from its stdout.
 fn decode_once(
     path: &Path,
-    sender: &VideoFrameSender,
+    tx: &SyncSender<Vec<u8>>,
     width: u32,
     height: u32,
     stop: &AtomicBool,
@@ -180,8 +215,7 @@ fn decode_once(
     // Drain stderr on its own thread so ffmpeg never blocks trying to write
     // warnings into a pipe nobody's reading; logged (at debug) only if
     // decode_once exits abnormally, to avoid spamming a normal run.
-    let mut stderr = child.stderr.take();
-    let stderr_thread = stderr.take().map(|mut s| {
+    let stderr_thread = child.stderr.take().map(|mut s| {
         std::thread::spawn(move || {
             let mut buf = String::new();
             let _ = s.read_to_string(&mut buf);
@@ -201,7 +235,7 @@ fn decode_once(
         match stdout.read_exact(&mut buf) {
             Ok(()) => {
                 frames_sent += 1;
-                if !sender.send(buf.clone()) {
+                if tx.send(buf.clone()).is_err() {
                     break Ok(()); // receiver dropped — pipeline is gone
                 }
             }

@@ -43,6 +43,7 @@
 //! - **Keyboard / directional navigation**: not wired — `navigation_system`
 //!   is itself still a stub.
 
+mod hls_video;
 mod services;
 mod surface;
 
@@ -212,7 +213,7 @@ fn start_raf_loop<D: FrameDriver + 'static>(state: Rc<RefCell<WebLoop<D>>>) {
     request_animation_frame(g.borrow().as_ref().unwrap());
 }
 
-fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
+pub(crate) fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
     web_sys::window()
         .expect("no window")
         .request_animation_frame(f.as_ref().unchecked_ref())

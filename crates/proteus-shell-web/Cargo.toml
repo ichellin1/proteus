@@ -10,14 +10,14 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# M13.2 collapse: all platform glue (canvas/wgpu setup, rAF loop, DPI,
-# resize, Pointer Events, visibility-pause, context-loss) now lives in
-# proteus-host-web; this crate is just DemoApp wiring + the M13.4-debt
-# video/gallery/texture-churn shim (see src/lib.rs's crate doc) — the same
-# role proteus-shell-native's main.rs plays for the native host.
+# M13.4 step 4b: this crate collapsed to just DemoApp wiring — texture
+# churn, the gallery, and now video (real <video>/MediaSource playback,
+# moved into proteus-host-web's own hls_video module) all moved off the
+# shell and onto the real Frame/HostServices contract. All platform glue
+# (canvas/wgpu setup, rAF loop, DPI, resize, Pointer Events, visibility-
+# pause, context-loss) already lived in proteus-host-web since M13.2.
 proteus-demo = { path = "../proteus-demo" }
 proteus-host-web = { path = "../proteus-host-web" }
-proteus-render = { path = "../proteus-render" }
 proteus-runtime = { path = "../proteus-runtime" }
 wasm-bindgen = { workspace = true }
 # Not referenced by name in src/, but a real dependency of wasm-bindgen's own
