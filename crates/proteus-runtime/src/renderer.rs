@@ -25,7 +25,7 @@ use proteus_sdk::Proteus;
 use proteus_ui::{collect_instances, TransitionAtlasSize};
 
 use crate::bake;
-use crate::config::ProteusConfig;
+use crate::config::{FontSource, ProteusConfig};
 use crate::viewport::Viewport;
 
 /// See the module docs.
@@ -92,8 +92,17 @@ impl Renderer {
         world.insert_resource(pipeline);
         world.insert_resource(TransitionAtlasSize(mem.transition_atlas_size));
 
+        // M13.4 step 2: TextConfig.default_font was declared back in M13.5
+        // but always ignored in favor of the embedded font — actually read
+        // it now. `FontAtlas::new(&[u8])` already accepted arbitrary TTF/OTF
+        // bytes; this was pure wiring, no new capability to build.
+        let font_atlas = match &config.text.default_font {
+            FontSource::Embedded => proteus_render::FontAtlas::with_embedded_font(),
+            FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes),
+        };
+
         Self {
-            font_atlas: proteus_render::FontAtlas::with_embedded_font(),
+            font_atlas,
             config,
             viewport,
         }
@@ -126,8 +135,14 @@ impl Renderer {
         let gpu = proteus.world().resource::<GpuContext>().clone();
         let world = proteus.world_mut();
 
-        bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue);
-        bake::bake_pending_images(world, &gpu.queue, self.config.resources.image_max_side);
+        let lazy_load = self.config.resources.lazy_load;
+        bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue, lazy_load);
+        bake::bake_pending_images(
+            world,
+            &gpu.queue,
+            self.config.resources.image_max_side,
+            lazy_load,
+        );
 
         let instances = collect_instances(world);
         if !instances.is_empty() {

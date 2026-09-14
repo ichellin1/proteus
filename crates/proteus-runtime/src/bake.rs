@@ -20,9 +20,20 @@ use proteus_render::{
     decode_image, resize_to_fit, DecodedImage, FontAtlas, GpuContext, QuadPipeline, TextureId,
 };
 use proteus_sdk::TextureHandle;
-use proteus_ui::{BakedImage, BakedText, Image, Text, TextureRef};
+use proteus_ui::{BakedImage, BakedText, EffectiveVisibility, Image, Text, TextureRef, Visibility};
 
 use crate::services::{HostServices, TextureRequest};
+
+/// Same "prefer the cascaded `EffectiveVisibility`, fall back to the
+/// entity's own raw `Visibility`, default visible" convention
+/// `proteus_ui::collect_instances` already uses — see that function's own
+/// doc for why (a bare `World` in a test may never have run the visibility
+/// cascade at all).
+fn is_visible(vis: Option<&Visibility>, eff_vis: Option<&EffectiveVisibility>) -> bool {
+    eff_vis
+        .map(|v| v.0)
+        .unwrap_or_else(|| vis.map(|v| v.visible).unwrap_or(true))
+}
 
 /// Fetch an asset's bytes via `services`, decode, and bake — backs
 /// [`Frame::load_texture`]. The fetch-and-decode half of the work; the actual
@@ -115,15 +126,29 @@ pub(crate) fn bake_texture(
     TextureHandle::from_texture_id(texture_id)
 }
 
-/// Rasterize and upload every `Text` entity that has no `BakedText` yet.
+/// Rasterize and upload every `Text` entity that has no `BakedText` yet. If
+/// `lazy_load` is set (M13.4 step 2 — `ResourceConfig.lazy_load`, declared in
+/// M13.5, previously never read), an entity that isn't currently visible is
+/// left pending rather than baked — it'll be picked up here again on some
+/// later call once it becomes visible.
 pub(crate) fn bake_pending_text(
     world: &mut World,
     font_atlas: &mut FontAtlas,
     queue: &wgpu::Queue,
+    lazy_load: bool,
 ) {
     let pending: Vec<(Entity, Text)> = {
-        let mut query = world.query_filtered::<(Entity, &Text), Without<BakedText>>();
-        query.iter(world).map(|(e, t)| (e, t.clone())).collect()
+        let mut query = world.query_filtered::<(
+            Entity,
+            &Text,
+            Option<&Visibility>,
+            Option<&EffectiveVisibility>,
+        ), Without<BakedText>>();
+        query
+            .iter(world)
+            .filter(|(_, _, vis, eff_vis)| !lazy_load || is_visible(*vis, *eff_vis))
+            .map(|(e, t, _, _)| (e, t.clone()))
+            .collect()
     };
 
     for (entity, text) in pending {
@@ -172,16 +197,24 @@ pub(crate) fn bake_pending_text(
 ///
 /// Each entity's own [`Image::max_side`] wins; `default_max_side` is the
 /// fallback for entities that don't set one (`None` on both = no downscale).
+/// `lazy_load` — see [`bake_pending_text`]'s identical doc.
 pub(crate) fn bake_pending_images(
     world: &mut World,
     queue: &wgpu::Queue,
     default_max_side: Option<u32>,
+    lazy_load: bool,
 ) {
     let pending: Vec<(Entity, Arc<[u8]>, Option<u32>)> = {
-        let mut query = world.query_filtered::<(Entity, &Image), Without<BakedImage>>();
+        let mut query = world.query_filtered::<(
+            Entity,
+            &Image,
+            Option<&Visibility>,
+            Option<&EffectiveVisibility>,
+        ), Without<BakedImage>>();
         query
             .iter(world)
-            .map(|(e, img)| (e, img.bytes.clone(), img.max_side))
+            .filter(|(_, _, vis, eff_vis)| !lazy_load || is_visible(*vis, *eff_vis))
+            .map(|(e, img, _, _)| (e, img.bytes.clone(), img.max_side))
             .collect()
     };
 
@@ -233,6 +266,44 @@ pub(crate) fn bake_pending_images(
                 pixel_size: [decoded.width as f32, decoded.height as f32],
             },
             TextureRef(texture_id),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_visible;
+    use proteus_ui::{EffectiveVisibility, Visibility};
+
+    // Mirrors M6's own stated preference for deterministic, GPU-free tests
+    // over pixel/integration ones (see PLANNING.md) — `is_visible` is the
+    // one piece of lazy-load logic worth pinning down in isolation; the
+    // surrounding `query_filtered` plumbing reuses the exact pattern
+    // `proteus_ui::collect_instances` already has extensive coverage for.
+
+    #[test]
+    fn no_components_defaults_to_visible() {
+        assert!(is_visible(None, None));
+    }
+
+    #[test]
+    fn raw_visibility_used_when_no_effective_visibility() {
+        assert!(is_visible(Some(&Visibility::VISIBLE), None));
+        assert!(!is_visible(Some(&Visibility::HIDDEN), None));
+    }
+
+    #[test]
+    fn effective_visibility_wins_over_raw_visibility() {
+        // A visible entity under a hidden ancestor: EffectiveVisibility
+        // reflects the cascade, raw Visibility does not — the cascaded
+        // value must win, exactly like collect_instances.
+        assert!(!is_visible(
+            Some(&Visibility::VISIBLE),
+            Some(&EffectiveVisibility(false))
+        ));
+        assert!(is_visible(
+            Some(&Visibility::HIDDEN),
+            Some(&EffectiveVisibility(true))
         ));
     }
 }

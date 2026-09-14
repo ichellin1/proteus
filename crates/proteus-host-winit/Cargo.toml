@@ -14,3 +14,11 @@ proteus-runtime = { path = "../proteus-runtime" }
 winit = { workspace = true }
 pollster = { workspace = true }
 log = { workspace = true }
+# M13.4: DirHostServices::fetch_async reaches arbitrary URLs (e.g. the
+# reference demo's photo gallery) on a background thread — blocking/sync,
+# which is exactly what a plain std::thread wants; this app has no async
+# runtime otherwise. Pinned to major version 2 (moved here from
+# proteus-shell-native's own former gallery_fetch.rs — see this crate's own
+# module doc): the 3.x line reworked the API around a different
+# agent/builder shape, and 2.x is confirmed to follow redirects by default.
+ureq = { version = "2" }

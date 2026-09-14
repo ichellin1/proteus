@@ -19,14 +19,20 @@
 //! navigation plumbing are M13.3 proper. Asset loading is a synchronous
 //! directory read ([`DirHostServices`]) — the async story is M13.2 / M13.4.
 
+mod mp4_player;
+
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
 use proteus_runtime::config::RenderConfig;
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
-use proteus_runtime::{App, Engine, Host, HostServices, ProteusConfig, Viewport};
+use proteus_runtime::{
+    App, Engine, FetchId, FetchResult, Host, HostServices, ProteusConfig, VideoStream, Viewport,
+};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -42,13 +48,61 @@ use winit::window::{Window, WindowAttributes, WindowId};
 /// `load_asset("nav/home-idle.png")` → `std::fs::read(base/nav/home-idle.png)`.
 /// A missing / unreadable file logs a warning and returns `None` — the same
 /// graceful degradation the M12 shells had (that quad just stays blank).
+///
+/// [`fetch_async`](HostServices::fetch_async) (M13.4) additionally accepts a
+/// full `http(s)://` URL — fetched on its own background thread via `ureq`
+/// (blocking/sync, exactly what a plain `std::thread` wants; this crate has
+/// no async runtime otherwise), one thread per fetch for concurrency, same
+/// shape the reference demo's own former `gallery_fetch.rs` used before this
+/// became a real `HostServices` primitive. A plain key still resolves via
+/// [`load_asset`] inline — local disk reads are fast enough that a
+/// background thread would only add latency, not remove it — but the result
+/// still arrives through the same [`poll_fetches`](HostServices::poll_fetches)
+/// channel, so callers see one uniform async story regardless of which path
+/// a given request took.
+///
+/// [`load_asset`]: HostServices::load_asset
 pub struct DirHostServices {
     base: PathBuf,
+    next_id: u64,
+    fetch_tx: Sender<FetchResult>,
+    fetch_rx: Receiver<FetchResult>,
+    /// Ids [`cancel_fetch`](HostServices::cancel_fetch) has been told to
+    /// drop — a blocking `ureq` call already running on its own thread can't
+    /// be interrupted, so this just discards the result in
+    /// [`poll_fetches`](HostServices::poll_fetches) instead of delivering it.
+    cancelled: HashSet<FetchId>,
 }
 
 impl DirHostServices {
     pub fn new(base: impl Into<PathBuf>) -> Self {
-        Self { base: base.into() }
+        let (fetch_tx, fetch_rx) = mpsc::channel();
+        Self {
+            base: base.into(),
+            next_id: 0,
+            fetch_tx,
+            fetch_rx,
+            cancelled: HashSet::new(),
+        }
+    }
+}
+
+fn fetch_url_bytes(url: &str) -> Option<Arc<[u8]>> {
+    use std::io::Read;
+    let result = (|| -> Result<Vec<u8>, String> {
+        let resp = ureq::get(url).call().map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        resp.into_reader()
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(bytes)
+    })();
+    match result {
+        Ok(bytes) => Some(Arc::from(bytes)),
+        Err(e) => {
+            log::warn!("fetch_async: {url}: {e}");
+            None
+        }
     }
 }
 
@@ -62,6 +116,52 @@ impl HostServices for DirHostServices {
                 None
             }
         }
+    }
+
+    fn fetch_async(&mut self, key_or_url: &str) -> FetchId {
+        let id = FetchId(self.next_id);
+        self.next_id += 1;
+
+        if key_or_url.starts_with("http://") || key_or_url.starts_with("https://") {
+            let url = key_or_url.to_string();
+            let tx = self.fetch_tx.clone();
+            std::thread::Builder::new()
+                .name(format!("fetch-{}", id.0))
+                .spawn(move || {
+                    let _ = tx.send((id, fetch_url_bytes(&url)));
+                })
+                .expect("failed to spawn fetch thread");
+        } else {
+            // Local key: resolved inline (see this type's own doc for why),
+            // but still delivered through the same channel as the URL case.
+            let bytes = self.load_asset(key_or_url);
+            let _ = self.fetch_tx.send((id, bytes));
+        }
+        id
+    }
+
+    fn poll_fetches(&mut self) -> Vec<FetchResult> {
+        let mut results = Vec::new();
+        while let Ok((id, bytes)) = self.fetch_rx.try_recv() {
+            if self.cancelled.remove(&id) {
+                continue;
+            }
+            results.push((id, bytes));
+        }
+        results
+    }
+
+    fn cancel_fetch(&mut self, id: FetchId) {
+        self.cancelled.insert(id);
+    }
+
+    /// `key` is a literal filesystem path here, unlike [`Self::load_asset`]
+    /// — video files don't live under `self.base` in the reference demo
+    /// (`assets/videos/`, separate from the image `base`), and there's no
+    /// established "video keyspace" convention yet to resolve a bare key
+    /// against. `.mp4` decode via `ffmpeg`/`ffprobe` — see [`mp4_player`].
+    fn open_video(&mut self, key: &str) -> Option<Box<dyn VideoStream>> {
+        mp4_player::open(PathBuf::from(key)).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
     }
 }
 

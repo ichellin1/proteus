@@ -41,12 +41,12 @@ mod renderer;
 mod services;
 mod viewport;
 
-pub use app::{App, Frame};
+pub use app::{App, Frame, PlayingVideo};
 pub use config::ProteusConfig;
 pub use engine::Engine;
 pub use host::Host;
 pub use renderer::Renderer;
-pub use services::{HostServices, TextureRequest};
+pub use services::{FetchId, FetchResult, HostServices, TextureRequest, VideoFrame, VideoStream};
 pub use viewport::{Insets, Viewport};
 
 // Re-exported so a host crate can depend on `proteus-runtime` alone and

@@ -10,6 +10,15 @@ license.workspace = true
 proteus-sdk = { path = "../proteus-sdk" }
 proteus-runtime = { path = "../proteus-runtime" }
 glam = { workspace = true }
+log = { workspace = true }
+# Gallery nonce (see gallery_fetch.rs): needs a value that varies across
+# separate app launches, not just across visits within one session — plain
+# std::time::SystemTime::now() panics at runtime on wasm32-unknown-unknown
+# (confirmed by hitting it), and this crate is shared with that target.
+# web-time is a drop-in SystemTime/Instant replacement backed by std::time
+# on native and by Performance/Date on wasm32 — already in the dependency
+# tree transitively (via wgpu), so this adds no new build weight.
+web-time = "1"
 
 [dev-dependencies]
 # Only needed by src/lib.rs's own `#[cfg(test)]` module, for direct
