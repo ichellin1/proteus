@@ -33,9 +33,27 @@
 //! (M10.6 — see `quad_contains`) so a rotated entity's hit region matches its
 //! rendered footprint rather than the unrotated shape's axis-aligned box.
 //!
-//! Entities are tested in world insertion order; the **last** entity whose
-//! bounds contain the pointer wins (matches GPU draw order — last drawn =
-//! visually on top).
+//! When several candidates contain the pointer, the winner is the one with the
+//! greatest `(world QuadState::position.z, SpawnOrder)` — the same key
+//! [`crate::collect_instances`] sorts root entities on, so the entity that
+//! receives the click is the one drawn on top.
+//!
+//! This used to be "whichever the query iterated last", which silently assumed
+//! ECS iteration order tracked spawn order. It doesn't across archetypes — the
+//! same wrong assumption M13.8 found and fixed for *rendering* (see
+//! `spawn_order.rs`), which was never applied to input; `position.z` was
+//! ignored here entirely, so an explicit layering honoured on screen was not
+//! honoured by the pointer.
+//!
+//! **Known divergence, deliberately not papered over:** the renderer walks each
+//! root's subtree depth-first, so a *child* always draws over its parent
+//! regardless of z, and a child's z never lifts it above a different root. This
+//! function instead compares every candidate on one global key. The two agree
+//! for root entities, and for children in the ordinary case (a child spawned
+//! after its parent, no explicit child z). They can disagree for a child
+//! carrying a nonzero z, or one re-parented under a later-spawned parent.
+//! Closing that gap means hit-testing against the renderer's own ordering
+//! rather than a second approximation of it.
 //!
 //! Virtual entities, hidden entities, `Disabled` entities, and (M12.2)
 //! `Transitioning` entities without `TransitioningConfig::allow_input` are
@@ -48,6 +66,7 @@ use glam::Vec2;
 
 use crate::component::{Disabled, Lifecycle, TransitioningConfig, Virtual};
 use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
+use crate::spawn_order::SpawnOrder;
 use crate::{QuadState, Visibility};
 
 // ---------------------------------------------------------------------------
@@ -175,9 +194,10 @@ pub struct Interactable;
 // Hit test helper
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if `point` (window-space pixels, origin top-left) is inside
-/// `qs`'s true footprint — accounting for rotation and (uniform) scale, not
-/// just an axis-aligned box (M10.6).
+/// Returns `true` if `point` (**world-space**: viewport-centre origin, Y-up —
+/// the same space [`PointerInput::position`] and `QuadState::position` are in,
+/// *not* window/CSS pixels) is inside `qs`'s true footprint — accounting for
+/// rotation and (uniform) scale, not just an axis-aligned box (M10.6).
 ///
 /// `QuadState::position` is the world location of the rotation *pivot* — the
 /// anchor point, per the vertex shader's own transform order (scale, then
@@ -195,13 +215,40 @@ pub struct Interactable;
 /// Accounts for `QuadState::anchor` — a center-anchored quad (0.5, 0.5) has
 /// its pivot at the center; a top-left-anchored quad (0.0, 0.0) has its pivot
 /// at the top-left corner.
+///
+/// ## Anchor is Y-down; these extents are Y-up
+///
+/// `anchor` uses the screen convention — `[0,0]` is the component's *top*-left,
+/// `[1,1]` its bottom-right — while `local` here is world-space, Y-up. The two
+/// disagree on Y, so the Y extents are **not** the mirror of the X ones. Derived
+/// from `quad.wgsl`'s own `anchor_shift` (`(anchor - 0.5) * size * vec2(1, -1)`,
+/// applied to a unit quad vertex `v ∈ [-0.5, 0.5]`, Y-up):
+///
+/// ```text
+/// x: size.x * (v.x - anchor.x + 0.5)  →  [-anchor.x·w, (1 - anchor.x)·w]
+/// y: size.y * (v.y + anchor.y - 0.5)  →  [-(1 - anchor.y)·h, anchor.y·h]
+/// ```
+///
+/// Both collapse to `±size/2` at the default centre anchor, which is why
+/// getting Y backwards here stayed invisible: every anchor in the reference
+/// demo and the TS example is `(0.5, 0.5)`. At `(0, 0)` the sign error
+/// mirrored the hit box about the pivot, so a top-left-anchored button was
+/// clickable in the rectangle *above* itself rather than the one it renders in.
 pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
     let delta = point - qs.position.truncate();
     let local = Vec2::from_angle(-qs.rotation).rotate(delta);
 
     let scaled_size = qs.size * qs.scale;
-    let min = -qs.anchor * scaled_size;
-    let max = (Vec2::ONE - qs.anchor) * scaled_size;
+    // See the Y-down/Y-up note above before "simplifying" these to
+    // `-anchor * size` / `(1 - anchor) * size`.
+    let min = Vec2::new(
+        -qs.anchor.x * scaled_size.x,
+        -(1.0 - qs.anchor.y) * scaled_size.y,
+    );
+    let max = Vec2::new(
+        (1.0 - qs.anchor.x) * scaled_size.x,
+        qs.anchor.y * scaled_size.y,
+    );
 
     local.x >= min.x && local.x < max.x && local.y >= min.y && local.y < max.y
 }
@@ -227,6 +274,7 @@ type HitTestQuery<'w, 's> = Query<
         Option<&'static Lifecycle>,
         Option<&'static TransitioningConfig>,
         Has<Disabled>,
+        Option<&'static SpawnOrder>,
     ),
     (With<Interactable>, Without<Virtual>),
 >;
@@ -247,6 +295,10 @@ type HitTestQuery<'w, 's> = Query<
 /// `TransitioningConfig::allow_input`, are excluded from the candidate loop
 /// entirely — click-through, not just event-suppressed (see this module's
 /// top doc for the reasoning).
+///
+/// M13.8 follow-up: overlapping candidates are resolved by `(world z,
+/// SpawnOrder)`, not by whichever the ECS query happened to iterate last —
+/// see this module's top doc.
 #[allow(clippy::too_many_arguments)]
 pub fn hit_test_system(
     pointer: Res<PointerInput>,
@@ -278,10 +330,13 @@ pub fn hit_test_system(
         return;
     };
 
-    // Find the topmost entity whose bounds contain the pointer.
-    // Entities are tested in world order; last hit wins (matches draw order).
-    let mut hit: Option<Entity> = None;
-    for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled) in query.iter() {
+    // Find the topmost entity whose bounds contain the pointer — "topmost" by
+    // the same key `collect_instances` sorts roots on, `(z, SpawnOrder)`, so
+    // input agrees with what's drawn instead of with ECS storage layout.
+    let mut hit: Option<(Entity, f32, SpawnOrder)> = None;
+    for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled, spawn_order) in
+        query.iter()
+    {
         // Prefer the cascaded EffectiveVisibility; fall back to the entity's
         // own raw Visibility for callers that run hit_test_system without the
         // full schedule (existing test convention in this crate).
@@ -300,10 +355,31 @@ pub fn hit_test_system(
             continue;
         }
         let world_qs = resolve_world_position_query(e, qs, &quad_states, &parents);
-        if quad_contains(&world_qs, pos) {
-            hit = Some(e);
+        if !quad_contains(&world_qs, pos) {
+            continue;
+        }
+        // Same "no SpawnOrder = sort last among ties" convention
+        // `collect_instances` uses for an entity that never went through
+        // `Proteus::component()` (e.g. a bare `World` in a test with no hooks
+        // registered) — there, last means drawn on top; here it means it wins
+        // the pointer, which is the same statement.
+        let order = spawn_order.copied().unwrap_or(SpawnOrder(u64::MAX));
+        let z = world_qs.position.z;
+        let wins = match hit {
+            None => true,
+            // `is_ge`, not `is_gt`: a genuine all-round tie keeps the old
+            // "last iterated wins" behavior rather than the first.
+            Some((_, best_z, best_order)) => z
+                .partial_cmp(&best_z)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(order.cmp(&best_order))
+                .is_ge(),
+        };
+        if wins {
+            hit = Some((e, z, order));
         }
     }
+    let hit = hit.map(|(e, _, _)| e);
 
     // Compute hover enter / exit.
     if hit != hovered.0 {

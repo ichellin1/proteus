@@ -23,11 +23,17 @@ name: Deploy PR preview to staging
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+    # Kept deliberately identical in shape to pages.yml's own filter — see
+    # that file for why this is `crates/**` rather than a hand-maintained
+    # list of the crates the web demo depends on (that list went stale the
+    # moment M12.5/M13 moved demo logic into proteus-demo/proteus-runtime/
+    # proteus-host-web). Staging and production must agree on what counts as
+    # a web-affecting change, or a PR gets no preview for a change that will
+    # still redeploy production on merge.
     paths:
-      - "crates/proteus-gpu/**"
-      - "crates/proteus-render/**"
-      - "crates/proteus-ui/**"
-      - "crates/proteus-shell-web/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/staging-deploy.yml"
 
 concurrency:

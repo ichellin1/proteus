@@ -3,11 +3,20 @@ name: Deploy Demo to GitHub Pages
 on:
   push:
     branches: [main]
+    # `crates/**`, not a hand-maintained list of the crates the web demo
+    # happens to depend on today. That list was written pre-M13, when the
+    # demo was `proteus-shell-web` on top of `proteus-gpu`/`render`/`ui`;
+    # since M12.5/M13 the deployed build also pulls in `proteus-demo` (where
+    # every line of demo logic now lives), `proteus-runtime`,
+    # `proteus-host-web`, `proteus-sdk` and `proteus-sdk-web` — none of which
+    # were listed, so a change to any of them silently never redeployed.
+    # A workspace-wide filter can't drift that way; the cost is an occasional
+    # no-op rebuild for a native-only change. `Cargo.toml`/`Cargo.lock` are
+    # included because a dependency bump changes the shipped wasm too.
     paths:
-      - "crates/proteus-gpu/**"
-      - "crates/proteus-render/**"
-      - "crates/proteus-ui/**"
-      - "crates/proteus-shell-web/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/pages.yml"
   workflow_dispatch: {}
 
