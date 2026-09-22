@@ -32,6 +32,7 @@ pub async fn mount(
     update: Option<js_sys::Function>,
 ) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
+    wasm_logger::init(wasm_logger::Config::default());
 
     let canvas = web_sys::window()
         .ok_or_else(|| JsValue::from_str("no window"))?

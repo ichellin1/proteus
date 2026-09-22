@@ -37,14 +37,14 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        # proteus-shell-web is wasm32-only (wgpu::SurfaceTarget::Canvas is
-        # #[cfg(web)]-gated) — it can't compile for this job's host target,
-        # so it's excluded here and clippy-checked against wasm32 in the
-        # `wasm` job below instead.
-        run: cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -- -D warnings
+        # proteus-shell-web / proteus-host-web are wasm32-only
+        # (wgpu::SurfaceTarget::Canvas is #[cfg(web)]-gated) — neither can
+        # compile for this job's host target, so both are excluded here and
+        # clippy-checked against wasm32 in the `wasm` job below instead.
+        run: cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace --exclude proteus-shell-web
+        run: cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
         env:
           # Force wgpu to use the Vulkan backend so it picks up lavapipe.
           WGPU_BACKEND: vulkan
@@ -81,8 +81,8 @@ jobs:
         if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Clippy (proteus-shell-web, wasm32)
-        run: cargo clippy -p proteus-shell-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+      - name: Clippy (proteus-shell-web + proteus-host-web, wasm32)
+        run: cargo clippy -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web
@@ -121,6 +121,14 @@ jobs:
       - name: wasm-pack build (proteus-sdk-web)
         run: wasm-pack build crates/proteus-sdk-web --target bundler --out-dir ts/pkg
 
+      - name: wasm-pack build (proteus-host-web)
+        # M13.2: the ts/ package's mount() wrapper needs this crate's own
+        # wasm-pack output (ts/pkg-host) alongside proteus-sdk-web's own
+        # (ts/pkg) — see PLANNING.md's M13.2 section for why bundling both
+        # into one npm package is sound despite being two separate wasm
+        # binaries.
+        run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host
+
       - name: Install Node toolchain
         uses: actions/setup-node@v4
         with:
@@ -136,6 +144,22 @@ jobs:
         working-directory: crates/proteus-sdk-web/ts
         run: npx tsc --noEmit
 
+      - name: Build TypeScript (dist/)
+        # examples/gallery depends on this package via `file:`, resolving
+        # its `main`/`types` into dist/ — it needs this built, not just
+        # type-checked, before that example's own npm install/type-check
+        # below can succeed.
+        working-directory: crates/proteus-sdk-web/ts
+        run: npm run build
+
       - name: Verify the package is in a publishable shape
         working-directory: crates/proteus-sdk-web/ts
         run: npm pack --dry-run
+
+      - name: examples/gallery — npm install
+        working-directory: examples/gallery
+        run: npm ci
+
+      - name: examples/gallery — type-check
+        working-directory: examples/gallery
+        run: npx tsc --noEmit

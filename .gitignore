@@ -6,6 +6,7 @@
 # WASM build artifacts — unanchored so they match under crates/*/
 dist/
 pkg/
+pkg-host/
 
 # Node/npm (crates/proteus-sdk-web/ts/) — unanchored so it matches wherever
 node_modules/

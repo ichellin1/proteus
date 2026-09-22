@@ -35,9 +35,10 @@ use proteus_render::{
     unpack_atlas_page, QuadPipeline, TransitionAtlasAllocator, ATLAS_SELECTOR_MAIN,
 };
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, ActiveTransition, BakedImage,
-    BakedText, BakedTexture, Border, DropShadow, Glow, ProteusWorld, QuadState, Text,
-    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    collect_instances, linear, spawn_order::register_spawn_order_hooks,
+    transition::TransitionConfig, ActiveTransition, BakedImage, BakedText, BakedTexture, Border,
+    DropShadow, Glow, Interactable, ProteusWorld, QuadState, Text, TransitionRequest,
+    VideoCrossfade, VideoPlayer, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -1055,5 +1056,86 @@ fn baked_image_coexists_with_text_overlay() {
         &instances[1].uv_offset,
         &[0.1, 0.2],
         "text overlay must keep its own BakedText UV, unaffected by the image",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M13.8 investigation: draw-order stability across archetype boundaries
+// ---------------------------------------------------------------------------
+
+/// `collect_instances`' own doc (and `QuadInstance`'s) promise "last spawned
+/// = on top" — draw order is meant to track spawn order. That promise is
+/// only backed by a `sort_by(|a, b| a.position.z...)` over whatever order
+/// the underlying `bevy_ecs` query happens to iterate in; for entities that
+/// share the same `z` (the overwhelmingly common case — most UI content
+/// never sets a nonzero `z`), `sort_by`'s stability only preserves *that*
+/// iteration order, which is not documented anywhere to equal spawn order.
+///
+/// This reproduces a real bug found while building M13.8's TS POC: a
+/// `background`-shaped entity (no `Interactable` — mirrors
+/// `ComponentSpec::non_interactive()`) spawned first, then an `Interactable`
+/// entity spawned second, rendered in the expected order (background
+/// behind). But the moment a *second* `Interactable` entity was spawned —
+/// joining the same archetype as the first one, not the background's —
+/// `collect_instances` started returning the background *after* both
+/// `Interactable` entities, i.e. drawn on top, completely hiding them.
+///
+/// If this test fails (background is no longer first once the third entity
+/// joins), the hypothesis is confirmed: crossing an archetype-population
+/// boundary (an already-existing archetype gaining a new member) can
+/// silently reorder that archetype's iteration position relative to a
+/// *different*, already-existing archetype — with no code anywhere
+/// requesting or expecting that reorder.
+#[test]
+fn spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype() {
+    let mut world = World::new();
+    register_spawn_order_hooks(&mut world);
+
+    // "background": non-interactive shape (no `Interactable`), spawned first.
+    let background = QuadState {
+        position: Vec3::new(0.0, 0.0, 0.0),
+        size: Vec2::new(1000.0, 1000.0),
+        ..sky_blue_button()
+    };
+    world.spawn(background);
+
+    // "small": interactive shape, spawned second — a different archetype
+    // from `background` (it additionally carries `Interactable`).
+    let small = QuadState {
+        position: Vec3::new(-300.0, 100.0, 0.0),
+        size: Vec2::new(100.0, 100.0),
+        ..sky_blue_button()
+    };
+    world.spawn((small, Interactable));
+
+    let before = collect_instances(&mut world);
+    assert_eq!(before.len(), 2, "background + small");
+    assert_f32_slice_approx(
+        &before[0].size,
+        &[1000.0, 1000.0],
+        "background must render first (behind) with just two entities",
+    );
+
+    // "large": ALSO interactive (same archetype as `small`, not
+    // `background`'s), spawned third.
+    let large = QuadState {
+        position: Vec3::new(0.0, 0.0, 0.0),
+        size: Vec2::new(400.0, 300.0),
+        ..sky_blue_button()
+    };
+    world.spawn((large, Interactable));
+
+    let after = collect_instances(&mut world);
+    assert_eq!(after.len(), 3, "background + small + large");
+    let background_index = after
+        .iter()
+        .position(|i| i.size == [1000.0, 1000.0])
+        .expect("background instance missing");
+    assert_eq!(
+        background_index, 0,
+        "background must still render first/behind after a third entity \
+         joins the `Interactable` archetype — got index {background_index}, \
+         meaning the background reordered to draw on top of interactive \
+         content with no explicit z-order change requested anywhere"
     );
 }

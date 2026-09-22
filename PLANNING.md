@@ -2654,7 +2654,7 @@ in full):
 | M13.4 | **Asset & resource contract** — static textures, fonts, runtime loading; **video as a host service** with the `.mp4`/HLS codec split hidden per-host; retires the video/gallery/texture-churn shims on both shells. Real functionality gap, not a platform-reach one — built before V1, not deferred. | design + **build** |
 | M13.5 | **Configuration & memory model** — `ProteusConfig` through host construction; atlas-sizing strategy; safe defaults for constrained targets. | design |
 | M13.6 | **Mobile packaging** — Capacitor is the mobile solution: a template (not a published CLI) wrapping the M13.2 web bundle. Write-once across web + desktop + mobile. PWA / Tauri notes. **Build deferred to V2 (post-V1)** — this section is the concrete plan only, confirmed additive to M13.1/M13.2. | design only |
-| M13.7 | **Post-V1 target map** — how native mobile (iOS/Android), embedded Linux (DRM/KMS, no compositor), native smart-TV, a browser-engine-free TypeScript-native host (`proteus-host-jsengine`, embeds a JS engine), and XR each attach to M13.1 with zero re-architecture. Explicit seams, not code. | design |
+| M13.7 | **Post-V1 target map** — how native mobile (iOS/Android), embedded Linux (DRM/KMS, no compositor), native smart-TV, a browser-engine-free TypeScript-native host (`proteus-host-jsengine`, embeds a JS engine), and XR each attach to M13.1. Four attach with no re-architecture; XR is the honest exception, flagged rather than glossed over. Explicit seams, not code. | design |
 | M13.8 | **TypeScript POC** (the app that was briefly M12.7) — `.ts`-only, importing only the published `proteus-sdk`, on the M13.2 host; all three transition topologies; doubles as an M14 example. Validates M13.1 / M13.2 / M13.4. (M13.6 validation happens once that milestone is actually built, in V2.) | **build** |
 
 **Definition of done:** M13.1–M13.7 written into this document and approved section by section;
@@ -2667,7 +2667,7 @@ demo still passes M6 visual regression on native and web.
 
 #### M13.1 — Core Contracts & Layering
 
-**Status: design approved 2026-09-10; build complete pending the user's visual review.**
+**Status: design approved 2026-09-10; build complete and reviewed — no regressions found.**
 The seam every target hangs off: a `Renderer` primitive, an `Engine` that owns `Proteus`, an `App`
 trait an application implements, and `Host` / `HostServices` traits a platform implements.
 Everything else in M13 depends on this.
@@ -2679,7 +2679,8 @@ Everything else in M13 depends on this.
 4. [x] `proteus-demo` → `impl App`. `Demo` no longer owns its `Proteus` — every method threads `&mut Proteus` (a mechanical ~200-site refactor). `DemoApp` (`crates/proteus-demo/src/app.rs`) wraps `Demo`, does the ~20 asset loads via `Frame::load_asset` / `load_texture` in `setup`, runs `Demo::advance` in `update`. The 53 demo tests keep passing via a `Harness` (owns the `Proteus`, derefs to `Demo`). `Demo::tick` → `Demo::advance` (no `Proteus::tick` / `refresh_cascades` — the engine owns both).
 5. [x] Shells adapted. **`proteus-shell-native`** collapsed 1080 → ~470 lines: a slim winit handler driving `Engine` + `DemoApp`; the ~20 asset setters and the duplicated bake loop are gone; video (`mp4_player`/ffmpeg), gallery (`ureq`/picsum) and texture-churn stay as **M13.4-debt shims** polling `Demo::take_pending_*` (a full `fn main()` collapse waits for M13.4). **`proteus-shell-web`** got the minimal keep-compiling edit — owns a `Proteus` explicitly, threads `&mut proteus`, keeps its own hand-rolled bake + render loop until M13.2. `cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -D warnings` + the wasm32 pass + `cargo fmt --check` + `cargo test` (proteus-demo 53, proteus-render M6 headless 3+14, proteus-ui, …) all green.
 
-**Remaining:** the user's visual review of the running native demo (per the standing "the user does visual review" rule) — then M13.1 is done and M13.2 can start.
+**Confirmed 2026-09-21:** the user's own visual review of the running native demo — smoke-tested
+alongside every other demo/example this milestone touched, working as expected. M13.1 is done.
 
 ##### The problem, precisely
 
@@ -3220,8 +3221,9 @@ documented M13.4 shim on the native demo entry, parallel to the web side.
 
 #### M13.4 — Asset & Resource Contract
 
-**Status: design approved 2026-09-14; build complete — all four steps done, both shells fully
-collapsed onto the real `App`/`Frame`/`HostServices` contract, zero shell-side shims remaining.**
+**Status: design approved 2026-09-14; build complete and reviewed — no regressions found.** All
+four steps done, both shells fully collapsed onto the real `App`/`Frame`/`HostServices` contract,
+zero shell-side shims remaining.
 Unlike M13.6's mobile-platform *reach*, which is
 additive and fine to add in V2, this section closed real functionality gaps that were live in the
 shipped framework — the video, gallery-fetch, and texture-churn shims both shells used to carry
@@ -3533,7 +3535,7 @@ separate example app.
 - [x] `HostServices::fetch_async`/`poll_fetches`/`cancel_fetch` implemented for `DirHostServices` and `PreloadedHostServices`; `proteus-demo`'s gallery shim migrated onto it on both shells, both shells' own gallery shim code deleted. *(No JS-facing equivalent for `mount()`-authored apps — out of scope by design, not an oversight: a JS `setup`/`update` has no `Frame`/`HostServices` at all per M13.2's own established boundary, so there's nothing for this to attach to on that path.)*
 - [x] `HostServices::open_video`/`VideoStream` implemented for **both** hosts: `DirHostServices` (ffmpeg, via `proteus-host-winit`'s own `mp4_player` module) and `PreloadedHostServices` (real HLS — `<video>`/`MediaSource`/`SourceBuffer`, via `proteus-host-web`'s own `hls_video` module). `Frame::play_video`/`poll_video`/`cancel_video_load`/`stop_video` built; `proteus-demo`'s video shim migrated onto it on both shells. `DemoApp`'s `video_keys: Option<[String; 3]>` opt-in (added for step 4a specifically so native and web could land independently without one migration breaking the other mid-flight) is now `Some(..)` unconditionally in both shells — the `None`/shell-managed path has no remaining caller, though it stays in the type for any future host that doesn't support video at all.
 - [x] All `demo_mut()`/`engine.proteus_mut()` escape hatches added during M13.1/M13.2 for texture churn, gallery, and video are deleted, on both shells — `demo_mut()` itself has no remaining shim caller. `proteus-shell-web`'s `WebDemoHandle` (and the `proteus-render` dependency it existed for) is gone entirely; `proteus-shell-native` was already down to a one-line `main()` after step 4a.
-- [x] `cargo clippy -D warnings` (both targets), `cargo fmt --check`, and the full test suite green. Reference demo verified building and loading cleanly on both shells (native: build + clippy + tests, no `ffmpeg`-equipped window driven; web: full `wasm-pack build` + a live browser load with zero console errors) — **actually watching video/gallery/texture-churn behave identically to before is the user's own visual review**, not re-claimed as done here for either shell.
+- [x] `cargo clippy -D warnings` (both targets), `cargo fmt --check`, and the full test suite green. Reference demo verified building and loading cleanly on both shells (native: build + clippy + tests, no `ffmpeg`-equipped window driven; web: full `wasm-pack build` + a live browser load with zero console errors). **Confirmed 2026-09-21 via the user's own visual review**: video/gallery/texture-churn smoke-tested on both shells and behave identically to before the migration.
 
 #### M13.5 — Configuration & Memory Model
 
@@ -3716,21 +3718,353 @@ correctly. Deferring the actual Capacitor wrapping to V2 costs nothing architect
 
 #### M13.7 — Post-V1 Target Map
 
-*Status: not started. Depends on M13.1, M13.3, M13.4.* Design notes + explicit seams (no
-implementation) for: native mobile hosts (iOS `android-activity`/UIView, Metal/Vulkan); embedded
-Linux without a compositor (`proteus-host-drm`, DRM + GBM + EGL); native smart-TV; a
-browser-engine-free TypeScript-native host (`proteus-host-jsengine` — embeds Deno/Boa/QuickJS,
-desktop-only, gives TS authors real native GPU without a webview); XR (WebXR/OpenXR). Each must
-attach to M13.1's `Host` trait with zero core changes. This section supersedes the scattered
-Post-Release bullets for these targets.
+**Status: design approved 2026-09-14.** Design notes + explicit seams (no implementation) for five
+post-V1 targets: native mobile, embedded Linux without a compositor, native smart-TV, a
+browser-engine-free TypeScript-native host, and XR. This section supersedes the scattered
+Post-Release bullets for these targets — each now has a real design note there pointing back here
+instead of a bare one-line mention.
+
+##### What a new host actually attaches to (corrected from the original stub)
+
+The original stub said every target "must attach to M13.1's `Host` trait with zero core changes."
+Checked against what actually shipped rather than assumed: **`Host` is decorative.** `grep`-ing the
+whole workspace turns up exactly one implementor (`proteus-host-winit`'s `Running`) and zero
+generic callers — nothing takes `&dyn Host` or `impl Host` anywhere; `Engine::new`/`Engine::frame`
+take a raw `&wgpu::Device`/`&wgpu::Queue`/`wgpu::TextureFormat`/`Viewport` directly. The trait
+exists as a documented shape a host *may* implement for its own bookkeeping (native does; web
+doesn't), not a real polymorphic seam. The actual attachment points, in order of how much of the
+contract a new host actually touches:
+
+1. **`HostServices`** — the one real, load-bearing trait. Any new host needs an impl (`load_asset`
+   at minimum; `fetch_async`/`open_video` only if that target needs async fetch or video at all —
+   both already default to "unsupported" for exactly this reason, per M13.4's own design).
+2. **A per-platform `run<A: App>(...)` free function** — not a trait, by design (M13.1): each
+   host's control flow genuinely differs (native blocks, web returns and is rAF-driven), so this
+   was never going to be one polymorphic entry point.
+3. **wgpu device/queue/surface acquisition** — genuinely per-platform (a window handle, a DRM/GBM
+   pair, an OpenXR swapchain, …), but wgpu's own `raw-window-handle`-based surface creation already
+   covers more of this list than the original stub assumed — see each target below.
+4. **`App`/`Frame`/`Engine`/`ProteusConfig`** — untouched by every target below except XR, which is
+   the one honest exception (see its own section).
+
+##### 1. Native mobile (iOS / Android)
+
+**Not a from-scratch host — an extension of `proteus-host-winit`.** winit 0.30 (already this
+project's native dependency) has real `target_os = "ios"` / `target_os = "android"` support built
+in (confirmed in its own `Cargo.toml`: `objc2` for iOS, `android-activity` feature flags for
+Android) — `proteus-host-winit`'s existing `run()`, `EventLoop`, and `ApplicationHandler` already
+compile and run on both targets as-is. Three concrete, scoped gaps, not a new crate:
+
+- **Touch input.** `WindowEvent::Touch(Touch)` exists in winit today; `proteus-host-winit`'s
+  `window_event` match only handles `CursorMoved`/`CursorLeft`/`MouseInput`. Translating
+  `TouchPhase::Started`/`Moved`/`Ended`/`Cancelled` into the existing `Engine::pointer_moved`/
+  `pointer_pressed`/`pointer_released` calls is additive to that one `match` arm — and benefits
+  any touchscreen on desktop/Linux too, not just mobile.
+- **Suspend/resume surface lifecycle.** Already an explicitly named gap from M13.1/M13.3 ("real
+  only on winit's mobile backends") — `WinitHostApp` doesn't implement meaningful `suspended`
+  teardown or `resumed` surface recreation yet. Mobile OSes reclaim the GPU surface on backgrounding
+  in a way desktop never does, so this stops being optional the moment mobile is a real target.
+- **A mobile-appropriate `HostServices`.** `DirHostServices::load_asset`'s `std::fs::read` doesn't
+  work against Android's APK-bundled `assets/` (needs the NDK `AssetManager` JNI API, e.g. via the
+  `ndk` crate) — a real, separate `HostServices` impl for Android. iOS is a smaller gap: an app
+  bundle's resources *are* plain filesystem paths (`NSBundle`-resolved), so `DirHostServices` likely
+  needs only a different `base` path, not a different implementation.
+
+##### 2. Embedded Linux without a compositor (`proteus-host-drm`)
+
+For a kiosk-style app with no X11/Wayland session at all — direct DRM/KMS mode-setting + GBM buffer
+management + EGL. Checked, not assumed: `raw-window-handle` 0.6 (wgpu's own window-handle
+abstraction) has real `RawWindowHandle::Drm`/`Gbm` and matching display-handle variants — wgpu can
+already accept a DRM/GBM-backed handle the same way it accepts winit's today, so this is a real,
+buildable target with existing crates (`drm`, `gbm`), not speculative. What's genuinely new,
+because there's no windowing system to lean on for any of it:
+
+- No winit at all — the crate would use `drm`/`gbm` directly for the KMS pipeline, wrap the
+  resulting handle in a small type implementing `HasWindowHandle`/`HasDisplayHandle`, and hand that
+  to wgpu exactly where winit's window normally goes.
+- Its own input path — reading raw `/dev/input/event*` nodes (`evdev`/`libinput`), since there's no
+  compositor translating those into window events for it.
+- `HostServices` needs nothing new — this is still a real filesystem; `DirHostServices` as-is.
+
+##### 3. Native smart-TV
+
+**Not its own host design — a consumer of others already designed or built**, and more of them
+than the first draft of this section credited. Three paths, not two:
+
+- **Web, via `proteus-host-web` — already built, likely the most immediately practical route.**
+  Tizen (Samsung) and webOS (LG), the two biggest smart-TV platforms, both run apps in an embedded
+  Chromium-family browser — a real web target `proteus-host-web`'s existing `run()`/`mount()`
+  already reaches today, unmodified, the same way any other web deployment does. This is the one
+  smart-TV path that isn't "designed for later," it's *already shipped*.
+- Android-TV-based sets reuse target 1's Android path unchanged (same `android-activity` NDK
+  surface, same `HostServices` gap).
+- A Linux-based TV OS with no compositor reuses target 2's DRM/KMS path unchanged.
+
+TV's actual distinguishing need, on **any** of these three, isn't a host at all — it's **D-pad/
+remote-control input**, which none of them handle yet: `navigation_system` is a stub on native
+(`stub_navigation_system` in `proteus-ui`, called out since M7 and confirmed still one today, not
+assumed), and M13.2 scoped web the same way ("keyboard/directional nav stays a stub"). Concretely,
+a TV remote's D-pad/OK/Back arrives at a web app as ordinary `KeyboardEvent`s (arrow keys + Enter,
+plus a handful of platform-specific codes on Tizen/webOS) — so finishing directional navigation
+is what actually unlocks TV on the already-built web path, not new host code. It's also exactly the
+same feature keyboard nav on desktop needs, so this section still deliberately doesn't invent a
+bespoke "TV host" — building `navigation_system` once serves TV, keyboard-driven desktop use, and
+accessibility all at once.
+
+##### 4. `proteus-host-jsengine` — browser-engine-free TypeScript-native desktop host
+
+The goal: a TS-authored app (the same `proteus-sdk` npm package, the same `mount()`-shaped API M13.2
+already built for the browser) running as a real native desktop app — real GPU via `wgpu`, no
+Electron/Tauri/webview overhead — by embedding a JS engine (`deno_core`, `boa_engine`, or
+`rquickjs`) directly in the host process instead of relying on a browser's own V8. **The hard part
+is already solved, not a new problem**: M13.2's `js_app.rs`/`JsDriver` already built exactly this
+shape for the browser case — a shared `Rc<RefCell<Proteus>>`, a `ProteusApp` binding wrapping it
+handed to a JS `setup` function once, and a hand-rolled `Engine::frame`-equivalent sequence
+(`tick` → call JS `update` → `refresh_cascades` → `render`) that calls into JS without ever holding
+a `RefCell` borrow across the JS call. `proteus-host-jsengine` is the *same* pattern against a
+different JS runtime's own native-binding API (`deno_core`'s ops, `boa_engine`'s native functions,
+`rquickjs`'s class macros — each embedded engine's own equivalent of what `wasm-bindgen` does for
+the browser), reusing `proteus-host-winit`'s window/wgpu setup unchanged. `HostServices` here is
+just `DirHostServices` again — a desktop process, real filesystem, nothing new.
+
+##### 5. XR (WebXR / OpenXR)
+
+**The one honest exception — this doesn't attach with zero core changes, and pretending otherwise
+would be the same mistake M13.2's "M6 baseline" premise made.** Two paths, browser (WebXR, extending
+`proteus-host-web` with WebXR session/frame APIs) or native (OpenXR via the `openxr` crate, a
+swapchain-based surface-creation story similar in shape to DRM/GBM's), but both hit the same real
+architectural mismatch: XR needs **stereo rendering** (two eye textures per frame, each with its own
+head-pose-derived view-projection) and a **3D head pose** feeding the camera, not a single 2D
+`Viewport`/pointer. `Renderer::render`'s projection is a plain 2D ortho matrix
+(`QuadPipeline::ortho`) set once via `set_view_projection`, separate from `render()` itself — so
+calling `render()` twice per frame into two eye textures, with `set_view_projection` called between
+them with two different pose-derived matrices, is *plausible* without touching `Engine`/`App`'s own
+signatures. What's genuinely unresolved, not just unbuilt: Proteus's whole UI model is 2D quads on
+a flat plane — XR realistically fits as a HUD-style overlay plane positioned in 3D space and viewed
+through both eyes, not a native 3D scene, and confirming that's an acceptable scope (rather than
+assuming full 3D XR UI is coming) is itself a design decision for whoever picks this up, not
+something this section can settle in the abstract.
+
+##### Decisions
+
+- [x] `Host` is documented as decorative going forward, not load-bearing — a new host needs
+  `HostServices` + its own `run()` + wgpu surface setup; implementing `Host` itself is optional.
+- [x] Mobile is scoped as *extending* `proteus-host-winit`, not a new crate — confirmed winit
+  already supports both target OSes before committing to this framing.
+- [x] Smart-TV explicitly does not get its own host design — it's web, Android, or DRM (web via
+  the already-built `proteus-host-web`, flagged by the user as the likely most practical route
+  since Tizen/webOS both embed a real browser) plus `navigation_system`, stated plainly rather
+  than inventing a bespoke path.
+- [x] `proteus-host-jsengine` is framed as reapplying M13.2's already-solved `JsDriver` pattern to a
+  different JS engine, not a new architectural problem.
+- [x] XR is flagged as the one target that doesn't cleanly fit "zero core changes" — stated as an
+  open scoping question, not glossed over.
+
+##### Definition of done
+
+- [x] All five targets have a concrete attachment story: what's reusable today, what's a real gap,
+  and (mobile, DRM) confirmation via checking actual dependency capabilities (winit's target
+  support, `raw-window-handle`'s DRM/GBM variants) rather than assumed.
+- [x] The `Host`-trait correction is based on grepping the actual shipped code, not the original
+  design sketch's assumption.
+- [x] XR's genuine architectural tension is stated explicitly rather than claimed away.
+- [x] Post-Release section's scattered bullets for these five targets point back here instead of
+  standing alone (see that section's own updates).
 
 #### M13.8 — TypeScript POC
 
-*Status: not started. Depends on M13.2; `splitTo`/`mergeFrom` bridged in M13.1 or M13.2.* The one
-hard V1 build. `.ts` source only, importing only the published `proteus-sdk` package, its own
-bundler/dev-server config, under a top-level `examples/` directory. Button → list → detail (or
-similar) exercising 1→1, 1→N, N→1. `tsc --noEmit` clean and wired into `ci.yml`. Doubles as one of
-M14's ≥3 examples.
+*Status: SDK bridging complete (2026-09-15); first POC attempt scrapped 2026-09-17, rebuilt
+incrementally (real `collect_instances` draw-order bug found and fixed along the way), full
+assembly complete and confirmed 2026-09-18; `tick()` re-entrancy panic fixed and CI wired for
+`examples/gallery`, both 2026-09-18 — milestone DoD fully closed.*
+
+**TS/JS bridge parity audit.** Before designing the POC's content, audited `proteus-sdk-web`
+against `proteus-sdk`'s full Rust API (`spec.rs`, `handle.rs`) to find every capability Rust authors
+have that TypeScript authors don't yet. Two gaps predate this milestone (`splitTo`/`mergeFrom`,
+already flagged by this section's original stub); the audit found several more, never previously
+tracked:
+
+- `ComponentSpecDto` never exposed `text`, `image`, `border`, `glow`, `dropShadow`, or
+  `nonInteractive` — only `geometry`/style overrides/`children`/`bake` crossed the boundary. This
+  is a real content gap, not cosmetic: **a TS app could not render text or images at all** before
+  this milestone. Confirmed the underlying pipeline was already sound though — `mount()`'s
+  `Renderer::render` has been calling `bake_pending_text`/`bake_pending_images` every frame all
+  along (M13.4); the only missing piece was `ComponentSpecDto` never accepting the data to bake in
+  the first place.
+- `Handle` methods never bridged: `setDeclaredGeometry`, `animateTo`, `bakedTextSize`,
+  `bakedImageSize`, `copyBakedImageFrom`, `centerCropToSquare`, `setInteractive`,
+  `splitToWithStates`, `setTexture`.
+- `Handle` video methods (`startVideo`, `stopVideo`, `setVideoCrossfade`) are a different kind of
+  gap: `mount()`'s own doc says it deliberately never touches `HostServices`, so there is currently
+  no concept of "a JS app opens a video" for these to attach to — closing this isn't a DTO addition
+  like the rest, it needs its own design pass (does a JS app get a fetch-your-own-bytes video
+  primitive, mirroring how JS apps already fetch their own images?). **Decision: scoped out of this
+  pass, tracked as its own follow-up design after the rest of M13.8 lands** — not folded in silently,
+  and not deferred to post-V1 either (unlike M13.6/M13.7's targets, this is a V1 framework-completeness
+  gap per the standing M13.4 distinction: platform *reach* can wait for V2, a functionality gap in
+  the framework itself cannot).
+
+Everything else above is being bridged as part of this milestone, following the exact DTO/wasm-bindgen
+convention already established for `splitTo`/`mergeFrom` (flat `{kind, ...}` shapes for enums, ids
+instead of by-value handles, camelCase `js_name`). `border`/`glow`/`dropShadow`/`nonInteractive` and
+the more advanced `Handle` methods (`setDeclaredGeometry`, `animateTo`, `splitToWithStates`,
+`setTexture`) close the parity gap even though the POC itself doesn't exercise all of them;
+`bakedTextSize`/`bakedImageSize`/`copyBakedImageFrom`/`centerCropToSquare`/`setInteractive` are used
+directly by the POC below (`centerCropToSquare` in particular — picsum photos vary in aspect ratio,
+and its own doc literally describes "a photo grid tile" as the motivating case).
+
+**The POC app: an image gallery — first attempt scrapped, restarting incrementally.** A first build
+(grid → detail → related-row → detail, all three transition topologies, real picsum.photos fetches,
+under `examples/gallery/`) reached a working single-cycle state — confirmed end-to-end: `npm
+install`/`tsc --noEmit`/`vite build` clean, and the dev server genuinely rendered the grid (light
+violet background, `Text` title, 12 real network-fetched photos, correctly square-cropped via
+`centerCropToSquare`) and a full grid→detail→back-to-grid cycle. But a *second* tile→detail cycle
+(after a `splitTo` back to grid) consistently showed a blank hero during the geometry morph, image
+popping in only once the morph settled, despite every ECS-level check (`copyBakedImageFrom` return
+value, baked image size, frame-by-frame `transition.progress`) proving correct on every cycle —
+including in a from-scratch minimal repro (one entity, synthetic image, no fetch) that could *not*
+reproduce the bug across several attempts. That gap between "the data says this is fine" and "the
+screen shows something else" was never resolved through data-level polling or synthetic-click
+testing alone. Rather than keep guessing at a moderately complex app's worth of orchestration code,
+the app was scrapped (2026-09-17) in favor of a much smaller, incrementally-reviewed rebuild — one
+small piece at a time, checked in with the user before adding the next, rather than several steps
+built ahead and debugged after the fact.
+
+**A real, pre-existing framework bug surfaced along the way — found and fixed (2026-09-18).** Not a
+TS-bridge gap — would hit any caller, Rust included — but the actual fix ended up scoped entirely to
+`proteus-sdk-web`, not `proteus-sdk`. `Handle.onClick`'s callback fires synchronously from inside the
+host's `Proteus::tick()`, which holds that `Proteus`'s `RefCell` borrowed for the whole call, callback
+dispatch included (confirmed via stack trace: `ProteusApp::destroy` → `self.0.borrow_mut()` → panic
+"already borrowed", from a click handler that destroyed sibling tiles). Calling back into *any*
+`ProteusApp`/`Proteus` method from inside a dispatched callback re-borrowed the same `RefCell` and
+panicked. Read `crates/proteus-sdk/src/callback.rs` to confirm the actual scope: `Proteus`'s own
+callback registry already avoids re-entrancy correctly for pure-Rust callers, via a take-remove-call-
+put-back pattern on its `HashMap` — there's no `RefCell` anywhere in that layer, so a Rust closure
+holding `&mut Proteus` can freely call back into other `Proteus` methods with no hazard at all. The
+panic was entirely `proteus-sdk-web`'s own problem: its `Rc<RefCell<sdk::Proteus>>` wrapper holds a
+borrow across the *whole* `tick()` call, including the synchronous JS callback invocation nested
+inside it.
+
+**Fix:** `wrap_plain`/`wrap_drag`/`wrap_dropped` (the three `js_sys::Function` → Rust-closure
+adapters `proteus-sdk-web/src/lib.rs` registers for every callback kind) no longer call the JS
+function inline. Each now defers the actual call via `wasm_bindgen_futures::spawn_local` — a
+microtask, guaranteed to run only after the *entire* current synchronous call stack (all of `tick()`,
+borrow included) has unwound, but still strictly before the next `requestAnimationFrame`, so
+callbacks stay effectively same-frame from the app's perspective. This fixes every callback kind at
+once (click/hover/press/release/focus/blur/drag/dropped), not just `onClick`, and needed no change to
+`proteus-sdk`'s public API — confirmed via `examples/gallery`'s own grid→detail→back-to-grid cycle
+with the `setTimeout` workaround fully removed from `onClick` handlers: both re-entrant paths (a click
+handler spawning a component + signal transition; a click handler rebuilding the grid + calling
+`splitTo`) now complete with zero panics.
+
+**Restart plan**: rebuild as a sequence of small, independently-reviewed steps rather than one
+multi-feature build, each verified before the next starts. SDK bridging (the parity-audit work
+above) stays untouched unless this rebuild turns up an actual bridge-level problem, not just an
+app-level one.
+
+1. Static full-viewport background + one component carrying both `Text` and `Image` (a locally
+   generated synthetic image, no network fetch) + a single `onClick` that logs — combined per
+   review, since 1–3 were expected to validate cleanly together. **Done, confirmed.**
+2. One isolated `SignalHandle.set` (1→1) between two plain colored rectangles, no image/text at
+   all — the smallest possible version of the exact mechanism that broke in the scrapped app.
+   **Done, confirmed** — see the bug writeup below; this step is what actually found and pinned
+   down the real cause.
+3. The same 1→1 morph, repeated indefinitely via real clicks (grow small→large, shrink large→a
+   *freshly spawned* small, repeat) — re-tests the fix under actual repetition, not just one cycle.
+   **Done, confirmed.**
+4. Image content added back into the repeated cycle — a synthetic image carried through every
+   spawn via `copyBakedImageFrom`, confirming an image-bearing entity (a different archetype than a
+   plain quad) still respects the fix. **Done, confirmed.**
+5. Synthetic image replaced with a real picsum.photos fetch each cycle. **Done, confirmed.**
+6. `Handle.splitTo` (1→N) added, isolated from `mergeFrom` — large tile splits into 3 small tiles
+   instead of shrinking to one. **Done, confirmed** — surfaced and fixed a real bug in this
+   example's own code along the way (see below), not a framework issue.
+7. `Handle.mergeFrom` (N→1) added — tapping any of the 3 split tiles merges all three back into one
+   large tile. **Done, confirmed** — all three transition topologies now exercised together.
+8. Full assembly into the actual gallery app (grid → detail → related-row → detail → back to grid),
+   built on the now individually-proven pieces. **Done, confirmed** — see below for what shipped
+   and what didn't.
+
+**The real bug, found and fixed.** Step 2's minimal case reproduced the scrapped app's exact
+symptom — geometry data (`get()`, frame-by-frame `transition.progress`) proved correct every time,
+but the square was invisible during the whole morph, popping in only once settled. Confirmed via a
+render-pipeline-level diagnostic (temporarily logging `collect_instances`' own output) that the
+*data fed to the GPU* was also correct — the bug was in draw order, not data: a background entity
+(no `Interactable`) and an interactive entity are in different `bevy_ecs` archetypes, and
+`collect_instances`' root-level sort (`crates/proteus-ui/src/collect.rs`) only sorted by
+`QuadState::position.z`; for entities sharing `z` (the common case — most callers never set a
+nonzero `z`), it fell back to whatever order the underlying query happened to iterate, which
+reflects archetype-registration order, not spawn order. A from-scratch native `bevy_ecs` unit test
+(`proteus-ui/tests/render_instances.rs`'s
+`spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype`) proved this
+definitively and deterministically — with **just two entities**, no dynamic spawning even
+required: a background spawned first, then one interactive entity spawned second, iterated in the
+wrong relative order from the very first frame. The reference demo never hit this because its
+whole screen tree is spawned once upfront in a fixed order, and its one dynamic-spawn path
+(`run_burst_spawn`) reuses the same (non-interactive) archetype as what it draws over — it never
+crosses an archetype boundary the way this minimal repro deliberately does.
+
+Fixed via [`SpawnOrder`](crates/proteus-ui/src/spawn_order.rs) — a monotonic counter component,
+auto-stamped once via a `ComponentHooks::on_add::<QuadState>()` hook (mirrors
+`texture_ref.rs`'s established hook-registration convention exactly) the *first* time `QuadState`
+is attached to an entity, never again on later `.insert()`s (so an actively-transitioning entity's
+stamp stays fixed at its true creation moment, not "now"). `collect_instances`' root sort now keys
+on `(z, SpawnOrder)`, restoring "last spawned = on top" as an actual guarantee rather than an
+accident of ECS storage layout. `Entity` itself was considered as the tie-breaker (needs no new
+component) and rejected: entity indices recycle after despawn, which would misorder a long-running,
+destroy/rebuild-heavy app (exactly this POC's own pattern) in a way `SpawnOrder`'s
+never-reused counter cannot. Trade-off discussed and accepted: an entity's position among
+same-`z` siblings is fixed at creation — moving it later requires either respawning or setting an
+explicit `z` (already the intended, existing mechanism for deliberate layering; `SpawnOrder` is
+only the fallback for the common "didn't think about z-layers" case). Confirmed via the user's own
+real click-through, not just automated polling.
+
+Two real environment-debugging detours along the way, worth remembering: (1) synthetic clicks
+through this session's own browser-automation tooling never reliably registered against this
+canvas, so every fix had to be confirmed by the user's own interactive testing, not automated
+screenshots; (2) after the fix was deployed, the user's browser session was itself frozen (likely a
+stuck debugger pause), making the fix *look* like it hadn't worked at all — resolved by relaunching
+the browser, not by any code change. Both are noted here so a future "it doesn't work" report gets
+checked against these first.
+
+**A second real bug, this time in the example's own code, found during step 6.** Fetching a batch
+of images with one `await` per loop iteration (rather than `Promise.all`) serializes the fetches —
+slower overall, and worse, each newly-created tile sat fully visible in its final position as soon
+as it was created, well before `splitTo` (called only after the whole loop finished) ever ran to
+hide it again until the crossfade completed. Visibly worse on Firefox than Chrome (different fetch
+scheduling), reported as "hangs" plus tiles visibly painting over the still-showing source image.
+Fixed by fetching every image in a batch concurrently and doing "create every target + call
+`splitTo`" in one synchronous block right after, collapsing that gap to effectively zero. Confirmed
+fixed identically on both browsers.
+
+**Step 8's assembly, and what didn't make the cut.** The full grid → detail → related-row → detail
+→ back-to-grid loop was built and confirmed working end-to-end — then the "related row" (the
+1→N/N→1 detour used to reach `mergeFrom`) was removed at the user's request: it read as an extra,
+slightly confusing detour rather than a natural part of the gallery flow, not as a bug. The shipped
+example exercises 1→1 (tap a tile → detail) and 1→N (`splitTo`, "back to grid") only. `mergeFrom`
+stays fully proven — confirmed working, repeatedly, in step 7's isolated test — it's just not part
+of this particular assembled app. If a real N→1 moment is wanted in an example later, it needs its
+own natural fit, not a bolt-on detour.
+
+**DoD:**
+- [x] `ComponentSpecDto`/`ComponentSpec` (TS): `text`, `image`, `border`, `glow`, `dropShadow`,
+  `nonInteractive` bridged
+- [x] `Handle` (TS): `setDeclaredGeometry`, `animateTo`, `bakedTextSize`, `bakedImageSize`,
+  `copyBakedImageFrom`, `centerCropToSquare`, `setInteractive`, `splitToWithStates`, `setTexture`
+  bridged
+- [x] Video `Handle` methods documented as a known, explicitly-deferred gap with its own open design
+  question (not silently dropped)
+- [x] `collect_instances` draw-order bug: found, isolated in a native unit test, fixed via
+  `SpawnOrder`, confirmed by the user's own interactive test
+- [x] POC example app: built incrementally, all 8 steps confirmed; final assembly exercises 1→1 and
+  1→N (`mergeFrom`/N→1 proven separately in step 7, not part of the shipped app — see above)
+- [x] Full workspace `cargo fmt`/`clippy -D warnings`/`test` clean; `npm pack --dry-run` still
+  publishable
+- [x] `tsc --noEmit` wired into `ci.yml` for `examples/gallery` (`sdk-web` job: build `proteus-sdk`'s
+  `dist/`, then `npm ci`/`tsc --noEmit` in `examples/gallery`)
+- [x] `Proteus::tick()` callback-dispatch re-entrancy panic: fixed in `proteus-sdk-web` (deferred JS
+  callback invocation via `wasm_bindgen_futures::spawn_local`, see above) — `examples/gallery`'s
+  `setTimeout` workaround removed and re-confirmed working
 
 ---
 
@@ -3766,8 +4100,9 @@ cross-shell requirement.
 
 ### Post-Release
 Planned future work, not part of the V1 scope. **Platform/host targets below (native mobile,
-embedded Linux, smart-TV, TypeScript-native, XR) are designed in M13.7 against the M13.1 `Host`
-contract — this section tracks their *implementation*, which is deferred to V2. Mobile packaging
+embedded Linux, smart-TV, TypeScript-native, XR) are designed in M13.7 — against `HostServices` +
+a per-platform `run()`, not the `Host` trait itself, which M13.7 found to be decorative rather than
+load-bearing — this section tracks their *implementation*, which is deferred to V2. Mobile packaging
 via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
 not V1.**
 

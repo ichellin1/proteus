@@ -18,9 +18,13 @@ import {
 import type {
   ComponentData,
   ComponentSpec,
+  Geometry,
+  MergeLayout,
+  SplitStrategy,
   TextureState,
   TransitionConfig,
   TransitionDropped,
+  Vec2,
 } from "./types.js";
 
 export * from "./types.js";
@@ -96,12 +100,156 @@ export class Handle {
     this.app.wasmApp.removeChild(this.wasmHandle, child.wasmHandle, destroy);
   }
 
+  /**
+   * Split this component into `targets` — a 1→N group transition. Each
+   * target's geometry is resolved automatically from its own
+   * `component()`-declared rest state, mirroring {@link SignalHandle.set}.
+   * This component is hidden once the transition completes — no separate
+   * visibility call needed.
+   */
+  splitTo(
+    targets: Handle[],
+    config: TransitionConfig,
+    strategy: SplitStrategy,
+  ): void {
+    this.app.wasmApp.splitTo(
+      this.wasmHandle,
+      new Float64Array(targets.map((t) => t.id())),
+      config,
+      strategy,
+    );
+  }
+
+  /**
+   * Merge `sources` into this component — an N→1 group transition.
+   * `sources` are hidden immediately — "the morph is the exit", the same
+   * convention 1→1 signals already use.
+   */
+  mergeFrom(
+    sources: Handle[],
+    config: TransitionConfig,
+    layout: MergeLayout,
+  ): void {
+    this.app.wasmApp.mergeFrom(
+      this.wasmHandle,
+      new Float64Array(sources.map((s) => s.id())),
+      config,
+      layout,
+    );
+  }
+
   destroy(): void {
     this.app.wasmApp.destroy(this.wasmHandle);
   }
 
   freeResources(): void {
     this.app.wasmApp.freeResources(this.wasmHandle);
+  }
+
+  /**
+   * {@link splitTo}, but with each target's rest geometry given explicitly
+   * instead of resolved from its own declared/live state — needed whenever
+   * the natural declared geometry would be wrong, or (when this component is
+   * also one of `targets`) unsafe to derive automatically.
+   */
+  splitToWithStates(
+    targets: { handle: Handle; state: Geometry }[],
+    config: TransitionConfig,
+    strategy: SplitStrategy,
+  ): void {
+    this.app.wasmApp.splitToWithStates(
+      this.wasmHandle,
+      targets.map((t) => ({ id: t.handle.id(), state: t.state })),
+      config,
+      strategy,
+    );
+  }
+
+  /**
+   * Overwrites both this component's live geometry and its declared rest
+   * state — {@link splitTo}/{@link mergeFrom} resolve a target's rest state
+   * from the declared value, not the live one, so plain geometry mutation
+   * elsewhere won't update what a future group transition resolves to. Use
+   * whenever a component's real resting layout is only known after spawn —
+   * e.g. sized from its own {@link bakedTextSize}/{@link bakedImageSize}.
+   */
+  setDeclaredGeometry(state: Geometry): void {
+    this.app.wasmApp.setDeclaredGeometry(this.wasmHandle, state);
+  }
+
+  /**
+   * Ad-hoc 1→1 morph to `to`, starting from this component's current live
+   * geometry — no signal or second entity involved, unlike
+   * {@link SignalHandle.set}. Useful for repeatedly re-targeting the same
+   * entity to a fresh destination with nothing else to resolve against.
+   */
+  animateTo(to: Geometry, config: TransitionConfig): void {
+    this.app.wasmApp.animateTo(this.wasmHandle, to, config);
+  }
+
+  /**
+   * The baked glyph run's pixel footprint, if this component's `text` has
+   * finished baking — `undefined` before baking completes or if it was
+   * never given one.
+   */
+  bakedTextSize(): Vec2 | undefined {
+    return this.app.wasmApp.bakedTextSize(this.wasmHandle) as
+      | Vec2
+      | undefined;
+  }
+
+  /**
+   * The baked image's pixel footprint, if this component's `image` has
+   * finished baking — `undefined` before baking completes or if it was
+   * never given one.
+   */
+  bakedImageSize(): Vec2 | undefined {
+    return this.app.wasmApp.bakedImageSize(this.wasmHandle) as
+      | Vec2
+      | undefined;
+  }
+
+  /**
+   * Copies whichever baked image `source` currently shows onto this
+   * component — `false` (no-op) if `source` has no baked image yet. Useful
+   * when one entity needs to immediately show what another already-baked
+   * entity looks like, e.g. an "enlarged view" coordinator a group
+   * transition is about to reveal.
+   */
+  copyBakedImageFrom(source: Handle): boolean {
+    return this.app.wasmApp.copyBakedImageFrom(
+      this.wasmHandle,
+      source.wasmHandle,
+    );
+  }
+
+  /**
+   * Crops this component's current baked image to a centered square, in
+   * place — `false` (no-op) if it has no baked image yet. Useful for square
+   * display cells (e.g. a photo grid tile) fed from images of varying aspect
+   * ratios — crop instead of stretch.
+   */
+  centerCropToSquare(): boolean {
+    return this.app.wasmApp.centerCropToSquare(this.wasmHandle);
+  }
+
+  /**
+   * Toggles this component's click/hover eligibility at runtime. Every
+   * component is interactive by default unless {@link ComponentSpec.nonInteractive}
+   * was set at spawn — this is the same toggle, applied later.
+   */
+  setInteractive(interactive: boolean): void {
+    this.app.wasmApp.setInteractive(this.wasmHandle, interactive);
+  }
+
+  /**
+   * Shows an already-registered texture on this component, replacing
+   * whatever image/text/composite it previously showed — `false` (no-op) if
+   * `texture` is evicted/unknown. The sanctioned way to do frame-swap
+   * animation off a pre-baked set.
+   */
+  setTexture(texture: TextureHandle): boolean {
+    return this.app.wasmApp.setTexture(this.wasmHandle, texture.wasmHandle);
   }
 }
 

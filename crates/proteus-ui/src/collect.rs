@@ -116,6 +116,7 @@ use crate::{
     hierarchy::{
         compose_with_parent, resolve_world_position, EffectiveOpacity, EffectiveVisibility, Opacity,
     },
+    spawn_order::SpawnOrder,
     video::{VideoCrossfade, VideoPlayer},
     ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual, Visibility,
 };
@@ -426,36 +427,65 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
 /// Call this once per frame after `ProteusWorld::update()`, then pass the
 /// returned vec to [`QuadPipeline::upload_instances`].
 ///
-/// ## Draw order (M10)
+/// ## Draw order (M10; tie-break corrected M13.8)
 ///
 /// Instances are collected via an explicit depth-first walk starting from
 /// **root** entities (no [`ChildOf`]), each root's own instance(s) pushed
 /// before recursing into its children in [`Children`] order — so a child
 /// always draws on top of its parent, and root entities layer by
-/// `QuadState::position.z` ascending (lower z = further back).
+/// `QuadState::position.z` ascending (lower z = further back), tied entities
+/// broken by [`SpawnOrder`] ascending (earlier-created = further back).
 ///
-/// This is deliberately explicit rather than relying on however `World`'s own
-/// archetype storage happens to iterate entities: with component composition
-/// (a `Text` child, a hover-overlay child, and so on) in the picture, the
-/// *number of distinct archetypes* — and how entities migrate between them as
-/// components get inserted (e.g. `BakedText` after baking) — varies enough
-/// that a flat, unordered query over "every entity with `QuadState`" is not
-/// guaranteed to visit a parent before its children. Before hierarchy existed
-/// this never came up, because every entity was a root with no descendants.
+/// The child-before-parent walk is deliberately explicit rather than relying
+/// on however `World`'s own archetype storage happens to iterate entities —
+/// see this function's own module doc for why a flat query alone can't
+/// guarantee that.
+///
+/// Root-level *ties* (equal `z`, the common case: most callers never set a
+/// nonzero `z` at all) used to fall back to raw query iteration order with
+/// no further tie-break — silently assumed to approximate spawn order, but
+/// actually just "whichever archetype `bevy_ecs` happens to iterate first,"
+/// which has no defined relationship to spawn order across two *different*
+/// archetypes (confirmed by a from-scratch repro: a non-interactive entity
+/// spawned first, then an interactive one spawned second, iterated in the
+/// *wrong* relative order from the very first frame — see
+/// `proteus-ui/tests/render_instances.rs`'s
+/// `spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype`
+/// and PLANNING.md's M13.8 section). [`SpawnOrder`] fixes this: an explicit,
+/// archetype-independent stamp, so "last spawned = on top" is an actual
+/// guarantee again, not an accident of ECS storage layout.
+/// One snapshotted root entity's data, collected up front (see
+/// [`collect_instances`]'s own doc for why): its own `QuadState`, its raw
+/// `Visibility`/`EffectiveVisibility` (both `None` = absent, matching the
+/// components' own optionality), and its draw-order tie-break.
+type RootSnapshot = (Entity, QuadState, Option<bool>, Option<bool>, SpawnOrder);
+
 pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
     // Root = has QuadState, has no ChildOf. Snapshotted while holding the
     // query borrow, then dropped before the recursive world.get() calls in
     // collect_subtree/push_entity_instances.
-    let mut roots: Vec<(Entity, QuadState, Option<bool>, Option<bool>)> = {
+    let mut roots: Vec<RootSnapshot> = {
         let mut q = world.query_filtered::<(
             Entity,
             &QuadState,
             Option<&Visibility>,
             Option<&EffectiveVisibility>,
+            Option<&SpawnOrder>,
         ), Without<ChildOf>>();
         q.iter(world)
-            .map(|(e, qs, vis, eff_vis)| {
-                (e, qs.clone(), vis.map(|v| v.visible), eff_vis.map(|v| v.0))
+            .map(|(e, qs, vis, eff_vis, spawn_order)| {
+                (
+                    e,
+                    qs.clone(),
+                    vis.map(|v| v.visible),
+                    eff_vis.map(|v| v.0),
+                    // Entities that never went through `Proteus::component()`
+                    // (e.g. a bare `World::new()` in a test that doesn't
+                    // register `spawn_order`'s hook) have no `SpawnOrder` —
+                    // sort them last among ties rather than reintroducing the
+                    // undefined-order bug for just that case.
+                    spawn_order.copied().unwrap_or(SpawnOrder(u64::MAX)),
+                )
             })
             .collect()
     };
@@ -464,10 +494,11 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
             .z
             .partial_cmp(&b.1.position.z)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.4.cmp(&b.4))
     });
 
     let mut out = Vec::new();
-    for (e, local_qs, vis, eff_vis) in roots {
+    for (e, local_qs, vis, eff_vis, _spawn_order) in roots {
         // Root: local QuadState *is* world QuadState (no ancestor to compose with).
         collect_subtree(world, e, &local_qs, vis, eff_vis, false, &mut out);
     }

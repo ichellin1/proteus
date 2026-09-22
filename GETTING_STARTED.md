@@ -27,8 +27,9 @@ Native shell only:
 Web shell only:
 
 - **wasm-pack** — `cargo install wasm-pack`, used to build the WASM bundle.
-- Any local HTTP server to serve `crates/proteus-shell-web/www/` (the example below uses
-  Python's built-in one; anything that serves static files works).
+- **Python 3** — `make serve-web` uses its built-in HTTP server to serve
+  `crates/proteus-shell-web/www/`. Not needed if you'd rather serve that directory with
+  something else (anything that serves static files works).
 
 ## Demo assets
 
@@ -53,16 +54,18 @@ cargo run -p proteus-shell-native
 
 ## Building and Running on a Web Browser
 
-```
-wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
-```
-
-Then serve `crates/proteus-shell-web/www/` over HTTP (not `file://` — the page fetches its
-wasm, video, and image assets) and open it in a browser, e.g.:
+The page fetches its wasm, video, and image assets, so it needs to be served over HTTP —
+opening `crates/proteus-shell-web/www/index.html` directly as a `file://` URL won't work.
+Build and serve in one step:
 
 ```
-python3 -m http.server 8000 --directory crates/proteus-shell-web/www
+make serve-web
 ```
+
+This builds the WASM bundle (`wasm-pack build crates/proteus-shell-web --target web --out-dir
+www/pkg`) then serves `crates/proteus-shell-web/www/` on <http://localhost:8080> via Python's
+built-in HTTP server. To just build (e.g. to serve it with a different HTTP server), run `make
+build-web` on its own.
 
 The web shell decodes video via the browser's own `<video>` element, so there's no `ffmpeg`
 dependency on this target.
@@ -70,7 +73,8 @@ dependency on this target.
 ## Tests
 
 ```
-cargo test --workspace
-cargo clippy --workspace --all-targets
-cargo fmt --check
+make check
 ```
+
+Runs the same fmt + clippy + test checks CI does. Each is also its own target
+(`make fmt` / `make clippy` / `make test`) if you want to run just one.

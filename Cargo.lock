@@ -2227,6 +2227,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "slotmap",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

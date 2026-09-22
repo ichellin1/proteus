@@ -56,6 +56,58 @@ export interface StyleOverride {
   cornerRadius?: number;
 }
 
+/** A single line of text (M4). Rasterized and baked into `main_atlas` automatically each frame. */
+export interface TextSpec {
+  content: string;
+  /** Pixels. Valid range 1–512; 12–48 is the recommended sweet spot. */
+  sizePx: number;
+  /** Defaults to opaque white — set a dark value for light backgrounds. */
+  color?: Color;
+  /** Extra tracking between glyphs, in pixels. Default `0`. */
+  letterSpacingPx?: number;
+}
+
+/**
+ * A static image (M9.7), given its already-loaded raw file bytes — e.g.
+ * straight from a `fetch()` response's `arrayBuffer()`/`Uint8Array`, PNG or
+ * JPEG (format sniffed from the data, not a file extension). Decoded and
+ * baked into `main_atlas` automatically each frame, same as {@link TextSpec}.
+ */
+export interface ImageSpec {
+  bytes: Uint8Array;
+  /** Downscale cap (longest side, pixels) applied before baking. `undefined` = native resolution. */
+  maxSide?: number;
+}
+
+/** Draws an SDF-based border around a component. */
+export interface Border {
+  /** Pixels. `0` disables the border. */
+  width: number;
+  color: Color;
+  /** -1 inner, 0 center, 1 outer — only `-1` renders correctly. */
+  offset: number;
+}
+
+/** Draws a soft radial glow behind a component. Mutually exclusive with {@link DropShadow} — if both are set, the drop shadow wins. */
+export interface Glow {
+  /** Halo spread in pixels. */
+  radius: number;
+  color: Color;
+  /** Opacity multiplier (effective alpha = `color.a * intensity`). */
+  intensity: number;
+}
+
+/** Draws an SDF-based drop shadow behind a component. See {@link Glow} for the mutual-exclusivity note. */
+export interface DropShadow {
+  /** Displacement in entity-local pixels (X right, Y up). */
+  offset: Vec2;
+  color: Color;
+  /** Penumbra softness in pixels. Values below 0.5 are clamped in the shader. */
+  softness: number;
+  /** Uniform shape expansion in pixels applied before softening. */
+  spread: number;
+}
+
 /** Argument to {@link ProteusApp.component}. */
 export interface ComponentSpec {
   geometry: Geometry;
@@ -67,6 +119,18 @@ export interface ComponentSpec {
   children?: number[];
   /** Collapse this component (and any `children`) into one permanent textured quad. */
   bake?: boolean;
+  text?: TextSpec;
+  image?: ImageSpec;
+  border?: Border;
+  glow?: Glow;
+  dropShadow?: DropShadow;
+  /**
+   * Opts this component out of hit-testing entirely — e.g. a full-window
+   * background that shouldn't swallow clicks meant for something on top of
+   * it. Every component is interactive (`onClick`/etc. "just work") by
+   * default unless this is set.
+   */
+  nonInteractive?: boolean;
 }
 
 /**
@@ -90,6 +154,25 @@ export interface TransitionConfig {
   /** Default `"linear"`. */
   easing?: EasingName;
 }
+
+/**
+ * How a 1→N transition ({@link Handle.splitTo}) is normalized to a set of
+ * 1→1 lerps — see `proteus_ui::SplitStrategy`'s own doc for the visual
+ * difference between each. `cols`/`rows` only apply to `"gridSlice"`.
+ */
+export type SplitStrategy =
+  | { kind: "bake" }
+  | { kind: "slice" }
+  | { kind: "gridSlice"; cols: number; rows: number };
+
+/**
+ * How an N→1 transition ({@link Handle.mergeFrom}) divides the destination
+ * among its sources — see `proteus_ui::MergeLayout`'s own doc. `cols`/`rows`
+ * only apply to `"grid"`.
+ */
+export type MergeLayout =
+  | { kind: "horizontal" }
+  | { kind: "grid"; cols: number; rows: number };
 
 export type InteractionState =
   | "default"
