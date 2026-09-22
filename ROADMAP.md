@@ -40,7 +40,7 @@ M14 Developer Release
 - **M9 — Video** (and its sub-milestones M9.5–M9.8) — can begin after M7
 - **M10.5 — Static Component Baking** — can begin after M10
 - **M10.6 — Oriented Hit-Test Boxes** — can begin after M10
-- **M11.1 — Update Demo, Part 1** — after M11 (complete, ready to commit)
+- **M11.1 — Update Demo, Part 1** — after M11 (complete)
 - **M11.2 — Multi-Page Atlas & Bounded Working Set** — after M11.1 (complete)
 - **M11.3 — Update Demo, Part 2: Gallery + Examples** — after M11.2 (complete)
 - **M11.4 — Host Demo on GitHub Pages** — conceptually after M11.3, no hard dependency
@@ -152,9 +152,9 @@ and shows a baked snapshot instead, regardless of `SplitStrategy`, with no `Vide
 `VideoCrossfade` awareness anywhere in `topology.rs`/`bake.rs`. Narrowed from its original broader
 scope now that M9.8 covers the simpler 1↔1 case.
 
-Still genuinely unsolved, but the "no demo scene exercises this path" note above is now stale: the
-reference demo's video-tile↔screen reverse morph (`start_screen_to_tiles`, M12.5) uses exactly this
-combination — a `VideoPlayer`+`VideoCrossfade` entity mid-`Slice` split — and does hit the frozen-
+Still genuinely unsolved, and no longer hypothetical — this milestone was originally filed with a
+note that no demo scene exercised the path. One does now: the reference demo's video-tile↔screen
+reverse morph (`start_screen_to_tiles`, M12.5) uses exactly this combination — a `VideoPlayer`+`VideoCrossfade` entity mid-`Slice` split — and does hit the frozen-
 snapshot gap this milestone describes. It just reads fine in practice, since the frozen frame is
 whatever the video looked like an instant before the ~0.6s crossfade-out started, not a stale or
 mismatched one.
@@ -233,7 +233,7 @@ PLANNING.md's M11 entry for why evicting referenced content would be unsafe give
 components) — referenced-content eviction, a restoration mechanism, and backgrounding-driven
 eviction beyond video are Post-V1. See PLANNING.md for the full DoD.
 
-## M11.1 — Update Demo, Part 1 *(off critical path — complete, ready to commit)*
+## M11.1 — Update Demo, Part 1 *(off critical path — complete)*
 
 A dogfooding pass on the reference demo — using the framework as a real user rather than its
 author, to actually exercise M11's resource management and the transition topologies under a
@@ -277,11 +277,12 @@ DoD and what shipped.
 Building and running the demo locally is fine for a developer already comfortable with the
 Rust/wasm toolchain — it shuts out anyone else visiting the project. Goal: a fully working,
 publicly reachable, browser-hosted build of the web shell demo, nothing needed but a browser.
-Proposed shape: a separate public repo (not a branch of this one, to keep binary demo assets out
-of the framework's own history), referencing the framework crates as git dependencies, with the
-demo's images/videos/wasm output actually committed there (unlike this repo, where `images/`/
-`www/pkg/` are gitignored on purpose) and GitHub Pages serving it. See PLANNING.md for the full
-DoD and open decisions.
+Shipped shape (the "separate public repo" this was originally filed with was reconsidered during
+design — see PLANNING.md): **this** repo, with the demo's images and videos committed under
+`crates/proteus-shell-web/www/`, built and deployed to GitHub Pages by `pages.yml` on every push
+to `main`. `www/pkg/` (the wasm-pack output) stays gitignored and is produced by the workflow. A
+second workflow, `staging-deploy.yml`, publishes a per-PR preview to `ichellin1/proteus-staging`
+— see [RELEASING.md](./RELEASING.md) for the full flow.
 
 ## M12 — TypeScript SDK *(critical path — complete)*
 
@@ -347,9 +348,12 @@ contract** an app targets instead of a shell, and a **target map** for browser /
 mobile / embedded such that a new platform is a new `impl Host`, never a re-architecture. V1
 release is deliberately delayed for this; what was M13 (Developer Release) is now **M14**.
 
-Only **M13.8 (the TypeScript POC)** is a hard V1 *build*; M13.2 (web host) and part of M13.1
-(contracts) are built because the POC needs them. **M13.3–M13.7 are design deliverables** —
-written into PLANNING.md and approved section by section — with implementation deferred to V2.
+Every section is designed and approved in PLANNING.md. Scoping as it landed: **M13.1** (contracts),
+**M13.2** (web host), **M13.3** (native host), **M13.4** (assets, resources and video) and
+**M13.8** (the TypeScript POC) are built; **M13.5** shipped a scoped build (`ProteusConfig`) on
+top of its design; **M13.6** (mobile packaging) and **M13.7** (the post-V1 target map) are design
+and seams only, with implementation deferred to V2. The `V1` column below records this per
+section.
 
 The **Rust / TypeScript tradeoff is deliberate and permanent**: Rust compiles to native *and*
 wasm, so a Rust app is portable by compilation with no bridge; TypeScript always needs a JS
@@ -358,11 +362,11 @@ default; Rust is the performance path.
 
 | § | Section | V1 |
 |---|---|---|
-| M13.1 | Core contracts & layering — `Renderer` primitive; `Host` / `App` / `HostServices` traits; host owns `Proteus` | design + trait defs |
+| M13.1 | Core contracts & layering — `Renderer` primitive; `App` / `HostServices` traits; host owns `Proteus` | design + **build** |
 | M13.2 | Web host — Rust crate + `ts/` layer: `run()`, canvas, rAF loop, DPI, safe-area, touch, visibility-pause, context-loss. Rust→web and TS→web both front doors. | **build** |
-| M13.3 | Native host — `proteus-host-winit`; shell → thin `main()`. `Host` trait windowing-agnostic so DRM/KMS, SDL2, mobile slot in later. | design |
+| M13.3 | Native host — `proteus-host-winit`; shell → thin `main()`. Windowing-agnostic (nothing below it names winit) so DRM/KMS, SDL2, mobile slot in later. | design + **build** |
 | M13.4 | Asset & resource contract — textures, fonts, runtime loading; video as a host service, codec split hidden per-host | design + **build** |
-| M13.5 | Configuration & memory model — `ProteusConfig` through host construction; atlas-sizing for constrained targets | design |
+| M13.5 | Configuration & memory model — `ProteusConfig` through host construction; atlas-sizing for constrained targets | design + scoped **build** |
 | M13.6 | Mobile packaging — Capacitor wraps the web bundle (only path for TS logic on iOS); `create-proteus-app` scaffold + template. Write-once web + desktop + mobile. | design + template |
 | M13.7 | Post-V1 target map — native mobile, embedded Linux (DRM/KMS), native smart-TV, `proteus-host-jsengine` (browser-engine-free TS-native), XR. Seams, not code. | design |
 | M13.8 | TypeScript POC (was the ex-M12.6/M12.7 app) — `.ts`-only, published package only, on the M13.2 host, all three topologies. Doubles as an M14 example. | **build** |
@@ -374,6 +378,11 @@ public and documented, CHANGELOG and semantic versioning, contributing guide. An
 can install the SDK, follow the README, and build a working component with a transition. Also the
 final checkpoint for the macOS/Linux/Windows CI matrix and a last cross-shell parity audit. V1
 ships on the M13 platform architecture.
+
+Carries **both** benchmarks in its DoD: the native performance numbers it already owned, and the
+WASM-boundary benchmark vs. a hand-written TS/WebGL2 baseline. The latter was M1's box and was
+blocked on the TypeScript SDK until M12 shipped; it has had no owner since. See
+[BENCHMARKS.md](./BENCHMARKS.md).
 
 ---
 
@@ -421,28 +430,18 @@ Planned future work, not part of the V1 scope:
   alongside the bake instead of relying on the bake's own baked-in rounding — would need a new
   mask atlas (or a reusable region within an existing one) and a way to address it per-instance
   in the shader.
-- **Native renders at physical/device-pixel resolution; web renders 1:1 CSS pixels — not
-  unified, and native pays for it most visibly during the gallery grid → large-image
-  transition.** Native's swapchain is sized from `window.inner_size()` (physical pixels —
-  `main.rs`'s `RenderState::new`), so on a 2x/3x HiDPI display it composites 4x/9x the pixel
-  count of web's canvas, which is pinned to `canvas.clientWidth`/`clientHeight` with no
-  `devicePixelRatio` scaling at all (`www/index.html`'s resize handler — the file's own comment
-  claiming "pixel density handled by devicePixelRatio" is stale). Invisible on ordinary screens
-  (few simple quads, CPU/vsync-bound either way), but `start_gallery_to_image` fills nearly the
-  whole window with 12 simultaneously crossfading quads, each paying the fragment shader's
-  rounded-rect SDF + border + crossfade-blend math per pixel (`quad.wgsl`) — exactly where
-  fragment throughput becomes the bottleneck, and exactly where native is paying several times
-  more of it than web for the identical scene. Compounding factor specific to this same
-  transition: native's hires-image fetch size is *also* scaled by `scale_factor` before capping
-  to `GALLERY_LARGE_IMAGE_MAX_SIDE` (900px), while web caps the unscaled logical size — so native
-  routinely fetches/decodes/uploads a bigger JPEG (near the 900px cap) than web does (often well
-  under it) for the same on-screen result, and that decode runs synchronously on the main thread
-  right as the transition is playing. Neither side is simply "wrong" — native rendering at true
-  display resolution is a legitimate choice (sharper on Retina), it's just not free, and this
-  demo never exposed a way to trade that off. Deliberately not fixed now — surfacing a
-  resolution/DPI tradeoff as an explicit developer choice (e.g. a capped or configurable render
-  scale, independent of the hires-fetch sizing) belongs to whoever tunes the app for production,
-  not baked into the framework's default.
+- **No configurable render scale.** Both platforms now render at physical/device-pixel
+  resolution — M13.2 made the web host DPI-aware (its canvas is sized by `devicePixelRatio`,
+  not pinned to `clientWidth`/`clientHeight`), and M13.4 moved the hires-image fetch sizing into
+  `DemoApp` so one implementation serves both, fixing the web side's unscaled cap along the way.
+  What remains is that rendering at true display resolution is a *choice* nobody can make: on a
+  2x/3x display the shader pays 4x/9x the fragment cost, which is invisible for ordinary scenes
+  but real during `start_gallery_to_image` — nearly a full window of simultaneously crossfading
+  quads, each running the rounded-rect SDF + border + crossfade-blend math per pixel
+  (`quad.wgsl`). Sharper on Retina is a legitimate default; it just isn't free, and there's no
+  way to trade it off. A capped or configurable render scale (independent of hires-fetch sizing)
+  belongs to whoever tunes an app for production rather than in the framework's default — it
+  would slot into `ProteusConfig::render` alongside the M13.5 fields.
 - **Text Phase 2** — multi-line layout (line breaking, alignment, line height)
 - **Text Phase 3** — bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - **Text Phase 4** — inline styles (mixed bold, italic, size, color within a text run)
