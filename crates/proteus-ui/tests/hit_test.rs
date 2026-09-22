@@ -13,15 +13,20 @@
 //! | `hidden_entity_not_hit_testable` | `Visibility::HIDDEN` opt-out |
 //! | `virtual_entity_not_hit_testable` | `Virtual` opt-out |
 //! | `hover_enter_then_exit` | `hover_entered` / `hover_exited` lifecycle |
+//! | `click_at_left_boundary_hits` / `..._right_boundary_misses` | `[left, right)` half-open bounds |
+//! | `top_draw_order_entity_wins_when_quads_overlap` | Overlap resolved by draw order |
 //! | `rotated_quad_hit_tests_its_true_footprint_not_the_unrotated_box` | M10.6: oriented hit box |
 //! | `rotated_parent_rotates_interactable_childs_hit_region_too` | M10.6: applies to children too |
+//! | `top_left_anchored_quad_is_clickable_where_it_renders_not_mirrored_above_it` | Anchor is Y-down, extents are Y-up |
+//! | `higher_z_entity_wins_even_though_it_was_spawned_first` | `position.z` beats spawn order |
+//! | `overlap_is_decided_by_spawn_order_across_archetypes` | Not by ECS iteration order |
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_ui::{
-    ChildOf, Interactable, InteractionEvents, PointerInput, ProteusWorld, QuadState, Virtual,
-    Visibility,
+    ChildOf, Interactable, InteractionEvents, Opacity, PointerInput, ProteusWorld, QuadState,
+    Virtual, Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -345,4 +350,151 @@ fn rotated_parent_rotates_interactable_childs_hit_region_too() {
 
     let clicked = click_at(&mut world, Vec2::new(220.0, 20.0));
     assert_eq!(clicked, vec![child]);
+}
+
+// ---------------------------------------------------------------------------
+// Anchor handedness
+// ---------------------------------------------------------------------------
+
+/// `QuadState::anchor` is the *screen* convention — `(0, 0)` pins the
+/// component's **top**-left corner at `position` — while hit-testing works in
+/// world space, where Y increases upward. `quad.wgsl` reconciles the two by
+/// negating Y in its `anchor_shift`; `quad_contains` has to do the same, so a
+/// `(0, 0)`-anchored quad occupies the rectangle to the right of and *below*
+/// its position (below = smaller world Y).
+///
+/// Regression test: the Y extents were previously the plain mirror of the X
+/// ones (`-anchor·size` … `(1 - anchor)·size` on both axes), which mirrored the
+/// hit box about the pivot — a top-left-anchored button was clickable in the
+/// rectangle *above* the one it renders in. Invisible at the default centre
+/// anchor, where both formulas give `±size/2`, which is every anchor the
+/// reference demo and the TS example use.
+#[test]
+fn top_left_anchored_quad_is_clickable_where_it_renders_not_mirrored_above_it() {
+    let mut world = ProteusWorld::new();
+    // 100×100 at (100, 100), anchor (0, 0) → occupies x ∈ [100, 200),
+    // y ∈ [0, 100): right of, and below, the pivot.
+    let e = world
+        .world
+        .spawn((
+            QuadState {
+                anchor: Vec2::new(0.0, 0.0),
+                ..quad_at(100.0, 100.0)
+            },
+            Interactable,
+        ))
+        .id();
+
+    let clicked = click_at(&mut world, Vec2::new(150.0, 50.0));
+    assert_eq!(
+        clicked,
+        vec![e],
+        "a point below-right of a top-left-anchored quad's pivot is inside the \
+         footprint it actually renders in"
+    );
+
+    let clicked = click_at(&mut world, Vec2::new(150.0, 150.0));
+    assert!(
+        clicked.is_empty(),
+        "a point *above* the pivot is outside a top-left-anchored quad — if this \
+         hits, the Y extents are mirrored"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Overlap resolution — must agree with draw order (M13.8 follow-up)
+// ---------------------------------------------------------------------------
+
+/// `collect_instances` sorts root entities by `(position.z, SpawnOrder)`, so a
+/// higher-z entity draws on top no matter when it was spawned. Hit-testing must
+/// resolve overlaps the same way, or the pointer lands on something the user
+/// can't see.
+///
+/// Regression test: `position.z` was ignored here entirely — overlap was decided
+/// purely by which entity the query iterated last, so the *lower*-z entity won
+/// simply by being spawned second.
+#[test]
+fn higher_z_entity_wins_even_though_it_was_spawned_first() {
+    let mut world = ProteusWorld::new();
+    let front = world
+        .world
+        .spawn((
+            QuadState {
+                position: Vec3::new(100.0, 100.0, 5.0),
+                ..quad_at(100.0, 100.0)
+            },
+            Interactable,
+        ))
+        .id();
+    let _behind = world
+        .world
+        .spawn((
+            QuadState {
+                position: Vec3::new(100.0, 100.0, 0.0),
+                ..quad_at(100.0, 100.0)
+            },
+            Interactable,
+        ))
+        .id();
+
+    let clicked = click_at(&mut world, Vec2::new(100.0, 100.0));
+    assert_eq!(
+        clicked,
+        vec![front],
+        "the higher-z entity draws on top, so it must receive the click even \
+         though the lower-z one was spawned later"
+    );
+}
+
+/// The input-side counterpart of `render_instances.rs`'s
+/// `spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype`.
+///
+/// Two overlapping interactables in *different* archetypes: "later spawned wins"
+/// has to come from an explicit `SpawnOrder` stamp, because `bevy_ecs`'s
+/// iteration order across two archetypes has no defined relationship to spawn
+/// order. M13.8 fixed exactly this for rendering and left input on the old
+/// assumption.
+///
+/// Measured against the pre-fix code, this is *worse* on the input side than it
+/// was on the render side: the rendering repro needed a third entity to join an
+/// existing archetype before the order flipped, whereas here the very first
+/// assertion below already fails — two overlapping interactables in different
+/// archetypes resolved in reverse-spawn order straight away, with nothing
+/// perturbing them. The third entity is kept as a stability guard rather than
+/// as the trigger.
+#[test]
+fn overlap_is_decided_by_spawn_order_across_archetypes() {
+    let mut world = ProteusWorld::new();
+
+    // `Opacity` is the archetype differentiator on purpose: it's inert for
+    // hit-testing (unlike `Disabled`, which opts out, or `InteractionDef`,
+    // which would start a mini-transition and gate the entity mid-test).
+    let _under = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+    let over = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable, Opacity(1.0)))
+        .id();
+
+    let clicked = click_at(&mut world, Vec2::new(100.0, 100.0));
+    assert_eq!(
+        clicked,
+        vec![over],
+        "the later-spawned entity draws on top and must receive the click"
+    );
+
+    // Add a third entity to the *first* archetype — the move that reordered
+    // archetype iteration in M13.8's rendering repro. It doesn't overlap, so it
+    // can never be the hit; it exists only to perturb iteration order.
+    world.world.spawn((quad_at(400.0, 400.0), Interactable));
+
+    let clicked = click_at(&mut world, Vec2::new(100.0, 100.0));
+    assert_eq!(
+        clicked,
+        vec![over],
+        "still the later-spawned entity — an unrelated third entity joining \
+         another archetype must not flip which of these two receives the click"
+    );
 }
