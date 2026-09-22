@@ -10,7 +10,7 @@
 
 use proteus_render::{
     pack_atlas_page, AtlasConfig, MainAtlasPlacement, QuadInstance, QuadPipeline,
-    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION, TRANSITION_ATLAS_SIZE,
+    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION, DEFAULT_TRANSITION_ATLAS_SIZE,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ fn headless_quad_renders_to_expected_color() {
         FORMAT,
         16,
         AtlasConfig::default(),
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
@@ -168,7 +168,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         FORMAT,
         16,
         AtlasConfig::default(),
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
@@ -296,7 +296,7 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
             page_size,
             page_count: 2,
         },
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
@@ -403,7 +403,7 @@ fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
             page_size: 4096,
             page_count: 1,
         },
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 

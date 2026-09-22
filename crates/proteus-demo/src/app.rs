@@ -13,18 +13,17 @@
 //! update` — which does have `Frame` — drains those requests and does the
 //! actual work via [`Frame::bake_texture`]/[`Frame::fetch_async`]/
 //! [`Frame::play_video`] instead of leaving it to a shell-side shim reaching
-//! past `Frame` into `Engine::proteus_mut()`. Which photo to fetch and how
+//! past `Frame` into the `Engine`. Which photo to fetch and how
 //! to build its URL is [`crate::gallery_fetch`] — shared here instead of
 //! duplicated per shell, now that there's one real async-fetch primitive
 //! both shells can drive identically.
 //!
-//! **Video on the web host is not here yet** (M13.4 step 4b) — HLS decode
-//! needs `<video>`/`MediaSource`, which has no Rust-side implementation as
-//! of this pass; it's tracked as its own, separately-scoped unit of work in
-//! `PLANNING.md` § M13.4 given its size, not silently deferred. Until then
-//! the web shell keeps driving video the old way, through `demo_mut()` +
-//! `Demo::take_pending_video_*` — see [`DemoApp::new`]'s doc for exactly how
-//! this module stays out of that host's way.
+//! Video reaches both hosts the same way, through
+//! [`Frame::play_video`]/[`Frame::poll_video`] over
+//! `HostServices::open_video` — natively an `ffmpeg`-backed `Mp4Stream`, on
+//! the web `proteus-host-web`'s `hls_video` (`<video>`/`MediaSource`, no JS).
+//! Only the *keyspace* differs, and that is the host's business: see
+//! [`DemoApp::new`]'s `video_keys`.
 
 use std::collections::HashMap;
 
@@ -72,14 +71,17 @@ pub struct DemoApp {
     /// purely so `take_pending_gallery_hires_cancel` has something to look
     /// up without scanning the map for a `Hires` entry.
     hires_fetch: Option<FetchId>,
-    /// `None` on a host that hasn't migrated video onto `HostServices::
-    /// open_video` yet (the web host, until M13.4 step 4b) — `advance_video`
-    /// then leaves `Demo::take_pending_video_*` completely alone so a
-    /// shell-side shim can keep polling them directly, exactly as before
-    /// M13.4. `Some([left, center, right])` (native) means this module
-    /// drives video itself through `Frame`, resolved by whatever keyspace
-    /// that host's own `HostServices::open_video` expects (native: literal
-    /// filesystem paths).
+    /// `Some([left, center, right])` — the keys this module hands
+    /// `Frame::play_video`, resolved by whatever keyspace the host's own
+    /// `HostServices::open_video` expects (native: literal filesystem paths;
+    /// web: an HLS manifest path plus a codec string). Both shells pass
+    /// `Some`.
+    ///
+    /// `None` means "this host has no video at all": `advance_video` becomes
+    /// a no-op and the video tiles' pending requests are simply never
+    /// drained. No shell needs it today — it's kept so a host without video
+    /// support can still run the demo, and it's what the `resize` test
+    /// builds against.
     video_keys: Option<[String; 3]>,
     playing_video: Option<proteus_runtime::PlayingVideo>,
     /// Last viewport size handed to `Demo::set_viewport_size`, so `update` can
@@ -89,8 +91,7 @@ pub struct DemoApp {
 }
 
 impl DemoApp {
-    /// `video_keys`: see the field's own doc — `None` until a host migrates
-    /// video onto the real contract.
+    /// `video_keys`: see the field's own doc.
     pub fn new(video_keys: Option<[String; 3]>) -> Self {
         Self {
             demo: None,
@@ -103,12 +104,15 @@ impl DemoApp {
         }
     }
 
-    /// The wrapped [`Demo`] once `setup` has run — for a host still driving
-    /// the M13.4-debt video shim (`take_pending_*`) outside the `App`
-    /// contract (currently: the web host only). `None` before the first
-    /// frame. Texture churn and the gallery no longer need this — see this
-    /// module's own crate doc.
-    pub fn demo_mut(&mut self) -> Option<&mut Demo> {
+    /// The wrapped [`Demo`] once `setup` has run; `None` before the first
+    /// frame.
+    ///
+    /// Test-only. Every host-side shim that used to reach through this —
+    /// texture churn, the gallery, and finally video at M13.4 — now goes
+    /// through `Frame` inside `update`, so nothing outside this crate needs
+    /// to see the `Demo` itself any more.
+    #[cfg(test)]
+    pub(crate) fn demo_mut(&mut self) -> Option<&mut Demo> {
         self.demo.as_mut()
     }
 
@@ -137,7 +141,7 @@ impl DemoApp {
     }
 
     /// Kicks off / drains this frame's video, on a host that's migrated it
-    /// (see `video_keys`'s own doc) — a no-op otherwise. Split out of
+    /// (see `video_keys`'s own doc) — a no-op on a host without video. Split out of
     /// `update` purely for readability — not part of the `App` trait.
     fn advance_video(&mut self, demo: &mut Demo, f: &mut Frame) {
         let Some(video_keys) = &self.video_keys else {

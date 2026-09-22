@@ -49,7 +49,7 @@ impl TransitionRegion {
 /// transparent).
 pub(crate) const TRANSITION_BAKE_PAD: u32 = 2;
 
-/// Wraps `etagere::AtlasAllocator`, sized to [`crate::TRANSITION_ATLAS_SIZE`].
+/// Wraps `etagere::AtlasAllocator`, sized to [`crate::DEFAULT_TRANSITION_ATLAS_SIZE`].
 pub struct TransitionAtlasAllocator {
     inner: etagere::AtlasAllocator,
 }

@@ -10,7 +10,7 @@
 //! 4. `QuadPipeline::upload_instances`
 //! 5. encode one render pass into the handed-in target
 //!
-//! Surface *acquire / reconfigure / present* stays with the [`Host`] — this
+//! Surface *acquire / reconfigure / present* stays with the host — this
 //! type never sees a `wgpu::Surface`, only an already-acquired
 //! `wgpu::TextureView`. `QuadPipeline` and `proteus_render::GpuContext` live
 //! as `World` resources (as in M12); `proteus_ui::bake_system` reads them
@@ -18,7 +18,6 @@
 //! via [`Proteus::world_mut`]. [`Renderer::new`] is what inserts them
 //! (the M12 shells did it themselves).
 //!
-//! [`Host`]: crate::Host
 
 use proteus_render::{GpuContext, QuadPipeline};
 use proteus_sdk::Proteus;

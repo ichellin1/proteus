@@ -1,5 +1,5 @@
-//! [`Viewport`] — the drawable area, reported by the [`crate::Host`] once per
-//! resize and delivered to the app through [`crate::Frame`].
+//! [`Viewport`] — the drawable area, reported by the host once per resize
+//! and delivered to the app through [`crate::Frame`].
 
 use glam::Vec2;
 

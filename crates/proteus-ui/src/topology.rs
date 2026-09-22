@@ -40,7 +40,7 @@ use glam::Vec4;
 
 use proteus_render::{
     pack_atlas_page, GpuContext, QuadInstance, QuadPipeline, TransitionAllocId, TransitionRegion,
-    ATLAS_SELECTOR_MAIN, TRANSITION_ATLAS_SIZE,
+    ATLAS_SELECTOR_MAIN, DEFAULT_TRANSITION_ATLAS_SIZE,
 };
 
 use crate::collect::{quad_state_to_instance, BakedTexture};
@@ -67,7 +67,7 @@ pub struct TransitionAtlasSize(pub u32);
 
 impl Default for TransitionAtlasSize {
     fn default() -> Self {
-        Self(TRANSITION_ATLAS_SIZE)
+        Self(DEFAULT_TRANSITION_ATLAS_SIZE)
     }
 }
 
@@ -300,11 +300,6 @@ pub struct GroupSource {
 pub struct ActiveGroupTransition {
     /// Entities to make visible (`Visibility::VISIBLE`) when all virtuals complete.
     pub reveal_on_complete: Vec<Entity>,
-    /// Total virtual entities created for this group transition.
-    ///
-    /// Used to detect completion: when the count of complete virtuals that
-    /// carry `PartOfGroup(coordinator)` equals `total`, the group is done.
-    pub total: usize,
     /// The one `transition_atlas` bake shared by every virtual in this group
     /// (the source's bake for 1→N, the destination's bake for N→1) — as
     /// opposed to each virtual's own individual bake, tracked per-virtual on
@@ -370,30 +365,9 @@ pub fn horizontal_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
         .collect()
 }
 
-/// Divide `source` into `n` equal vertical strips (top-to-bottom rows, Y-down).
-///
-/// Each strip has the full width of the source and `source.height / n` height.
-pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
-    assert!(n > 0, "vertical_slices: n must be > 0");
-    let slice_h = source.size.y / n as f32;
-    // Y-down: the topmost strip has the highest Y (most negative in world space).
-    // Position top strip at the top of the source's bounding box.
-    let topmost_center = source.position.y + source.size.y * 0.5 - slice_h * 0.5;
-    (0..n)
-        .map(|i| {
-            let y = topmost_center - slice_h * i as f32;
-            QuadState {
-                position: glam::Vec3::new(source.position.x, y, source.position.z),
-                size: glam::Vec2::new(source.size.x, slice_h),
-                ..source.clone()
-            }
-        })
-        .collect()
-}
-
 /// Divide `source` into an equal `cols`×`rows` grid, row-major (index =
-/// `row * cols + col`; row 0 is the top, same convention as `vertical_slices`).
-/// The two-axis counterpart of `horizontal_slices`/`vertical_slices` — used
+/// `row * cols + col`; row 0 is the top). The two-axis counterpart of
+/// `horizontal_slices` — used
 /// when pairing with a same-shaped grid of targets, so each cell starts at
 /// the position within `source` that already corresponds to its own row/col
 /// rather than every cell starting along one shared axis (see
@@ -884,7 +858,6 @@ pub fn one_to_n_setup_system(
                     Lifecycle::Transitioning,
                     ActiveGroupTransition {
                         reveal_on_complete: reveal,
-                        total: n,
                         shared_alloc,
                     },
                 ));
@@ -1072,7 +1045,6 @@ pub fn n_to_one_setup_system(
         // Coordinator: destination entity tracks group completion.
         commands.entity(dest_entity).insert(ActiveGroupTransition {
             reveal_on_complete: vec![dest_entity],
-            total: n,
             shared_alloc,
         });
     }
@@ -1410,23 +1382,6 @@ mod tests {
                 s.corner_radius,
             );
             assert!(s.corner_radius > 0.0, "clamping should not zero it out");
-        }
-    }
-
-    #[test]
-    fn vertical_slices_count() {
-        let slices = vertical_slices(&source(), 4);
-        assert_eq!(slices.len(), 4);
-    }
-
-    #[test]
-    fn vertical_slices_height() {
-        let slices = vertical_slices(&source(), 4);
-        for s in &slices {
-            assert!(
-                (s.size.y - 25.0).abs() < 1e-4,
-                "each slice should be 25px tall"
-            );
         }
     }
 

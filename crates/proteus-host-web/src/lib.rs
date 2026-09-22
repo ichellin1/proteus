@@ -51,9 +51,8 @@ pub mod js_app;
 pub mod rust_app;
 
 pub use js_app::mount;
-pub use rust_app::{run, RustDriver};
+pub use rust_app::run;
 pub use services::PreloadedHostServices;
-pub use surface::WebSurface;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -68,16 +67,14 @@ use web_sys::HtmlCanvasElement;
 // FrameDriver — the seam between WebLoop's event wiring and either front door
 // ---------------------------------------------------------------------------
 
-/// What [`WebLoop`] needs from either front door. [`rust_app::RustDriver`]
-/// forwards to an `Engine`; [`js_app::JsDriver`] hand-drives a shared
-/// `Proteus` + `Renderer`, calling into JS for `update`.
+/// What [`WebLoop`] needs from either front door. `rust_app`'s driver
+/// forwards to an `Engine`; `js_app`'s hand-drives a shared `Proteus` +
+/// `Renderer`, calling into JS for `update`.
 ///
-/// `pub` (not `pub(crate)`) so a concrete host shell — e.g.
-/// `proteus-shell-web`'s `DemoApp`-specific M13.4-debt shim (video / gallery /
-/// texture-churn, none of which have a home in the `App` contract yet) — can
-/// name [`WebLoop`]'s full type and reach [`rust_app::RustDriver`]'s own
-/// accessors without reimplementing this trait itself.
-pub trait FrameDriver {
+/// Internal: both implementors live in this crate, and a host shell reaches
+/// the loop through [`rust_app::run`] or [`js_app::mount`] rather than by
+/// naming this.
+pub(crate) trait FrameDriver {
     fn frame(&mut self, dt_secs: f32, target: &wgpu::TextureView);
     fn resize(&mut self, viewport: Viewport);
     fn pointer_moved(&mut self, pos: Option<Vec2>);
@@ -95,7 +92,7 @@ pub trait FrameDriver {
 /// build one of these and call [`WebLoop::start`] to hand control to the
 /// browser's event loop (this function returns immediately — wasm has no
 /// blocking "run forever" the way native's winit loop does).
-pub struct WebLoop<D: FrameDriver + 'static> {
+pub(crate) struct WebLoop<D: FrameDriver + 'static> {
     canvas: HtmlCanvasElement,
     surface: surface::WebSurface,
     driver: D,
@@ -116,14 +113,12 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         }
     }
 
-    /// Wire every DOM listener and start the `requestAnimationFrame` loop.
-    /// Consumes `self` into a shared `Rc<RefCell<_>>` and returns it — the
-    /// closures wired below hold their own clone, so the loop keeps running
-    /// even if the caller drops the returned handle; [`rust_app::run`]
-    /// returns it anyway so a `DemoApp`-shaped M13.4-debt shim can poll
-    /// [`Self::driver_mut`] once per its own `requestAnimationFrame` tick
-    /// (see `proteus-shell-web`'s crate doc).
-    pub(crate) fn start(self) -> Rc<RefCell<Self>> {
+    /// Wire every DOM listener and start the `requestAnimationFrame` loop,
+    /// then hand ownership to the browser: `self` moves into a shared
+    /// `Rc<RefCell<_>>` that the closures wired below each hold a clone of,
+    /// so the loop outlives this call with nothing left for a caller to
+    /// keep.
+    pub(crate) fn start(self) {
         let state = Rc::new(RefCell::new(self));
 
         wire_resize(&state);
@@ -131,29 +126,7 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         wire_visibility(&state);
         wire_context_loss(&state);
 
-        start_raf_loop(state.clone());
-        state
-    }
-
-    /// Mutable access to the front door's own driver — e.g.
-    /// `RustDriver::app_mut`/`engine_mut` for a `DemoApp`-specific shim that
-    /// needs to poll `Demo::take_pending_*` or reach the GPU pipeline
-    /// directly, neither of which the generic `App`/`FrameDriver` contracts
-    /// expose.
-    pub fn driver_mut(&mut self) -> &mut D {
-        &mut self.driver
-    }
-
-    /// The wgpu device backing this loop's surface — needed by a shim that
-    /// registers/writes GPU textures outside the generic bake pass (e.g.
-    /// video, texture churn).
-    pub fn device(&self) -> &wgpu::Device {
-        self.surface.device()
-    }
-
-    /// The wgpu queue backing this loop's surface. See [`Self::device`].
-    pub fn queue(&self) -> &wgpu::Queue {
-        self.surface.queue()
+        start_raf_loop(state);
     }
 
     fn render_frame(&mut self, ts_ms: f64) {

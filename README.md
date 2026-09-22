@@ -26,7 +26,7 @@ crates/
 ```
 
 > **M13 — Application Platform Architecture (in progress):** `proteus-runtime` is the new seam
-> that decouples an application from its platform shell. A `Host` (winit, web, …) owns the GPU
+> that decouples an application from its platform shell. A host crate (winit, web, …) owns the GPU
 > surface and frame loop and drives an `Engine` that owns `Proteus`; an application implements the
 > `App` trait instead of forking a shell. The `proteus-host-winit` / `proteus-host-web` crates and
 > the collapse of both shells to thin entry points land across M13.1–M13.3. See

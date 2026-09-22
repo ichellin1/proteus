@@ -9,7 +9,6 @@
 //!
 //! One buffer upload and one draw call renders the entire scene.
 
-use std::sync::mpsc::{Receiver, SyncSender};
 use wgpu::util::DeviceExt;
 
 use crate::mesh::{quad_vertex_layout, QuadInstance, QUAD_INDICES, QUAD_VERTICES};
@@ -41,7 +40,7 @@ pub fn validate_atlas_config(device: &wgpu::Device, config: &AtlasConfig) -> Res
 
 /// M13.5: same "validate before you build" self-check as
 /// [`validate_atlas_config`], for the two sizing knobs that used to be
-/// hardcoded constants — `transition_atlas_size` (was `TRANSITION_ATLAS_SIZE`)
+/// hardcoded constants — `transition_atlas_size` (was `DEFAULT_TRANSITION_ATLAS_SIZE`)
 /// and `max_instances` (was a bare `QuadPipeline::new` argument with no
 /// upper-bound check at all).
 pub fn validate_render_config(
@@ -83,16 +82,22 @@ pub fn validate_render_config(
 /// limits specifically to catch this class of regression).
 ///
 /// (M11.2) Atlas pressure is no longer answered by shrinking page size — `main_atlas` is a
-/// multi-page pool (see [`MAIN_ATLAS_PAGE_COUNT`], [`crate::texture_registry::AtlasConfig`]), and
+/// multi-page pool (see [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`], [`crate::texture_registry::AtlasConfig`]), and
 /// per-page size/page count are now a configurable, validated input
 /// ([`crate::validate_atlas_config`]) rather than a hard ceiling. This constant and
 /// [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`] together are only `AtlasConfig::default()`'s values — the
 /// safe out-of-box defaults, not a limit on what a consumer can configure.
-const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
+///
+/// Also what normalizes a `main_atlas` pixel region — the placement
+/// [`crate::TextureRegistry::register_static`] hands back — into the UV
+/// coordinates stored in a [`QuadInstance`], for a pipeline left at the
+/// default. A pipeline configured with its own `AtlasConfig::page_size` must
+/// normalize against *that*, not this.
+pub const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 
 /// Number of array layers ("pages") in the default `main_atlas` pool (M11.2).
 ///
-/// Total capacity at the defaults is `MAIN_ATLAS_SIZE² × MAIN_ATLAS_PAGE_COUNT` texels — 4 ×
+/// Total capacity at the defaults is `MAIN_ATLAS_SIZE² × DEFAULT_MAIN_ATLAS_PAGE_COUNT` texels — 4 ×
 /// 2048² × 4 bytes = 64 MiB of VRAM, eagerly committed at texture creation (wgpu cannot lazily
 /// back array layers).
 ///
@@ -107,26 +112,19 @@ const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 /// `downlevel_webgl2_defaults()` (web shell) alike — unlike `max_texture_dimension_2d`, which is
 /// what caps [`DEFAULT_MAIN_ATLAS_SIZE`]. Page count is an orthogonal axis to page size, so
 /// raising it costs no WebGL2 parity.
-const DEFAULT_MAIN_ATLAS_PAGE_COUNT: u32 = 4;
-
-/// Public alias for the default `main_atlas` page count — see [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`].
+///
 /// Only meaningful as `AtlasConfig::default()`'s value; a consumer building a custom
 /// [`crate::texture_registry::AtlasConfig`] chooses its own page count directly.
-pub const MAIN_ATLAS_PAGE_COUNT: u32 = DEFAULT_MAIN_ATLAS_PAGE_COUNT;
-/// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
-const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
-/// Public alias for the main atlas size.
-///
-/// Use this when creating a [`crate::font_atlas::FontAtlas`] and when
-/// converting a [`crate::font_atlas::BakedRegion`] pixel origin into the
-/// normalised UV coordinates stored in a [`QuadInstance`].
-pub const MAIN_ATLAS_SIZE: u32 = DEFAULT_MAIN_ATLAS_SIZE;
+pub const DEFAULT_MAIN_ATLAS_PAGE_COUNT: u32 = 4;
 
-/// Public alias for the transition atlas size — needed to normalize a
-/// `transition_atlas` pixel region into UV coordinates (e.g.
-/// `BakedTexture::uv_offset`/`uv_scale`), the same way [`MAIN_ATLAS_SIZE`] is
-/// used for `main_atlas`.
-pub const TRANSITION_ATLAS_SIZE: u32 = DEFAULT_TRANSITION_ATLAS_SIZE;
+/// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
+///
+/// Also what normalizes a `transition_atlas` pixel region into UV coordinates
+/// (e.g. `BakedTexture::uv_offset`/`uv_scale`) for a pipeline left at the
+/// default — the transition-atlas counterpart of [`DEFAULT_MAIN_ATLAS_SIZE`].
+/// A pipeline configured with its own `transition_atlas_size` must normalize
+/// against *that*, not this.
+pub const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
 
 /// Default video texture dimensions (M9).  1280×720 is enough for a crisp demo;
 /// the caller can request a different resolution via [`QuadPipeline::init_video`].
@@ -163,51 +161,6 @@ impl bevy_ecs::prelude::Resource for GpuContext {}
 // genuinely `Send + Sync`.
 unsafe impl Send for GpuContext {}
 unsafe impl Sync for GpuContext {}
-
-// ---------------------------------------------------------------------------
-// VideoFrameSender
-// ---------------------------------------------------------------------------
-
-/// The sending half of the BYOV (bring-your-own-video-player) channel.
-///
-/// Obtain one from [`QuadPipeline::init_video`].  Move it into your decoder
-/// thread and call [`send`](VideoFrameSender::send) once per decoded frame.
-/// The channel is bounded to **2 frames** so the decoder thread blocks
-/// naturally when the render loop falls behind — no unbounded memory growth.
-///
-/// Dropping the sender signals to the pipeline that no more frames will
-/// arrive; [`QuadPipeline::consume_video_frame`] becomes a no-op.
-pub struct VideoFrameSender {
-    tx: SyncSender<Vec<u8>>,
-    /// Width of the video texture this sender targets.
-    pub width: u32,
-    /// Height of the video texture this sender targets.
-    pub height: u32,
-}
-
-impl VideoFrameSender {
-    /// Send one frame of raw RGBA pixels (`width × height × 4` bytes).
-    ///
-    /// Blocks when the internal 2-frame buffer is full.  This is intentional
-    /// backpressure — **do not add an artificial sleep** in your decoder thread.
-    /// The pipeline drains the channel once per render frame, so `send` unblocks
-    /// at approximately the display refresh rate.  For real video, advance frames
-    /// by comparing PTS against playback time; for synthetic content, derive `t`
-    /// from `Instant::now()` rather than a fixed increment.
-    ///
-    /// Returns `false` if the pipeline has been dropped — exit the decoder loop.
-    pub fn send(&self, rgba: Vec<u8>) -> bool {
-        debug_assert_eq!(
-            rgba.len(),
-            (self.width * self.height * 4) as usize,
-            "VideoFrameSender::send: expected {}×{}×4 bytes, got {}",
-            self.width,
-            self.height,
-            rgba.len(),
-        );
-        self.tx.send(rgba).is_ok()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // QuadPipeline
@@ -251,7 +204,7 @@ pub struct QuadPipeline {
     _main_atlas: wgpu::Texture,
     _transition_atlas: wgpu::Texture,
     /// Streaming video texture (M9).  Starts as a 1×1 black placeholder; replaced
-    /// by [`init_video`] with the requested resolution.
+    /// by [`init_video`](QuadPipeline::init_video) with the requested resolution.
     video_atlas: wgpu::Texture,
     /// Pixel dimensions of the current `video_atlas` allocation.
     video_atlas_size: (u32, u32),
@@ -264,14 +217,6 @@ pub struct QuadPipeline {
 
     /// Metadata store for textures beyond the core atlases.
     pub texture_registry: TextureRegistry,
-
-    /// Receiving end of the BYOV frame channel.  `None` until [`init_video`] is called.
-    /// Each frame [`consume_video_frame`] drains this and uploads the latest.
-    /// `Receiver<T>` is `Send` but not `Sync` — wrapped so `QuadPipeline` can
-    /// be a bevy ECS `Resource` (requires `Sync`). `consume_video_frame` only
-    /// ever takes `&self`, so this needs a real lock (not just `Mutex::get_mut`,
-    /// which requires `&mut self`).
-    video_rx: std::sync::Mutex<Option<Receiver<Vec<u8>>>>,
 
     /// Sub-region allocator for `transition_atlas`. See `transition_atlas` module docs.
     transition_allocator: crate::transition_atlas::TransitionAtlasAllocator,
@@ -351,7 +296,7 @@ impl QuadPipeline {
     /// validate it against this device's real limits with [`crate::validate_atlas_config`]
     /// *before* calling this, since a bad config otherwise fails deep inside `create_texture`
     /// with an opaque wgpu validation panic instead of a clear error. `transition_atlas_size`
-    /// sizes `transition_atlas` (M13.5 — was the hardcoded [`TRANSITION_ATLAS_SIZE`] constant);
+    /// sizes `transition_atlas` (M13.5 — was the hardcoded [`DEFAULT_TRANSITION_ATLAS_SIZE`] constant);
     /// callers that don't need a different value can just pass that constant.
     pub fn new(
         device: &wgpu::Device,
@@ -388,7 +333,7 @@ impl QuadPipeline {
         let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("atlas_bgl"),
             entries: &[
-                // binding 0: main_atlas — a D2Array pool since M11.2 (see MAIN_ATLAS_PAGE_COUNT)
+                // binding 0: main_atlas — a D2Array pool since M11.2 (see DEFAULT_MAIN_ATLAS_PAGE_COUNT)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -594,7 +539,6 @@ impl QuadPipeline {
             sampler,
             atlas_bind_group,
             texture_registry: TextureRegistry::new(atlas_config),
-            video_rx: std::sync::Mutex::new(None),
             transition_allocator: crate::transition_atlas::TransitionAtlasAllocator::new(
                 transition_atlas_size,
             ),
@@ -1004,18 +948,14 @@ impl QuadPipeline {
     // Video texture API (M9)
     // ---------------------------------------------------------------------------
 
-    /// Initialize the video texture slot and return the BYOV frame channel.
+    /// Allocate the video texture slot at `width`×`height` and register it.
     ///
-    /// Returns `(TextureId, VideoFrameSender)`.  Move the [`VideoFrameSender`]
-    /// into your decoder thread and call [`VideoFrameSender::send`] once per
-    /// decoded frame.  The pipeline drains the channel each render frame via
-    /// [`consume_video_frame`].
+    /// Feed it with [`upload_video_frame`], once per render frame while
+    /// playback is live. A host obtains frames however it likes — the
+    /// `VideoStream` seam (M13.4) is the supported route — and this crate
+    /// never owns a decoder or a frame channel of its own.
     ///
-    /// The channel is bounded to **2 frames** so the decoder thread blocks
-    /// naturally when the render loop falls behind — no unbounded memory growth.
-    ///
-    /// Calling `init_video` a second time replaces both the GPU texture and the
-    /// channel, implicitly dropping any previous [`VideoFrameSender`].
+    /// Calling `init_video` a second time replaces the GPU texture.
     ///
     /// The new texture is cleared to opaque black immediately — a freshly
     /// created GPU texture has undefined contents (some backends leave
@@ -1023,14 +963,14 @@ impl QuadPipeline {
     /// quad would render that garbage, fully opaque, for however long
     /// playback takes to produce its first real frame.
     ///
-    /// [`consume_video_frame`]: QuadPipeline::consume_video_frame
+    /// [`upload_video_frame`]: QuadPipeline::upload_video_frame
     pub fn init_video(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
-    ) -> (TextureId, VideoFrameSender) {
+    ) -> TextureId {
         self.video_atlas = Self::create_video_texture(device, width, height);
         self.video_atlas_size = (width, height);
         let black_frame: Vec<u8> = std::iter::repeat_n([0u8, 0, 0, 255], (width * height) as usize)
@@ -1038,65 +978,7 @@ impl QuadPipeline {
             .collect();
         self.upload_video_frame(queue, &black_frame);
         self.rebuild_atlas_bind_group(device);
-        let id = self.texture_registry.register_video(width, height);
-
-        // Bounded to 2 frames: one frame of lookahead; sender blocks when the
-        // render loop is behind, providing natural backpressure.
-        let (tx, rx) = std::sync::mpsc::sync_channel(2);
-        // `&mut self` here — `get_mut` skips locking since exclusive access is
-        // already guaranteed.
-        *self.video_rx.get_mut().unwrap() = Some(rx);
-
-        (id, VideoFrameSender { tx, width, height })
-    }
-
-    /// Drain the BYOV frame channel and upload the latest received frame.
-    ///
-    /// Call this once per render frame, before [`draw`].  If multiple frames
-    /// arrived since the last call (e.g., after a pause) only the freshest is
-    /// uploaded — stale intermediate frames are discarded.  No-op if the
-    /// channel is empty or if [`init_video`] has not been called.
-    ///
-    /// Returns `true` iff a frame was actually uploaded this call — callers
-    /// that need to know "has the video produced its first real frame yet"
-    /// (e.g. to drive a loading indicator while the decoder is still
-    /// buffering) can latch this once true.
-    ///
-    /// [`draw`]: QuadPipeline::draw
-    /// [`init_video`]: QuadPipeline::init_video
-    pub fn consume_video_frame(&self, queue: &wgpu::Queue) -> bool {
-        let guard = self.video_rx.lock().unwrap();
-        let Some(rx) = guard.as_ref() else {
-            return false;
-        };
-        // After suspend_video() the texture is a 1×1 placeholder.  Uploading a
-        // full-resolution frame into it would hit the debug_assert in
-        // upload_video_frame and corrupt GPU memory.  Skip until resume_video()
-        // restores the full-resolution allocation.
-        if self.video_atlas_size == (1, 1) {
-            return false;
-        }
-        let mut latest: Option<Vec<u8>> = None;
-        let mut drained = 0u32;
-        while let Ok(frame) = rx.try_recv() {
-            latest = Some(frame);
-            drained += 1;
-        }
-        // More than one frame queued up since the last call means the render
-        // loop fell behind the decoder for at least one tick — everything but
-        // the freshest gets discarded here. Logged so playback smoothness
-        // issues can be attributed to this coalescing vs. decoder-side jitter.
-        if drained > 1 {
-            log::debug!(
-                "consume_video_frame: {} stale frame(s) discarded (render loop behind decoder)",
-                drained - 1
-            );
-        }
-        if let Some(frame) = latest {
-            self.upload_video_frame(queue, &frame);
-            return true;
-        }
-        false
+        self.texture_registry.register_video(width, height)
     }
 
     /// Upload one frame of RGBA pixels to the video texture.
@@ -1173,6 +1055,10 @@ impl QuadPipeline {
     /// Creates a fresh texture at the given resolution and rebuilds the bind
     /// group.  [`TextureRegistry::is_active`] returns `true` again after this
     /// call.  Upload frames immediately afterward.
+    ///
+    /// No in-tree caller yet: M11 shipped the suspend/resume pair as a
+    /// callable API, but the OS-signal wiring that would drive it on a
+    /// real backgrounding event is Post-V1 (see `ROADMAP.md`).
     ///
     /// [`suspend_video`]: QuadPipeline::suspend_video
     pub fn resume_video(&mut self, device: &wgpu::Device, id: TextureId, width: u32, height: u32) {

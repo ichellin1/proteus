@@ -91,9 +91,8 @@ impl Frame<'_> {
 
     /// Poll `playing` for a new frame and upload it if one landed. Returns
     /// `true` iff a frame was actually uploaded this call — e.g. to drive a
-    /// loading indicator until the first real frame shows, mirroring what
-    /// `QuadPipeline::consume_video_frame`'s own return value used to signal
-    /// before this seam existed. Call once per frame while `playing` is live.
+    /// loading indicator until the first real frame shows. Call once per
+    /// frame while `playing` is live.
     pub fn poll_video(&mut self, playing: &mut PlayingVideo) -> bool {
         let Some(frame) = playing.stream.poll_frame() else {
             return false;
@@ -105,14 +104,10 @@ impl Frame<'_> {
         };
         let mut pipeline = world.resource_mut::<QuadPipeline>();
         if playing.texture_id.is_none() {
-            let (texture_id, _sender) =
-                pipeline.init_video(&device, &queue, frame.width, frame.height);
-            // `_sender` (the BYOV channel's sending half `QuadPipeline` used
-            // before this seam existed) goes unused — `playing.stream`
-            // already delivers frames directly, so `upload_video_frame`
-            // below is called straight from here instead of routing through
-            // that channel. See `QuadPipeline::init_video`'s own doc.
-            playing.texture_id = Some(texture_id);
+            // Lazily, from the first frame's own dimensions — see
+            // `play_video`'s doc for why this can't happen at open time.
+            playing.texture_id =
+                Some(pipeline.init_video(&device, &queue, frame.width, frame.height));
         }
         pipeline.upload_video_frame(&queue, &frame.rgba);
         true
@@ -187,7 +182,7 @@ pub trait App {
 #[cfg(test)]
 mod video_tests {
     use super::*;
-    use proteus_render::{AtlasConfig, QuadPipeline, TRANSITION_ATLAS_SIZE};
+    use proteus_render::{AtlasConfig, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
     use proteus_sdk::Proteus;
 
     use crate::services::{FetchId, FetchResult, VideoFrame};
@@ -284,7 +279,7 @@ mod video_tests {
             wgpu::TextureFormat::Rgba8Unorm,
             16,
             AtlasConfig::default(),
-            TRANSITION_ATLAS_SIZE,
+            DEFAULT_TRANSITION_ATLAS_SIZE,
         ));
 
         let mut services = VideoServices;

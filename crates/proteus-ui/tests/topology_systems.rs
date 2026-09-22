@@ -13,7 +13,7 @@ use proteus_ui::{
     topology::{
         group_transition_complete_system, horizontal_slices, n_to_one_setup_system,
         one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout,
-        NToOneRequest, OneToNRequest, SplitStrategy, TransitionAtlasSize,
+        NToOneRequest, OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
     },
     transition::{
         linear, transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
@@ -378,8 +378,17 @@ fn slice_1_to_n_source_has_active_group_transition() {
     let coordinator = world
         .get::<ActiveGroupTransition>(source)
         .expect("source should carry ActiveGroupTransition");
-    assert_eq!(coordinator.total, n);
     assert_eq!(coordinator.reveal_on_complete.len(), n);
+
+    // The coordinator used to cache a `total` field; completion is now decided
+    // by counting the virtuals that actually carry `PartOfGroup(source)`, so
+    // that is what this pins.
+    let members = world
+        .query::<&PartOfGroup>()
+        .iter(&world)
+        .filter(|p| p.0 == source)
+        .count();
+    assert_eq!(members, n);
 }
 
 #[test]
