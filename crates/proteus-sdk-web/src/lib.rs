@@ -5,7 +5,7 @@
 //! `SignalHandle`/`TextureHandle` — no new ECS logic lives in this crate.
 //! Data (`ComponentSpec`, `ComponentData`, `TransitionConfig`, ...) crosses
 //! the boundary as plain JS objects via `serde-wasm-bindgen` and this
-//! crate's own [`dto`] conversions; see that module's top doc for why (and
+//! crate's own `dto` conversions; see that module's top doc for why (and
 //! for the entity-handle-as-`f64` precision note). Callback registration
 //! (`.onClick` etc.) wraps a `js_sys::Function` in a Rust closure and passes
 //! it straight into the matching `proteus-sdk` method — `proteus-sdk`'s

@@ -1,7 +1,7 @@
 //! `proteus-host-web` — Layer 3: a WebGPU/WebGL2 wasm host for
 //! [`proteus_runtime`] (M13.2).
 //!
-//! Two front doors, both driving the same [`WebLoop`] machinery
+//! Two front doors, both driving the same internal `WebLoop` machinery
 //! (canvas/wgpu setup, DPI, resize, Pointer Events, visibility-pause,
 //! context-loss logging):
 //!
@@ -11,7 +11,8 @@
 //!   `proteus-host-winit`.
 //! - **TS → web**: [`mount`] — a wasm-bindgen export the `ts/` layer's
 //!   `mount()` calls, taking `setup`/`update` JS functions. Does *not* go
-//!   through `Engine` (JS isn't a Rust `App` impl) — [`JsDriver`] replicates
+//!   through `Engine` (JS isn't a Rust `App` impl) — `js_app`'s own driver
+//!   replicates
 //!   `Engine::frame`'s exact sequence (`tick` → call JS `update` →
 //!   `refresh_cascades` → `Renderer::render`) by hand against a shared
 //!   `Rc<RefCell<Proteus>>` (see `proteus_sdk_web`'s module doc for why

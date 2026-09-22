@@ -131,7 +131,7 @@ use crate::{
 /// / `n_to_one_setup_system`): the source entity is baked once and sliced into
 /// N thirds (the `from_*` side, different per slice), and each target entity is
 /// baked once in full (the `to_*` side, one whole snapshot per slice — shape,
-/// border, *and* text). Each frame, [`push_entity_instances`] reads the
+/// border, *and* text). Each frame, `push_entity_instances` reads the
 /// entity's own [`ActiveTransition`] to compute `crossfade_t`, so the slice
 /// crossfades texel-for-texel from the source's cropped appearance to the
 /// target's real appearance — not just geometry, and not a flat-color

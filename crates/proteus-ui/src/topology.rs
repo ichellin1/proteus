@@ -58,7 +58,8 @@ use crate::transition::{ActiveTransition, TransitionConfig};
 /// The `transition_atlas`'s real pixel dimensions, mirrored into the ECS
 /// world so this module's UV-normalisation math (`region_uv*`) doesn't have
 /// to assume the compile-time default (M13.5: `transition_atlas_size` is now
-/// a [`proteus_runtime::ProteusConfig`] field). `Engine::new` overwrites this
+/// a `proteus_runtime::ProteusConfig` field — not linkable from here, since
+/// that crate sits a layer above this one). `Engine::new` overwrites this
 /// resource with the configured value alongside inserting `QuadPipeline`,
 /// the same "world resource set post-hoc by the render layer" pattern
 /// `GpuContext`/`QuadPipeline` already use.

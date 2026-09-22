@@ -767,7 +767,7 @@ impl SignalHandle {
     /// `component()`-declared rest geometry, appearing to originate from
     /// `from`'s current geometry — mirrors the TypeScript API's
     /// `signal.set([to, from], config)` with no separate target argument,
-    /// resolved here via the internal [`DeclaredGeometry`] `component()`
+    /// resolved here via the internal `DeclaredGeometry` `component()`
     /// captures at creation time (closing the gap M12.1's lower-level
     /// `proteus_ui::signal::set` scope-noted as this crate's job).
     pub fn set(
