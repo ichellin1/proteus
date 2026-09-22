@@ -5784,4 +5784,111 @@ mod tests {
             "nav.lockup is decorative brand chrome, not a click target"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Viewport changes reach the demo (audit C-05)
+    // -----------------------------------------------------------------------
+
+    /// A `HostServices` that provides nothing — enough to build a `Frame` and
+    /// drive `DemoApp::update`, which is all the viewport test needs. Asset
+    /// loading, fetching and video are exercised elsewhere.
+    struct NullServices;
+
+    impl proteus_runtime::HostServices for NullServices {
+        fn load_asset(&mut self, _key: &str) -> Option<std::sync::Arc<[u8]>> {
+            None
+        }
+        fn fetch_async(&mut self, _key_or_url: &str) -> proteus_runtime::FetchId {
+            proteus_runtime::FetchId(0)
+        }
+        fn poll_fetches(&mut self) -> Vec<proteus_runtime::FetchResult> {
+            Vec::new()
+        }
+        fn cancel_fetch(&mut self, _id: proteus_runtime::FetchId) {}
+    }
+
+    /// `Engine::resize` keeps `Frame::viewport` current, but `DemoApp` only read
+    /// it in `setup` — so resizing the window left the demo laid out for
+    /// whatever size it opened at: background stuck at its startup size, nav and
+    /// theme icons pinned to the old corners. A regression from the pre-M13
+    /// shells, which called `set_viewport_size` from their own resize handler.
+    ///
+    /// Drives the real `App::update` through a real `Frame` rather than calling
+    /// `Demo::set_viewport_size` directly — the forwarding *is* the thing under
+    /// test, and calling the setter would pass no matter what `update` does.
+    #[test]
+    fn resizing_the_viewport_relays_out_the_demo() {
+        use proteus_runtime::{App, Frame, Viewport};
+
+        let mut app = Proteus::new();
+        let mut demo_app = DemoApp::new(None);
+        let mut services = NullServices;
+
+        let initial = Vec2::new(1280.0, 800.0);
+        {
+            let mut frame = Frame {
+                proteus: &mut app,
+                services: &mut services,
+                viewport: Viewport::new(initial, 1.0),
+            };
+            demo_app.setup(&mut frame);
+        }
+
+        let background = demo_app
+            .demo_mut()
+            .expect("setup ran")
+            .background
+            .light
+            .id();
+        let size_of = |app: &Proteus| {
+            app.world()
+                .get::<QuadState>(background)
+                .expect("background exists")
+                .size
+        };
+        assert_eq!(
+            size_of(&app),
+            initial,
+            "setup should apply the initial size"
+        );
+
+        // Resize, then run one ordinary frame.
+        let resized = Vec2::new(1920.0, 1080.0);
+        {
+            let mut frame = Frame {
+                proteus: &mut app,
+                services: &mut services,
+                viewport: Viewport::new(resized, 1.0),
+            };
+            demo_app.update(&mut frame, 0.016);
+        }
+        assert_eq!(
+            size_of(&app),
+            resized,
+            "a changed viewport must reach Demo::set_viewport_size on the next frame"
+        );
+
+        // And a frame at the same size must not re-apply it — `set_viewport_size`
+        // rewrites every gallery tile's *declared* geometry, which would clobber
+        // a tile mid-transition if it ran every frame.
+        let tile = demo_app.demo_mut().expect("demo").gallery.tiles[0];
+        let marker = QuadState {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            ..Default::default()
+        };
+        let _ = tile.set_declared_geometry(&mut app, marker.clone());
+        {
+            let mut frame = Frame {
+                proteus: &mut app,
+                services: &mut services,
+                viewport: Viewport::new(resized, 1.0),
+            };
+            demo_app.update(&mut frame, 0.016);
+        }
+        assert_eq!(
+            app.world().get::<QuadState>(tile.id()).map(|q| q.position),
+            Some(marker.position),
+            "an unchanged viewport must not re-run the relayout"
+        );
+    }
 }
