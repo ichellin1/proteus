@@ -148,6 +148,26 @@ fn wrap_dropped(
 }
 
 // ---------------------------------------------------------------------------
+// Error conversion
+// ---------------------------------------------------------------------------
+
+/// `proteus-sdk`'s [`HandleError`](sdk::HandleError) as a thrown JS value.
+///
+/// These calls used to *panic* on a dead handle, which on wasm aborts the whole
+/// module — the canvas freezes and only a page reload recovers it. Throwing
+/// instead makes the same mistake catchable, and matches what this bridge
+/// already does for a malformed `ComponentSpec`/`TransitionConfig`: the
+/// failure channel for "the caller passed something unusable" is an exception.
+///
+/// `JsValue::from_str` (rather than a real `js_sys::Error`) to stay consistent
+/// with every other throw in this file. Promoting all of them to `Error`
+/// objects — which carry a stack trace — is a worthwhile follow-up, but not one
+/// to do halfway.
+fn handle_err(e: sdk::HandleError) -> JsValue {
+    JsValue::from_str(&format!("proteus: {e}"))
+}
+
+// ---------------------------------------------------------------------------
 // ProteusApp
 // ---------------------------------------------------------------------------
 
@@ -264,13 +284,15 @@ impl ProteusApp {
             .into_iter()
             .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
             .collect();
-        handle.0.split_to(
-            &mut self.0.borrow_mut(),
-            &targets,
-            (&config_dto).into(),
-            (&strategy_dto).into(),
-        );
-        Ok(())
+        handle
+            .0
+            .split_to(
+                &mut self.0.borrow_mut(),
+                &targets,
+                (&config_dto).into(),
+                (&strategy_dto).into(),
+            )
+            .map_err(handle_err)
     }
 
     /// N→1 group transition (M13.8) — `source_ids` merge into `handle`. See
@@ -292,13 +314,15 @@ impl ProteusApp {
             .into_iter()
             .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
             .collect();
-        handle.0.merge_from(
-            &mut self.0.borrow_mut(),
-            &sources,
-            (&config_dto).into(),
-            (&layout_dto).into(),
-        );
-        Ok(())
+        handle
+            .0
+            .merge_from(
+                &mut self.0.borrow_mut(),
+                &sources,
+                (&config_dto).into(),
+                (&layout_dto).into(),
+            )
+            .map_err(handle_err)
     }
 
     /// [`Self::split_to`], but with each target's rest geometry given
@@ -330,13 +354,15 @@ impl ProteusApp {
                 (sdk::Handle::from_entity(entity), (&t.state).into())
             })
             .collect();
-        handle.0.split_to_with_states(
-            &mut self.0.borrow_mut(),
-            &targets,
-            (&config_dto).into(),
-            (&strategy_dto).into(),
-        );
-        Ok(())
+        handle
+            .0
+            .split_to_with_states(
+                &mut self.0.borrow_mut(),
+                &targets,
+                (&config_dto).into(),
+                (&strategy_dto).into(),
+            )
+            .map_err(handle_err)
     }
 
     #[wasm_bindgen(js_name = onDropped)]
@@ -461,28 +487,43 @@ impl ProteusApp {
     }
 
     #[wasm_bindgen(js_name = addChild)]
-    pub fn add_child(&mut self, parent: &Handle, child: &Handle) {
-        parent.0.add_child(&mut self.0.borrow_mut(), child.0);
+    pub fn add_child(&mut self, parent: &Handle, child: &Handle) -> Result<(), JsValue> {
+        parent
+            .0
+            .add_child(&mut self.0.borrow_mut(), child.0)
+            .map_err(handle_err)
     }
 
     #[wasm_bindgen(js_name = removeChild)]
-    pub fn remove_child(&mut self, parent: &Handle, child: &Handle, destroy: bool) {
+    pub fn remove_child(
+        &mut self,
+        parent: &Handle,
+        child: &Handle,
+        destroy: bool,
+    ) -> Result<(), JsValue> {
         parent
             .0
-            .remove_child(&mut self.0.borrow_mut(), child.0, destroy);
+            .remove_child(&mut self.0.borrow_mut(), child.0, destroy)
+            .map_err(handle_err)
     }
 
     /// Consumes `handle` — matches `proteus-sdk`'s own `Handle::destroy`,
     /// which takes `self` by value. The entity is despawned; further use of
     /// the JS `Handle` object after this call is invalid (same as in Rust).
     #[wasm_bindgen]
-    pub fn destroy(&mut self, handle: Handle) {
-        handle.0.destroy(&mut self.0.borrow_mut());
+    pub fn destroy(&mut self, handle: Handle) -> Result<(), JsValue> {
+        handle
+            .0
+            .destroy(&mut self.0.borrow_mut())
+            .map_err(handle_err)
     }
 
     #[wasm_bindgen(js_name = freeResources)]
-    pub fn free_resources(&mut self, handle: &Handle) {
-        handle.0.free_resources(&mut self.0.borrow_mut());
+    pub fn free_resources(&mut self, handle: &Handle) -> Result<(), JsValue> {
+        handle
+            .0
+            .free_resources(&mut self.0.borrow_mut())
+            .map_err(handle_err)
     }
 
     /// Overwrites both `handle`'s live geometry and its declared rest
@@ -501,8 +542,8 @@ impl ProteusApp {
             .map_err(|e| JsValue::from_str(&format!("invalid QuadState: {e}")))?;
         handle
             .0
-            .set_declared_geometry(&mut self.0.borrow_mut(), (&dto).into());
-        Ok(())
+            .set_declared_geometry(&mut self.0.borrow_mut(), (&dto).into())
+            .map_err(handle_err)
     }
 
     /// Ad-hoc 1→1 morph with no signal/second entity involved (M13.8 parity
@@ -518,12 +559,14 @@ impl ProteusApp {
             .map_err(|e| JsValue::from_str(&format!("invalid QuadState: {e}")))?;
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
-        handle.0.animate_to(
-            &mut self.0.borrow_mut(),
-            (&to_dto).into(),
-            (&config_dto).into(),
-        );
-        Ok(())
+        handle
+            .0
+            .animate_to(
+                &mut self.0.borrow_mut(),
+                (&to_dto).into(),
+                (&config_dto).into(),
+            )
+            .map_err(handle_err)
     }
 
     /// `undefined` before this component's `Text` has finished baking, or if
@@ -560,10 +603,15 @@ impl ProteusApp {
     /// (M13.8 parity audit) — `false` (no-op) if `source` has no baked image
     /// yet. See `proteus-sdk`'s `Handle::copy_baked_image_from` doc.
     #[wasm_bindgen(js_name = copyBakedImageFrom)]
-    pub fn copy_baked_image_from(&mut self, handle: &Handle, source: &Handle) -> bool {
+    pub fn copy_baked_image_from(
+        &mut self,
+        handle: &Handle,
+        source: &Handle,
+    ) -> Result<bool, JsValue> {
         handle
             .0
             .copy_baked_image_from(&mut self.0.borrow_mut(), source.0)
+            .map_err(handle_err)
     }
 
     /// Crops `handle`'s current baked image to a centered square, in place
@@ -572,17 +620,21 @@ impl ProteusApp {
     /// motivating case is exactly a photo grid tile fed from images of
     /// varying aspect ratios.
     #[wasm_bindgen(js_name = centerCropToSquare)]
-    pub fn center_crop_to_square(&mut self, handle: &Handle) -> bool {
-        handle.0.center_crop_to_square(&mut self.0.borrow_mut())
+    pub fn center_crop_to_square(&mut self, handle: &Handle) -> Result<bool, JsValue> {
+        handle
+            .0
+            .center_crop_to_square(&mut self.0.borrow_mut())
+            .map_err(handle_err)
     }
 
     /// Toggles `handle`'s click/hover eligibility at runtime (M13.8 parity
     /// audit) — see `proteus-sdk`'s `Handle::set_interactive` doc.
     #[wasm_bindgen(js_name = setInteractive)]
-    pub fn set_interactive(&mut self, handle: &Handle, interactive: bool) {
+    pub fn set_interactive(&mut self, handle: &Handle, interactive: bool) -> Result<(), JsValue> {
         handle
             .0
-            .set_interactive(&mut self.0.borrow_mut(), interactive);
+            .set_interactive(&mut self.0.borrow_mut(), interactive)
+            .map_err(handle_err)
     }
 
     /// Shows an already-registered texture on `handle`, replacing whatever
@@ -590,8 +642,15 @@ impl ProteusApp {
     /// `false` (no-op) if `texture` is evicted/unknown. See `proteus-sdk`'s
     /// `Handle::set_texture` doc.
     #[wasm_bindgen(js_name = setTexture)]
-    pub fn set_texture(&mut self, handle: &Handle, texture: &TextureHandle) -> bool {
-        handle.0.set_texture(&mut self.0.borrow_mut(), texture.0)
+    pub fn set_texture(
+        &mut self,
+        handle: &Handle,
+        texture: &TextureHandle,
+    ) -> Result<bool, JsValue> {
+        handle
+            .0
+            .set_texture(&mut self.0.borrow_mut(), texture.0)
+            .map_err(handle_err)
     }
 }
 

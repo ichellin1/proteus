@@ -2207,6 +2207,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
+ "log",
  "pollster",
  "proteus-render",
  "proteus-ui",

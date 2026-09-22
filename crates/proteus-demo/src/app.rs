@@ -243,7 +243,7 @@ impl App for DemoApp {
                 update.rgba,
                 TextureRequest::default(),
             );
-            update.handle.set_texture(f.proteus, texture);
+            let _ = update.handle.set_texture(f.proteus, texture);
         }
         self.advance_gallery(&mut demo, f);
         self.advance_video(&mut demo, f);

@@ -85,7 +85,7 @@ pub fn spawn(app: &mut Proteus) -> ExamplesHome {
             // `ComponentSpec::non_interactive`'s doc.
             .non_interactive(),
         );
-        button.add_child(app, label);
+        let _ = button.add_child(app, label);
         buttons.push(button);
         labels.push(label);
     }

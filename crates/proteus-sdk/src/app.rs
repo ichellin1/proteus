@@ -106,7 +106,20 @@ impl Proteus {
         }
 
         for child in spec.children {
-            self.world.world.entity_mut(child.0).insert(ChildOf(entity));
+            // A dead handle in `children` skips that child rather than
+            // panicking the whole `component()` call — same contract as
+            // `Handle::add_child`, which this is the declarative form of.
+            // (Every other `entity_mut` in this function targets `entity`,
+            // which was spawned three lines up and is always alive.)
+            match self.world.world.get_entity_mut(child.0) {
+                Ok(mut child_entity) => {
+                    child_entity.insert(ChildOf(entity));
+                }
+                Err(_) => log::warn!(
+                    "Proteus::component: child entity {:?} is no longer alive — not attached",
+                    child.0
+                ),
+            }
         }
 
         Handle(entity)

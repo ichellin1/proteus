@@ -43,6 +43,6 @@ pub fn spawn(app: &mut Proteus, size: Vec2) -> Background {
     let light = app.component(ComponentSpec::new(quad(Vec4::ONE)).non_interactive());
     let dark =
         app.component(ComponentSpec::new(quad(Vec4::new(1.0, 1.0, 1.0, 0.0))).non_interactive());
-    light.add_child(app, dark);
+    let _ = light.add_child(app, dark);
     Background { light, dark }
 }

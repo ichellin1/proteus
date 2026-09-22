@@ -77,7 +77,7 @@ fn spawn_overlay(app: &mut Proteus, parent: Handle) -> Handle {
         // Display-only — the base icon is the click/hover target.
         .non_interactive(),
     );
-    parent.add_child(app, overlay);
+    let _ = parent.add_child(app, overlay);
     overlay
 }
 

@@ -111,7 +111,7 @@ pub fn spawn(app: &mut Proteus) -> Splash {
         // whatever's underneath it.
         .non_interactive(),
     );
-    button.add_child(app, wordmark);
+    let _ = button.add_child(app, wordmark);
 
     Splash { button, wordmark }
 }
