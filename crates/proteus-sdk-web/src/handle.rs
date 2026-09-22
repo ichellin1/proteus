@@ -35,7 +35,9 @@ impl Handle {
     /// Reconstruct a `Handle` from an id previously obtained from
     /// [`Handle::id`] or a `ComponentData.children` entry. Does not check
     /// the entity is still alive — exactly like holding onto any other stale
-    /// `Handle` (methods become no-ops, `get()` returns `undefined`).
+    /// `Handle`: mutating methods **throw**, and `get()` returns `undefined`.
+    /// Neither panics (before this was fixed, they panicked, which on wasm
+    /// takes the whole module down — see `proteus_sdk::HandleError`).
     #[wasm_bindgen(js_name = fromId)]
     pub fn from_id(id: f64) -> Handle {
         let entity = bevy_ecs::prelude::Entity::from_bits(id as u64);

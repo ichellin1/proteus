@@ -292,7 +292,7 @@ pub fn spawn(app: &mut Proteus) -> VideoTiles {
     // `proteus-shell-native`'s own spawn order.
     let tile_overlays = std::array::from_fn(|idx| {
         let overlay = app.component(ComponentSpec::new(tile_overlay_quad()).non_interactive());
-        tiles[idx].add_child(app, overlay);
+        let _ = tiles[idx].add_child(app, overlay);
         overlay
     });
     let tile_labels = std::array::from_fn(|idx| {
@@ -313,7 +313,7 @@ pub fn spawn(app: &mut Proteus) -> VideoTiles {
             )
             .non_interactive(),
         );
-        tiles[idx].add_child(app, label);
+        let _ = tiles[idx].add_child(app, label);
         label
     });
 

@@ -54,7 +54,7 @@ pub fn spawn(app: &mut Proteus) -> Loading {
         })
         .non_interactive(),
     );
-    logo.add_child(app, logo_dark);
+    let _ = logo.add_child(app, logo_dark);
 
     let error_text = app.component(
         ComponentSpec::new(QuadState {

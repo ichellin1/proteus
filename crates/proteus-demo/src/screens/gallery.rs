@@ -160,7 +160,7 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
         )
         .non_interactive(),
     );
-    fetch_button.add_child(app, fetch_button_label);
+    let _ = fetch_button.add_child(app, fetch_button_label);
 
     let enlarged = app.component(
         ComponentSpec::new(QuadState {

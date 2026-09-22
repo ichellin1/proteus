@@ -84,7 +84,7 @@ pub fn spawn(app: &mut Proteus) -> Home {
             // the label text itself rather than the surrounding padding.
             .non_interactive(),
         );
-        button.add_child(app, text);
+        let _ = button.add_child(app, text);
 
         nav_buttons.push(button);
         nav_labels.push(text);

@@ -39,6 +39,25 @@ type DroppedCallback = (dropped: TransitionDropped) => void;
 // Handle
 // ---------------------------------------------------------------------------
 
+/**
+ * A handle to one component.
+ *
+ * ## Using a handle after its component is destroyed
+ *
+ * Every mutating method below **throws** if this handle's component is no
+ * longer alive — destroyed directly, despawned as a descendant of a destroyed
+ * parent, or reconstructed via {@link ProteusApp.handleFromId} from a stale
+ * id. Read-only accessors don't throw: {@link Handle.get} returns `undefined`,
+ * and {@link Handle.bakedTextSize}/{@link Handle.bakedImageSize} do too.
+ *
+ * These used to *panic* the wasm module instead, which freezes the canvas with
+ * no recovery short of a page reload. A throw is catchable and tells you which
+ * call went wrong; the Rust side logs a warning alongside it.
+ *
+ * A method returning `boolean` uses it for "there was nothing to do" — an image
+ * that hasn't finished baking, a texture that's been evicted — which is a
+ * routine state, not an error, and never throws.
+ */
 export class Handle {
   /**
    * Prefer {@link ProteusApp.component} or {@link ProteusApp.handleFromId}
@@ -138,6 +157,13 @@ export class Handle {
     );
   }
 
+  /**
+   * Destroys this component and (via `bevy_ecs`'s `ChildOf`/`Children`
+   * relationship) every descendant.
+   *
+   * @throws if this handle's component was already destroyed. Harmless to
+   * ignore, but reported so a double-destroy doesn't pass for a successful one.
+   */
   destroy(): void {
     this.app.wasmApp.destroy(this.wasmHandle);
   }
@@ -354,6 +380,10 @@ export class ProteusApp {
   /**
    * Reconstruct a {@link Handle} from an id obtained from
    * {@link Handle.id} or a {@link ComponentData.children} entry.
+   *
+   * The id isn't checked against the live world here — if it names a component
+   * that has since been destroyed, the returned handle behaves like any other
+   * stale one: mutating methods throw, {@link Handle.get} returns `undefined`.
    */
   handleFromId(id: number): Handle {
     return new Handle(this, WasmHandle.fromId(id));

@@ -11,6 +11,7 @@
 
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::Entity;
+use bevy_ecs::world::EntityWorldMut;
 use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
@@ -23,6 +24,121 @@ use proteus_ui::{
 use crate::app::DeclaredGeometry;
 use crate::callback::EventKind;
 use crate::Proteus;
+
+// ---------------------------------------------------------------------------
+// HandleError
+// ---------------------------------------------------------------------------
+
+/// Why a [`Handle`] operation could not be applied.
+///
+/// Every fallible `Handle` method returns `Result<_, HandleError>` **and** logs
+/// the failure at `warn!` before returning it. Both, deliberately: the `Result`
+/// lets a caller that cares branch on the outcome, and the log means a caller
+/// that deliberately ignores it (`let _ = …`, common in app code that knows its
+/// handles are alive) still leaves something in the log rather than failing
+/// silently. `bevy_ecs`'s own `World::despawn` uses exactly this shape — `bool`
+/// plus an internal `warn!` — for the same situation.
+///
+/// These were previously **panics**: every mutating method reached
+/// `World::entity_mut`, which panics on a despawned entity, while three separate
+/// doc comments (here, in `proteus-sdk-web`, and in the TS `handleFromId`
+/// JSDoc) promised that a stale handle would quietly no-op. On the wasm target a
+/// panic aborts the module and the canvas freezes with no recovery, so this was
+/// a page-killer one `destroy()`-then-touch race away.
+///
+/// **Not an error:** "there was nothing to do." A method that finds no baked
+/// image to copy or crop reports that through its `Ok` value, not through this
+/// enum — that's a routine, expected state (the image simply hasn't finished
+/// baking yet), whereas everything below means the caller is working from a
+/// handle that no longer refers to anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleError {
+    /// This handle's own entity is no longer alive — destroyed via
+    /// [`Handle::destroy`]/[`Handle::remove_child`], despawned as a descendant
+    /// of a destroyed parent, or reconstructed from a stale id.
+    EntityNotFound,
+    /// The *other* entity an operation needs is gone: the `child` of
+    /// [`Handle::add_child`]/[`Handle::remove_child`], the `source` of
+    /// [`Handle::copy_baked_image_from`], or a `targets`/`sources` entry of a
+    /// group transition. `self` is alive; the operation still couldn't run.
+    OtherEntityNotFound,
+}
+
+impl std::fmt::Display for HandleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EntityNotFound => f.write_str("handle refers to a dead entity"),
+            Self::OtherEntityNotFound => {
+                f.write_str("a handle passed to this call refers to a dead entity")
+            }
+        }
+    }
+}
+
+impl std::error::Error for HandleError {}
+
+/// `world.entity_mut(entity)` without the panic: logs which call site hit a
+/// dead entity and returns [`HandleError::EntityNotFound`].
+///
+/// `op` is the `Handle` method name, so the log says what was being attempted
+/// rather than just naming an entity id.
+fn entity_mut<'a>(
+    app: &'a mut Proteus,
+    entity: Entity,
+    op: &str,
+) -> Result<EntityWorldMut<'a>, HandleError> {
+    app.world.world.get_entity_mut(entity).map_err(|_| {
+        log::warn!("Handle::{op}: entity {entity:?} is no longer alive — call ignored");
+        HandleError::EntityNotFound
+    })
+}
+
+/// [`entity_mut`] for an entity that isn't `self` — same thing, but reports
+/// [`HandleError::OtherEntityNotFound`] so a caller can tell "my handle died"
+/// from "the handle I was handed died".
+fn other_entity_mut<'a>(
+    app: &'a mut Proteus,
+    entity: Entity,
+    op: &str,
+    role: &str,
+) -> Result<EntityWorldMut<'a>, HandleError> {
+    app.world.world.get_entity_mut(entity).map_err(|_| {
+        log::warn!("Handle::{op}: {role} entity {entity:?} is no longer alive — call ignored");
+        HandleError::OtherEntityNotFound
+    })
+}
+
+/// Returns `Err` if `entity` is not alive, without borrowing it — for methods
+/// that need the liveness check but then go on to touch the world through some
+/// other path.
+fn check_alive(app: &Proteus, entity: Entity, op: &str) -> Result<(), HandleError> {
+    if app.world.world.entities().contains(entity) {
+        Ok(())
+    } else {
+        log::warn!("Handle::{op}: entity {entity:?} is no longer alive — call ignored");
+        Err(HandleError::EntityNotFound)
+    }
+}
+
+/// [`check_alive`] across a group-transition's whole target/source list, up
+/// front: a group transition is all-or-nothing, so one dead participant fails
+/// the call rather than silently running a split/merge with a hole in it (the
+/// setup systems would hide the live siblings and then wait forever on a
+/// virtual that can never complete).
+fn check_all_alive(
+    app: &Proteus,
+    entities: impl Iterator<Item = Entity>,
+    op: &str,
+    role: &str,
+) -> Result<(), HandleError> {
+    for entity in entities {
+        if !app.world.world.entities().contains(entity) {
+            log::warn!("Handle::{op}: {role} entity {entity:?} is no longer alive — call ignored");
+            return Err(HandleError::OtherEntityNotFound);
+        }
+    }
+    Ok(())
+}
 
 /// Resolve `entity`'s declared rest geometry — the `DeclaredGeometry`
 /// `component()` captured at creation time if present, else its current
@@ -55,7 +171,9 @@ impl Handle {
     /// need to turn it back into a real `Handle` to call `add_child`/etc. on.
     /// Does not check that `entity` is actually alive; passing a stale or
     /// foreign entity behaves exactly like passing a stale `Handle` obtained
-    /// any other way (methods no-op or `Proteus::get` returns `None`).
+    /// any other way — mutating methods log a warning and return
+    /// [`HandleError::EntityNotFound`], and `Proteus::get` returns `None`.
+    /// Neither panics.
     pub fn from_entity(entity: Entity) -> Self {
         Self(entity)
     }
@@ -84,11 +202,14 @@ impl Handle {
     /// whenever a component's real resting layout can only be computed
     /// *after* spawn — e.g. a grid cell sized from its label's actual baked
     /// width, only known once baking completes.
-    pub fn set_declared_geometry(&self, app: &mut Proteus, state: QuadState) {
-        app.world
-            .world
-            .entity_mut(self.0)
+    pub fn set_declared_geometry(
+        &self,
+        app: &mut Proteus,
+        state: QuadState,
+    ) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "set_declared_geometry")?
             .insert((state.clone(), DeclaredGeometry(state)));
+        Ok(())
     }
 
     /// Animates this component to `to` over `config`, starting from its
@@ -100,15 +221,18 @@ impl Handle {
     /// entity's declared geometry to resolve against. Check
     /// [`crate::Proteus::get`]'s `transition` field (`None` means idle) to
     /// know when it's safe to call again.
-    pub fn animate_to(&self, app: &mut Proteus, to: QuadState, config: TransitionConfig) {
-        app.world
-            .world
-            .entity_mut(self.0)
-            .insert(TransitionRequest {
-                to,
-                config,
-                from_state: None,
-            });
+    pub fn animate_to(
+        &self,
+        app: &mut Proteus,
+        to: QuadState,
+        config: TransitionConfig,
+    ) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "animate_to")?.insert(TransitionRequest {
+            to,
+            config,
+            from_state: None,
+        });
+        Ok(())
     }
 
     /// Marks this component as showing the live video feed — the render
@@ -122,21 +246,19 @@ impl Handle {
     /// `1.0` here shows the video immediately, with no crossfade; a caller
     /// wanting a gradual reveal can animate `video_t` down from there
     /// itself via the `world_mut()` escape hatch.
-    pub fn start_video(&self, app: &mut Proteus) {
-        app.world
-            .world
-            .entity_mut(self.0)
+    pub fn start_video(&self, app: &mut Proteus) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "start_video")?
             .insert((VideoPlayer, VideoCrossfade { video_t: 1.0 }));
+        Ok(())
     }
 
     /// Reverses [`Handle::start_video`] — back to showing whatever
     /// `BakedImage`/solid color this component had before.
-    pub fn stop_video(&self, app: &mut Proteus) {
-        app.world
-            .world
-            .entity_mut(self.0)
+    pub fn stop_video(&self, app: &mut Proteus) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "stop_video")?
             .remove::<VideoPlayer>()
             .remove::<VideoCrossfade>();
+        Ok(())
     }
 
     /// Updates `video_t` on a component already showing live video — a
@@ -148,9 +270,21 @@ impl Handle {
     /// component's own [`crate::Proteus::get`]`(..).transition.progress`,
     /// if the reveal is meant to track a geometry morph already running on
     /// it) — see `start_video`'s own doc.
-    pub fn set_video_crossfade(&self, app: &mut Proteus, video_t: f32) {
-        if let Some(mut crossfade) = app.world.world.get_mut::<VideoCrossfade>(self.0) {
-            crossfade.video_t = video_t;
+    /// `Ok(false)` means the component is alive but isn't showing video (never
+    /// [`Handle::start_video`]-ed, or already stopped) — routine, since callers
+    /// ramp this every frame without tracking playback state themselves.
+    pub fn set_video_crossfade(
+        &self,
+        app: &mut Proteus,
+        video_t: f32,
+    ) -> Result<bool, HandleError> {
+        check_alive(app, self.0, "set_video_crossfade")?;
+        match app.world.world.get_mut::<VideoCrossfade>(self.0) {
+            Some(mut crossfade) => {
+                crossfade.video_t = video_t;
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
@@ -196,17 +330,31 @@ impl Handle {
     /// touches a target's own `BakedImage` (see [`Handle::split_to`]'s
     /// doc), so without a call like this the coordinator would be revealed
     /// showing nothing at all.
-    pub fn copy_baked_image_from(&self, app: &mut Proteus, source: Handle) -> bool {
+    pub fn copy_baked_image_from(
+        &self,
+        app: &mut Proteus,
+        source: Handle,
+    ) -> Result<bool, HandleError> {
+        check_alive(app, self.0, "copy_baked_image_from")?;
+        if !app.world.world.entities().contains(source.0) {
+            log::warn!(
+                "Handle::copy_baked_image_from: source entity {:?} is no longer alive — call ignored",
+                source.0
+            );
+            return Err(HandleError::OtherEntityNotFound);
+        }
+        // Distinct from the two errors above: the source is alive and simply
+        // has nothing baked yet. Routine — callers poll on exactly this.
         let Some(baked) = app.world.world.get::<BakedImage>(source.0).cloned() else {
-            return false;
+            return Ok(false);
         };
         let texture_ref = app.world.world.get::<TextureRef>(source.0).copied();
-        let mut entity = app.world.world.entity_mut(self.0);
+        let mut entity = entity_mut(app, self.0, "copy_baked_image_from")?;
         entity.insert(baked);
         if let Some(texture_ref) = texture_ref {
             entity.insert(texture_ref);
         }
-        true
+        Ok(true)
     }
 
     /// Crops this component's current `BakedImage` to a centered square, in
@@ -227,9 +375,11 @@ impl Handle {
     /// the uncropped frame is needed again later (e.g. an enlarged-view
     /// coordinator) — this call is destructive to `self`'s own crop state,
     /// though the underlying atlas pixels are untouched.
-    pub fn center_crop_to_square(&self, app: &mut Proteus) -> bool {
+    pub fn center_crop_to_square(&self, app: &mut Proteus) -> Result<bool, HandleError> {
+        check_alive(app, self.0, "center_crop_to_square")?;
+        // Alive but nothing baked yet — routine, not an error.
         let Some(baked) = app.world.world.get::<BakedImage>(self.0).cloned() else {
-            return false;
+            return Ok(false);
         };
         let (pw, ph) = (baked.pixel_size[0], baked.pixel_size[1]);
         let mut uv_offset = baked.uv_offset;
@@ -243,13 +393,13 @@ impl Handle {
             uv_offset[1] += uv_scale[1] * (1.0 - frac) / 2.0;
             uv_scale[1] *= frac;
         }
-        app.world.world.entity_mut(self.0).insert(BakedImage {
+        entity_mut(app, self.0, "center_crop_to_square")?.insert(BakedImage {
             uv_offset,
             uv_scale,
             page: baked.page,
             pixel_size: baked.pixel_size,
         });
-        true
+        Ok(true)
     }
 
     /// Marks this component interactive (the default at spawn, unless
@@ -261,12 +411,14 @@ impl Handle {
     /// where only one of two entities should ever be clickable/hoverable
     /// at a time (e.g. a light/dark theme switch: only the icon that
     /// *doesn't* match the current theme should be interactive).
-    pub fn set_interactive(&self, app: &mut Proteus, interactive: bool) {
+    pub fn set_interactive(&self, app: &mut Proteus, interactive: bool) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_interactive")?;
         if interactive {
-            app.world.world.entity_mut(self.0).insert(Interactable);
+            entity.insert(Interactable);
         } else {
-            app.world.world.entity_mut(self.0).remove::<Interactable>();
+            entity.remove::<Interactable>();
         }
+        Ok(())
     }
 
     fn on(&self, app: &mut Proteus, kind: EventKind, cb: impl FnMut(&mut Proteus) + 'static) {
@@ -322,7 +474,9 @@ impl Handle {
         targets: &[Handle],
         config: TransitionConfig,
         strategy: SplitStrategy,
-    ) {
+    ) -> Result<(), HandleError> {
+        check_alive(app, self.0, "split_to")?;
+        check_all_alive(app, targets.iter().map(|h| h.0), "split_to", "target")?;
         let group_targets = targets
             .iter()
             .map(|h| GroupTarget {
@@ -330,12 +484,13 @@ impl Handle {
                 state: declared_geometry(app, h.0),
             })
             .collect();
-        app.world.world.entity_mut(self.0).insert(OneToNRequest {
+        entity_mut(app, self.0, "split_to")?.insert(OneToNRequest {
             targets: group_targets,
             default_config: config,
             child_behavior: None,
             strategy,
         });
+        Ok(())
     }
 
     /// [`Handle::split_to`], but with each target's state given explicitly
@@ -357,7 +512,14 @@ impl Handle {
         targets: &[(Handle, QuadState)],
         config: TransitionConfig,
         strategy: SplitStrategy,
-    ) {
+    ) -> Result<(), HandleError> {
+        check_alive(app, self.0, "split_to_with_states")?;
+        check_all_alive(
+            app,
+            targets.iter().map(|(h, _)| h.0),
+            "split_to_with_states",
+            "target",
+        )?;
         let group_targets = targets
             .iter()
             .map(|(h, state)| GroupTarget {
@@ -365,12 +527,13 @@ impl Handle {
                 state: state.clone(),
             })
             .collect();
-        app.world.world.entity_mut(self.0).insert(OneToNRequest {
+        entity_mut(app, self.0, "split_to_with_states")?.insert(OneToNRequest {
             targets: group_targets,
             default_config: config,
             child_behavior: None,
             strategy,
         });
+        Ok(())
     }
 
     /// Merge `sources` into this component — an N→1 group transition
@@ -384,7 +547,9 @@ impl Handle {
         sources: &[Handle],
         config: TransitionConfig,
         layout: MergeLayout,
-    ) {
+    ) -> Result<(), HandleError> {
+        check_alive(app, self.0, "merge_from")?;
+        check_all_alive(app, sources.iter().map(|h| h.0), "merge_from", "source")?;
         let group_sources = sources
             .iter()
             .map(|h| GroupSource {
@@ -392,35 +557,71 @@ impl Handle {
                 state: declared_geometry(app, h.0),
             })
             .collect();
-        app.world.world.entity_mut(self.0).insert(NToOneRequest {
+        entity_mut(app, self.0, "merge_from")?.insert(NToOneRequest {
             sources: group_sources,
             default_config: config,
             child_behavior: None,
             layout,
         });
+        Ok(())
     }
 
     /// Parent `child` to this component — `child`'s `QuadState` becomes
     /// relative to this component's own (M10).
-    pub fn add_child(&self, app: &mut Proteus, child: Handle) {
-        app.world.world.entity_mut(child.0).insert(ChildOf(self.0));
+    pub fn add_child(&self, app: &mut Proteus, child: Handle) -> Result<(), HandleError> {
+        check_alive(app, self.0, "add_child")?;
+        other_entity_mut(app, child.0, "add_child", "child")?.insert(ChildOf(self.0));
+        Ok(())
     }
 
     /// Detach `child` from this component. `destroy: false` leaves `child`
     /// alive as its own root entity; `destroy: true` despawns it.
-    pub fn remove_child(&self, app: &mut Proteus, child: Handle, destroy: bool) {
+    pub fn remove_child(
+        &self,
+        app: &mut Proteus,
+        child: Handle,
+        destroy: bool,
+    ) -> Result<(), HandleError> {
+        // Checked even though nothing below touches `self`: detaching a child
+        // from a parent that no longer exists is a caller mistake either way,
+        // and `add_child` reports it — an API where one of a symmetric pair
+        // validates the receiver and the other doesn't is just a trap.
+        check_alive(app, self.0, "remove_child")?;
         if destroy {
-            app.world.world.despawn(child.0);
-        } else {
-            app.world.world.entity_mut(child.0).remove::<ChildOf>();
+            // `World::despawn` is already non-panicking (returns `bool` and
+            // warns internally on a missing entity), so this path only needs
+            // its result mapped into ours.
+            return if app.world.world.despawn(child.0) {
+                Ok(())
+            } else {
+                log::warn!(
+                    "Handle::remove_child: child entity {:?} is no longer alive — call ignored",
+                    child.0
+                );
+                Err(HandleError::OtherEntityNotFound)
+            };
         }
+        other_entity_mut(app, child.0, "remove_child", "child")?.remove::<ChildOf>();
+        Ok(())
     }
 
     /// Remove this component from the ECS entirely. `bevy_ecs`'s
     /// `ChildOf`/`Children` relationship cascades the despawn to every
     /// descendant automatically.
-    pub fn destroy(self, app: &mut Proteus) {
-        app.world.world.despawn(self.0);
+    /// Returns [`HandleError::EntityNotFound`] if it was already destroyed —
+    /// harmless to ignore, but reported so a double-destroy shows up rather
+    /// than passing for a successful one.
+    pub fn destroy(self, app: &mut Proteus) -> Result<(), HandleError> {
+        // Already non-panicking — see `remove_child`'s note on `World::despawn`.
+        if app.world.world.despawn(self.0) {
+            Ok(())
+        } else {
+            log::warn!(
+                "Handle::destroy: entity {:?} was already destroyed — call ignored",
+                self.0
+            );
+            Err(HandleError::EntityNotFound)
+        }
     }
 
     /// Release the GPU resources this component references (baked text,
@@ -429,14 +630,13 @@ impl Handle {
     /// the shared `TextureRegistry` automatically — this is the correct way
     /// to free a texture a component owns; see [`TextureHandle`]'s doc for
     /// why it has no `.free()` of its own.
-    pub fn free_resources(&self, app: &mut Proteus) {
-        app.world
-            .world
-            .entity_mut(self.0)
+    pub fn free_resources(&self, app: &mut Proteus) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "free_resources")?
             .remove::<TextureRef>()
             .remove::<BakedImage>()
             .remove::<BakedText>()
             .remove::<BakedComposite>();
+        Ok(())
     }
 
     /// Show an already-registered texture on this component (replacing
@@ -452,21 +652,29 @@ impl Handle {
     /// Returns `false` (no-op) if no `QuadPipeline` resource is installed
     /// yet, or `texture` is evicted/unknown — same "degrade gracefully"
     /// convention as the rest of this crate's texture handling.
-    pub fn set_texture(&self, app: &mut Proteus, texture: TextureHandle) -> bool {
+    pub fn set_texture(
+        &self,
+        app: &mut Proteus,
+        texture: TextureHandle,
+    ) -> Result<bool, HandleError> {
+        check_alive(app, self.0, "set_texture")?;
+        // Everything below is "nothing to show", not "you used a dead handle":
+        // no GPU pipeline installed (headless), or the texture was evicted.
+        // Routine degradation, reported through `Ok(false)`.
         let Some(pipeline) = app
             .world
             .world
             .get_resource::<proteus_render::QuadPipeline>()
         else {
-            return false;
+            return Ok(false);
         };
         let Some(uv) = pipeline.texture_registry.main_atlas_uv(texture.0) else {
-            return false;
+            return Ok(false);
         };
         let Some((_, width, height)) = pipeline.texture_registry.info(texture.0) else {
-            return false;
+            return Ok(false);
         };
-        app.world.world.entity_mut(self.0).insert((
+        entity_mut(app, self.0, "set_texture")?.insert((
             BakedImage {
                 uv_offset: uv.uv_offset,
                 uv_scale: uv.uv_scale,
@@ -475,7 +683,7 @@ impl Handle {
             },
             TextureRef(texture.0),
         ));
-        true
+        Ok(true)
     }
 }
 

@@ -5,7 +5,9 @@
 
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_sdk::{ComponentSpec, Proteus, QuadState, StyleOverride, TransitionConfig};
+use proteus_sdk::{
+    ComponentSpec, HandleError, Proteus, QuadState, StyleOverride, TransitionConfig,
+};
 
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
@@ -54,7 +56,7 @@ fn get_returns_none_after_destroy() {
     let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     assert!(app.get(handle).is_some());
 
-    handle.destroy(&mut app);
+    let _ = handle.destroy(&mut app);
     assert!(app.get(handle).is_none());
 }
 
@@ -64,7 +66,7 @@ fn remove_child_without_destroy_leaves_it_alive_as_a_root() {
     let item = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let list = app.component(ComponentSpec::new(quad_at(200.0, 0.0)).child(item));
 
-    list.remove_child(&mut app, item, false);
+    let _ = list.remove_child(&mut app, item, false);
 
     assert_eq!(app.get(list).unwrap().children.len(), 0);
     assert!(app.get(item).is_some(), "detached child must still exist");
@@ -76,7 +78,7 @@ fn remove_child_with_destroy_despawns_it() {
     let item = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let list = app.component(ComponentSpec::new(quad_at(200.0, 0.0)).child(item));
 
-    list.remove_child(&mut app, item, true);
+    let _ = list.remove_child(&mut app, item, true);
 
     assert!(app.get(item).is_none());
 }
@@ -479,7 +481,7 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
         .main_atlas_region(texture_id)
         .is_some());
 
-    handle.free_resources(&mut app);
+    let _ = handle.free_resources(&mut app);
 
     assert!(
         app.world().get::<BakedComposite>(handle.id()).is_none(),
@@ -519,7 +521,7 @@ fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destina
     let dest = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
 
     assert!(
-        !dest.copy_baked_image_from(&mut app, source),
+        !dest.copy_baked_image_from(&mut app, source).unwrap(),
         "no-op (false) while source has no BakedImage yet"
     );
     assert!(app.world().get::<BakedImage>(dest.id()).is_none());
@@ -534,7 +536,7 @@ fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destina
         .entity_mut(source.id())
         .insert((baked.clone(), TextureRef(TextureId::default())));
 
-    assert!(dest.copy_baked_image_from(&mut app, source));
+    assert!(dest.copy_baked_image_from(&mut app, source).unwrap());
     assert_eq!(app.world().get::<BakedImage>(dest.id()), Some(&baked));
     assert_eq!(
         app.world().get::<TextureRef>(dest.id()),
@@ -556,7 +558,7 @@ fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_
     let entity = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
 
     assert!(
-        !entity.center_crop_to_square(&mut app),
+        !entity.center_crop_to_square(&mut app).unwrap(),
         "no-op (false) with no BakedImage yet"
     );
 
@@ -567,7 +569,7 @@ fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_
         page: 2,
         pixel_size: [200.0, 100.0],
     });
-    assert!(entity.center_crop_to_square(&mut app));
+    assert!(entity.center_crop_to_square(&mut app).unwrap());
     let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
     assert_eq!(cropped.uv_scale, [0.5, 1.0]);
     assert_eq!(cropped.uv_offset, [0.25, 0.0]);
@@ -585,7 +587,7 @@ fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_
         page: 0,
         pixel_size: [100.0, 200.0],
     });
-    entity.center_crop_to_square(&mut app);
+    let _ = entity.center_crop_to_square(&mut app);
     let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
     assert_eq!(cropped.uv_scale, [1.0, 0.5]);
     assert_eq!(cropped.uv_offset, [0.0, 0.25]);
@@ -597,7 +599,7 @@ fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_
         page: 0,
         pixel_size: [100.0, 100.0],
     });
-    entity.center_crop_to_square(&mut app);
+    let _ = entity.center_crop_to_square(&mut app);
     let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
     assert_eq!(cropped.uv_scale, [0.5, 0.5]);
     assert_eq!(cropped.uv_offset, [0.1, 0.2]);
@@ -625,7 +627,7 @@ fn set_interactive_toggles_whether_clicks_land() {
     );
 
     fired.set(false);
-    button.set_interactive(&mut app, false);
+    let _ = button.set_interactive(&mut app, false);
     app.pointer_moved(None);
     app.tick(1.0);
     app.pointer_moved(Some(Vec2::new(0.0, 0.0)));
@@ -636,7 +638,7 @@ fn set_interactive_toggles_whether_clicks_land() {
         "set_interactive(false) must make the entity un-clickable"
     );
 
-    button.set_interactive(&mut app, true);
+    let _ = button.set_interactive(&mut app, true);
     app.pointer_moved(None);
     app.tick(1.0);
     app.pointer_moved(Some(Vec2::new(0.0, 0.0)));
@@ -665,7 +667,7 @@ fn split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry() {
         ..quad_at(400.0, 0.0)
     }));
 
-    source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
+    let _ = source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
     app.tick(1.0);
 
     let source_data = app.get(source).unwrap();
@@ -696,7 +698,7 @@ fn merge_from_hides_sources_and_settles_destination_to_its_declared_geometry() {
     };
     let dest = app.component(ComponentSpec::new(dest_geometry.clone()));
 
-    dest.merge_from(
+    let _ = dest.merge_from(
         &mut app,
         &[source1, source2],
         cfg(0.1),
@@ -735,9 +737,9 @@ fn set_declared_geometry_updates_what_a_later_split_to_settles_targets_to() {
         color: Vec4::new(0.0, 1.0, 1.0, 1.0),
         ..quad_at(300.0, 0.0)
     };
-    target.set_declared_geometry(&mut app, real_geometry.clone());
+    let _ = target.set_declared_geometry(&mut app, real_geometry.clone());
 
-    source.split_to(&mut app, &[target], cfg(0.1), SplitStrategy::Bake);
+    let _ = source.split_to(&mut app, &[target], cfg(0.1), SplitStrategy::Bake);
     app.tick(1.0);
 
     let target_data = app.get(target).unwrap();
@@ -760,7 +762,7 @@ fn split_to_with_states_uses_the_given_state_not_declared_geometry() {
         ..quad_at(300.0, 0.0)
     };
 
-    source.split_to_with_states(
+    let _ = source.split_to_with_states(
         &mut app,
         &[(target, explicit_state.clone())],
         cfg(0.1),
@@ -803,7 +805,7 @@ fn split_to_with_states_is_safe_when_the_source_is_also_one_of_the_targets() {
     };
 
     let before = app.get(source).unwrap().geometry;
-    source.split_to_with_states(
+    let _ = source.split_to_with_states(
         &mut app,
         &[
             (source, own_slot_state.clone()),
@@ -837,7 +839,7 @@ fn animate_to_morphs_a_single_entity_with_no_second_entity_involved() {
         ..quad_at(400.0, 0.0)
     };
 
-    particle.animate_to(&mut app, target.clone(), cfg(0.1));
+    let _ = particle.animate_to(&mut app, target.clone(), cfg(0.1));
     app.tick(1.0);
 
     let data = app.get(particle).unwrap();
@@ -854,7 +856,7 @@ fn animate_to_can_retarget_the_same_entity_once_its_prior_transition_settles() {
     let mut app = Proteus::new();
     let particle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
 
-    particle.animate_to(&mut app, quad_at(100.0, 0.0), cfg(0.1));
+    let _ = particle.animate_to(&mut app, quad_at(100.0, 0.0), cfg(0.1));
     app.tick(1.0);
     assert!(app.get(particle).unwrap().transition.is_none());
 
@@ -862,7 +864,7 @@ fn animate_to_can_retarget_the_same_entity_once_its_prior_transition_settles() {
         color: Vec4::new(1.0, 1.0, 0.0, 1.0),
         ..quad_at(200.0, 0.0)
     };
-    particle.animate_to(&mut app, second_target.clone(), cfg(0.1));
+    let _ = particle.animate_to(&mut app, second_target.clone(), cfg(0.1));
     app.tick(1.0);
 
     let data = app.get(particle).unwrap();
@@ -881,7 +883,7 @@ fn start_video_defaults_to_full_video_no_crossfade() {
     let mut app = Proteus::new();
     let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
 
-    tile.start_video(&mut app);
+    let _ = tile.start_video(&mut app);
 
     let video_t = app
         .world()
@@ -900,9 +902,9 @@ fn set_video_crossfade_updates_video_t_while_playing() {
 
     let mut app = Proteus::new();
     let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
-    tile.start_video(&mut app);
+    let _ = tile.start_video(&mut app);
 
-    tile.set_video_crossfade(&mut app, 0.0);
+    let _ = tile.set_video_crossfade(&mut app, 0.0);
     assert_eq!(
         app.world()
             .get::<VideoCrossfade>(tile.id())
@@ -911,7 +913,7 @@ fn set_video_crossfade_updates_video_t_while_playing() {
         0.0
     );
 
-    tile.set_video_crossfade(&mut app, 0.5);
+    let _ = tile.set_video_crossfade(&mut app, 0.5);
     assert_eq!(
         app.world()
             .get::<VideoCrossfade>(tile.id())
@@ -929,12 +931,213 @@ fn set_video_crossfade_is_a_noop_before_start_video_or_after_stop_video() {
     let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
 
     // Never started — nothing to update, and nothing should be created.
-    tile.set_video_crossfade(&mut app, 0.5);
+    let _ = tile.set_video_crossfade(&mut app, 0.5);
     assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
 
     // Started, then stopped — same graceful no-op.
-    tile.start_video(&mut app);
-    tile.stop_video(&mut app);
-    tile.set_video_crossfade(&mut app, 0.5);
+    let _ = tile.start_video(&mut app);
+    let _ = tile.stop_video(&mut app);
+    let _ = tile.set_video_crossfade(&mut app, 0.5);
     assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Stale handles report, they don't panic
+// ---------------------------------------------------------------------------
+
+/// Every mutating `Handle` method used to reach `World::entity_mut`, which
+/// **panics** on a despawned entity — while the docs on `Handle::from_entity`,
+/// on `proteus-sdk-web`'s `Handle::from_id`, and on the TS `handleFromId`
+/// all promised a stale handle would quietly do nothing. On wasm that panic
+/// aborts the module: the canvas freezes and only a page reload recovers it.
+///
+/// Each call below is made on a handle whose entity was just destroyed. The
+/// test asserts the whole sequence completes — reaching the end at all is the
+/// point, since the old behavior was to abort on the first one — and that each
+/// reports `EntityNotFound` rather than a silent success.
+#[test]
+fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
+    let mut app = Proteus::new();
+
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let other = app.component(ComponentSpec::new(quad_at(50.0, 0.0)));
+    let texture = app.texture(Default::default());
+    handle
+        .destroy(&mut app)
+        .expect("first destroy should succeed");
+
+    let geometry = quad_at(10.0, 10.0);
+    let config = cfg(0.2);
+
+    assert_eq!(
+        handle.set_declared_geometry(&mut app, geometry.clone()),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.animate_to(&mut app, geometry.clone(), config),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.start_video(&mut app),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.stop_video(&mut app),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.set_video_crossfade(&mut app, 0.5),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.set_interactive(&mut app, false),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.copy_baked_image_from(&mut app, other),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.center_crop_to_square(&mut app),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.set_texture(&mut app, texture),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.split_to(&mut app, &[other], config, proteus_sdk::SplitStrategy::Bake),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.split_to_with_states(
+            &mut app,
+            &[(other, geometry.clone())],
+            config,
+            proteus_sdk::SplitStrategy::Bake
+        ),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.merge_from(
+            &mut app,
+            &[other],
+            config,
+            proteus_sdk::MergeLayout::Horizontal
+        ),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.add_child(&mut app, other),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.remove_child(&mut app, other, false),
+        Err(HandleError::EntityNotFound),
+        "reported against the dead receiver, even though `other` is alive and \
+         nothing below the check would have touched `self`"
+    );
+    assert_eq!(
+        handle.free_resources(&mut app),
+        Err(HandleError::EntityNotFound)
+    );
+    assert_eq!(
+        handle.destroy(&mut app),
+        Err(HandleError::EntityNotFound),
+        "a second destroy is reported rather than passing for a successful one"
+    );
+
+    // The world is still usable afterwards — a reported error left nothing
+    // half-applied.
+    assert!(app.get(other).is_some());
+    assert!(app.get(handle).is_none());
+}
+
+/// A dead handle passed *into* a call on a live one is reported distinctly, so
+/// a caller can tell "my handle died" from "the handle I was handed died".
+#[test]
+fn a_dead_handle_passed_into_a_live_one_reports_other_entity_not_found() {
+    let mut app = Proteus::new();
+    let live = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let dead = app.component(ComponentSpec::new(quad_at(50.0, 0.0)));
+    dead.destroy(&mut app).unwrap();
+
+    assert_eq!(
+        live.add_child(&mut app, dead),
+        Err(HandleError::OtherEntityNotFound)
+    );
+    assert_eq!(
+        live.remove_child(&mut app, dead, false),
+        Err(HandleError::OtherEntityNotFound)
+    );
+    assert_eq!(
+        live.copy_baked_image_from(&mut app, dead),
+        Err(HandleError::OtherEntityNotFound)
+    );
+    assert_eq!(
+        live.split_to(
+            &mut app,
+            &[dead],
+            cfg(0.2),
+            proteus_sdk::SplitStrategy::Bake
+        ),
+        Err(HandleError::OtherEntityNotFound),
+        "a group transition is all-or-nothing: one dead target fails the call \
+         rather than half-running a split that can never complete"
+    );
+    assert_eq!(
+        live.merge_from(
+            &mut app,
+            &[dead],
+            cfg(0.2),
+            proteus_sdk::MergeLayout::Horizontal
+        ),
+        Err(HandleError::OtherEntityNotFound)
+    );
+
+    // The live handle is untouched by any of it.
+    assert!(app.get(live).is_some());
+}
+
+/// "Nothing to do" is not an error. A live component with no baked image yet
+/// reports `Ok(false)` — callers poll on exactly this while an image loads, and
+/// turning it into an `Err` would make a routine state look like a failure.
+#[test]
+fn nothing_to_do_is_ok_false_not_an_error() {
+    let mut app = Proteus::new();
+    let a = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let b = app.component(ComponentSpec::new(quad_at(50.0, 0.0)));
+
+    assert_eq!(a.center_crop_to_square(&mut app), Ok(false));
+    assert_eq!(a.copy_baked_image_from(&mut app, b), Ok(false));
+    // No GPU pipeline in a headless world, so there is no texture to show.
+    let texture = app.texture(Default::default());
+    assert_eq!(a.set_texture(&mut app, texture), Ok(false));
+    // Alive, but never `start_video`-ed.
+    assert_eq!(a.set_video_crossfade(&mut app, 0.5), Ok(false));
+}
+
+/// `component()`'s declarative `children` is the same contract as
+/// `Handle::add_child`: a dead child is skipped, not a panic. The surviving
+/// children still attach.
+#[test]
+fn component_skips_a_dead_child_instead_of_panicking() {
+    let mut app = Proteus::new();
+    let live_child = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let dead_child = app.component(ComponentSpec::new(quad_at(10.0, 0.0)));
+    dead_child.destroy(&mut app).unwrap();
+
+    let parent = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0))
+            .child(live_child)
+            .child(dead_child),
+    );
+
+    let data = app.get(parent).expect("parent should exist");
+    assert_eq!(
+        data.children.len(),
+        1,
+        "only the live child attaches; the dead one is skipped"
+    );
+    assert_eq!(data.children[0], live_child);
 }

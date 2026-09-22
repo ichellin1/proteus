@@ -440,7 +440,7 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     app.world_mut()
         .entity_mut(nested_child.id())
         .insert(Opacity(0.6));
-    nested_parent.add_child(app, nested_child);
+    let _ = nested_parent.add_child(app, nested_child);
     opacity_boxes.push(nested_parent);
     opacity_item_labels.push(row_label(app, "0.6 × 0.6", 12.0));
 

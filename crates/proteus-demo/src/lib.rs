@@ -36,6 +36,22 @@
 //! `set_*`/`take_*` injection points to [`Demo`] (mirroring
 //! `proteus-shell-web`'s existing wasm-bindgen surface, generalized) that
 //! each shell calls with bytes/frames it fetched its own way.
+//!
+//! ## Why so many `let _ = handle.foo(...)`
+//!
+//! Every mutating [`proteus_sdk::Handle`] method returns
+//! `Result<_, proteus_sdk::HandleError>`, which is `#[must_use]`. This app owns
+//! every handle it touches and destroys them only at well-defined points, so a
+//! dead-handle error here would be a bug in *this* crate rather than a
+//! condition to recover from — and there'd be nothing useful to do about it
+//! mid-frame anyway. `let _ =` says that deliberately, at each call site, rather
+//! than hiding it behind a wrapper.
+//!
+//! Ignoring the `Result` is not the same as ignoring the failure: the SDK logs
+//! a `warn!` naming the method and entity before returning `Err`, so a mistake
+//! still shows up in the log. An app that *can* react to one — e.g. a TS app
+//! driving components from server data that may reference something already
+//! destroyed — should branch on the `Result` instead of copying this pattern.
 
 mod app;
 mod gallery_fetch;
@@ -1083,7 +1099,7 @@ impl Demo {
         aspect: Vec2,
     ) {
         let tile = self.gallery.tiles[idx];
-        tile.free_resources(proteus);
+        let _ = tile.free_resources(proteus);
         self.pending_gallery_tile_crop[idx] = true;
         proteus
             .world_mut()
@@ -1110,7 +1126,7 @@ impl Demo {
         if self.state != AppState::GalleryImage(idx) {
             return;
         }
-        self.gallery.hires_overlay.free_resources(proteus);
+        let _ = self.gallery.hires_overlay.free_resources(proteus);
         // The one entity that wants a bigger cap than the rest of the grid —
         // only one hires image is ever resident, so it can afford a larger
         // footprint than the 12 simultaneous thumbnails. Was a separate
@@ -1139,7 +1155,7 @@ impl Demo {
             }
         }
         for (tile, state) in self.gallery.tiles.into_iter().zip(gallery::layout(size)) {
-            tile.set_declared_geometry(proteus, state);
+            let _ = tile.set_declared_geometry(proteus, state);
         }
     }
 
@@ -1155,7 +1171,7 @@ impl Demo {
         self.logo_frame_index = 0;
         self.logo_frame_elapsed = 0.0;
         if let Some(&first) = self.logo_frames.first() {
-            self.splash.button.set_texture(proteus, first);
+            let _ = self.splash.button.set_texture(proteus, first);
         }
     }
 
@@ -1269,12 +1285,12 @@ impl Demo {
         // "one call, right before the split" — see `home::layout`'s doc.
         let states = home::layout(proteus, &self.home);
         for (button, state) in self.home.nav_buttons.into_iter().zip(states) {
-            button.set_declared_geometry(proteus, state);
+            let _ = button.set_declared_geometry(proteus, state);
         }
 
         let button = self.splash.button;
         let targets = self.home.nav_buttons;
-        button.split_to(
+        let _ = button.split_to(
             proteus,
             &targets,
             group_transition_config(),
@@ -1359,7 +1375,7 @@ impl Demo {
                 self.examples_home.buttons[col * 2],
                 self.examples_home.buttons[col * 2 + 1],
             ];
-            source.split_to(
+            let _ = source.split_to(
                 proteus,
                 &targets,
                 group_transition_config(),
@@ -1382,7 +1398,7 @@ impl Demo {
                 self.examples_home.buttons[col * 2],
                 self.examples_home.buttons[col * 2 + 1],
             ];
-            dest.merge_from(
+            let _ = dest.merge_from(
                 proteus,
                 &sources,
                 group_transition_config(),
@@ -1412,7 +1428,7 @@ impl Demo {
             let source = self.home.nav_buttons[i];
             let target = self.video_tiles.tiles[i];
             let state = video_tiles::tile_target_state(proteus, target, i);
-            source.split_to_with_states(
+            let _ = source.split_to_with_states(
                 proteus,
                 &[(target, state)],
                 group_transition_config(),
@@ -1430,7 +1446,7 @@ impl Demo {
         for i in 0..3 {
             let source = self.video_tiles.tiles[i];
             let target = self.home.nav_buttons[i];
-            source.split_to(
+            let _ = source.split_to(
                 proteus,
                 &[target],
                 group_transition_config(),
@@ -1456,9 +1472,9 @@ impl Demo {
     fn start_tiles_to_screen(&mut self, proteus: &mut Proteus, idx: usize) {
         let tile = self.video_tiles.tiles[idx];
         let target = video_tiles::video_screen_quad(self.viewport_size);
-        tile.animate_to(proteus, target, group_transition_config());
-        tile.start_video(proteus);
-        tile.set_video_crossfade(proteus, 0.0);
+        let _ = tile.animate_to(proteus, target, group_transition_config());
+        let _ = tile.start_video(proteus);
+        let _ = tile.set_video_crossfade(proteus, 0.0);
         self.pending_video_start = Some(idx);
         // Fresh loading-UI state for this visit — see each field's own doc.
         // Mirrors `proteus-shell-native::start_video_playback`'s identical
@@ -1501,7 +1517,7 @@ impl Demo {
         if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
             qs.color.w = 1.0;
         }
-        tile.stop_video(proteus);
+        let _ = tile.stop_video(proteus);
         self.pending_video_stop = true;
         let targets: Vec<(Handle, QuadState)> = (0..3)
             .map(|i| {
@@ -1510,7 +1526,7 @@ impl Demo {
                 (t, state)
             })
             .collect();
-        tile.split_to_with_states(
+        let _ = tile.split_to_with_states(
             proteus,
             &targets,
             group_transition_config(),
@@ -1538,10 +1554,10 @@ impl Demo {
         if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
             qs.color.w = 1.0;
         }
-        tile.stop_video(proteus);
+        let _ = tile.stop_video(proteus);
         self.pending_video_stop = true;
         let targets = self.home.nav_buttons;
-        tile.split_to(
+        let _ = tile.split_to(
             proteus,
             &targets,
             group_transition_config(),
@@ -1610,13 +1626,13 @@ impl Demo {
     /// Mirrors `proteus-shell-native::apply_loading_logo_frame` exactly.
     fn apply_loading_logo_frame(&mut self, proteus: &mut Proteus) {
         if let Some(&frame) = self.logo_frames.get(self.loading_logo_frame_index) {
-            self.loading.logo.set_texture(proteus, frame);
+            let _ = self.loading.logo.set_texture(proteus, frame);
         }
         if let Some(&frame) = self
             .loading_logo_frames_dark
             .get(self.loading_logo_frame_index)
         {
-            self.loading.logo_dark.set_texture(proteus, frame);
+            let _ = self.loading.logo_dark.set_texture(proteus, frame);
         }
     }
 
@@ -1626,7 +1642,7 @@ impl Demo {
     fn start_home_to_loading(&mut self, proteus: &mut Proteus) {
         self.begin_gallery_fetch(proteus);
         let sources = self.home.nav_buttons;
-        self.loading.logo.merge_from(
+        let _ = self.loading.logo.merge_from(
             proteus,
             &sources,
             group_transition_config(),
@@ -1641,7 +1657,7 @@ impl Demo {
     /// `proteus-shell-native::start_loading_to_home`.
     fn start_loading_to_home(&mut self, proteus: &mut Proteus) {
         let targets = self.home.nav_buttons;
-        self.loading.logo.split_to(
+        let _ = self.loading.logo.split_to(
             proteus,
             &targets,
             group_transition_config(),
@@ -1668,7 +1684,7 @@ impl Demo {
     /// guess would. Mirrors `proteus-shell-native::start_loading_to_gallery`.
     fn start_loading_to_gallery(&mut self, proteus: &mut Proteus) {
         let targets = self.gallery.tiles;
-        self.loading.logo.split_to(
+        let _ = self.loading.logo.split_to(
             proteus,
             &targets,
             gallery_group_transition_config(),
@@ -1690,7 +1706,7 @@ impl Demo {
     fn start_gallery_to_loading(&mut self, proteus: &mut Proteus) {
         self.begin_gallery_fetch(proteus);
         let sources = self.gallery.tiles;
-        self.loading.logo.merge_from(
+        let _ = self.loading.logo.merge_from(
             proteus,
             &sources,
             gallery_group_transition_config(),
@@ -1718,7 +1734,7 @@ impl Demo {
                 .into_iter()
                 .map(|idx| self.gallery.tiles[idx])
                 .collect();
-            dest.merge_from(
+            let _ = dest.merge_from(
                 proteus,
                 &sources,
                 gallery_group_transition_config(),
@@ -1781,8 +1797,9 @@ impl Demo {
         let aspect = self.gallery_tile_aspect[idx];
         let target = gallery::large_image_quad(aspect, self.viewport_size);
         let target_size = target.size;
-        self.gallery.enlarged.set_declared_geometry(proteus, target);
-        self.gallery
+        let _ = self.gallery.enlarged.set_declared_geometry(proteus, target);
+        let _ = self
+            .gallery
             .enlarged
             .copy_baked_image_from(proteus, self.gallery.tile_full[idx]);
 
@@ -1791,7 +1808,7 @@ impl Demo {
         // `has_bake` check would see the stale `BakedImage` and start
         // crossfading the wrong photo in immediately, before this visit's
         // own fetch has even started.
-        self.gallery.hires_overlay.free_resources(proteus);
+        let _ = self.gallery.hires_overlay.free_resources(proteus);
         proteus
             .world_mut()
             .entity_mut(self.gallery.hires_overlay.id())
@@ -1804,7 +1821,7 @@ impl Demo {
         // immediately here — see `start_gallery_to_loading`'s doc for the
         // same call.
         let sources = self.gallery.tiles;
-        self.gallery.enlarged.merge_from(
+        let _ = self.gallery.enlarged.merge_from(
             proteus,
             &sources,
             gallery_group_transition_config(),
@@ -1855,7 +1872,7 @@ impl Demo {
             .entity_mut(self.gallery.hires_overlay.id())
             .insert(Visibility::HIDDEN);
         let targets = self.gallery.tiles;
-        self.gallery.enlarged.split_to(
+        let _ = self.gallery.enlarged.split_to(
             proteus,
             &targets,
             gallery_group_transition_config(),
@@ -1885,7 +1902,7 @@ impl Demo {
             .entity_mut(self.gallery.hires_overlay.id())
             .insert(Visibility::HIDDEN);
         let targets = self.home.nav_buttons;
-        self.gallery.enlarged.split_to(
+        let _ = self.gallery.enlarged.split_to(
             proteus,
             &targets,
             group_transition_config(),
@@ -1902,7 +1919,8 @@ impl Demo {
     /// straight to the correct spot instead of snapping after.
     fn start_examples_to_detail(&mut self, proteus: &mut Proteus, idx: usize) {
         let target = example_detail::panel_target(idx, self.viewport_size);
-        self.example_detail
+        let _ = self
+            .example_detail
             .panel
             .set_declared_geometry(proteus, target);
 
@@ -1913,7 +1931,7 @@ impl Demo {
         let sources: Vec<Handle> = (0..2)
             .flat_map(|row| (0..3).map(move |col| buttons[col * 2 + row]))
             .collect();
-        self.example_detail.panel.merge_from(
+        let _ = self.example_detail.panel.merge_from(
             proteus,
             &sources,
             group_transition_config(),
@@ -1934,7 +1952,7 @@ impl Demo {
         let targets: Vec<Handle> = (0..2)
             .flat_map(|row| (0..3).map(move |col| buttons[col * 2 + row]))
             .collect();
-        self.example_detail.panel.split_to(
+        let _ = self.example_detail.panel.split_to(
             proteus,
             &targets,
             group_transition_config(),
@@ -1951,7 +1969,7 @@ impl Demo {
     /// `proteus-shell-native::start_detail_to_home`.
     fn start_detail_to_home(&mut self, proteus: &mut Proteus) {
         let targets = self.home.nav_buttons;
-        self.example_detail.panel.split_to(
+        let _ = self.example_detail.panel.split_to(
             proteus,
             &targets,
             group_transition_config(),
@@ -2069,7 +2087,7 @@ impl Demo {
         if let Some(states) = examples_home::layout(proteus, &self.examples_home) {
             let buttons = self.examples_home.buttons;
             for (button, state) in buttons.into_iter().zip(states) {
-                button.set_declared_geometry(proteus, state);
+                let _ = button.set_declared_geometry(proteus, state);
             }
         }
     }
@@ -2110,7 +2128,7 @@ impl Demo {
             self.logo_frame_elapsed -= splash::LOGO_FRAME_DURATION;
             self.logo_frame_index = (self.logo_frame_index + 1) % self.logo_frames.len();
             let frame = self.logo_frames[self.logo_frame_index];
-            self.splash.button.set_texture(proteus, frame);
+            let _ = self.splash.button.set_texture(proteus, frame);
         }
     }
 
@@ -2158,8 +2176,8 @@ impl Demo {
             if tile.baked_image_size(proteus).is_none() {
                 continue;
             }
-            self.gallery.tile_full[idx].copy_baked_image_from(proteus, tile);
-            tile.center_crop_to_square(proteus);
+            let _ = self.gallery.tile_full[idx].copy_baked_image_from(proteus, tile);
+            let _ = tile.center_crop_to_square(proteus);
             self.pending_gallery_tile_crop[idx] = false;
         }
     }
@@ -2406,7 +2424,7 @@ impl Demo {
     /// live transition on this entity to fight.
     fn apply_gallery_fetch_button_layout(&mut self, proteus: &mut Proteus) {
         if let Some(qs) = gallery::fetch_button_quad(proteus, &self.gallery, self.viewport_size) {
-            self.gallery.fetch_button.set_declared_geometry(proteus, qs);
+            let _ = self.gallery.fetch_button.set_declared_geometry(proteus, qs);
         }
     }
 
@@ -2590,7 +2608,7 @@ impl Demo {
             let idle = proteus.get(entity).is_some_and(|d| d.transition.is_none());
             if idle {
                 let target = self.random_burst_target(&panel);
-                entity.animate_to(proteus, target, config);
+                let _ = entity.animate_to(proteus, target, config);
             }
         }
     }
@@ -2717,7 +2735,7 @@ impl Demo {
             return;
         };
         for &entity in &run.entities {
-            entity.destroy(proteus);
+            let _ = entity.destroy(proteus);
         }
         let avg_fps = run.frame_count as f32 / run.elapsed;
         // A real, deliberate cap (both shells run `PresentMode::AutoVsync`),
@@ -2745,7 +2763,7 @@ impl Demo {
         if let Some(mut text) = proteus.world_mut().get_mut::<Text>(result_text.id()) {
             text.content = result;
         }
-        result_text.free_resources(proteus);
+        let _ = result_text.free_resources(proteus);
     }
 
     /// Ends the current run early, if any — despawns its entities without
@@ -2757,7 +2775,7 @@ impl Demo {
     fn cancel_stress_test(&mut self, proteus: &mut Proteus) {
         if let Some(run) = self.stress_run.take() {
             for entity in run.entities {
-                entity.destroy(proteus);
+                let _ = entity.destroy(proteus);
             }
         }
     }
@@ -2887,7 +2905,7 @@ impl Demo {
         };
         for i in 0..3 {
             let tile = self.video_tiles.tiles[i];
-            tile.set_interactive(proteus, screen_focus_idx != Some(i));
+            let _ = tile.set_interactive(proteus, screen_focus_idx != Some(i));
 
             let progress = self
                 .hovers
@@ -2995,7 +3013,7 @@ impl Demo {
             .get(tile)
             .and_then(|d| d.transition)
             .map(|t| t.progress);
-        tile.set_video_crossfade(proteus, raw_t.map(ease_in_out_quad).unwrap_or(1.0));
+        let _ = tile.set_video_crossfade(proteus, raw_t.map(ease_in_out_quad).unwrap_or(1.0));
 
         let Some(raw_t) = raw_t else {
             return;
@@ -3202,8 +3220,8 @@ impl Demo {
         // mutual-exclusion toggle pair, not two independent buttons.
         // Idempotent every tick; `Handle::set_interactive`'s own doc covers
         // why this is safe to reassert unconditionally.
-        self.theme.sun.set_interactive(proteus, self.dark_target);
-        self.theme.moon.set_interactive(proteus, !self.dark_target);
+        let _ = self.theme.sun.set_interactive(proteus, self.dark_target);
+        let _ = self.theme.moon.set_interactive(proteus, !self.dark_target);
 
         // Unconditional dark-overlay crossfades — safe regardless of
         // `AppState`/visibility (a hidden overlay's alpha doesn't matter
@@ -3514,7 +3532,8 @@ impl Demo {
         // drops out of the interactable set — same mechanism `advance_theme`
         // already uses for the sun/moon mutual-exclusion toggle. Idempotent
         // every tick, same as that call.
-        self.nav
+        let _ = self
+            .nav
             .home
             .set_interactive(proteus, self.state != AppState::Home);
 
@@ -4031,7 +4050,7 @@ mod tests {
             let button = demo.examples_home.buttons[idx];
             let mut geometry = demo.app.get(button).unwrap().geometry;
             geometry.position = Vec3::new(5000.0, 5000.0, 0.5);
-            button.set_declared_geometry(&mut demo.app, geometry);
+            let _ = button.set_declared_geometry(&mut demo.app, geometry);
 
             demo.pointer_moved(Some(Vec2::new(5000.0, 5000.0)));
             demo.pointer_pressed();
@@ -5727,7 +5746,7 @@ mod tests {
             let button = demo.examples_home.buttons[idx];
             let mut geometry = demo.app.get(button).unwrap().geometry;
             geometry.position = Vec3::new(5000.0, 5000.0, 0.5);
-            button.set_declared_geometry(&mut demo.app, geometry);
+            let _ = button.set_declared_geometry(&mut demo.app, geometry);
             demo.pointer_moved(Some(Vec2::new(5000.0, 5000.0)));
             demo.pointer_pressed();
             demo.tick(1.0);
