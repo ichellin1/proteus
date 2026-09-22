@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-proteus-gpu = { path = "../proteus-gpu" }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }

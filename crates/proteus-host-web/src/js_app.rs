@@ -51,8 +51,8 @@ pub async fn mount(
     let proteus = Rc::new(RefCell::new(proteus_runtime::Proteus::new()));
     let renderer = Renderer::new(
         &mut proteus.borrow_mut(),
-        &surface.device,
-        &surface.queue,
+        surface.device(),
+        surface.queue(),
         surface_format,
         viewport,
         config,

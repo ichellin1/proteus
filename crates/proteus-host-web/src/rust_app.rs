@@ -49,8 +49,8 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
     let surface_format = surface.surface_format();
 
     let engine = Engine::new(
-        &surface.device,
-        &surface.queue,
+        surface.device(),
+        surface.queue(),
         surface_format,
         viewport,
         config,

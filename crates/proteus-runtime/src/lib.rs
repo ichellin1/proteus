@@ -54,5 +54,6 @@ pub use viewport::{Insets, Viewport};
 // including `wgpu` and `glam` at the exact versions this crate builds
 // against, so a host can never drift onto a mismatched copy.
 pub use glam;
+pub use proteus_gpu::{GpuError, GpuSurface, SurfaceRequest};
 pub use proteus_sdk::{Proteus, TextureHandle};
 pub use wgpu;

@@ -3189,8 +3189,9 @@ touch `proteus-runtime` or the `Host` trait — each provides its own `run` and 
 
 The `Instance::new` → `request_adapter` → `request_device` sequence, plus the deliberate non-sRGB
 surface-format pick (both shells author colours gamma-space), is currently hand-copied in both
-shells. M13.3 moves it into `proteus-gpu` (`GpuContext::for_surface(&surface) -> GpuContext`), used
-by `proteus-host-winit` and `proteus-host-web` alike.
+shells. M13.3 moves it into `proteus-gpu`, used by `proteus-host-winit` and `proteus-host-web`
+alike. **Built 2026-09-22** as `GpuSurface::create(target, SurfaceRequest)` — see this section's
+Definition of done for why the name differs from this sketch's `GpuContext::for_surface`.
 
 ##### GPU floor
 
@@ -3226,7 +3227,20 @@ documented M13.4 shim on the native demo entry, parallel to the web side.
 - [ ] Reference demo runs and passes M6 visual regression on native.
 
 *M13.3 proper (optional for V1):*
-- [ ] `proteus-gpu::GpuContext::for_surface` exists and both hosts use it.
+- [x] Shared GPU init lives in `proteus-gpu` and both hosts use it — **done
+  2026-09-22**, during the post-M13 audit's dead-code pass. Named
+  `GpuSurface::create` rather than this sketch's `GpuContext::for_surface`:
+  `proteus-render` already has its own `GpuContext` (the device+queue ECS
+  resource), and two types of that name in one workspace is a trap. It returns
+  the whole bundle — surface, device, queue, configured swap chain, adapter —
+  because the steps are interdependent (the adapter is requested *against* the
+  surface, the format is chosen from what that adapter reports). The
+  ~176 duplicated lines are gone from the two hosts; only device limits and the
+  initial size differ, and those are inputs (`SurfaceRequest`) rather than
+  forks. `proteus-gpu` had until then declared a surfaceless `GpuContext` that
+  nothing constructed, so the "Layer 0" crate was in no crate's build graph;
+  `proteus-render`'s unused dependency on it was dropped and `proteus-runtime`
+  now re-exports it, keeping "a host depends on `proteus-runtime` alone" true.
 - [ ] `suspended` / `resumed` recreate the surface.
 - [ ] Keyboard events reach `navigation_system` (still a stub, but wired).
 
