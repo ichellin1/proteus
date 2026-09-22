@@ -33,6 +33,7 @@ use crate::input::{
 };
 use crate::interaction::interaction_style_system;
 use crate::signal::{self, register_signal_hooks, signal_dispatch_system};
+use crate::spawn_order::register_spawn_order_hooks;
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
@@ -191,6 +192,10 @@ impl ProteusWorld {
         // M12.1: same requirement, same reasoning, for OwnedSignals's
         // despawn-cleanup hook.
         register_signal_hooks(&mut world);
+        // M13.8: same requirement, same reasoning, for SpawnOrder's
+        // auto-stamping hook — must be registered before any QuadState
+        // exists.
+        register_spawn_order_hooks(&mut world);
 
         // --- Schedule ---
         let schedule = build_schedule();

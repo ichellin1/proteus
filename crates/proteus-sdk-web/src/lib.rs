@@ -57,13 +57,16 @@
 //! host crate uses to construct one and get its `Rc` back out — see
 //! `proteus-host-web`'s `JsDriver`.
 //!
-//! Every method borrows for the duration of the call only, never across a
-//! JS re-entrant call — a callback that calls back into another `ProteusApp`
-//! method (e.g. an `onClick` handler calling `.get()`) would otherwise
-//! double-borrow the same `RefCell` and panic. `signal_set`/`on_click`/etc.
-//! all drop their borrow before invoking `proteus-sdk`'s own callback
-//! dispatch machinery for this reason — see each method's borrow scoping
-//! below.
+//! Every method borrows for the duration of its own call only. The one place
+//! that isn't naturally safe is callback dispatch: `Proteus::tick()` invokes
+//! registered JS callbacks *synchronously*, from underneath whichever method
+//! is driving it (`Self::tick`, or a host's own `tick` call on the shared
+//! `Rc<RefCell<_>>`) — if a callback called straight back into another
+//! `ProteusApp` method, that method's `self.0.borrow_mut()` would double-
+//! borrow the same `RefCell` and panic (found during M13.8's example app
+//! work). `wrap_plain`/`wrap_drag`/`wrap_dropped` fix this by deferring the
+//! actual JS invocation to a microtask (`wasm_bindgen_futures::spawn_local`)
+//! instead of calling it inline — see their doc for why that's sufficient.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -77,27 +80,56 @@ mod handle;
 
 pub use handle::{Handle, JsSignalHandle as SignalHandle, JsTextureHandle as TextureHandle};
 
-use dto::{ComponentDataDto, ComponentSpecDto, TransitionConfigDto, TransitionDroppedDto};
+use dto::{
+    ComponentDataDto, ComponentSpecDto, MergeLayoutDto, QuadStateDto, SplitStrategyDto,
+    TargetStateDto, TransitionConfigDto, TransitionDroppedDto, Vec2Dto,
+};
 
 // ---------------------------------------------------------------------------
 // Callback wrapping — js_sys::Function -> Rust closure
 // ---------------------------------------------------------------------------
 
+// `proteus-sdk`'s `Proteus::tick()` invokes these closures *synchronously*,
+// from inside `dispatch_events()` — and `ProteusApp::tick()` (below) holds
+// its `Rc<RefCell<sdk::Proteus>>` borrow for that entire nested call. If the
+// JS function called straight from here turned around and called any other
+// `ProteusApp` method (e.g. an `onClick` handler calling `.component()`),
+// that method's own `self.0.borrow_mut()` would double-borrow the same
+// `RefCell` and panic ("already borrowed") — a real bug found during M13.8's
+// example app work, not hypothetical. `proteus-sdk`'s own callback registry
+// (`crates/proteus-sdk/src/callback.rs`) already avoids this for pure-Rust
+// callers via a take-call-put-back pattern, but that only protects its own
+// `HashMap`, not this crate's separate `RefCell` layer underneath it.
+//
+// The fix: never call `cb` directly from inside the dispatch closure.
+// `wasm_bindgen_futures::spawn_local` schedules it as a microtask, which the
+// JS engine only runs after the *current* synchronous call stack — all of
+// `tick()`, including this dispatch — has fully unwound and every
+// `ProteusApp` borrow has been dropped. Microtasks still run before the next
+// `requestAnimationFrame`, so callbacks remain effectively same-frame from
+// the app's perspective; they're just no longer nested inside `tick()`'s own
+// borrow.
 fn wrap_plain(cb: js_sys::Function) -> impl FnMut(&mut sdk::Proteus) + 'static {
     move |_app: &mut sdk::Proteus| {
-        // Errors thrown by the JS callback are swallowed here — a thin
-        // bridge concern for a later pass, not part of M12.4's DoD.
-        let _ = cb.call0(&JsValue::NULL);
+        let cb = cb.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            // Errors thrown by the JS callback are swallowed here — a thin
+            // bridge concern for a later pass, not part of M12.4's DoD.
+            let _ = cb.call0(&JsValue::NULL);
+        });
     }
 }
 
 fn wrap_drag(cb: js_sys::Function) -> impl FnMut(&mut sdk::Proteus, glam::Vec2) + 'static {
     move |_app: &mut sdk::Proteus, delta: glam::Vec2| {
-        let _ = cb.call2(
-            &JsValue::NULL,
-            &JsValue::from_f64(delta.x as f64),
-            &JsValue::from_f64(delta.y as f64),
-        );
+        let cb = cb.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = cb.call2(
+                &JsValue::NULL,
+                &JsValue::from_f64(delta.x as f64),
+                &JsValue::from_f64(delta.y as f64),
+            );
+        });
     }
 }
 
@@ -105,9 +137,12 @@ fn wrap_dropped(
     cb: js_sys::Function,
 ) -> impl FnMut(&mut sdk::Proteus, proteus_ui::TransitionDropped) + 'static {
     move |_app: &mut sdk::Proteus, dropped: proteus_ui::TransitionDropped| {
+        let cb = cb.clone();
         let dto = TransitionDroppedDto::from(&dropped);
         if let Ok(js_val) = serde_wasm_bindgen::to_value(&dto) {
-            let _ = cb.call1(&JsValue::NULL, &js_val);
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = cb.call1(&JsValue::NULL, &js_val);
+            });
         }
     }
 }
@@ -204,6 +239,104 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = signalDestroy)]
     pub fn signal_destroy(&mut self, signal: SignalHandle) {
         signal.0.destroy(&mut self.0.borrow_mut());
+    }
+
+    /// 1→N group transition (M13.8) — `handle` splits into `target_ids`.
+    /// `target_ids` are `Handle.id()` values, not opaque `Handle` objects —
+    /// same reasoning as `ComponentSpec.children`/`signal(owner)`: taking a
+    /// JS `Handle` by value would invalidate the caller's own wrapper, and
+    /// there's no `Option<&CustomStruct>`-style workaround for a whole list
+    /// of them. `config`/`strategy` are plain JS objects matching the
+    /// `TransitionConfig`/`SplitStrategy` TS types — see `ts/src/types.ts`.
+    #[wasm_bindgen(js_name = splitTo)]
+    pub fn split_to(
+        &mut self,
+        handle: &Handle,
+        target_ids: Vec<f64>,
+        config: JsValue,
+        strategy: JsValue,
+    ) -> Result<(), JsValue> {
+        let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+        let strategy_dto: SplitStrategyDto = serde_wasm_bindgen::from_value(strategy)
+            .map_err(|e| JsValue::from_str(&format!("invalid SplitStrategy: {e}")))?;
+        let targets: Vec<sdk::Handle> = target_ids
+            .into_iter()
+            .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
+            .collect();
+        handle.0.split_to(
+            &mut self.0.borrow_mut(),
+            &targets,
+            (&config_dto).into(),
+            (&strategy_dto).into(),
+        );
+        Ok(())
+    }
+
+    /// N→1 group transition (M13.8) — `source_ids` merge into `handle`. See
+    /// [`Self::split_to`]'s doc for why sources cross as ids, not `Handle`
+    /// objects.
+    #[wasm_bindgen(js_name = mergeFrom)]
+    pub fn merge_from(
+        &mut self,
+        handle: &Handle,
+        source_ids: Vec<f64>,
+        config: JsValue,
+        layout: JsValue,
+    ) -> Result<(), JsValue> {
+        let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+        let layout_dto: MergeLayoutDto = serde_wasm_bindgen::from_value(layout)
+            .map_err(|e| JsValue::from_str(&format!("invalid MergeLayout: {e}")))?;
+        let sources: Vec<sdk::Handle> = source_ids
+            .into_iter()
+            .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
+            .collect();
+        handle.0.merge_from(
+            &mut self.0.borrow_mut(),
+            &sources,
+            (&config_dto).into(),
+            (&layout_dto).into(),
+        );
+        Ok(())
+    }
+
+    /// [`Self::split_to`], but with each target's rest geometry given
+    /// explicitly instead of resolved from its own declared/live
+    /// `QuadState` (M13.8 parity audit) — see `proteus-sdk`'s
+    /// `Handle::split_to_with_states` doc for when this is needed instead of
+    /// the plain id-list form. `targets` is a plain JS array of
+    /// `{id, state}` objects (`id` a `Handle.id()` value, `state` a
+    /// `QuadState`-shaped object) — one `serde-wasm-bindgen` call for the
+    /// whole array, same convention as the rest of this bridge.
+    #[wasm_bindgen(js_name = splitToWithStates)]
+    pub fn split_to_with_states(
+        &mut self,
+        handle: &Handle,
+        targets: JsValue,
+        config: JsValue,
+        strategy: JsValue,
+    ) -> Result<(), JsValue> {
+        let targets_dto: Vec<TargetStateDto> = serde_wasm_bindgen::from_value(targets)
+            .map_err(|e| JsValue::from_str(&format!("invalid target state list: {e}")))?;
+        let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+        let strategy_dto: SplitStrategyDto = serde_wasm_bindgen::from_value(strategy)
+            .map_err(|e| JsValue::from_str(&format!("invalid SplitStrategy: {e}")))?;
+        let targets: Vec<(sdk::Handle, proteus_sdk::QuadState)> = targets_dto
+            .iter()
+            .map(|t| {
+                let entity = bevy_ecs::prelude::Entity::from_bits(t.id as u64);
+                (sdk::Handle::from_entity(entity), (&t.state).into())
+            })
+            .collect();
+        handle.0.split_to_with_states(
+            &mut self.0.borrow_mut(),
+            &targets,
+            (&config_dto).into(),
+            (&strategy_dto).into(),
+        );
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = onDropped)]
@@ -350,6 +483,115 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = freeResources)]
     pub fn free_resources(&mut self, handle: &Handle) {
         handle.0.free_resources(&mut self.0.borrow_mut());
+    }
+
+    /// Overwrites both `handle`'s live geometry and its declared rest
+    /// state (M13.8 parity audit) — see `proteus-sdk`'s
+    /// `Handle::set_declared_geometry` doc: needed whenever a component's
+    /// real resting layout is only known *after* spawn (e.g. sized from its
+    /// own baked text/image footprint), since `splitTo`/`mergeFrom` resolve
+    /// a target's rest state from the declared value, not the live one.
+    #[wasm_bindgen(js_name = setDeclaredGeometry)]
+    pub fn set_declared_geometry(
+        &mut self,
+        handle: &Handle,
+        state: JsValue,
+    ) -> Result<(), JsValue> {
+        let dto: QuadStateDto = serde_wasm_bindgen::from_value(state)
+            .map_err(|e| JsValue::from_str(&format!("invalid QuadState: {e}")))?;
+        handle
+            .0
+            .set_declared_geometry(&mut self.0.borrow_mut(), (&dto).into());
+        Ok(())
+    }
+
+    /// Ad-hoc 1→1 morph with no signal/second entity involved (M13.8 parity
+    /// audit) — see `proteus-sdk`'s `Handle::animate_to` doc.
+    #[wasm_bindgen(js_name = animateTo)]
+    pub fn animate_to(
+        &mut self,
+        handle: &Handle,
+        to: JsValue,
+        config: JsValue,
+    ) -> Result<(), JsValue> {
+        let to_dto: QuadStateDto = serde_wasm_bindgen::from_value(to)
+            .map_err(|e| JsValue::from_str(&format!("invalid QuadState: {e}")))?;
+        let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+        handle.0.animate_to(
+            &mut self.0.borrow_mut(),
+            (&to_dto).into(),
+            (&config_dto).into(),
+        );
+        Ok(())
+    }
+
+    /// `undefined` before this component's `Text` has finished baking, or if
+    /// it was never given one (M13.8 parity audit) — see `proteus-sdk`'s
+    /// `Handle::baked_text_size` doc.
+    #[wasm_bindgen(js_name = bakedTextSize)]
+    pub fn baked_text_size(&self, handle: &Handle) -> JsValue {
+        match handle.0.baked_text_size(&self.0.borrow()) {
+            Some(size) => serde_wasm_bindgen::to_value(&Vec2Dto {
+                x: size.x,
+                y: size.y,
+            })
+            .unwrap_or(JsValue::UNDEFINED),
+            None => JsValue::UNDEFINED,
+        }
+    }
+
+    /// `undefined` before this component's `Image` has finished baking, or
+    /// if it was never given one (M13.8 parity audit) — see `proteus-sdk`'s
+    /// `Handle::baked_image_size` doc.
+    #[wasm_bindgen(js_name = bakedImageSize)]
+    pub fn baked_image_size(&self, handle: &Handle) -> JsValue {
+        match handle.0.baked_image_size(&self.0.borrow()) {
+            Some(size) => serde_wasm_bindgen::to_value(&Vec2Dto {
+                x: size.x,
+                y: size.y,
+            })
+            .unwrap_or(JsValue::UNDEFINED),
+            None => JsValue::UNDEFINED,
+        }
+    }
+
+    /// Copies whichever baked image `source` currently shows onto `handle`
+    /// (M13.8 parity audit) — `false` (no-op) if `source` has no baked image
+    /// yet. See `proteus-sdk`'s `Handle::copy_baked_image_from` doc.
+    #[wasm_bindgen(js_name = copyBakedImageFrom)]
+    pub fn copy_baked_image_from(&mut self, handle: &Handle, source: &Handle) -> bool {
+        handle
+            .0
+            .copy_baked_image_from(&mut self.0.borrow_mut(), source.0)
+    }
+
+    /// Crops `handle`'s current baked image to a centered square, in place
+    /// (M13.8 parity audit) — `false` (no-op) if it has no baked image yet.
+    /// See `proteus-sdk`'s `Handle::center_crop_to_square` doc — the
+    /// motivating case is exactly a photo grid tile fed from images of
+    /// varying aspect ratios.
+    #[wasm_bindgen(js_name = centerCropToSquare)]
+    pub fn center_crop_to_square(&mut self, handle: &Handle) -> bool {
+        handle.0.center_crop_to_square(&mut self.0.borrow_mut())
+    }
+
+    /// Toggles `handle`'s click/hover eligibility at runtime (M13.8 parity
+    /// audit) — see `proteus-sdk`'s `Handle::set_interactive` doc.
+    #[wasm_bindgen(js_name = setInteractive)]
+    pub fn set_interactive(&mut self, handle: &Handle, interactive: bool) {
+        handle
+            .0
+            .set_interactive(&mut self.0.borrow_mut(), interactive);
+    }
+
+    /// Shows an already-registered texture on `handle`, replacing whatever
+    /// image/text/composite it previously showed (M13.8 parity audit) —
+    /// `false` (no-op) if `texture` is evicted/unknown. See `proteus-sdk`'s
+    /// `Handle::set_texture` doc.
+    #[wasm_bindgen(js_name = setTexture)]
+    pub fn set_texture(&mut self, handle: &Handle, texture: &TextureHandle) -> bool {
+        handle.0.set_texture(&mut self.0.borrow_mut(), texture.0)
     }
 }
 

@@ -27,6 +27,7 @@ use proteus_sdk::{
     ComponentData, ComponentSpec, DropReason, InteractionStateKind, QuadState, StyleOverride,
     TransitionConfig, TransitionData, TransitionDropped,
 };
+use proteus_ui::{Border, DropShadow, Glow, Image, Text};
 
 // ---------------------------------------------------------------------------
 // Shared value types
@@ -153,6 +154,111 @@ impl From<&StyleOverrideDto> for StyleOverride {
 }
 
 // ---------------------------------------------------------------------------
+// Text / Image / Border / Glow / DropShadow (M13.8 — TS/JS parity audit;
+// previously only reachable from Rust)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextDto {
+    pub content: String,
+    pub size_px: f32,
+    #[serde(default)]
+    pub color: Option<ColorDto>,
+    #[serde(default)]
+    pub letter_spacing_px: f32,
+}
+
+impl From<&TextDto> for Text {
+    fn from(d: &TextDto) -> Self {
+        let mut text =
+            Text::new(d.content.clone(), d.size_px).with_letter_spacing(d.letter_spacing_px);
+        if let Some(c) = &d.color {
+            text = text.with_color(glam::Vec4::new(c.r, c.g, c.b, c.a));
+        }
+        text
+    }
+}
+
+/// `bytes` is raw PNG/JPEG file bytes (format sniffed from the data, not a
+/// file extension — see `proteus_ui::Image`'s own doc), e.g. straight from a
+/// `fetch()` response's `Uint8Array`, not decoded pixels — decoding happens
+/// during baking, same as the Rust-only path.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDto {
+    pub bytes: Vec<u8>,
+    #[serde(default)]
+    pub max_side: Option<u32>,
+}
+
+impl From<&ImageDto> for Image {
+    fn from(d: &ImageDto) -> Self {
+        let mut image = Image::new(d.bytes.clone());
+        if let Some(max_side) = d.max_side {
+            image = image.with_max_side(max_side);
+        }
+        image
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BorderDto {
+    pub width: f32,
+    pub color: ColorDto,
+    pub offset: f32,
+}
+
+impl From<&BorderDto> for Border {
+    fn from(d: &BorderDto) -> Self {
+        Self {
+            width: d.width,
+            color: glam::Vec4::new(d.color.r, d.color.g, d.color.b, d.color.a),
+            offset: d.offset,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlowDto {
+    pub radius: f32,
+    pub color: ColorDto,
+    pub intensity: f32,
+}
+
+impl From<&GlowDto> for Glow {
+    fn from(d: &GlowDto) -> Self {
+        Self {
+            radius: d.radius,
+            color: glam::Vec4::new(d.color.r, d.color.g, d.color.b, d.color.a),
+            intensity: d.intensity,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropShadowDto {
+    pub offset: Vec2Dto,
+    pub color: ColorDto,
+    pub softness: f32,
+    pub spread: f32,
+}
+
+impl From<&DropShadowDto> for DropShadow {
+    fn from(d: &DropShadowDto) -> Self {
+        Self {
+            offset: glam::Vec2::new(d.offset.x, d.offset.y),
+            color: glam::Vec4::new(d.color.r, d.color.g, d.color.b, d.color.a),
+            softness: d.softness,
+            spread: d.spread,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ComponentSpec
 // ---------------------------------------------------------------------------
 
@@ -174,6 +280,18 @@ pub struct ComponentSpecDto {
     pub children: Vec<f64>,
     #[serde(default)]
     pub bake: bool,
+    #[serde(default)]
+    pub text: Option<TextDto>,
+    #[serde(default)]
+    pub image: Option<ImageDto>,
+    #[serde(default)]
+    pub border: Option<BorderDto>,
+    #[serde(default)]
+    pub glow: Option<GlowDto>,
+    #[serde(default)]
+    pub drop_shadow: Option<DropShadowDto>,
+    #[serde(default)]
+    pub non_interactive: bool,
 }
 
 impl ComponentSpecDto {
@@ -196,6 +314,24 @@ impl ComponentSpecDto {
         }
         if self.bake {
             spec = spec.bake();
+        }
+        if let Some(text) = &self.text {
+            spec = spec.text(text.into());
+        }
+        if let Some(image) = &self.image {
+            spec = spec.image(image.into());
+        }
+        if let Some(border) = &self.border {
+            spec = spec.border(border.into());
+        }
+        if let Some(glow) = &self.glow {
+            spec = spec.glow(glow.into());
+        }
+        if let Some(drop_shadow) = &self.drop_shadow {
+            spec = spec.drop_shadow(drop_shadow.into());
+        }
+        if self.non_interactive {
+            spec = spec.non_interactive();
         }
         (spec, self.children)
     }
@@ -234,6 +370,76 @@ impl From<&TransitionConfigDto> for TransitionConfig {
             easing,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// SplitStrategy / MergeLayout (M13.8 — group transitions, previously
+// Rust-only)
+// ---------------------------------------------------------------------------
+
+/// Same flat `{kind, ...}` shape convention `easing` already uses above
+/// (a string tag instead of a nested JSON tagged-union) — `kind` is one of
+/// `"bake"` / `"slice"` / `"gridSlice"`; `cols`/`rows` only matter for
+/// `"gridSlice"`. An unrecognized `kind` falls back to `Bake`, mirroring
+/// `TransitionConfigDto::easing`'s identical "unknown string → sane default"
+/// leniency rather than erroring.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitStrategyDto {
+    pub kind: String,
+    #[serde(default)]
+    pub cols: usize,
+    #[serde(default)]
+    pub rows: usize,
+}
+
+impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
+    fn from(d: &SplitStrategyDto) -> Self {
+        match d.kind.as_str() {
+            "slice" => proteus_ui::SplitStrategy::Slice,
+            "gridSlice" => proteus_ui::SplitStrategy::GridSlice {
+                cols: d.cols.max(1),
+                rows: d.rows.max(1),
+            },
+            _ => proteus_ui::SplitStrategy::Bake,
+        }
+    }
+}
+
+/// `kind` is `"horizontal"` / `"grid"`; `cols`/`rows` only matter for
+/// `"grid"`. Unrecognized `kind` falls back to `Horizontal` — same
+/// leniency convention as [`SplitStrategyDto`].
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeLayoutDto {
+    pub kind: String,
+    #[serde(default)]
+    pub cols: usize,
+    #[serde(default)]
+    pub rows: usize,
+}
+
+impl From<&MergeLayoutDto> for proteus_ui::MergeLayout {
+    fn from(d: &MergeLayoutDto) -> Self {
+        match d.kind.as_str() {
+            "grid" => proteus_ui::MergeLayout::Grid {
+                cols: d.cols.max(1),
+                rows: d.rows.max(1),
+            },
+            _ => proteus_ui::MergeLayout::Horizontal,
+        }
+    }
+}
+
+/// One entry of `splitToWithStates`'s target list — `id` is a `Handle.id()`
+/// value (see this module's top doc), `state` the explicit rest geometry to
+/// use instead of resolving it from the target's own declared/live
+/// `QuadState` (mirrors `proteus-sdk`'s `Handle::split_to_with_states`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetStateDto {
+    pub id: f64,
+    pub state: QuadStateDto,
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ pub mod input;
 pub mod interaction;
 pub mod schedule;
 pub mod signal;
+pub mod spawn_order;
 pub mod text;
 pub mod texture_ref;
 pub mod topology;
@@ -59,6 +60,7 @@ pub use signal::{
     create_signal, destroy_signal, set as set_signal, signal_dispatch_system, DropReason,
     DroppedSignals, OwnedSignals, SignalId, SignalRegistry, TransitionDropped,
 };
+pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};
 pub use texture_ref::TextureRef;
 pub use topology::{

@@ -17,6 +17,7 @@ bevy_ecs = { workspace = true }
 glam = { workspace = true }
 slotmap = { workspace = true }
 wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
 serde-wasm-bindgen = { workspace = true }

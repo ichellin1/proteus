@@ -8,6 +8,7 @@ Proteus is a cross-platform UI framework written in Rust. Its defining idea: **U
 → [ROADMAP.md](./ROADMAP.md) — milestones and sequencing
 → [PLANNING.md](./PLANNING.md) — full architecture decisions and definitions of done
 → [GETTING_STARTED.md](./GETTING_STARTED.md) — dependencies, demo assets, build & run instructions
+→ [RELEASING.md](./RELEASING.md) — release strategy and deploy steps for the web reference demo
 
 ## Crate Structure
 
@@ -43,9 +44,8 @@ setup, and full run/test instructions for both shells. Quick version, once depen
 assets are in place:
 
 ```
-cargo run -p proteus-shell-native                                          # native
-wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg    # web (build)
-python3 -m http.server 8000 --directory crates/proteus-shell-web/www       # web (serve)
+cargo run -p proteus-shell-native   # native
+make serve-web                      # web (builds, then serves on :8080)
 ```
 
 The native shell is currently only built and verified on macOS; the web shell runs in any
