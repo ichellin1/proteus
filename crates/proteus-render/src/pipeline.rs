@@ -302,21 +302,39 @@ impl QuadPipeline {
     // ---------------------------------------------------------------------------
     // White-pixel sentinel UV constants
     //
-    // The main_atlas has a 1×1 white pixel baked at its origin. Components with
-    // no image texture point at this pixel so their `color` field alone
-    // determines appearance without any shader branching.
+    // `main_atlas` has a solid-white block baked at its origin (see
+    // `create_atlases`). Components with no image texture point at it so their
+    // `color` field alone determines appearance, with no shader branching.
     //
-    // Using the texel *center* (0.5/atlas_size) and zero scale avoids the
-    // linear-sampler edge bleed that occurs when sampling at the texel boundary.
+    // ## Why the offset is exactly (0, 0), not the texel centre
+    //
+    // It used to be `0.5 / DEFAULT_MAIN_ATLAS_SIZE` — the centre of texel 0
+    // *assuming a 2048px page*. That assumption became wrong the moment
+    // `AtlasConfig::page_size` was made configurable (M11.2): the constant is
+    // a normalised UV, so the texel it lands on scales with the real page size.
+    // At `page_size` 4096 — i.e. `ProteusConfig::desktop()`, a shipped, public
+    // preset — it lands exactly on the boundary between texel 0 and texel 1 on
+    // both axes, so the bilinear sampler averages the white texel with three
+    // never-written ones and every untextured quad in the app renders at about
+    // a quarter intensity.
+    //
+    // Sampling at (0, 0) is correct for *any* page size instead of one: the
+    // sampler is `ClampToEdge` on both axes (see `new`), so the four bilinear
+    // taps around the atlas corner all clamp to texel (0, 0) and the result is
+    // that texel exactly. The original comment's worry — bleed from sampling on
+    // a texel boundary — applies to the boundary *between* texels, not to the
+    // outer edge of the texture, where clamping removes it.
+    //
+    // Belt and braces: `create_atlases` fills the whole reserved guard block
+    // with white rather than a single pixel, so the neighbourhood of the origin
+    // is uniformly white and the sentinel reads pure white even if a future
+    // change nudges this offset or the address mode.
     // ---------------------------------------------------------------------------
 
-    /// UV offset for the white-pixel sentinel — center of the 1×1 texel at atlas origin.
+    /// UV offset for the white-pixel sentinel — the atlas origin corner.
     ///
     /// Assign to `QuadInstance::uv_offset` when the component has no image texture.
-    pub const WHITE_PIXEL_UV_OFFSET: [f32; 2] = [
-        0.5 / DEFAULT_MAIN_ATLAS_SIZE as f32,
-        0.5 / DEFAULT_MAIN_ATLAS_SIZE as f32,
-    ];
+    pub const WHITE_PIXEL_UV_OFFSET: [f32; 2] = [0.0, 0.0];
 
     /// UV scale for the white-pixel sentinel — zero means all fragments sample the
     /// same point (the offset), preventing any bilinear bleed into adjacent texels.
@@ -1322,12 +1340,18 @@ impl QuadPipeline {
     }
 
     /// Create `main_atlas` (a `config.page_count`-layer `D2Array` pool, M11.2) and
-    /// `transition_atlas`, and bake a 1×1 white pixel at the origin of `main_atlas`'s
-    /// **layer 0 only** — `QuadState::WHITE_PIXEL_UV_OFFSET` and the default `atlas_page`
-    /// (`pack_atlas_page(ATLAS_SELECTOR_MAIN, 0)`, i.e. plain `0`) both hard-code that fixed
-    /// location, so it must never move even though `main_atlas` now has more than one layer.
-    /// Components with no texture point at this pixel so their `color` field alone determines
+    /// `transition_atlas`, and fill the reserved guard block at the origin of `main_atlas`'s
+    /// **layer 0 only** with white — [`QuadPipeline::WHITE_PIXEL_UV_OFFSET`] and the default
+    /// `atlas_page` (`pack_atlas_page(ATLAS_SELECTOR_MAIN, 0)`, i.e. plain `0`) both hard-code
+    /// that fixed location, so it must never move even though `main_atlas` now has more than
+    /// one layer. Components with no texture sample it so their `color` field alone determines
     /// their appearance with no shader branching.
+    ///
+    /// The whole [`crate::main_atlas_allocator::WHITE_PIXEL_GUARD_SIZE`] block is written, not
+    /// just one texel: that region is reserved from the allocator anyway (nothing else can ever
+    /// be packed there), so filling it costs nothing and makes "the neighbourhood of the atlas
+    /// origin is white" true by construction rather than by the sample point landing on exactly
+    /// the right texel — see [`QuadPipeline::WHITE_PIXEL_UV_OFFSET`]'s own note.
     fn create_atlases(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1351,9 +1375,11 @@ impl QuadPipeline {
             view_formats: &[],
         });
 
-        // Write a 1×1 white pixel at (0, 0) of layer 0 only — origin.z = 0 and
-        // depth_or_array_layers: 1 below already mean exactly that.
-        // Components with no texture use uv_offset=[0,0], uv_scale=[1/atlas_size].
+        // Fill the reserved guard block at (0, 0) of layer 0 only — origin.z = 0
+        // and depth_or_array_layers: 1 below already mean exactly that.
+        // Components with no texture sample this via `WHITE_PIXEL_UV_OFFSET`.
+        let guard = crate::main_atlas_allocator::WHITE_PIXEL_GUARD_SIZE;
+        let guard_pixels = vec![255u8; (guard * guard * 4) as usize]; // RGBA white
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &main_atlas,
@@ -1361,15 +1387,15 @@ impl QuadPipeline {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &[255u8, 255, 255, 255], // RGBA white
+            &guard_pixels,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
+                bytes_per_row: Some(guard * 4),
+                rows_per_image: Some(guard),
             },
             wgpu::Extent3d {
-                width: 1,
-                height: 1,
+                width: guard,
+                height: guard,
                 depth_or_array_layers: 1,
             },
         );

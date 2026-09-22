@@ -82,6 +82,10 @@ pub struct DemoApp {
     /// filesystem paths).
     video_keys: Option<[String; 3]>,
     playing_video: Option<proteus_runtime::PlayingVideo>,
+    /// Last viewport size handed to `Demo::set_viewport_size`, so `update` can
+    /// notice a resize. `Engine::resize` keeps `Frame::viewport` current, but
+    /// nothing was reading it after `setup` — see `advance_viewport`.
+    last_viewport: Option<glam::Vec2>,
 }
 
 impl DemoApp {
@@ -95,6 +99,7 @@ impl DemoApp {
             hires_fetch: None,
             video_keys,
             playing_video: None,
+            last_viewport: None,
         }
     }
 
@@ -105,6 +110,30 @@ impl DemoApp {
     /// module's own crate doc.
     pub fn demo_mut(&mut self) -> Option<&mut Demo> {
         self.demo.as_mut()
+    }
+
+    /// Forwards a changed viewport to [`Demo::set_viewport_size`].
+    ///
+    /// `Demo::set_viewport_size`'s own doc says "call on every resize", and
+    /// `Engine::resize` does keep `Frame::viewport` up to date — but nothing
+    /// read it after `setup`, so the demo stayed laid out for whatever size the
+    /// window happened to open at. The background quad kept its startup size,
+    /// the gallery's declared cell geometry went stale, and the nav/theme icons
+    /// stayed pinned to the old corners (they position from
+    /// `Demo::viewport_size` every frame). A regression from the pre-M13
+    /// shells, which called this from their own `Resized` handler.
+    ///
+    /// Compared rather than called unconditionally: `set_viewport_size` rewrites
+    /// every gallery tile's declared geometry, which is real work and — more to
+    /// the point — would clobber a tile's declared state mid-transition on every
+    /// frame.
+    fn advance_viewport(&mut self, demo: &mut Demo, f: &mut Frame) {
+        let size = f.viewport.logical_size;
+        if self.last_viewport == Some(size) {
+            return;
+        }
+        self.last_viewport = Some(size);
+        demo.set_viewport_size(f.proteus, size);
     }
 
     /// Kicks off / drains this frame's video, on a host that's migrated it
@@ -226,7 +255,7 @@ impl Default for DemoApp {
 impl App for DemoApp {
     fn setup(&mut self, f: &mut Frame) {
         let mut demo = Demo::new(f.proteus);
-        demo.set_viewport_size(f.proteus, f.viewport.logical_size);
+        self.advance_viewport(&mut demo, f);
         load_assets(&mut demo, f);
         self.demo = Some(demo);
     }
@@ -235,6 +264,7 @@ impl App for DemoApp {
         let Some(mut demo) = self.demo.take() else {
             return;
         };
+        self.advance_viewport(&mut demo, f);
         demo.advance(f.proteus, dt);
         for update in demo.take_pending_texture_churn() {
             let texture = f.bake_texture(

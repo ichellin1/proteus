@@ -38,7 +38,11 @@ pub struct MainAtlasRegion {
 }
 
 /// Pixel dimensions of the guard region reserved at atlas origin — see the module docs.
-const WHITE_PIXEL_GUARD_SIZE: u32 = 4;
+///
+/// `pub(crate)` so [`crate::QuadPipeline::create_atlases`] can fill exactly this block with
+/// white: the allocator reserving the region and the pipeline painting it are two halves of one
+/// invariant, and they must not drift apart.
+pub(crate) const WHITE_PIXEL_GUARD_SIZE: u32 = 4;
 
 /// Wraps `etagere::AtlasAllocator`, sized to [`crate::pipeline::MAIN_ATLAS_SIZE`].
 pub struct MainAtlasAllocator {
