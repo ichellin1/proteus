@@ -1093,6 +1093,37 @@ mod tests {
         assert!(reg.is_active(id));
     }
 
+    /// A finished video's registry entry must actually go away.
+    ///
+    /// `QuadPipeline::suspend_video` only marks the entry `Evicted` — it's built
+    /// to be resumable — so stopping playback left the entry behind forever.
+    /// Nothing reclaims it either: eviction only ever considers `main_atlas`
+    /// entries (`is_eviction_candidate` requires `AtlasRegion::Main`), and a
+    /// `Video` entry has no packed region to reclaim. Every play therefore added
+    /// a permanent row to the slotmap.
+    #[test]
+    fn a_video_entry_can_be_freed_once_playback_is_over() {
+        let mut reg = TextureRegistry::new(single_page(256));
+        let id = reg.register_video(1280, 720);
+        assert!(reg.info(id).is_some());
+
+        // What `suspend_video` does on its own: still registered, just not
+        // safe to sample.
+        reg.mark_suspended(id);
+        assert!(!reg.is_active(id));
+        assert!(
+            reg.info(id).is_some(),
+            "suspend alone must not drop the entry — it's resumable"
+        );
+
+        // What stopping for good now additionally does.
+        reg.free(id);
+        assert!(
+            reg.info(id).is_none(),
+            "a freed video entry must be gone from the registry"
+        );
+    }
+
     #[test]
     fn main_atlas_uv_is_normalized_and_within_unit_range() {
         let mut reg = TextureRegistry::new(single_page(1024));

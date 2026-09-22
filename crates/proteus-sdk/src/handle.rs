@@ -140,6 +140,51 @@ fn check_all_alive(
     Ok(())
 }
 
+/// Every entity in `root`'s subtree, `root` included.
+///
+/// `bevy_ecs`'s `ChildOf`/`Children` relationship cascades a despawn to
+/// descendants, so destroying a parent destroys them too — and their callbacks
+/// have to be forgotten along with the parent's.
+fn subtree(app: &Proteus, root: Entity) -> Vec<Entity> {
+    let mut out = vec![root];
+    let mut i = 0;
+    while i < out.len() {
+        if let Some(children) = app.world.world.get::<proteus_ui::Children>(out[i]) {
+            out.extend(children.iter());
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Forget every callback registered against `root`'s subtree, and every
+/// `on_dropped` handler for the signals those entities own.
+///
+/// Call immediately *before* despawning. `proteus-ui` already destroys an
+/// owned signal when its owner despawns (`OwnedSignals`' hook), but that only
+/// clears the `SignalRegistry` — this crate's own handler map is separate and
+/// has to be told too.
+///
+/// Does not cover a despawn made directly through
+/// [`Proteus::world_mut`](crate::Proteus::world_mut): that escape hatch bypasses
+/// this crate entirely. Closing that would mean a `proteus-ui`-side despawn hook
+/// feeding a "these died this frame" queue for the SDK to drain — worth doing if
+/// direct world despawns ever become common, but not for an escape hatch.
+fn forget_subtree(app: &mut Proteus, root: Entity) {
+    for entity in subtree(app, root) {
+        let owned = app
+            .world
+            .world
+            .get::<proteus_ui::OwnedSignals>(entity)
+            .map(|s| s.0.clone())
+            .unwrap_or_default();
+        for signal in owned {
+            app.callbacks.forget_signal(signal);
+        }
+        app.callbacks.forget_entity(entity);
+    }
+}
+
 /// Resolve `entity`'s declared rest geometry — the `DeclaredGeometry`
 /// `component()` captured at creation time if present, else its current
 /// live `QuadState`, else a default. Shared by the group-transition
@@ -208,7 +253,21 @@ impl Handle {
         state: QuadState,
     ) -> Result<(), HandleError> {
         entity_mut(app, self.0, "set_declared_geometry")?
-            .insert((state.clone(), DeclaredGeometry(state)));
+            .insert((state.clone(), DeclaredGeometry(state.clone())));
+        // `interaction_style_system` resolves hover/pressed/focused overrides
+        // against its *own* snapshot of the rest state, taken the first frame
+        // it ever saw this entity — it has no access to `DeclaredGeometry`
+        // (private to this crate). Left stale, a component whose rest layout
+        // is computed after spawn — a grid cell sized from its baked label,
+        // the exact case this method exists for — would snap back to its
+        // original spawn geometry the moment the pointer left it.
+        if let Some(mut interaction) = app
+            .world
+            .world
+            .get_mut::<proteus_ui::InteractionState>(self.0)
+        {
+            interaction.declared = state;
+        }
         Ok(())
     }
 
@@ -588,6 +647,7 @@ impl Handle {
         // validates the receiver and the other doesn't is just a trap.
         check_alive(app, self.0, "remove_child")?;
         if destroy {
+            forget_subtree(app, child.0);
             // `World::despawn` is already non-panicking (returns `bool` and
             // warns internally on a missing entity), so this path only needs
             // its result mapped into ours.
@@ -612,6 +672,9 @@ impl Handle {
     /// harmless to ignore, but reported so a double-destroy shows up rather
     /// than passing for a successful one.
     pub fn destroy(self, app: &mut Proteus) -> Result<(), HandleError> {
+        // Before the despawn: `forget_subtree` reads `Children`/`OwnedSignals`
+        // off entities that are about to stop existing.
+        forget_subtree(app, self.0);
         // Already non-panicking — see `remove_child`'s note on `World::despawn`.
         if app.world.world.despawn(self.0) {
             Ok(())
@@ -748,6 +811,7 @@ impl SignalHandle {
     /// Remove this signal from the registry. Further `.set()` calls are
     /// silently dropped (`DropReason::SignalNotFound`).
     pub fn destroy(self, app: &mut Proteus) {
+        app.callbacks.forget_signal(self.0);
         proteus_ui::destroy_signal(&mut app.world.world, self.0);
     }
 }

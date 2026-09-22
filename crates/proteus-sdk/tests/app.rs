@@ -1141,3 +1141,55 @@ fn component_skips_a_dead_child_instead_of_panicking() {
     );
     assert_eq!(data.children[0], live_child);
 }
+
+// ---------------------------------------------------------------------------
+// set_declared_geometry keeps interaction styling in sync (audit C-11)
+// ---------------------------------------------------------------------------
+
+/// `interaction_style_system` resolves hover/pressed/focused overrides against
+/// its *own* snapshot of the rest state, captured the first frame it saw the
+/// entity — it can't read `DeclaredGeometry` (private to `proteus-sdk`). So
+/// `set_declared_geometry` has to update that snapshot too, or returning to
+/// `Default` snaps the component back to its spawn geometry.
+///
+/// Exactly the case the method exists for: a component whose real resting
+/// layout is only known after spawn — e.g. a cell sized from its own baked
+/// label — is precisely the one that would snap.
+#[test]
+fn set_declared_geometry_updates_what_hover_returns_to() {
+    let spawn = quad_at(0.0, 0.0);
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(spawn.clone()).hover(StyleOverride {
+        scale: Some(2.0),
+        ..Default::default()
+    }));
+
+    // Frame 1 captures the declared baseline.
+    app.tick(0.016);
+
+    // Rest layout is only now known — e.g. measured from baked content.
+    let relaid_out = quad_at(500.0, 250.0);
+    button
+        .set_declared_geometry(&mut app, relaid_out.clone())
+        .unwrap();
+
+    // Hover, settle, then leave and settle again.
+    app.pointer_moved(Some(Vec2::new(500.0, 250.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    app.pointer_moved(Some(Vec2::new(5000.0, 5000.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+
+    let settled = app.get(button).unwrap().geometry;
+    assert_eq!(
+        settled.position, relaid_out.position,
+        "leaving hover must return to the geometry declared after spawn, not the \
+         one captured at spawn"
+    );
+    assert!(
+        (settled.scale - 1.0).abs() < 1e-5,
+        "and the hover scale must be undone, got {}",
+        settled.scale
+    );
+}

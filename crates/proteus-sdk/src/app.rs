@@ -290,8 +290,129 @@ impl Proteus {
     }
 }
 
+impl Proteus {
+    /// How many callbacks are currently registered, across every kind.
+    /// Test-only: a leaked closure is otherwise invisible from outside.
+    #[cfg(test)]
+    pub(crate) fn callback_count(&self) -> usize {
+        self.callbacks.len()
+    }
+}
+
 impl Default for Proteus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ComponentSpec;
+
+    /// Destroying a component must drop the closures registered against it.
+    ///
+    /// The registry is keyed by `(Entity, EventKind)`, and `bevy_ecs` bumps an
+    /// entity's generation on despawn — so a recycled index never collides with
+    /// the dead key, nothing ever overwrote it, and nothing removed it. An app
+    /// that destroys and rebuilds components grew without bound; until there's
+    /// a way to *hide* a component, destroy-and-rebuild is the only way to swap
+    /// a screen, so this is the normal path rather than an unusual one.
+    #[test]
+    fn destroying_a_component_forgets_its_callbacks() {
+        let mut app = Proteus::new();
+        assert_eq!(app.callback_count(), 0);
+
+        let handle = app.component(ComponentSpec::new(QuadState::default()));
+        handle.on_click(&mut app, |_| {});
+        handle.on_hover_enter(&mut app, |_| {});
+        handle.on_drag(&mut app, |_, _| {});
+        assert_eq!(app.callback_count(), 3);
+
+        handle.destroy(&mut app).unwrap();
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "every handler registered against a destroyed component must go with it"
+        );
+    }
+
+    /// `bevy_ecs` cascades a despawn to descendants, so a destroyed parent takes
+    /// its children's callbacks with it too.
+    #[test]
+    fn destroying_a_parent_forgets_its_descendants_callbacks() {
+        let mut app = Proteus::new();
+        let grandchild = app.component(ComponentSpec::new(QuadState::default()));
+        let child = app.component(ComponentSpec::new(QuadState::default()).child(grandchild));
+        let parent = app.component(ComponentSpec::new(QuadState::default()).child(child));
+
+        for h in [parent, child, grandchild] {
+            h.on_click(&mut app, |_| {});
+        }
+        assert_eq!(app.callback_count(), 3);
+
+        parent.destroy(&mut app).unwrap();
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "descendants are despawned with the parent, so their handlers must go too"
+        );
+        assert!(app.get(grandchild).is_none(), "cascade really happened");
+    }
+
+    /// A handler that destroys its own component is a real pattern ("this
+    /// button dismisses the thing it belongs to"), and it races the
+    /// take-call-put-back that makes dispatch re-entrant: the handlers are held
+    /// *outside* the map during the call, where `destroy`'s pruning can't see
+    /// them, so putting them back unconditionally resurrects them.
+    #[test]
+    fn a_callback_that_destroys_its_own_component_does_not_resurrect_its_handlers() {
+        let mut app = Proteus::new();
+        let handle = app.component(ComponentSpec::new(QuadState {
+            position: glam::Vec3::new(0.0, 0.0, 0.0),
+            size: glam::Vec2::new(100.0, 100.0),
+            ..Default::default()
+        }));
+        handle.on_click(&mut app, move |app| {
+            let _ = handle.destroy(app);
+        });
+        assert_eq!(app.callback_count(), 1);
+
+        app.pointer_moved(Some(glam::Vec2::ZERO));
+        app.pointer_pressed();
+        app.tick(0.016);
+
+        assert!(app.get(handle).is_none(), "the callback destroyed it");
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "the handler must not be put back for an entity that can never fire again"
+        );
+    }
+
+    /// Destroying a signal drops its `on_dropped` handlers, and destroying an
+    /// entity that *owns* signals drops theirs too — `proteus-ui` already
+    /// destroys owned signals on despawn, but that only clears its own registry,
+    /// not this crate's separate handler map.
+    #[test]
+    fn destroying_signals_and_their_owners_forgets_dropped_handlers() {
+        let mut app = Proteus::new();
+
+        let unowned = app.signal(None);
+        unowned.on_dropped(&mut app, |_, _| {});
+        assert_eq!(app.callback_count(), 1);
+        unowned.destroy(&mut app);
+        assert_eq!(app.callback_count(), 0, "explicit signal destroy");
+
+        let owner = app.component(ComponentSpec::new(QuadState::default()));
+        let owned = app.signal(Some(owner));
+        owned.on_dropped(&mut app, |_, _| {});
+        assert_eq!(app.callback_count(), 1);
+        owner.destroy(&mut app).unwrap();
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "an owned signal's handlers go when its owner does"
+        );
     }
 }

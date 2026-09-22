@@ -52,6 +52,35 @@ impl CallbackRegistry {
         self.handlers.entry((entity, kind)).or_default().push(cb);
     }
 
+    /// Drop every handler registered against `entity`.
+    ///
+    /// Called when an entity is destroyed. Without this the closures stayed in
+    /// the map forever: keys are `(Entity, EventKind)` and `bevy_ecs` bumps an
+    /// entity's generation on despawn, so a recycled index never collides with
+    /// the dead key and nothing ever overwrote it either. An app that destroys
+    /// and rebuilds components — which, until there's a way to hide one, is the
+    /// *only* way to swap a screen — grows without bound.
+    pub(crate) fn forget_entity(&mut self, entity: Entity) {
+        self.handlers.retain(|(e, _), _| *e != entity);
+        self.drag_handlers.remove(&entity);
+    }
+
+    /// Drop every `on_dropped` handler registered against `signal`.
+    pub(crate) fn forget_signal(&mut self, signal: SignalId) {
+        self.dropped_handlers.remove(&signal);
+    }
+
+    /// Total registered handlers of every kind — the number that must come
+    /// back down when components are destroyed. Test-facing observability;
+    /// there is no other way to see the leak this guards against, since a
+    /// leaked closure is invisible from outside.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.handlers.values().map(Vec::len).sum::<usize>()
+            + self.drag_handlers.values().map(Vec::len).sum::<usize>()
+            + self.dropped_handlers.values().map(Vec::len).sum::<usize>()
+    }
+
     pub(crate) fn register_drag(&mut self, entity: Entity, cb: DragCallback) {
         self.drag_handlers.entry(entity).or_default().push(cb);
     }
@@ -70,11 +99,24 @@ pub(crate) fn fire(app: &mut Proteus, entity: Entity, kind: EventKind) {
     for cb in &mut cbs {
         cb(app);
     }
-    app.callbacks
-        .handlers
-        .entry((entity, kind))
-        .or_default()
-        .extend(cbs);
+    // Not put back if the callback destroyed its own entity — a real pattern
+    // ("this button dismisses the thing it belongs to"). The take-call-put-back
+    // above holds the handlers *outside* the map for the duration of the call,
+    // so `Handle::destroy`'s own pruning can't see them, and putting them back
+    // unconditionally would resurrect handlers for an entity that can never
+    // fire again.
+    if is_alive(app, entity) {
+        app.callbacks
+            .handlers
+            .entry((entity, kind))
+            .or_default()
+            .extend(cbs);
+    }
+}
+
+/// Whether `entity` still exists — see [`fire`]'s put-back guard.
+fn is_alive(app: &Proteus, entity: Entity) -> bool {
+    app.world.world.entities().contains(entity)
 }
 
 /// Same shape as [`fire`], for the one event that carries a payload.
@@ -85,11 +127,13 @@ pub(crate) fn fire_drag(app: &mut Proteus, entity: Entity, delta: Vec2) {
     for cb in &mut cbs {
         cb(app, delta);
     }
-    app.callbacks
-        .drag_handlers
-        .entry(entity)
-        .or_default()
-        .extend(cbs);
+    if is_alive(app, entity) {
+        app.callbacks
+            .drag_handlers
+            .entry(entity)
+            .or_default()
+            .extend(cbs);
+    }
 }
 
 /// Same shape as [`fire`], for [`crate::SignalHandle::on_dropped`].
