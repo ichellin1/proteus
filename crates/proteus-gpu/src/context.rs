@@ -47,7 +47,7 @@ impl GpuSurface {
     /// for `target`.
     ///
     /// `target` is whatever the platform presents: an `Arc<winit::Window>` on
-    /// native, [`wgpu::SurfaceTarget::Canvas`] on the web. Both satisfy
+    /// native, `wgpu::SurfaceTarget::Canvas` on the web. Both satisfy
     /// `Into<SurfaceTarget<'static>>`, which is the only shape of the platform
     /// this crate ever sees — no winit, no web-sys, no `#[cfg]`.
     ///

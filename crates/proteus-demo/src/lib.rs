@@ -1146,7 +1146,7 @@ impl Demo {
     /// those methods' own doc.) Call on every resize (and once up front with
     /// the real initial size, since [`Demo::new`] only has a placeholder to
     /// spawn with). Logical pixels, same convention as
-    /// [`Demo::pointer_moved`].
+    /// [`proteus_sdk::Proteus::pointer_moved`].
     pub fn set_viewport_size(&mut self, proteus: &mut Proteus, size: Vec2) {
         self.viewport_size = size;
         for handle in [self.background.light, self.background.dark] {
@@ -2682,8 +2682,8 @@ impl Demo {
     /// Drains this tick's pending video-start request, if any — `Some(idx)`
     /// means the shell should probe/decode whichever file index `idx`
     /// (0/1/2, matching `screens::video_tiles`' left/center/right tiles)
-    /// maps to and start pushing frames into its `VideoFrameSender` (see
-    /// the crate-root doc: decoding stays a shell concern). The entity
+    /// maps to and start pushing frames at the video texture (see the
+    /// crate-root doc: decoding stays a shell concern). The entity
     /// already shows the video texture by the time this fires — see
     /// `pending_video_start`'s doc.
     pub fn take_pending_video_start(&mut self) -> Option<usize> {
@@ -2699,14 +2699,12 @@ impl Demo {
 
     /// Tells `Demo` a real decoded video frame has actually landed for the
     /// currently-playing tile — the shell's own job is just detecting that
-    /// (e.g. `QuadPipeline::consume_video_frame` returning `true`) and
-    /// calling this once; `Demo` has no way to see the GPU texture itself.
-    /// Drives `Demo::advance_video_loading`'s loading-dots/error visibility.
+    /// (e.g. `Frame::poll_video` returning `true`) and calling this once;
+    /// `Demo` has no way to see the GPU texture itself. Drives
+    /// `Demo::advance_video_loading`'s loading-dots/error visibility.
     /// A no-op call (e.g. after the tile has already moved on) is harmless —
     /// this just sets a flag `start_tiles_to_screen` resets on the next
-    /// visit anyway. Mirrors `proteus-shell-native`'s own
-    /// `PlayingVideo::first_frame_shown` latch (set the same way, from
-    /// `consume_video_frame`'s return value).
+    /// visit anyway. `DemoApp` latches it from `poll_video`'s return value.
     pub fn set_video_first_frame_shown(&mut self) {
         self.video_first_frame_shown = true;
     }
@@ -3628,15 +3626,23 @@ impl Demo {
     /// Pointer position in **world-space** (viewport-center origin, Y-up) —
     /// see [`proteus_sdk::Proteus::pointer_moved`]'s doc for the exact
     /// contract and the conversion a caller needs from window/CSS pixels.
-    pub fn pointer_moved(&mut self, proteus: &mut Proteus, pos: Option<Vec2>) {
+    ///
+    /// Test-only. A host drives input through `Engine::pointer_*`, which
+    /// reaches `Proteus` without passing through `Demo` at all; these three
+    /// forwarders exist so the test harness can drive input without standing
+    /// up an `Engine`.
+    #[cfg(test)]
+    pub(crate) fn pointer_moved(&mut self, proteus: &mut Proteus, pos: Option<Vec2>) {
         proteus.pointer_moved(pos);
     }
 
-    pub fn pointer_pressed(&mut self, proteus: &mut Proteus) {
+    #[cfg(test)]
+    pub(crate) fn pointer_pressed(&mut self, proteus: &mut Proteus) {
         proteus.pointer_pressed();
     }
 
-    pub fn pointer_released(&mut self, proteus: &mut Proteus) {
+    #[cfg(test)]
+    pub(crate) fn pointer_released(&mut self, proteus: &mut Proteus) {
         proteus.pointer_released();
     }
 

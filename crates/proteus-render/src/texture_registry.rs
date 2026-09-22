@@ -86,8 +86,8 @@ pub struct AtlasConfig {
 impl Default for AtlasConfig {
     fn default() -> Self {
         Self {
-            page_size: crate::MAIN_ATLAS_SIZE,
-            page_count: crate::MAIN_ATLAS_PAGE_COUNT,
+            page_size: crate::DEFAULT_MAIN_ATLAS_SIZE,
+            page_count: crate::DEFAULT_MAIN_ATLAS_PAGE_COUNT,
         }
     }
 }
@@ -118,16 +118,18 @@ pub enum TextureKind {
 }
 
 /// Lifecycle state of a registered texture.
+///
+/// Registration and upload are one synchronous step here — a `register_*`
+/// method either returns a `TextureId` whose pixels are already on the GPU or
+/// doesn't return one at all — so there is no "loading" or "failed" state in
+/// between for an entry to sit in. (An earlier revision declared both; neither
+/// was ever constructed. If asynchronous uploads land, they come back.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureState {
-    /// Registered but not yet uploaded.
-    Loading,
     /// Uploaded and safe to sample.
     Ready,
     /// GPU memory released (eviction, or `suspend_video`) — not safe to sample.
     Evicted,
-    /// Registration or upload failed.
-    Failed,
 }
 
 /// Where a registered texture's pixels physically live.

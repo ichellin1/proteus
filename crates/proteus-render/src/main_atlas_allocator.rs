@@ -44,7 +44,7 @@ pub struct MainAtlasRegion {
 /// invariant, and they must not drift apart.
 pub(crate) const WHITE_PIXEL_GUARD_SIZE: u32 = 4;
 
-/// Wraps `etagere::AtlasAllocator`, sized to [`crate::pipeline::MAIN_ATLAS_SIZE`].
+/// Wraps `etagere::AtlasAllocator`, sized to [`crate::pipeline::DEFAULT_MAIN_ATLAS_SIZE`].
 pub struct MainAtlasAllocator {
     inner: etagere::AtlasAllocator,
 }

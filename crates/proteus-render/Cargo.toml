@@ -1,6 +1,6 @@
 [package]
 name = "proteus-render"
-description = "Layer 1: scene graph, instanced render pipeline, transition pipeline"
+description = "Layer 1: instanced render pipeline, atlases, and the offscreen bake pipeline"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -2910,7 +2910,7 @@ blocking this milestone on the full asset contract.
 
 ##### Definition of done
 
-- [ ] `proteus-runtime` exists with `Renderer`, `Engine`, and the `App` / `Host` / `HostServices` / `Frame` / `Viewport` trait + type defs, documented.
+- [x] `proteus-runtime` exists with `Renderer`, `Engine`, and the `App` / `HostServices` / `Frame` / `Viewport` trait + type defs, documented. *(A `Host` trait was part of this sketch and was built, but no caller was ever generic over it and `proteus-host-web` declined to implement it — dropped at the 2026-09-22 audit, § X-10.)*
 - [ ] Minimal `proteus-host-winit` implements `Host` and exposes `run<A: App>(app: A)`.
 - [ ] `proteus-demo` is `impl App for DemoApp`; `Demo::tick` / `app_mut` / `set_*` / `take_pending_*` are gone.
 - [ ] `proteus-shell-native` is a thin `fn main()` calling `proteus_host_winit::run(DemoApp::new())`, with the per-frame loop and the ~20 asset setters deleted.
@@ -3170,9 +3170,9 @@ loop. Native blocks until the window closes.
 
 ##### Windowing-agnostic from day one
 
-The crate is `-winit`, not `-native`, on purpose. The `Host` trait (M13.1: `device()` / `queue()`
-/ `surface_format()` / `viewport()`) leaks no winit types, and `Engine` is driven entirely through
-`pointer_*` / `resize` / `frame` — also winit-free. A later host is a pure addition:
+The crate is `-winit`, not `-native`, on purpose. Nothing a host hands `proteus-runtime` leaks
+winit types — `GpuSurface::create` takes an `Into<wgpu::SurfaceTarget<'static>>` and `Engine` is
+driven entirely through `pointer_*` / `resize` / `frame`. A later host is a pure addition:
 
 | Host | Surface | Event source | Status |
 |---|---|---|---|
@@ -3183,7 +3183,10 @@ The crate is `-winit`, not `-native`, on purpose. The `Host` trait (M13.1: `devi
 ("DRM" here is Linux's **Direct Rendering Manager** — the kernel GPU/display subsystem — not
 digital-rights anything. Bare embedded devices with no compositor talk to it directly to own the
 whole screen; embedded *with* a compositor already runs on `proteus-host-winit`.) None of these
-touch `proteus-runtime` or the `Host` trait — each provides its own `run` and `impl Host`.
+touch `proteus-runtime` — each provides its own `run`, its own `HostServices`, and a
+`GpuSurface::create` call. (M13.1 sketched a `Host` trait of `device()` / `queue()` /
+`surface_format()` / `viewport()`; `proteus-host-web` never implemented it, nothing ever
+dispatched through it, and the audit removed it — see `AUDIT-2026-09-21.md` § X-10.)
 
 ##### Shared GPU init
 

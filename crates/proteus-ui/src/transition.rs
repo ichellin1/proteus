@@ -134,19 +134,6 @@ impl ActiveTransition {
 // TransitionComplete event
 // ---------------------------------------------------------------------------
 
-/// Written by `transition_complete_system` when a transition reaches `t = 1.0`.
-///
-/// The shell drains `CompletedTransitions` once per frame (after `world.update()`)
-/// to react to finished transitions — e.g. to chain the next transition or
-/// update application state.
-///
-/// A plain struct rather than a bevy_ecs `Event` so there is no dependency on
-/// the event subsystem, which changed significantly between bevy_ecs releases.
-#[derive(Debug, Clone)]
-pub struct TransitionComplete {
-    pub entity: Entity,
-}
-
 /// Single-frame message bag: entities whose transitions completed this frame.
 ///
 /// `transition_complete_system` clears this at the start of each frame and then

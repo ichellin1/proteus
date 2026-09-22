@@ -1,7 +1,7 @@
 //! `proteus-host-winit` — Layer 3: a winit + wgpu native host for
 //! [`proteus_runtime`] (M13.1 minimal build / M13.3).
 //!
-//! Implements [`proteus_runtime::Host`] on a winit window and drives an
+//! Owns a winit window plus its [`proteus_runtime::GpuSurface`] and drives an
 //! [`Engine`] from winit's event loop. A native app is then just:
 //!
 //! ```no_run
@@ -31,8 +31,8 @@ use proteus_runtime::config::RenderConfig;
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
 use proteus_runtime::{
-    App, Engine, FetchId, FetchResult, GpuSurface, Host, HostServices, ProteusConfig,
-    SurfaceRequest, VideoStream, Viewport,
+    App, Engine, FetchId, FetchResult, GpuSurface, HostServices, ProteusConfig, SurfaceRequest,
+    VideoStream, Viewport,
 };
 
 use winit::application::ApplicationHandler;
@@ -229,21 +229,6 @@ struct Running {
     engine: Engine,
     services: DirHostServices,
     last_frame: Instant,
-}
-
-impl Host for Running {
-    fn device(&self) -> &wgpu::Device {
-        &self.gpu.device
-    }
-    fn queue(&self) -> &wgpu::Queue {
-        &self.gpu.queue
-    }
-    fn surface_format(&self) -> wgpu::TextureFormat {
-        self.gpu.format()
-    }
-    fn viewport(&self) -> Viewport {
-        viewport_for(&self.window, self.gpu.config.width, self.gpu.config.height)
-    }
 }
 
 impl Running {

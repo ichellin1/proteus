@@ -48,7 +48,7 @@ pub struct FetchId(pub u64);
 /// bytes, or `None` on failure/not-found (see that method's own doc).
 pub type FetchResult = (FetchId, Option<Arc<[u8]>>);
 
-/// The asset services a [`Host`] provides to the running [`App`].
+/// The asset services a host provides to the running [`App`].
 ///
 /// **Two seams, both "resolves on this host's own terms":**
 /// - [`load_asset`](HostServices::load_asset) — synchronous, resolves
@@ -62,7 +62,6 @@ pub type FetchResult = (FetchId, Option<Arc<[u8]>>);
 ///   impls in this repo accept one) — kicked off now, polled for later via
 ///   [`poll_fetches`](HostServices::poll_fetches).
 ///
-/// [`Host`]: crate::Host
 /// [`App`]: crate::App
 pub trait HostServices {
     /// Fetch an asset's raw bytes by platform-agnostic key (e.g.
