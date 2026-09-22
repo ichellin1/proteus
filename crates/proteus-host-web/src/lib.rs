@@ -148,12 +148,12 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
     /// registers/writes GPU textures outside the generic bake pass (e.g.
     /// video, texture churn).
     pub fn device(&self) -> &wgpu::Device {
-        &self.surface.device
+        self.surface.device()
     }
 
     /// The wgpu queue backing this loop's surface. See [`Self::device`].
     pub fn queue(&self) -> &wgpu::Queue {
-        &self.surface.queue
+        self.surface.queue()
     }
 
     fn render_frame(&mut self, ts_ms: f64) {
@@ -170,7 +170,7 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         };
         self.last_frame = Some(ts_ms);
 
-        let frame = match self.surface.surface.get_current_texture() {
+        let frame = match self.surface.surface().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {

@@ -31,7 +31,8 @@ use proteus_runtime::config::RenderConfig;
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
 use proteus_runtime::{
-    App, Engine, FetchId, FetchResult, Host, HostServices, ProteusConfig, VideoStream, Viewport,
+    App, Engine, FetchId, FetchResult, GpuSurface, Host, HostServices, ProteusConfig,
+    SurfaceRequest, VideoStream, Viewport,
 };
 
 use winit::application::ApplicationHandler;
@@ -224,10 +225,7 @@ struct WinitHostApp<A: App> {
 /// Everything that exists only once a surface is live.
 struct Running {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    gpu: GpuSurface,
     engine: Engine,
     services: DirHostServices,
     last_frame: Instant,
@@ -235,20 +233,16 @@ struct Running {
 
 impl Host for Running {
     fn device(&self) -> &wgpu::Device {
-        &self.device
+        &self.gpu.device
     }
     fn queue(&self) -> &wgpu::Queue {
-        &self.queue
+        &self.gpu.queue
     }
     fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_config.format
+        self.gpu.format()
     }
     fn viewport(&self) -> Viewport {
-        viewport_for(
-            &self.window,
-            self.surface_config.width,
-            self.surface_config.height,
-        )
+        viewport_for(&self.window, self.gpu.config.width, self.gpu.config.height)
     }
 }
 
@@ -257,9 +251,7 @@ impl Running {
         if width == 0 || height == 0 {
             return;
         }
-        self.surface_config.width = width;
-        self.surface_config.height = height;
-        self.surface.configure(&self.device, &self.surface_config);
+        self.gpu.resize(width, height);
         self.engine
             .resize(viewport_for(&self.window, width, height));
     }
@@ -270,11 +262,11 @@ impl Running {
         let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
 
-        let frame = match self.surface.get_current_texture() {
+        let frame = match self.gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.surface_config);
+                self.gpu.reconfigure();
                 self.window.request_redraw();
                 return;
             }
@@ -317,15 +309,15 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
         );
 
         let render_cfg = self.config.proteus.render;
-        let (surface, device, queue, surface_config) =
-            pollster::block_on(init_gpu(window.clone(), render_cfg));
+        let gpu = pollster::block_on(init_gpu(window.clone(), render_cfg));
+        log::info!("GPU adapter: {}", gpu.adapter_description());
 
         let mut services = DirHostServices::new(self.config.asset_dir.clone());
-        let viewport = viewport_for(&window, surface_config.width, surface_config.height);
+        let viewport = viewport_for(&window, gpu.config.width, gpu.config.height);
         let engine = Engine::new(
-            &device,
-            &queue,
-            surface_config.format,
+            &gpu.device,
+            &gpu.queue,
+            gpu.format(),
             viewport,
             self.config.proteus.clone(),
             &mut self.app,
@@ -334,10 +326,7 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
 
         let running = Running {
             window,
-            surface,
-            surface_config,
-            device,
-            queue,
+            gpu,
             engine,
             services,
             last_frame: Instant::now(),
@@ -372,8 +361,8 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
                 // `position` is physical px; the engine wants world-space,
                 // logical, centre-origin, Y-up.
                 let scale = running.window.scale_factor() as f32;
-                let w = running.surface_config.width as f32 / scale;
-                let h = running.surface_config.height as f32 / scale;
+                let w = running.gpu.config.width as f32 / scale;
+                let h = running.gpu.config.height as f32 / scale;
                 let wx = (position.x as f32 / scale) - w / 2.0;
                 let wy = h / 2.0 - (position.y as f32 / scale);
                 running.engine.pointer_moved(Some(Vec2::new(wx, wy)));
@@ -406,75 +395,26 @@ fn viewport_for(window: &Window, physical_w: u32, physical_h: u32) -> Viewport {
     )
 }
 
-/// wgpu instance / surface / adapter / device setup. Lifted from the M12
-/// native shell; `render`'s `power_preference` / `present_mode` are M13.5's
-/// wiring (were hardcoded before). The `proteus-gpu` consolidation (shared
-/// with the web host) is M13.3 proper.
-async fn init_gpu(
-    window: Arc<Window>,
-    render: RenderConfig,
-) -> (
-    wgpu::Surface<'static>,
-    wgpu::Device,
-    wgpu::Queue,
-    wgpu::SurfaceConfiguration,
-) {
+/// Window + GPU bring-up. The wgpu half now lives in `proteus-gpu`
+/// (`GpuSurface::create`) — see `PLANNING.md` § M13.3's "shared GPU init":
+/// this host and `proteus-host-web` each carried a copy of the same instance →
+/// surface → adapter → device → format-choice → configure sequence, differing
+/// only in device limits and where the initial size comes from.
+async fn init_gpu(window: Arc<Window>, render: RenderConfig) -> GpuSurface {
     let size = window.inner_size();
-
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-
-    let surface = instance
-        .create_surface(window)
-        .expect("failed to create surface");
-
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
+    GpuSurface::create(
+        window,
+        SurfaceRequest {
+            label: "proteus-host-winit",
+            size: (size.width, size.height),
             power_preference: render.power_preference,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        })
-        .await
-        .expect("no suitable GPU adapter found");
-
-    log::info!("GPU adapter: {}", adapter.get_info().name);
-
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("proteus-host-winit"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: Default::default(),
-            ..Default::default()
-        })
-        .await
-        .expect("failed to create GPU device");
-
-    let surface_caps = surface.get_capabilities(&adapter);
-    // Avoid an sRGB-tagged surface format on purpose — every colour in
-    // Proteus is authored as a flat, already-gamma-space value and the
-    // fragment shader passes it through untouched, so an sRGB swapchain
-    // would double-encode. Lifted from the M12 shells.
-    let surface_format = surface_caps
-        .formats
-        .iter()
-        .find(|f| !f.is_srgb())
-        .copied()
-        .unwrap_or(surface_caps.formats[0]);
-
-    let surface_config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface_format,
-        width: size.width.max(1),
-        height: size.height.max(1),
-        present_mode: render.present_mode,
-        alpha_mode: surface_caps.alpha_modes[0],
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-    };
-    surface.configure(&device, &surface_config);
-
-    (surface, device, queue, surface_config)
+            present_mode: render.present_mode,
+            // Native asks for the full default limits; the pipeline still never
+            // relies on anything above the WebGL2 floor, so the same shaders
+            // run on both hosts.
+            limits: wgpu::Limits::default(),
+        },
+    )
+    .await
+    .expect("GPU setup failed")
 }

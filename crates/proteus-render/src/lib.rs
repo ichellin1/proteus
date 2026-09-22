@@ -1,6 +1,6 @@
 //! `proteus-render` — Layer 1: scene graph and instanced GPU render pipeline.
 //!
-//! Builds on [`proteus_gpu`] to provide:
+//! Provides:
 //! - The instanced quad pipeline — one buffer upload, one draw call per frame
 //! - The WGSL shader set (SDF corner radius, borders, texture crossfade)
 //! - The texture registry (reference counting, LRU eviction)

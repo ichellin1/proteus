@@ -11,6 +11,7 @@ repository.workspace = true
 # proteus-sdk stays headless; this crate is the first layer that knows about
 # the GPU surface. Hosts (proteus-host-winit, proteus-host-web) depend on
 # this crate only — never on proteus-render / proteus-ui directly.
+proteus-gpu = { path = "../proteus-gpu" }
 proteus-sdk = { path = "../proteus-sdk" }
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
