@@ -6,7 +6,7 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/isaacchellin/proteus",
+    "url": "https://github.com/ichellin1/proteus",
     "directory": "crates/proteus-sdk-web/ts"
   },
   "keywords": [
