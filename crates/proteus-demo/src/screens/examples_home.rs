@@ -1,16 +1,14 @@
 //! The Examples category grid — reached from `Home`'s third nav button.
 //! Six category buttons in a 3-column × 2-row grid (column-major:
-//! `buttons[col*2]` = top, `buttons[col*2+1]` = bottom), matching
-//! `proteus-shell-native::EXAMPLE_CATEGORY_TITLES`. All 6 are clickable,
-//! matching source — categories 0 (Effects), 1 (Text), 2 (Transforms &
-//! Animation), 3 (Stress Tests) have real content; 4–5 (Layout, 3D) land on
-//! a "not built yet" placeholder instead (see `screens::example_detail`'s
-//! doc).
+//! `buttons[col*2]` = top, `buttons[col*2+1]` = bottom), titled by
+//! [`EXAMPLE_CATEGORY_TITLES`]. All 6 are clickable — categories 0
+//! (Effects), 1 (Text), 2 (Transforms & Animation), 3 (Stress Tests) have
+//! real content; 4–5 (Layout, 3D) land on a "not built yet" placeholder
+//! instead (see `screens::example_detail`'s doc).
 //!
 //! Design-System treatment: same "no fill ever, border/glow only, violet
-//! label" call as `screens::home`'s nav buttons — same spawn recipe as
-//! `proteus-shell-native`'s own `example_buttons` (border/glow/interactable,
-//! identical constants). Hover registration lives in `Demo::new`
+//! label" call as `screens::home`'s nav buttons, down to the same
+//! border/glow/interactable recipe and constants. Hover registration lives in `Demo::new`
 //! (`register_hover`), theme-color blend in `Demo::advance_theme`.
 
 use glam::{Vec2, Vec3, Vec4};
@@ -97,10 +95,9 @@ pub fn spawn(app: &mut Proteus) -> ExamplesHome {
 
 /// Grid layout — each column shares the wider of its own top/bottom
 /// button's baked-label width; all 6 share one row height (the tallest
-/// label). Centered on both axes. Mirrors
-/// `proteus-shell-native::layout_example_buttons` exactly. `None` until
-/// every label has baked (text bakes within the first frame or two, well
-/// before anything can click through to trigger this).
+/// label). Centered on both axes. `None` until every label has baked (text
+/// bakes within the first frame or two, well before anything can click
+/// through to trigger this).
 pub fn layout(app: &Proteus, examples_home: &ExamplesHome) -> Option<[QuadState; 6]> {
     let mut sizes = [Vec2::ZERO; 6];
     for (size, &label) in sizes.iter_mut().zip(examples_home.labels.iter()) {

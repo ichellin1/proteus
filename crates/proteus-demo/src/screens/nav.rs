@@ -5,9 +5,7 @@
 //! also carries a "selected" overlay pair (`home_selected`/
 //! `home_selected_dark`), shown only while resting on `Home`.
 //!
-//! Fade-in/position/hover: `Demo::advance_nav_icons`. Mirrors
-//! `proteus-shell-native`'s own `nav_icons`/`logo_lockup`/
-//! `home_icon_selected` spawn code and `advance_nav_icons` exactly.
+//! Fade-in/position/hover: `Demo::advance_nav_icons`.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -121,9 +119,8 @@ pub fn spawn(app: &mut Proteus) -> Nav {
             color: Vec4::new(1.0, 1.0, 1.0, 0.0),
             corner_radius: 0.0,
         })
-        // Decorative brand mark, not a click target — matching
-        // `proteus-shell-native::logo_lockup`'s own spawn (no `Interactable`
-        // there at all). Its bounding box (the full `lockup.png`, including
+        // Decorative brand mark, not a click target — deliberately no
+        // `Interactable`. Its bounding box (the full `lockup.png`, including
         // the trailing whitespace `LOGO_TEXT_RIGHT_PX`'s doc mentions)
         // overlaps `home`'s own hit region — real fallout from a missing
         // call here, not a hypothetical: without this, clicking `home`

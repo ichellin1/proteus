@@ -1,7 +1,7 @@
 //! The full-window background image — persistent across every screen, not
 //! specific to any one of them. Spawned once by `Demo::new()`; never hidden
-//! or touched by state transitions (matches
-//! `proteus-shell-native`'s own `background`/`background_dark` pair).
+//! or touched by state transitions — the light/dark pair is the only thing
+//! that ever changes about it.
 //!
 //! `dark` crossfades in over `light` as `Demo`'s `theme_progress` ramps
 //! toward 1 (`Demo::advance_theme`) — unconditionally, every frame,
