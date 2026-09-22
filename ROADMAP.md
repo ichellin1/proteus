@@ -105,9 +105,12 @@ entity composition at M10. The `with_text()` style API goes away entirely at tha
 
 ## M6 — Visual Regression Testing *(complete)*
 
-Headless render target, reference image capture, per-frame pixel diffing, CI integration.
-Rendering correctness locked in before the complexity of interactivity is introduced. Failing
-diffs surface in CI with before/after image artifacts.
+Rendering correctness locked in before the complexity of interactivity is introduced. Pixel
+snapshots were considered and **deliberately not taken** — they are GPU- and driver-dependent,
+non-deterministic across machines, and need a GPU in CI. What shipped asserts on the
+`Vec<QuadInstance>` that `collect_instances` produces (`proteus-ui/tests/render_instances.rs`),
+which is the complete ground truth for what reaches the screen: pure Rust, deterministic, no GPU.
+See PLANNING.md § M6 for the full rationale.
 
 ## M7 — Interactivity *(complete — minimal set)*
 
@@ -442,6 +445,14 @@ Planned future work, not part of the V1 scope:
   way to trade it off. A capped or configurable render scale (independent of hires-fetch sizing)
   belongs to whoever tunes an app for production rather than in the framework's default — it
   would slot into `ProteusConfig::render` alongside the M13.5 fields.
+- **Centered and outer border placement.** `QuadInstance::border_offset` and the TypeScript
+  `borderAlignment: 'inner' | 'center' | 'outer'` were designed as a continuous -1.0…1.0 range,
+  but only inner (`-1.0`) renders correctly: centered shows just the inner half of the band, and
+  outer renders nothing, because the fragment shader discards outside the rect edge so there is
+  nowhere for an outer band to land (see `quad.wgsl`'s border block, which documents this). The
+  fix is to grow the quad's geometry by the border width, or render the border as its own
+  instance — neither is a shader-only change. Surfaced by the 2026-09-22 audit; the limitation
+  was real and documented in code but tracked in no milestone until then.
 - **Text Phase 2** — multi-line layout (line breaking, alignment, line height)
 - **Text Phase 3** — bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - **Text Phase 4** — inline styles (mixed bold, italic, size, color within a text run)
