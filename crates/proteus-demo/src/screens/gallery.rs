@@ -6,8 +6,7 @@
 //! entity, deliberately not one of the 12 `tiles` (see its doc for why).
 //!
 //! Unlike `screens::video_tiles`' fixed 3-tile row, this grid is fully
-//! viewport-computed (`cell_size`/`cell_quad`) — mirrors
-//! `proteus-shell-native::gallery_cell_size`/`gallery_cell_quad` exactly.
+//! viewport-computed (`cell_size`/`cell_quad`).
 //! Hover (glow + scale on `tiles`/`fetch_button`; glow only, no scale, on
 //! `enlarged` — see `Demo::advance_hovers`' call site for why that one's
 //! different) and theme-color/corner-radius wiring both live in `Demo`
@@ -51,7 +50,7 @@ const GRID_BOTTOM_MARGIN_PX: f32 = 40.0;
 /// counterpart (`CORNER_RADIUS_DARK`) is a genuine, verified no-op (both
 /// `20.0` in source), wired anyway — see the module doc.
 pub const CORNER_RADIUS: f32 = 20.0;
-/// `proteus-shell-native::GALLERY_CORNER_RADIUS_DARK`.
+/// Dark-theme counterpart of [`CORNER_RADIUS`] — see its doc.
 pub const CORNER_RADIUS_DARK: f32 = 20.0;
 const BORDER_WIDTH: f32 = 3.0;
 
@@ -59,10 +58,9 @@ const FETCH_BUTTON_LABEL: &str = "Fetch New Images";
 const FETCH_BUTTON_TOP_MARGIN_PX: f32 = 65.0;
 const FETCH_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(220.0, 46.0);
 const FETCH_BUTTON_PADDING_PX: f32 = 15.0;
-/// `proteus-shell-native` actually blends `gallery_fetch_button`'s corner
-/// radius against `NAV_BUTTON_CORNER_RADIUS`'s own pair, not `GALLERY_
-/// CORNER_RADIUS`'s — numerically identical either way (every one of these
-/// pairs happens to be `20.0`/`20.0`), but `Demo::advance_theme` uses this
+/// The fetch button blends its corner radius against the *nav button's*
+/// pair, not the gallery's — numerically identical either way (every one of
+/// these pairs happens to be `20.0`/`20.0`), but `Demo::advance_theme` uses this
 /// pair specifically to match source's own semantic pairing, not just its
 /// current numeric output.
 pub const FETCH_BUTTON_CORNER_RADIUS: f32 = 20.0;
@@ -107,11 +105,10 @@ pub struct Gallery {
     /// center-cropped to a square in place once it lands (so the grid cell
     /// shows a crop, not a stretch); `enlarged` needs the original,
     /// undistorted frame when `idx` is clicked, so it's stashed here first,
-    /// before the crop happens — mirrors
-    /// `proteus-shell-native::gallery_tile_full_baked`, just as an ECS
-    /// entity instead of a plain field (`Demo` has no way to hold a bare
-    /// `BakedImage` value itself — see `Handle::copy_baked_image_from`'s
-    /// doc for why that type only ever flows entity-to-entity here).
+    /// before the crop happens. Held as an ECS entity rather than a plain
+    /// field: `Demo` has no way to hold a bare `BakedImage` value itself —
+    /// see `Handle::copy_baked_image_from`'s doc for why that type only ever
+    /// flows entity-to-entity here.
     pub tile_full: [Handle; TILE_COUNT],
 }
 
@@ -210,8 +207,7 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
 
 /// The largest square cell that fits `COLS`×`ROWS` within `viewport_size`
 /// minus margins/gaps on both axes, then scaled down slightly
-/// (`CELL_SCALE`) for breathing room. Mirrors
-/// `proteus-shell-native::gallery_cell_size` exactly.
+/// (`CELL_SCALE`) for breathing room.
 fn cell_size(viewport_size: Vec2) -> f32 {
     let usable_w =
         (viewport_size.x - MARGIN_LEFT - MARGIN_RIGHT - (COLS - 1) as f32 * GAP_PX).max(0.0);
@@ -234,8 +230,8 @@ fn grid_content_size(viewport_size: Vec2) -> Vec2 {
 /// `idx` is row-major (`row = idx / COLS`, row 0 = top). Horizontally
 /// centered on the viewport; vertically bottom-anchored — the grid's own
 /// bottom edge always sits `GRID_BOTTOM_MARGIN_PX` above the viewport's
-/// bottom edge, regardless of viewport size or how many rows fit. Mirrors
-/// `proteus-shell-native::gallery_cell_quad` (light treatment only).
+/// bottom edge, regardless of viewport size or how many rows fit. Light
+/// treatment only — `Demo::advance_theme` owns the dark blend.
 pub fn cell_quad(idx: usize, viewport_size: Vec2) -> QuadState {
     let cell = cell_size(viewport_size);
     let row = idx / COLS;
@@ -267,8 +263,7 @@ pub fn layout(viewport_size: Vec2) -> [QuadState; TILE_COUNT] {
 /// horizontally centered, top-anchored `FETCH_BUTTON_TOP_MARGIN_PX` below
 /// the viewport's top edge. `None` until the label has baked (text bakes
 /// within the first frame or two — see `screens::examples_home::layout`'s
-/// identical convention). Mirrors the sizing/positioning math in
-/// `proteus-shell-native::layout_gallery_tiles`.
+/// identical convention).
 pub fn fetch_button_quad(
     app: &Proteus,
     gallery: &Gallery,
@@ -293,8 +288,7 @@ pub fn fetch_button_quad(
 /// (`grid_content_size`) without distorting it, independent of which cell
 /// the source tile was in. One `min()` covers portrait (height-constrained),
 /// landscape (width-constrained), and square photos alike — no branching.
-/// Mirrors `proteus-shell-native::gallery_large_image_quad` (light
-/// treatment only).
+/// Light treatment only — `Demo::advance_theme` owns the dark blend.
 pub fn large_image_quad(aspect: Vec2, viewport_size: Vec2) -> QuadState {
     let box_size = grid_content_size(viewport_size);
     let scale = (box_size.x / aspect.x).min(box_size.y / aspect.y);
@@ -313,8 +307,8 @@ pub fn large_image_quad(aspect: Vec2, viewport_size: Vec2) -> QuadState {
 /// the `width`-column-wide slice of the grid starting at `start_col` — used
 /// by `Demo::start_gallery_to_home`'s three column-grouped merges (column 0
 /// alone → nav button 0, columns 1–2 → nav button 1, column 3 alone → nav
-/// button 2), mirroring `proteus-shell-native::start_gallery_to_nav`'s
-/// asymmetric 1+2+1 grouping (4 grid columns onto 3 nav buttons).
+/// button 2). The 1+2+1 grouping is deliberately asymmetric: 4 grid columns
+/// have to land on 3 nav buttons.
 pub fn column_group_tiles(start_col: usize, width: usize) -> Vec<usize> {
     (0..ROWS)
         .flat_map(move |row| (start_col..start_col + width).map(move |col| row * COLS + col))

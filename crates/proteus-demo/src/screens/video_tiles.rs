@@ -14,17 +14,14 @@
 //! tile↔screen morph, a hard scale bump once resting as the video screen)
 //! to need their own `Demo::advance_tile_hover`, which reads each tile's
 //! ramped hover progress back out of that same shared engine rather than
-//! duplicating the ramp. Mirrors `proteus-shell-native::advance_tile_hover`
-//! exactly, including the label's own hardcoded (not theme-blended)
-//! `violet_dark()` — see that constant's own doc for why.
+//! duplicating the ramp. The label's colour is hardcoded rather than
+//! theme-blended — see `violet_dark`'s own doc for why.
 //!
 //! `VideoScreen`'s loading UI (`backdrop`/`loading_dots`/`error_text`, driven
 //! by `Demo::advance_video_loading`) papers over real decode latency — local
 //! `.mp4` playback via `ffmpeg` still routinely takes "a second or more" to
 //! deliver its first real frame (subprocess spawn + demux/decode warm-up),
-//! not just the network-fetch case this UI was originally built for. Mirrors
-//! `proteus-shell-native::advance_video_loading`/`video_backdrop`/
-//! `video_loading_dots`/`video_error_text` exactly.
+//! not just the network-fetch case this UI was originally built for.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -38,7 +35,7 @@ const TILE_GAP: f32 = 100.0;
 /// anyway per this pass's design decision (see `screens::home::CORNER_
 /// RADIUS`'s own doc for the same call).
 pub const TILE_CORNER_RADIUS: f32 = 20.0;
-/// `proteus-shell-native::TILE_CORNER_RADIUS_DARK`.
+/// Dark-theme counterpart of [`TILE_CORNER_RADIUS`] — see its doc.
 pub const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
 pub const BORDER_WIDTH: f32 = 3.0;
 
@@ -50,34 +47,29 @@ const TILE_COLORS: [Vec4; 3] = [
     Vec4::new(0.10, 0.55, 0.65, 1.0), // aqua — Jellyfish
 ];
 
-/// `proteus-shell-native::TILE_TITLES` — shown in the hover overlay only,
-/// never at rest.
+/// Shown in the hover overlay only, never at rest.
 pub const TILE_TITLES: [&str; 3] = ["Tiger", "Sintel", "Jellyfish"];
 const TILE_LABEL_SIZE_PX: f32 = 18.0;
 const TILE_LABEL_LETTER_SPACING_PX: f32 = TILE_LABEL_SIZE_PX * 0.02;
 /// The baked glyph run is a fixed size; `scale` composes down the hierarchy
 /// multiplicatively, so bumping the label child's own local scale renders
 /// the same glyphs visibly bigger once the tile is resting as the (much
-/// larger) video screen. Mirrors `proteus-shell-native::TILE_LABEL_SCREEN_SCALE`.
+/// larger) video screen.
 pub const TILE_LABEL_SCREEN_SCALE: f32 = 1.8;
 /// The overlay's alpha animates `0.0 → TILE_OVERLAY_MAX_ALPHA` on hover, not
 /// to a fully opaque `1.0` — the box art underneath should still read
-/// through a dark tint, not be fully hidden. Mirrors
-/// `proteus-shell-native::TILE_OVERLAY_MAX_ALPHA`.
+/// through a dark tint, not be fully hidden.
 pub const TILE_OVERLAY_MAX_ALPHA: f32 = 0.5;
 
 /// Video screen loading dots — small and subtle by design, unlike the much
 /// larger 19-frame `loading_logo` animation used for the Photo Gallery
-/// fetch, which would look clunky at video-screen scale. Mirrors
-/// `proteus-shell-native::VIDEO_DOT_SIZE_PX`/`VIDEO_DOT_SPACING_PX`.
+/// fetch, which would look clunky at video-screen scale.
 const VIDEO_DOT_SIZE_PX: f32 = 12.0;
 const VIDEO_DOT_SPACING_PX: f32 = 28.0;
-/// Full pulse cycle duration per dot. Mirrors
-/// `proteus-shell-native::VIDEO_DOT_PULSE_PERIOD_SECS`.
+/// Full pulse cycle duration per dot.
 pub const VIDEO_DOT_PULSE_PERIOD_SECS: f32 = 1.2;
 /// Phase offset between adjacent dots — what makes the pulse read as a
-/// left-to-right sequence rather than all 3 dots pulsing in unison. Mirrors
-/// `proteus-shell-native::VIDEO_DOT_PULSE_STAGGER_SECS`.
+/// left-to-right sequence rather than all 3 dots pulsing in unison.
 pub const VIDEO_DOT_PULSE_STAGGER_SECS: f32 = 0.15;
 pub const VIDEO_DOT_ALPHA_MIN: f32 = 0.25;
 pub const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
@@ -85,14 +77,13 @@ pub const VIDEO_DOT_ALPHA_MAX: f32 = 1.0;
 /// How long to wait for the first real decoded frame before giving up and
 /// showing `VIDEO_LOAD_ERROR_TEXT` instead of the loading dots — same
 /// "elapsed timer → inline error" shape as `crate::GALLERY_FETCH_TIMEOUT_
-/// SECS`. Mirrors `proteus-shell-native::VIDEO_LOAD_TIMEOUT_SECS`.
+/// SECS`.
 pub const VIDEO_LOAD_TIMEOUT_SECS: f32 = 15.0;
 pub const VIDEO_LOAD_ERROR_TEXT: &str = "Couldn't load video — check your connection";
 /// How long to sit settled-and-waiting before the loading dots actually
 /// show — playback often becomes ready within a beat of settling, and
 /// showing the dots immediately in that case reads as a flash rather than a
-/// loading indicator. Mirrors
-/// `proteus-shell-native::VIDEO_DOT_SHOW_DELAY_SECS`.
+/// loading indicator.
 pub const VIDEO_DOT_SHOW_DELAY_SECS: f32 = 0.25;
 
 fn violet() -> Vec4 {
@@ -104,7 +95,6 @@ fn violet() -> Vec4 {
 /// label color, not a live `theme_progress` blend target: the label sits on
 /// top of a black semi-transparent overlay in both themes, and the lighter
 /// violet reads clearly against black regardless of which theme is active.
-/// Mirrors `proteus-shell-native`'s own identical choice for `tile_labels`.
 fn violet_dark() -> Vec4 {
     Vec4::new(182.0 / 255.0, 168.0 / 255.0, 1.0, 1.0)
 }
@@ -116,9 +106,8 @@ fn violet_dark() -> Vec4 {
 pub(crate) const TILE_Z: f32 = 0.5;
 
 /// `idx` 0 = left, 1 = center, 2 = right — a fixed centered row, spaced
-/// `TILE_WIDTH + TILE_GAP` center-to-center. Mirrors
-/// `proteus-shell-native::tile_quad` (light treatment only — no
-/// `theme_progress` lerp, see `screens::background`'s doc for why).
+/// `TILE_WIDTH + TILE_GAP` center-to-center. Light treatment only — no
+/// `theme_progress` lerp, see `screens::background`'s doc for why.
 pub(crate) fn tile_quad(idx: usize) -> QuadState {
     let spacing = TILE_WIDTH + TILE_GAP;
     let x = (idx as f32 - 1.0) * spacing;
@@ -141,9 +130,9 @@ pub(crate) fn tile_quad(idx: usize) -> QuadState {
 /// `Demo::start_screen_to_tiles`). A bare `tile_quad(idx)` would always
 /// carry the tint, even multiplying real box art underneath it — a real
 /// bug, reported directly ("tiles keep color tint from the original bg
-/// colors"). Mirrors `proteus-shell-native::start_nav_to_tiles`/
-/// `start_screen_to_tiles`'s own identical `BakedImage`-gated override
-/// exactly.
+/// colors"). Both `Demo::start_home_to_tiles` and
+/// `Demo::start_screen_to_tiles` gate the override on `BakedImage` the same
+/// way.
 pub(crate) fn tile_target_state(app: &Proteus, tile: Handle, idx: usize) -> QuadState {
     let mut state = tile_quad(idx);
     if tile.baked_image_size(app).is_some() {
@@ -159,7 +148,7 @@ pub(crate) fn tile_target_state(app: &Proteus, tile: Handle, idx: usize) -> Quad
 /// recomputes both every tick from the parent tile's own *current*
 /// geometry, since (unlike every other child quad in this crate) the
 /// parent's shape itself changes continuously through the tile↔screen
-/// morph. Mirrors `proteus-shell-native::tile_overlay_quad` exactly.
+/// morph.
 fn tile_overlay_quad() -> QuadState {
     QuadState {
         position: Vec3::ZERO,
@@ -221,11 +210,9 @@ fn backdrop_quad() -> QuadState {
 
 /// One of the 3 loading dots — `idx` 0/1/2 = left/center/right, spaced
 /// `VIDEO_DOT_SPACING_PX` apart, centered on the video screen. z=0.52 —
-/// *above* this crate's own bumped `video_screen_quad` z (0.51): source
-/// puts these at 0.51, safely above its own unbumped 0.5 screen, but tying
-/// our own already-bumped screen would re-open the exact root z-tie-break
-/// bug `video_screen_quad`'s own doc already fixed once. Mirrors
-/// `proteus-shell-native::video_loading_dots`' geometry.
+/// *above* this crate's own bumped `video_screen_quad` z (0.51): tying the
+/// already-bumped screen would re-open the exact root z-tie-break bug
+/// `video_screen_quad`'s own doc already fixed once.
 fn loading_dot_quad(idx: usize) -> QuadState {
     QuadState {
         position: Vec3::new((idx as f32 - 1.0) * VIDEO_DOT_SPACING_PX, 0.0, 0.52),
@@ -241,7 +228,7 @@ fn loading_dot_quad(idx: usize) -> QuadState {
 /// Same z tier as `loading_dot_quad` (0.52, for the same reason) — never
 /// visible at the same time as the dots (`Demo::advance_video_loading`
 /// gates them on opposite conditions), so no stacking concern between the
-/// two. Mirrors `proteus-shell-native::video_error_text`'s geometry.
+/// two.
 fn error_text_quad() -> QuadState {
     QuadState {
         position: Vec3::new(0.0, 0.0, 0.52),
@@ -263,15 +250,14 @@ pub struct VideoTiles {
     /// before the first frame" gap (before `VideoPlayer`'s texture has any
     /// real content, the video-screen quad alone would show through to
     /// whatever's behind it). Independent, standalone, reused across all 3
-    /// tiles. Mirrors `proteus-shell-native::video_backdrop`.
+    /// tiles.
     pub backdrop: Handle,
     /// Three small loading dots, centered on the video screen, pulsing in
     /// sequence — shown only while settled on `VideoScreen` with no frame
-    /// shown yet. Mirrors `proteus-shell-native::video_loading_dots`.
+    /// shown yet.
     pub loading_dots: [Handle; 3],
     /// Inline "couldn't load" message, centered on the video screen — shown
-    /// only once the load has timed out. Mirrors
-    /// `proteus-shell-native::video_error_text`.
+    /// only once the load has timed out.
     pub error_text: Handle,
 }
 
@@ -287,9 +273,9 @@ pub fn spawn(app: &mut Proteus) -> VideoTiles {
                 }),
         )
     });
-    // Overlay first, label second — draw order follows insertion order, so
-    // the label renders on top of the overlay, matching
-    // `proteus-shell-native`'s own spawn order.
+    // Overlay first, label second — within a z tie, draw order follows
+    // spawn order (`SpawnOrder`), so the label renders on top of the
+    // overlay.
     let tile_overlays = std::array::from_fn(|idx| {
         let overlay = app.component(ComponentSpec::new(tile_overlay_quad()).non_interactive());
         let _ = tiles[idx].add_child(app, overlay);
@@ -350,7 +336,8 @@ const SCREEN_ASPECT: f32 = 720.0 / 1280.0;
 /// `TILE_CORNER_RADIUS`'s pair, this one's dark counterpart
 /// (`SCREEN_CORNER_RADIUS_DARK`) is a genuinely different value.
 pub const SCREEN_CORNER_RADIUS: f32 = 12.0;
-/// `proteus-shell-native::SCREEN_CORNER_RADIUS_DARK`.
+/// Dark-theme counterpart of [`SCREEN_CORNER_RADIUS`] — genuinely different
+/// here, unlike [`TILE_CORNER_RADIUS`]'s pair.
 pub const SCREEN_CORNER_RADIUS_DARK: f32 = 18.0;
 /// Same reasoning/value as `example_detail`'s own top-clearance constant —
 /// vertical space reserved (top *and* bottom, here) so the screen never
@@ -359,17 +346,15 @@ const SCREEN_CLEARANCE_PX: f32 = 110.0;
 
 /// The clicked tile's target geometry once it's grown into the video
 /// screen — width driven by `viewport_size.x`, capped so it never overlaps
-/// `screens::nav`'s buttons top or bottom. Mirrors
-/// `proteus-shell-native::video_screen_quad`'s geometry (light treatment
-/// only — no `theme_progress` lerp, see `screens::background`'s doc for
-/// why), but *not* its z: `tiles[0..3]` are all root entities tied at the
-/// same z=0.5, so `collect_instances`' z-sort falls back to iteration
-/// order for them — the growing/settled screen would draw *under* whichever
-/// sibling tiles happen to iterate later, visibly clipped by them wherever
+/// `screens::nav`'s buttons top or bottom. Light treatment only — no
+/// `theme_progress` lerp, see `screens::background`'s doc for why.
+///
+/// The z is deliberately *not* the tiles' own: `tiles[0..3]` are all root
+/// entities tied at z=0.5, and `collect_instances` breaks a z tie by
+/// `SpawnOrder`, so the growing/settled screen would draw *under* whichever
+/// sibling tiles were spawned later, visibly clipped by them wherever
 /// their (untransformed, still tile-sized) footprint overlaps the much
-/// bigger screen. `proteus-shell-native` doesn't share this concern (its own
-/// renderer sorts draw calls differently), so this is a real difference
-/// this port's own architecture needs, not a fidelity gap — bumping to
+/// bigger screen. Bumping to
 /// 0.51 (this crate's established "just above resting content" tier, same
 /// one `example_detail::CONTENT_Z` uses over its panel's own 0.5) guarantees
 /// the screen always wins the tie, growing or settled. `animate_to` lerps
