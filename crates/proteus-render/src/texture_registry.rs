@@ -49,7 +49,7 @@
 //! No explicit "repack/defragment a page" step exists, and testing found none is needed for the
 //! case that seemed likeliest to require it: fully emptying a page (mixed-size regions, freed in
 //! scattered order) already recovers its *entire* original space via `etagere`'s own coalescing —
-//! see [`TextureRegistry::free_internal`]'s doc for how this was verified rather than assumed. The
+//! see `TextureRegistry::free_internal`'s doc for how this was verified rather than assumed. The
 //! harder case — repacking a page that's still *partially* full, with some content still
 //! referenced — is a real gap, but not one this fixes: it needs the same referenced-content
 //! relocation mechanism already deferred to Post-V1 above (moving a referenced region's pixels

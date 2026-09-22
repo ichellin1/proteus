@@ -24,18 +24,19 @@
 //! Rendering (GPU device/surface setup, `collect_instances`, the actual
 //! draw call, and baking `Text`/`Image` components into the GPU atlas) is
 //! **not** this crate's job — `proteus-sdk` itself is headless, and this
-//! crate follows suit. A shell drives [`Demo`] with [`Demo::tick`]/pointer
-//! input, then reads [`Demo::app`]'s `world()` to render. `examples/
-//! native_preview.rs` is a minimal reference for how to wire this up
-//! (including the text-baking step) — not part of this crate's public API,
-//! just a `cargo run --example native_preview -p proteus-demo` harness for
-//! visually confirming each migration step as content lands.
+//! crate follows suit. [`Demo`] mutates a [`proteus_sdk::Proteus`] handed to
+//! it and nothing else; it never sees a GPU.
 //!
-//! Per-platform asset loading (reading files from disk, `fetch()`-ing
-//! images, decoding video) also stays a shell concern — later steps add
-//! `set_*`/`take_*` injection points to [`Demo`] (mirroring
-//! `proteus-shell-web`'s existing wasm-bindgen surface, generalized) that
-//! each shell calls with bytes/frames it fetched its own way.
+//! Since M13.4 a *shell* doesn't drive [`Demo`] either. [`DemoApp`] wraps it,
+//! implements `proteus_runtime::App`, and is handed to a host crate's
+//! `run()`; the host owns the window/canvas, the frame loop and the GPU, and
+//! `Engine` calls `DemoApp`'s `App::update` once per frame with a `Frame`.
+//! Per-platform asset work — reading files, `fetch()`-ing images, decoding
+//! video — reaches [`Demo`] through that `Frame` (`bake_texture`,
+//! `fetch_async`, `play_video`) over the host's own `HostServices`, rather
+//! than through a shell-side shim. `app.rs`'s own module doc has the full
+//! picture; [`Demo`]'s `set_*`/`take_*` methods are the injection points it
+//! drains.
 //!
 //! ## Why so many `let _ = handle.foo(...)`
 //!
@@ -410,7 +411,7 @@ pub struct GalleryFetchRequest {
 /// [`Demo::set_gallery_hires_image`] with the result. `width_px`/
 /// `height_px` already preserve the box's exact aspect ratio (`Demo`
 /// computes them from `gallery_tile_aspect[idx]`, the only side that knows
-/// the photo's real aspect — see [`Demo::start_gallery_to_image`]'s doc) —
+/// the photo's real aspect — see `Demo::start_gallery_to_image`'s doc) —
 /// the shell doesn't need to know or preserve the aspect ratio itself.
 ///
 /// Same logical-pixel/uncapped convention as [`GalleryFetchRequest::
@@ -1090,7 +1091,7 @@ impl Demo {
     /// square) — get this wrong and every enlarged photo comes out looking
     /// square regardless of the source's real proportions. Also queues a
     /// crop for the tile's own square grid cell, applied once baking
-    /// completes — see [`Demo::advance_gallery_tile_crop`]'s doc.
+    /// completes — see `Demo::advance_gallery_tile_crop`'s doc.
     pub fn set_gallery_tile_image(
         &mut self,
         proteus: &mut Proteus,
@@ -2652,9 +2653,10 @@ impl Demo {
         }
     }
 
-    /// Drains this tick's Texture Churn updates for the shell to register —
-    /// see [`TextureChurnUpdate`]'s doc. Call once per tick, after
-    /// [`Demo::tick`], whenever GPU resources are available.
+    /// Drains this tick's Texture Churn updates to register — see
+    /// [`TextureChurnUpdate`]'s doc. Call once per tick, after
+    /// [`Demo::advance`], from somewhere with GPU access: that is
+    /// [`DemoApp`]'s `App::update`, which has a `Frame`.
     pub fn take_pending_texture_churn(&mut self) -> Vec<TextureChurnUpdate> {
         std::mem::take(&mut self.pending_texture_churn)
     }

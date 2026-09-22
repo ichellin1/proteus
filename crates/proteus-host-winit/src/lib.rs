@@ -160,7 +160,7 @@ impl HostServices for DirHostServices {
     /// — video files don't live under `self.base` in the reference demo
     /// (`assets/videos/`, separate from the image `base`), and there's no
     /// established "video keyspace" convention yet to resolve a bare key
-    /// against. `.mp4` decode via `ffmpeg`/`ffprobe` — see [`mp4_player`].
+    /// against. `.mp4` decode via `ffmpeg`/`ffprobe` — see `mp4_player`.
     fn open_video(&mut self, key: &str) -> Option<Box<dyn VideoStream>> {
         mp4_player::open(PathBuf::from(key)).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
     }
