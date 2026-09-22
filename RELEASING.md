@@ -1,7 +1,8 @@
 # Releasing the Reference Demo (Web)
 
-How to ship a change to the web build of the reference demo view ed at **<https://ichellin1.github.io/proteus/>**. Four steps: review locally, open a PR,
-review on staging, merge. 
+How to ship a change to the web build of the reference demo, viewed at
+**<https://ichellin1.github.io/proteus/>**. Four steps: review locally, open a PR, review on
+staging, merge.
 
 *Native has no release path — it's `cargo run -p
 proteus-shell-native` from source (see [GETTING_STARTED.md](./GETTING_STARTED.md)), nothing
@@ -68,8 +69,9 @@ deploy — nothing further to run. Give it a minute or two, then open
 
 Three workflows under `.github/workflows/`, each doing one job in the flow above:
 
-- **`ci.yml`** — runs on every push and PR: `cargo fmt`/`clippy`/`test` plus wasm builds. The
-  gate step 2 waits on before a PR is mergeable.
+- **`ci.yml`** — runs on every push and PR: `cargo fmt`/`clippy`/`doc`/`test` plus wasm builds
+  and the TypeScript SDK's own type-check, package check and example build. The gate step 2
+  waits on before a PR is mergeable.
 - **`staging-deploy.yml`** — runs on PR open/update/close for the paths above: builds the web
   shell, publishes it to a per-PR subpath on a separate repo (`ichellin1/proteus-staging`, so a
   preview can never touch production), comments the URL, and removes it when the PR closes.
