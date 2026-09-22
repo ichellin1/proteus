@@ -180,6 +180,16 @@ impl Proteus {
     /// Advance one frame: runs the `proteus-ui` schedule, then dispatches
     /// this frame's interaction/signal-drop events to registered callbacks.
     ///
+    /// **Callbacks run after the schedule, so anything one of them starts
+    /// takes effect on the next tick.** A `signal.set` from inside an
+    /// `on_click` handler queues a `TransitionRequest` that
+    /// `transition_setup_system` has already run past this frame; the morph
+    /// begins on the following `tick`. That is one frame — invisible at
+    /// 60fps — and it is what makes dispatch re-entrant-safe, since a
+    /// handler can mutate the world freely without racing a system that is
+    /// mid-iteration. Pinned by
+    /// `signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick`.
+    ///
     /// Clears `just_pressed`/`just_released` after processing — callers only
     /// need to call `pointer_pressed`/`pointer_released` once per physical
     /// press/release, not remember to clear them again (a small ergonomic

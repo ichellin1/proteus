@@ -278,6 +278,65 @@ fn signal_set_drives_to_toward_its_declared_geometry_and_hides_from() {
 }
 
 #[test]
+fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() {
+    // M7 deferred this exact combination to M12 and nothing pinned it since.
+    // It is the case `callback.rs`'s take-call-put-back dispatch exists for:
+    // the handler runs while the callback registry is lifted out of
+    // `Proteus`, and `signal.set` re-enters that same `Proteus`.
+    //
+    // It works — but the transition starts on the *next* tick, because
+    // `tick` runs the whole schedule and only then dispatches callbacks, so
+    // the `TransitionRequest` the handler queues arrives after
+    // `transition_setup_system` has already run for this frame. That one
+    // frame of latency is invisible at 60fps and is what this pins; the
+    // reference demo never exposed it, since every `on_click` there only
+    // sets a flag the next `advance` reads.
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let to = app.component(ComponentSpec::new(QuadState {
+        color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+        ..quad_at(300.0, 0.0)
+    }));
+
+    let signal = app.signal(None);
+    button.on_click(&mut app, move |app| {
+        signal.set(app, to, from, cfg(10.0), false);
+    });
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+
+    assert!(
+        app.get(to)
+            .expect("to should still exist")
+            .transition
+            .is_none(),
+        "the handler runs after this tick's transition_setup_system, so nothing \
+         should have started yet — if this starts passing, tick()'s ordering \
+         changed and the latency note on Proteus::tick is stale"
+    );
+
+    app.tick(1.0);
+
+    let transition = app
+        .get(to)
+        .expect("to should still exist")
+        .transition
+        .expect("the click handler's signal.set should have started a transition by now");
+    assert!(
+        transition.progress > 0.0 && transition.progress < 1.0,
+        "10s transition should be mid-flight after a 1s tick, got {}",
+        transition.progress
+    );
+    assert!(
+        !app.get(from).expect("from should still exist").visible,
+        "from must be hidden once the morph starts, same as a set() from outside a handler"
+    );
+}
+
+#[test]
 fn get_reflects_transition_progress_mid_flight() {
     let mut app = Proteus::new();
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));

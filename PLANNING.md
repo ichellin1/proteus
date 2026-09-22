@@ -63,11 +63,11 @@ The vision document ([VISION.md](./VISION.md)) is stable. Phase B can begin.
 - [x] A child's geometric state is expressed relative to its parent. When the parent moves, children move with it.
 - [x] Transitions cascade in both directions — a child can initiate a transition independently of its parent (list item → detail view), and a parent can drive a transition that absorbs its children (list → button is an N→1 where N includes children).
 
-### In Progress
+### Resolved during Phase B
 
-- [ ] **Scene graph / internal architecture model** — how components and their relationships are represented and updated internally. This is the most important architectural decision in the project. Three models under investigation (see Research Questions below).
+- [x] **Scene graph / internal architecture model** — how components and their relationships are represented and updated internally. This was the most important architectural decision in the project. **Resolved: `bevy_ecs`**, confirmed in Phase C and built on ever since; see the Research Questions below for the three models that were weighed and Phase B for the model as built.
 
-- [ ] **Developer experience** — what does it feel like to use Proteus?
+- [x] **Developer experience** — what does it feel like to use Proteus? **Resolved** in Phase B's API design and built at M12 (`component()` / `signal()` / `texture()`, Rust and TypeScript).
   - What does a developer write to declare a component and its possible forms?
   - What does a developer write to declare a transition between two forms?
   - What triggers a transition — user input, application state, both?
@@ -420,9 +420,9 @@ The vision document ([VISION.md](./VISION.md)) is stable. Phase B can begin.
 
 ### To Do
 
-- [ ] Reference the original POC — document what it demonstrated, what it proved, and what it did not address. Use it as a concrete reference point for the target experience.
-- [ ] Define what a "prototype" milestone looks like for V1 — the specific interaction that demonstrates the paradigm
-- [ ] Resolve scene graph model (see Research Questions) before Phase B begins
+- [ ] Reference the original POC — document what it demonstrated, what it proved, and what it did not address. Use it as a concrete reference point for the target experience. *(Still open; the link is still missing under Reference Material too. The only Phase A item never closed — everything the POC would have anchored has since been decided in Phase B and built.)*
+- [x] Define what a "prototype" milestone looks like for V1 — the specific interaction that demonstrates the paradigm. **Resolved:** M2 (first transition) proved the paradigm; M5 (reference demo) is the showcase.
+- [x] Resolve scene graph model (see Research Questions) before Phase B begins. **Resolved: `bevy_ecs`.**
 
 ---
 
@@ -755,7 +755,7 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
       atlas_page:    u32,       // 0 = main_atlas, 1 = transition_atlas
   }
   ```
-  See below for crossfade and border fields. Full struct is ~124 bytes per instance. 1000 components ≈ 124KB — well within GPU limits.
+  See below for crossfade and border fields. Full struct is **160 bytes** per instance as built — a compile-time assertion in `mesh.rs` pins it, and the vertex-attribute layout must agree. 1000 components ≈ 160KB — well within GPU limits.
 
   **Camera and projection — 3D forward-compatible from day one:**
   The vertex shader computes `clip_position = projection * view * model * vertex_position`.
@@ -911,6 +911,14 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   TypeScript API: `borderAlignment: 'inner' | 'center' | 'outer'` (maps to -1.0, 0.0, 1.0);
   raw float also accepted for fine-grained control. Three fields on `QuadInstance`:
   `border_width: f32`, `border_color: [f32; 4]`, `border_offset: f32` (default 0.0).
+
+  > **As built, only inner borders render correctly.** `border_offset = 0.0` (centered) shows
+  > only the inner half of the band, and `1.0` (outer) renders nothing at all: the fragment
+  > shader discards outside the rect edge, so there is nowhere for an outer band to land. The
+  > limitation is documented at `quad.wgsl`'s border block but was tracked in no milestone or
+  > roadmap entry until the 2026-09-22 audit. Fixing it means growing the quad's geometry by
+  > the border width (or rendering the border as its own instance) — listed under Post-V1 in
+  > ROADMAP.md.
 
   *Note — future shader effects:* blur, glow, drop shadow, distortion, and other multi-pass effects
   belong in the M8 Shader Effects Library. The base fragment shader handles all single-pass
@@ -1188,13 +1196,14 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
     handle infrastructure. No dependency owns any part of the public-facing API surface.
 
 - [x] **Developer tooling decisions:**
-  - *Build — web:* `wasm-pack` for npm library distribution; `trunk` for the reference demo app.
+  - *Build — web:* `wasm-pack` for npm library distribution; `trunk` for the reference demo app. *(Trunk was never adopted — the demo builds with `wasm-pack --target web` and is served by a static file server; see the Makefile. Vite serves `examples/gallery`.)*
   - *Build — native:* `cargo build` / `cargo run` via standard Cargo workflow.
   - *Testing:* `cargo test` for unit and integration tests; visual regression tests against a headless
     wgpu render target (introduced at M6).
   - *CI:* GitHub Actions — `cargo test`, `cargo clippy`, `wasm-pack build` on every push.
-  - *Hot reload:* deferred — not in scope until M5 (reference demo) or later. Trunk provides basic
-    browser live-reload for the demo during development.
+  - *Hot reload:* deferred — not in scope until M5 (reference demo) or later. *(Still deferred for
+    the Rust demo, which has no live-reload; `examples/gallery` gets Vite's HMR for the TypeScript
+    side, which is as far as this has gone.)*
   - *Formatting:* `rustfmt` with default settings. `cargo fmt --check` in CI.
 
 ---
@@ -1641,11 +1650,11 @@ User input drives transitions. The reference demo becomes interactive.
 - [x] Regression tests: `hit_test.rs` covers hidden/virtual opt-out, AABB hit, hover enter/exit
 - [x] Existing visual regression tests (M6) still pass after M7 work
 
-**Deferred to M12 (full handler API):**
-- [ ] All handlers: `onPress`, `onRelease`, `onFocus`, `onBlur`, `onDrag`
-- [ ] `allowInput`/`allowNavigation` transition config flags
-- [ ] `signal.set()` from an `onClick` handler triggering a transition
-- [ ] `CommandQueue`/`flush_commands_system` for mutation deferral from callbacks
+**Deferred to M12 (full handler API) — all four landed:**
+- [x] All handlers: `onPress`, `onRelease`, `onFocus`, `onBlur`, `onDrag` (`proteus_sdk::Handle::on_*`)
+- [x] `allowInput`/`allowNavigation` transition config flags (`TransitioningConfig`)
+- [x] `signal.set()` from an `onClick` handler triggering a transition. *Verified at the 2026-09-22 audit — nothing had pinned it, and the reference demo sidesteps it by setting a flag the next `advance` reads. It works, with **one frame of latency**: `Proteus::tick` runs the whole schedule and only then dispatches callbacks, so the handler's `TransitionRequest` arrives after `transition_setup_system` has run and the morph begins on the following tick. That ordering is what makes dispatch re-entrant-safe. Documented on `Proteus::tick`; pinned by `signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick`.*
+- [x] `CommandQueue`/`flush_commands_system` for mutation deferral from callbacks
 
 ---
 
@@ -1672,18 +1681,20 @@ and sharper anti-aliasing as a free side-effect.
 
 ---
 
-### M8.5 — Blur *(off critical path — skeleton exists, NOT scheduled)*
+### M8.5 — Blur *(off critical path — NOT scheduled)*
 
 Gaussian blur via an offscreen bake pass. Establishes the bake-to-atlas
 infrastructure used by both blur and glow.
 
-**Status:** An early skeleton (`blur.rs`, `shaders/blur.wgsl`) was created but
-is intentionally **not compiled** (`mod blur` is absent from `lib.rs`).  The
-skeleton is incomplete and the shader uses `@group(1) @binding(3)`, which now
-collides with `video_atlas` (M9).  Before M8.5 begins, the binding collision
-must be resolved and the skeleton properly completed.  Glow (M8.6) landed
-without the bake infrastructure by reusing the shadow SDF path, so M8.5 does
-not gate any other shipped milestone.
+**Status: not started, nothing on disk.** An early, never-compiled skeleton
+(`blur.rs`, `shaders/blur.wgsl`) existed at the time this section was written
+and has since been deleted — it was incomplete and its shader used
+`@group(1) @binding(3)`, which collides with `video_atlas` (M9). Whoever picks
+this up starts fresh and must pick a free binding. Two things that did not
+exist then and would change the approach: M10.5 built the bake-to-atlas
+infrastructure this milestone was meant to establish (`bake.rs`,
+`transition_atlas.rs`), and Glow (M8.6) shipped without it by reusing the
+shadow SDF path. M8.5 gates no shipped milestone.
 
 **Approach:** Components with a `Blur` effect render to a small offscreen texture
 first (reusing the bake concept from M4 text rendering). A two-pass separable
@@ -2485,7 +2496,7 @@ actually land. First TypeScript in this repo.
 don't require `Send` — a `js_sys::Function` wrapped in a Rust closure passes straight into them;
 M12.3's own registry does the dispatch work, unchanged.
 
-**Two real bugs were caught by actually running the pipeline (a Node smoke test against a
+**Three real bugs were caught by actually running the pipeline (a Node smoke test against a
 `--target nodejs` build, not committed/shipped — the shipped package uses `--target bundler`),
 not assumed correct from a clean `cargo check`:**
 1. Every `Handle`/`SignalHandle`/`TextureHandle` parameter was originally taken *by value*.
@@ -2782,7 +2793,10 @@ impl Engine {
         app: &mut dyn App, services: &mut dyn HostServices,
     ) -> Self;
 
-    /// One frame: App::update → Proteus::tick → Renderer::render.
+    /// One frame: Proteus::tick → App::update → refresh_cascades →
+    /// Renderer::render. (This sketch originally read `App::update` first;
+    /// build step 3 settled on `update` as a **late** hook, which is what
+    /// shipped — see that step and `App::update`'s own doc below.)
     fn frame(&mut self, dt: f32, target: &wgpu::TextureView,
              app: &mut dyn App, services: &mut dyn HostServices);
 
@@ -2911,12 +2925,12 @@ blocking this milestone on the full asset contract.
 ##### Definition of done
 
 - [x] `proteus-runtime` exists with `Renderer`, `Engine`, and the `App` / `HostServices` / `Frame` / `Viewport` trait + type defs, documented. *(A `Host` trait was part of this sketch and was built, but no caller was ever generic over it and `proteus-host-web` declined to implement it — dropped at the 2026-09-22 audit, § X-10.)*
-- [ ] Minimal `proteus-host-winit` implements `Host` and exposes `run<A: App>(app: A)`.
-- [ ] `proteus-demo` is `impl App for DemoApp`; `Demo::tick` / `app_mut` / `set_*` / `take_pending_*` are gone.
-- [ ] `proteus-shell-native` is a thin `fn main()` calling `proteus_host_winit::run(DemoApp::new())`, with the per-frame loop and the ~20 asset setters deleted.
-- [ ] The generic `Text`/`Image` bake loop lives in `Renderer`, deleted from the native shell.
-- [ ] The reference demo still passes M6 visual regression on native.
-- [ ] `cargo fmt` / `cargo clippy -D warnings` clean; the native default-members build and test pass. (Web shell stays on its old path until M13.2 — no wasm regression expected because `proteus-shell-web` is untouched this milestone.)
+- [x] Minimal `proteus-host-winit` exposes `run<A: App>(app: A, RunConfig)`. *(Was "implements `Host` and exposes …"; the trait is gone — see the note on the box above.)*
+- [x] `proteus-demo` is `impl App for DemoApp`; `Demo::tick` / `app_mut` are gone. *(`Demo`'s `set_*` / `take_pending_*` remain, but no longer as a **shell** surface: `DemoApp::update` is the only caller, draining them through `Frame`. Removing them entirely would mean folding all of `Demo` into `DemoApp`, which was never the intent — `Demo` stays the headless, GPU-free half.)*
+- [x] `proteus-shell-native` is a thin `fn main()` calling `proteus_host_winit::run(DemoApp::new(..), ..)`, with the per-frame loop and the ~20 asset setters deleted.
+- [x] The generic `Text`/`Image` bake loop lives in `proteus-runtime` (`bake.rs`, driven by `Renderer`), deleted from the native shell.
+- [x] The reference demo still passes M6 visual regression on native. *(M6 is the instance-buffer suite — `proteus-ui/tests/render_instances.rs`, 34 tests — not pixel snapshots; see § M6.)*
+- [x] `cargo fmt` / `cargo clippy -D warnings` clean; the native default-members build and test pass. (Web shell stays on its old path until M13.2 — no wasm regression expected because `proteus-shell-web` is untouched this milestone.)
 
 #### M13.2 — Web Host
 
@@ -3134,7 +3148,7 @@ M13.1. Generalizing "app asks the host to run an async job" is M13.4.
 - [x] `proteus-shell-web` is a thin entry; `www/index.html` shrunk (~710 → ~400 lines, not ~60 — see "Build part 2a"); asset loading goes through `HostServices`.
 - [x] DPI-aware; Pointer Events; visibility-pause working — confirmed via a real loaded page (adapter init, asset fetches, a pointer click, no console errors). Context-loss recovery stays narrowed-scope (log + halt, not full rebuild — see "Scope narrowed" above). **Still needs the user's own visual review**, not just this technical smoke check.
 - [x] Reference demo passes M6 visual regression on web. **The "re-captured baselines" framing in this section's design sketch was a false premise, corrected on investigation rather than acted on**: M6 (see that milestone's own section) deliberately isn't pixel snapshots at all — "GPU-dependent, non-deterministic across drivers, requires GPU in CI" is the exact reason it tests `collect_instances`'s `Vec<QuadInstance>` output instead, in logical/world units, with zero per-platform baseline artifacts to capture or diff, on native or web. The DPI change (canvas backing store × `devicePixelRatio`) only touches the wgpu surface's physical-pixel configuration — `Viewport.logical_size` (what `collect_instances`'s math actually runs on) is unaffected. `cargo test -p proteus-ui` (part of the `cargo test --workspace` pass already run and green throughout this milestone's build) already *is* "M6 on web" passing, same suite as native — there was never a separate web run to do.
-- [x] `cargo clippy` (wasm target) + `tsc` wired into `ci.yml` (`wasm` job covers `proteus-shell-web`/`proteus-host-web`; `sdk-web` job now builds `pkg-host/` before `tsc`/`npm pack`). Staging deploy — not set up this milestone (no staging environment exists yet for this project).
+- [x] `cargo clippy` (wasm target) + `tsc` wired into `ci.yml` (`wasm` job covers `proteus-shell-web`/`proteus-host-web`; `sdk-web` job now builds `pkg-host/` before `tsc`/`npm pack`). Staging deploy — set up separately at M12.5 (`staging-deploy.yml` → `ichellin1/proteus-staging`, a per-PR preview URL), not by this milestone; see § M12.5 and RELEASING.md.
 
 #### M13.3 — Native Host (winit)
 
@@ -3225,9 +3239,9 @@ documented M13.4 shim on the native demo entry, parallel to the web side.
 ##### Definition of done
 
 *Minimal (M13.1 steps 3 + 5):*
-- [ ] `proteus-host-winit` implements `Host`, exposes `run<A: App>(app: A)`.
-- [ ] `proteus-shell-native` is `fn main() { proteus_host_winit::run(DemoApp::new()) }`.
-- [ ] Reference demo runs and passes M6 visual regression on native.
+- [x] `proteus-host-winit` exposes `run<A: App>(app: A, RunConfig)`. *(No longer "implements `Host`" — that trait was removed at the 2026-09-22 audit, § X-10.)*
+- [x] `proteus-shell-native` is `fn main() { proteus_host_winit::run(DemoApp::new(..), ..) }`.
+- [x] Reference demo runs and passes M6 visual regression on native.
 
 *M13.3 proper (optional for V1):*
 - [x] Shared GPU init lives in `proteus-gpu` and both hosts use it — **done
@@ -3626,7 +3640,7 @@ code now, wire only `memory` + `render.{clear_color,present_mode,power_preferenc
   - `main_atlas` (page_size/page_count) — was already configurable via `AtlasConfig`, now sits under the nested struct.
   - `transition_atlas_size` — **newly wired**. `QuadPipeline::new` gained a `transition_atlas_size: u32` parameter (was the hardcoded `TRANSITION_ATLAS_SIZE` const in `create_atlases`/`TransitionAtlasAllocator::new`). `proteus-ui`'s UV-normalisation math (`topology.rs`'s `region_uv`/`region_uv_slices`/`region_uv_grid_slices`, used by the 1→N/N→1 group-transition systems) took a compile-time `TRANSITION_ATLAS_SIZE` before — now reads a new `TransitionAtlasSize` ECS resource (mirrors the `GpuContext`/`QuadPipeline` "world resource set post-hoc by the render layer" pattern), which `Renderer::new` overwrites with the real configured value.
   - `max_instances` — **newly wired**. Was a bare `QuadPipeline::new` argument with no upper-bound check; now sourced from config and validated.
-  - `video.*` — struct present, **not wired** (see the field docs: `init_video` still takes its own explicit dims from the host per-play; there's no eager allocation for `default_size`/`enabled`/`channel_depth` to gate until M13.4 makes video a host service).
+  - `video.*` — struct present, **still not wired**, though no longer for the reason given here: M13.4 did make video a host service (`HostServices::open_video` → `VideoStream`), and `init_video` still takes its dimensions from the first decoded frame rather than from config, so there is no eager allocation for `default_size`/`enabled` to gate. `channel_depth` described `QuadPipeline`'s own frame channel, which M13.4 replaced and the 2026-09-22 audit removed (§ X-03); the field stays — per this milestone's own additive-only rule — re-documented as advisory for a host's decoder.
 - **`render.clear_color`** — unchanged from M13.1, moved under the nested struct.
 - **`render.present_mode` / `power_preference`** — **newly wired** into both hosts' `request_adapter`/`SurfaceConfiguration` (previously hardcoded `HighPerformance`/`AutoVsync` in each host).
 - **`frame.dt_clamp_secs`** — **newly wired**, and centralised: `Engine::frame` now applies the clamp itself, so `proteus-host-winit` and `proteus-shell-native` both dropped their own copy of the identical `.min(0.05)`.
@@ -3659,7 +3673,7 @@ to 1024²; acceptable on the slower GPU a constrained target usually pairs with.
 - [x] `ProteusConfig::web()` / `::desktop()` / `::constrained()` presets; `ProteusConfig::estimated_gpu_bytes()`.
 - [x] `transition_atlas_size` and `max_instances` threaded through `proteus-render` (`QuadPipeline::new`, `create_atlases`, `TransitionAtlasAllocator`) and `proteus-ui` (`TransitionAtlasSize` resource, `topology.rs`'s UV math, both group-transition setup systems).
 - [x] `validate_render_config` added alongside `validate_atlas_config`; both always run in `Renderer::new`.
-- [x] `present_mode` / `power_preference` wired into `proteus-host-winit` and `proteus-shell-native`; the duplicated `dt` clamp removed from both hosts in favour of `Engine::frame`'s own.
+- [x] `present_mode` / `power_preference` wired into `proteus-host-winit` and `proteus-host-web`; the duplicated `dt` clamp removed from both hosts in favour of `Engine::frame`'s own. *(Written as "`proteus-shell-native`" — by M13.4 that crate is a one-line `main()` and the config reaches the GPU through the host, which is where both now read it.)*
 - [x] `cargo clippy --workspace --exclude proteus-shell-web --all-targets --all-features -D warnings`, the wasm32 pass, `cargo fmt --check`, and the full test suite (28 test binaries, all green) all pass.
 
 #### M13.6 — Mobile Packaging
@@ -4165,7 +4179,9 @@ not V1.**
 
 ## Phase E — Build
 
-**Status: Not Started**
+**Status: In Progress** — M0–M13 complete, M14 (Developer Release) remaining. Matches the
+phase table at the top of this file. Every milestone's own status and Definition of Done is in
+its section above; this header is not a second source of truth.
 
 *Prereqs: Phase D complete*
 
@@ -4183,7 +4199,7 @@ Questions that have surfaced but don't yet have answers. Pull them into the rele
 - ~~What triggers a transition — is it always user-initiated, or can application logic drive it?~~ ✅ Resolved — anything that calls `signal.set()`: user input handlers or application logic; cross-component triggering is first-class
 - ~~What is the developer-facing API for defining a component's interaction definition?~~ ✅ Resolved — `on`-prefixed handle methods (`onClick`, `onHoverEnter`, `onDrag`, …) — see Phase A
 - ~~What does the TypeScript API look like end to end for a simple component with one transition?~~ ✅ Resolved — see the Phase A developer experience example (button → list → detail)
-- How do parent and child transitions coordinate — who has priority when both are triggered simultaneously?
+- How do parent and child transitions coordinate — who has priority when both are triggered simultaneously? *(Still open, and the only unresolved question on this list. M10 shipped independent child transitions without deciding it: a child mid-morph whose parent then starts its own gets both applied — the child's local transform lerps while `compose_with_parent` folds in the parent's changing one, which composes without error but is nobody's stated intent. No milestone owns it; surfaced again by the 2026-09-22 audit, § D-17.)*
 - ~~Open from review: how do JS callbacks that re-enter the framework (`signal.set()`, `destroy()` mid-dispatch) interact with ECS system execution?~~ ✅ Resolved — command queue: all WASM handle mutations push `PendingCommand` to `CommandQueue`; `flush_commands_system` drains at the start of each `tick()`.
 - ~~Open from review: differently-sized per-component textures cannot share one `texture_2d_array` (layers must be uniform size, no bindless in WebGL2) — atlas, size-classes, or padded layers?~~ ✅ Resolved — two-atlas model: `main_atlas` (long-lived, window-sized) + `transition_atlas` (ephemeral, 2× window area), UV-addressed via `uv_offset`/`uv_scale` and `base_uv_offset`/`base_uv_scale` on `QuadInstance`.
 
@@ -4236,4 +4252,4 @@ A minimal framework puts composition burden on the developer. A developer-friend
 ## Reference Material
 
 - [VISION.md](./VISION.md) — the philosophy, paradigm, geometry model, and high-level roadmap
-- Original POC — JavaScript + WebGL implementation, built ~11 years ago. Validates the core concept. *(link or path to be added)*
+- Original POC — JavaScript + WebGL implementation, built ~11 years ago. Validates the core concept. *(Link still missing — the one Phase A "To Do" never closed. Tracked there too; everything it would have anchored has since been decided in Phase B and built, so this is now a provenance note rather than a blocker.)*
