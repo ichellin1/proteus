@@ -337,7 +337,7 @@ The actual "one app, both shells" deliverable: the 9-screen reference demo, buil
 asset I/O, event forwarding) linking this one crate. Highest-risk step in M12 — done additively,
 old demo code kept working until the new path is verified, cutover an explicit separate step.
 
-## M13 — Application Platform Architecture *(critical path — design in progress)*
+## M13 — Application Platform Architecture *(critical path — complete)*
 
 Everything through M12 produced a framework with exactly one app — the reference demo — welded 1:1
 to two hand-rolled platform shells (each holding a concrete `demo: Demo` field and ~20
@@ -361,7 +361,7 @@ default; Rust is the performance path.
 | M13.1 | Core contracts & layering — `Renderer` primitive; `Host` / `App` / `HostServices` traits; host owns `Proteus` | design + trait defs |
 | M13.2 | Web host — Rust crate + `ts/` layer: `run()`, canvas, rAF loop, DPI, safe-area, touch, visibility-pause, context-loss. Rust→web and TS→web both front doors. | **build** |
 | M13.3 | Native host — `proteus-host-winit`; shell → thin `main()`. `Host` trait windowing-agnostic so DRM/KMS, SDL2, mobile slot in later. | design |
-| M13.4 | Asset & resource contract — textures, fonts, runtime loading; video as a host service, codec split hidden per-host | design |
+| M13.4 | Asset & resource contract — textures, fonts, runtime loading; video as a host service, codec split hidden per-host | design + **build** |
 | M13.5 | Configuration & memory model — `ProteusConfig` through host construction; atlas-sizing for constrained targets | design |
 | M13.6 | Mobile packaging — Capacitor wraps the web bundle (only path for TS logic on iOS); `create-proteus-app` scaffold + template. Write-once web + desktop + mobile. | design + template |
 | M13.7 | Post-V1 target map — native mobile, embedded Linux (DRM/KMS), native smart-TV, `proteus-host-jsengine` (browser-engine-free TS-native), XR. Seams, not code. | design |

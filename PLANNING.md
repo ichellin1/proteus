@@ -2602,7 +2602,9 @@ Architecture** (below). M12 stands complete at M12.1–M12.5.
 
 ### M13 — Application Platform Architecture
 
-**Status: design in progress — sections land individually.**
+**Status: complete — 2026-09-22.** All sections (M13.1–M13.8) designed and approved; M13.4 and
+M13.8 built, user-reviewed with no regressions, and green in CI on the pushed commit. See each
+section's own status line below, and the Definition of Done at the end of this overview.
 
 *Prereqs: M12 complete. Inserted ahead of Developer Release (now **M14**); V1 release is
 deliberately delayed for this work.*
@@ -2662,6 +2664,15 @@ M13.4 and M13.8 built and green in CI, including `proteus-demo`'s video/gallery/
 shims retired on both shells onto M13.4's real contract, not left as documented debt; `proteus-demo`
 ported onto the M13.1 `App` contract with both shells collapsed to thin entry points; the reference
 demo still passes M6 visual regression on native and web.
+
+**Met — closed 2026-09-22.** M13.1–M13.7 approved section by section (see each section's own
+status line). M13.4 and M13.8 built, confirmed via the user's own visual review (native demo,
+both shells' video/gallery/texture-churn, and every M13.8 example/demo touched this milestone —
+see M13.1's and M13.4's own "Confirmed" notes), and green in CI on the pushed commit (`ci.yml` +
+`pages.yml` both passed). `proteus-demo` runs on the M13.1 `App` contract with both shells
+collapsed to thin entry points (`proteus-shell-native/src/main.rs` ~86 lines,
+`proteus-shell-web/www/index.html` ~83 lines) and passes the full `proteus-ui`/M6 test suite
+(headless, not pixel snapshots — see M13.2's own note on why that's still "M6 on web").
 
 ---
 
