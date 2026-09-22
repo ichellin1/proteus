@@ -975,3 +975,72 @@ fn one_to_n_with_zero_targets_is_noop() {
         "bake strategy with zero targets must also produce zero virtual entities"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A group transition whose coordinator disappears (audit C-07)
+// ---------------------------------------------------------------------------
+
+/// Destroying the coordinator mid-transition must not strand its virtuals.
+///
+/// `group_transition_complete_system` bails out when the coordinator is gone,
+/// because everything finalization needs (`reveal_on_complete`, the shared
+/// allocation, the `Lifecycle` to restore) lives on it. That left the virtual
+/// entities alive forever — still rendering, frozen at whatever `t` they
+/// reached — and leaked every `transition_atlas` region the group held.
+///
+/// Reachable from shipped code: `examples/gallery` calls `splitTo` and then
+/// destroys the source on a `setTimeout` sized to the transition. `setTimeout`
+/// keeps running while `requestAnimationFrame` is throttled, so backgrounding
+/// the tab in that window destroys the coordinator with the group in flight.
+#[test]
+fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() {
+    let mut world = make_world();
+
+    let n = 3;
+    let targets = spawn_targets(&mut world, n);
+    let group_targets: Vec<GroupTarget> = targets
+        .iter()
+        .map(|&e| GroupTarget {
+            entity: e,
+            state: world.get::<QuadState>(e).unwrap().clone(),
+        })
+        .collect();
+
+    let source = world
+        .spawn((
+            red(),
+            Lifecycle::Idle,
+            OneToNRequest {
+                targets: group_targets,
+                default_config: default_cfg(),
+                child_behavior: None,
+                strategy: SplitStrategy::Slice,
+            },
+        ))
+        .id();
+
+    run(&mut world, one_to_n_setup_system);
+    world.flush();
+    assert_eq!(
+        count_with::<Virtual>(&mut world),
+        n,
+        "setup should have spawned one virtual per target"
+    );
+
+    // Mid-flight: advance a little, but nowhere near completion.
+    set_dt(&mut world, 0.05);
+    run(&mut world, transition_tick_system);
+
+    // The app destroys the coordinator out from under the transition.
+    world.despawn(source);
+
+    run(&mut world, group_transition_complete_system);
+    world.flush();
+
+    assert_eq!(
+        count_with::<Virtual>(&mut world),
+        0,
+        "virtuals whose coordinator is gone can never be finalized, so they must \
+         be cleaned up rather than left rendering forever"
+    );
+}

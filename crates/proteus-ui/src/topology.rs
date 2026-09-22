@@ -72,6 +72,61 @@ impl Default for TransitionAtlasSize {
 }
 
 // ---------------------------------------------------------------------------
+// transition_atlas reclamation
+// ---------------------------------------------------------------------------
+
+/// Tie every `transition_atlas` region to the lifetime of the component that
+/// owns it, so the region is reclaimed whether the transition finished normally
+/// or the entity holding it simply went away.
+///
+/// Mirrors [`crate::texture_ref::register_texture_ref_hooks`]'s treatment of
+/// `main_atlas` regions: the component *is* the ownership record, so `on_remove`
+/// — which fires on explicit removal **and** on despawn — is the one place that
+/// can't be skipped.
+///
+/// Before this, both frees lived in [`group_transition_complete_system`], which
+/// bails out when the coordinator no longer exists. Destroy a coordinator
+/// mid-transition and its virtuals were never despawned (they kept rendering,
+/// frozen, forever) and every region the group had allocated — one shared bake
+/// plus one per virtual — leaked for the life of the process.
+///
+/// That is reachable from shipped code, not just in principle:
+/// `examples/gallery` calls `splitTo` and then destroys the source on a
+/// `setTimeout` sized to the transition's duration. A `setTimeout` keeps running
+/// while `requestAnimationFrame` is throttled, so backgrounding the tab during
+/// that window destroys the coordinator with the group still in flight.
+///
+/// Registered once, from `ProteusWorld::new()`, before any entity can exist —
+/// `bevy_ecs` panics if a hook is added after the component is already in an
+/// archetype.
+pub fn register_transition_alloc_hooks(world: &mut World) {
+    world
+        .register_component_hooks::<ActiveGroupTransition>()
+        .on_remove(|mut world, ctx| {
+            let Some(shared) = world
+                .get::<ActiveGroupTransition>(ctx.entity)
+                .and_then(|g| g.shared_alloc)
+            else {
+                return;
+            };
+            if let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() {
+                pipeline.free_transition_region(shared);
+            }
+        });
+
+    world
+        .register_component_hooks::<BakedTexture>()
+        .on_remove(|mut world, ctx| {
+            let Some(own) = world.get::<BakedTexture>(ctx.entity).map(|b| b.own_alloc) else {
+                return;
+            };
+            if let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() {
+                pipeline.free_transition_region(own);
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
 // ChildBehaviorFn
 // ---------------------------------------------------------------------------
 
@@ -1056,7 +1111,6 @@ pub fn group_transition_complete_system(
         With<Virtual>,
     >,
     mut coordinators: Query<(&ActiveGroupTransition, &mut Lifecycle)>,
-    mut pipeline: Option<ResMut<QuadPipeline>>,
 ) {
     // Build a map: coordinator_entity → (all_virtual_entities, complete_count).
     type CoordEntry = (Vec<(Entity, Option<TransitionAllocId>)>, usize);
@@ -1072,6 +1126,25 @@ pub fn group_transition_complete_system(
 
     for (coord_entity, (v_entities, complete_count)) in by_coord {
         let total = v_entities.len();
+
+        // Coordinator gone (destroyed mid-transition) — these virtuals can
+        // never be finalized, because everything finalization needs lives on
+        // the coordinator. Despawn them rather than leaving them rendering
+        // frozen forever; their `transition_atlas` regions come back via
+        // `BakedTexture`'s own on_remove hook, and the shared bake via the
+        // coordinator's, which already fired when it was despawned.
+        if !coordinators.contains(coord_entity) {
+            log::warn!(
+                "group transition coordinator {coord_entity:?} disappeared with {} virtual(s) \
+                 still in flight — cleaning them up",
+                v_entities.len()
+            );
+            for (v_entity, _) in v_entities {
+                commands.entity(v_entity).despawn();
+            }
+            continue;
+        }
+
         if complete_count < total {
             continue; // still waiting on some virtuals
         }
@@ -1086,17 +1159,11 @@ pub fn group_transition_complete_system(
             commands.entity(entity).insert(Visibility::VISIBLE);
         }
 
-        // Free the transition_atlas allocations this group used, if any.
-        if let Some(pipeline) = pipeline.as_deref_mut() {
-            if let Some(shared) = group.shared_alloc {
-                pipeline.free_transition_region(shared);
-            }
-            for (_, own_alloc) in &v_entities {
-                if let Some(id) = own_alloc {
-                    pipeline.free_transition_region(*id);
-                }
-            }
-        }
+        // The `transition_atlas` regions are *not* freed here — removing
+        // `ActiveGroupTransition` below and despawning the virtuals fires the
+        // `on_remove` hooks that own that (see
+        // `register_transition_alloc_hooks`). Keeping a second, parallel free
+        // path here would double-free whichever region both paths touched.
 
         // Restore coordinator lifecycle and remove group state.
         *lifecycle = Lifecycle::Idle;
