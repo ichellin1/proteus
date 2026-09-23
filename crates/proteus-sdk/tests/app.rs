@@ -337,6 +337,70 @@ fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() 
 }
 
 #[test]
+fn signal_set_reveals_to_so_a_round_trip_works() {
+    // Phase A's button -> list -> button round trip. Dispatch used to hide
+    // `from` without ever showing `to`, so the return leg animated an
+    // invisible entity and the whole component was simply gone.
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let list = app.component(ComponentSpec::new(quad_at(300.0, 0.0)).visible(false));
+
+    let signal = app.signal(None);
+
+    // Out: button -> list.
+    signal.set(&mut app, list, button, cfg(0.1), false);
+    app.tick(1.0);
+    assert!(
+        app.get(list).unwrap().visible,
+        "list must be revealed by the morph that targets it"
+    );
+    assert!(!app.get(button).unwrap().visible, "button is the exit");
+
+    // Back: list -> button. This is the leg that was impossible.
+    signal.set(&mut app, button, list, cfg(0.1), false);
+    app.tick(1.0);
+    assert!(
+        app.get(button).unwrap().visible,
+        "button must come back visible, not morph invisibly"
+    );
+    assert!(!app.get(list).unwrap().visible, "list is now the exit");
+}
+
+#[test]
+fn component_spawns_hidden_when_the_spec_says_so() {
+    let mut app = Proteus::new();
+    let shown = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let hidden = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).visible(false));
+
+    assert!(app.get(shown).unwrap().visible, "visible is the default");
+    assert!(!app.get(hidden).unwrap().visible);
+}
+
+#[test]
+fn set_visible_toggles_an_already_spawned_component() {
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+
+    handle.set_visible(&mut app, false).unwrap();
+    assert!(!app.get(handle).unwrap().visible);
+
+    handle.set_visible(&mut app, true).unwrap();
+    assert!(app.get(handle).unwrap().visible);
+}
+
+#[test]
+fn set_visible_on_a_destroyed_handle_is_an_error_not_a_panic() {
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    handle.destroy(&mut app).unwrap();
+
+    assert!(matches!(
+        handle.set_visible(&mut app, true),
+        Err(HandleError::EntityNotFound)
+    ));
+}
+
+#[test]
 fn get_reflects_transition_progress_mid_flight() {
     let mut app = Proteus::new();
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));

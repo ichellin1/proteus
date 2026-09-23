@@ -9,7 +9,7 @@ use crate::handle::Handle;
 /// declared"), children, whether it should be permanently baked, and any of
 /// the visual/content components (`Text`/`Image`/`Border`/`Glow`/
 /// `DropShadow`) it should carry from the moment it's spawned.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ComponentSpec {
     pub(crate) geometry: QuadState,
     pub(crate) hover: Option<StyleOverride>,
@@ -24,6 +24,29 @@ pub struct ComponentSpec {
     pub(crate) glow: Option<Glow>,
     pub(crate) drop_shadow: Option<DropShadow>,
     pub(crate) non_interactive: bool,
+    pub(crate) visible: bool,
+}
+
+impl Default for ComponentSpec {
+    fn default() -> Self {
+        Self {
+            geometry: QuadState::default(),
+            hover: None,
+            pressed: None,
+            focused: None,
+            disabled: None,
+            children: Vec::new(),
+            bake: false,
+            text: None,
+            image: None,
+            border: None,
+            glow: None,
+            drop_shadow: None,
+            non_interactive: false,
+            // Every other field's default is "absent"; this one's is "on".
+            visible: true,
+        }
+    }
 }
 
 impl ComponentSpec {
@@ -36,6 +59,17 @@ impl ComponentSpec {
             geometry,
             ..Default::default()
         }
+    }
+
+    /// Whether the component is visible when spawned. Defaults to `true`.
+    ///
+    /// `false` spawns it inert — skipped by render, input and navigation —
+    /// until something reveals it. `SignalHandle::set` does that for its
+    /// `to` side, so a component declared hidden here is ready to be morphed
+    /// into without a separate reveal call.
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
     }
 
     /// Style applied while the pointer hovers this component.
@@ -56,10 +90,10 @@ impl ComponentSpec {
         self
     }
 
-    /// Style applied while this component is disabled
-    /// (`Handle`s don't carry a `disable()` toggle yet — attach
-    /// `proteus_ui::component::Disabled` directly via `Proteus::world_mut()`
-    /// until a `Handle`-level convenience lands).
+    /// Style applied while this component is disabled.
+    ///
+    /// Nothing on `Handle` toggles `Disabled` yet — attach
+    /// `proteus_ui::component::Disabled` via `Proteus::world_mut()` for now.
     pub fn disabled(mut self, style: StyleOverride) -> Self {
         self.disabled = Some(style);
         self

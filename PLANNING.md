@@ -4118,9 +4118,63 @@ concerns that were tracked continuously rather than as their own milestone — s
 note above on why Native Parity was retired as a standalone milestone in favor of an ongoing
 cross-shell requirement.
 
+#### SDK gaps the 2026-09-22 audit found (A-01 … A-05)
+
+Reading `examples/gallery` as an outside developer would surfaced five places where the shipped
+SDK can't express what Phase A promises. These aren't bugs in what exists; they change what "an
+outside developer can build a working component with a transition" means, so they're settled
+before the rest of M14's polish.
+
+##### A-01 — visibility control *(decided and built 2026-09-23)*
+
+`signal_dispatch_system` hid `from` without ever revealing `to`, so Phase A's button → list →
+button round trip was impossible: the return leg animated an invisible entity. That is why
+`examples/gallery`'s `backToGrid()` rebuilds all 12 tiles from scratch and routes through
+`splitTo` instead of the 1→1 signal path.
+
+Decisions:
+
+- **Dispatch reveals `to`.** Symmetric with the `from` hide it already did. At *setup*, not
+  completion — in a 1→1 the `to` entity is what animates, so it has to be visible for the whole
+  morph. The group path reveals at completion (`reveal_on_complete`) because there it's virtuals
+  that animate and the real targets are only waiting. That asymmetry is deliberate.
+- **Reveal is ordered after the hide**, so `set(x, x)` degenerates into `animate_to` semantics
+  rather than silently hiding `x`.
+- **The `from`-must-be-visible guard stays.** "Morph from something the user can't see" is a
+  caller error worth reporting.
+- **Both `ComponentSpec::visible(bool)` and `Handle::set_visible(bool)`**, mirroring the existing
+  `non_interactive()` / `set_interactive()` pair. `ComponentSpec` deliberately had no `.hidden()`
+  builder before this; that call was about not spawning hidden *by default*, which would leave a
+  developer wondering why an element never appeared. An opt-in builder doesn't do that. The
+  `Default` impl is now hand-written so `visible` defaults to `true` rather than `bool::default()`.
+
+`Handle::set_visible` also retired 20 `world_mut().entity_mut(…).insert(Visibility::…)` calls in
+`proteus-demo` — the panicking `entity_mut` API that C-04 was about.
+
+##### A-02 … A-05 — still to decide
+
+- **A-02** No transition-completion callback in the SDK. `CompletedTransitions` exists in
+  `proteus-ui` but neither `proteus-sdk` nor TS surfaces it, so `examples/gallery` guesses with
+  `setTimeout(duration + 150ms)`.
+- **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
+  exposed by either SDK.
+- **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to
+  spawn a throwaway off-screen component and poll `bakedImageSize()` every frame.
+- **A-05** `mount()` hardcodes `ProteusConfig::web()`, so a TS app can't set `clear_color`,
+  atlas sizes, `image_max_side` or `present_mode`.
+
+`examples/gallery` should be revisited once A-01/A-02 have both landed — it currently
+demonstrates the workarounds rather than the model.
+
 **Definition of done:**
 - [ ] Public documentation: README covers installation, quickstart, and links to full docs;
   a `docs/` directory with API reference and at least a getting-started guide
+- [ ] **Comment cleanup pass.** Doc comments across the codebase are wordy and carry context from
+  design conversations — "matching source's own selective scope", "per this pass's design
+  decision", rationale that only makes sense to whoever was in the room. A reader wants what the
+  code does and why, not the deliberation that produced it. The 2026-09-22 audit's K-31 sweep did
+  this for one class of it (157 references to a deleted shell); this is the general pass. New
+  comments written from here should be short and self-contained.
 - [ ] ≥3 complete examples in an `examples/` directory, beyond the reference demo — each
   demonstrating a distinct use case or transition pattern
 - [ ] Pluggable interpolation interface is public, stable, and documented with an example

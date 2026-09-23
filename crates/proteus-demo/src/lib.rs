@@ -77,7 +77,7 @@ use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
     ease_in_out_quad, ease_out_quad, Border, ComponentSpec, Glow, Handle, Image, MergeLayout,
-    Proteus, QuadState, SplitStrategy, Text, TextureHandle, TransitionConfig, Visibility,
+    Proteus, QuadState, SplitStrategy, Text, TextureHandle, TransitionConfig,
 };
 
 use screens::{
@@ -682,18 +682,14 @@ impl Demo {
         // see [`HoverEntry`]'s doc.
         let mut hovers: Vec<HoverEntry> = Vec::new();
 
-        // Every transition *target*/standalone-content entity starts
-        // hidden — `component()` always spawns visible by default (see
-        // `proteus_sdk::Visibility`'s own doc), so initial visibility for
-        // anything not shown from frame one has to be set explicitly here,
-        // via the escape hatch. `ComponentSpec` has no `.hidden()` builder,
-        // deliberately: this is the state machine's concern, not something
-        // a screen's own spawn function should have to know about itself.
+        // Every transition target / standalone-content entity starts
+        // hidden. Done here rather than with `ComponentSpec::visible(false)`
+        // at each spawn site: which screens are up is this state machine's
+        // business, not something a screen's own spawn function should have
+        // to know about itself.
         let hide = |app: &mut Proteus, handles: &[Handle]| {
             for &h in handles {
-                app.world_mut()
-                    .entity_mut(h.id())
-                    .insert(Visibility::HIDDEN);
+                let _ = h.set_visible(app, false);
             }
         };
         hide(proteus, &home.nav_buttons);
@@ -1538,10 +1534,7 @@ impl Demo {
         self.pending_tile_reset = Some(PendingTileReset { tile });
         for (i, &other) in self.video_tiles.tiles.iter().enumerate() {
             if i != idx {
-                proteus
-                    .world_mut()
-                    .entity_mut(other.id())
-                    .insert(Visibility::HIDDEN);
+                let _ = other.set_visible(proteus, false);
             }
         }
         self.state = AppState::Home;
@@ -1561,10 +1554,7 @@ impl Demo {
         self.gallery_fetch_elapsed = 0.0;
         self.gallery_error_shown = false;
         self.gallery_logo_error_fade = 1.0;
-        proteus
-            .world_mut()
-            .entity_mut(self.loading.error_text.id())
-            .insert(Visibility::HIDDEN);
+        let _ = self.loading.error_text.set_visible(proteus, false);
         self.loading_logo_frame_index = 0;
         self.loading_logo_frame_elapsed = 0.0;
         self.apply_loading_logo_frame(proteus);
@@ -1623,10 +1613,7 @@ impl Demo {
             group_transition_config(),
             SplitStrategy::Slice,
         );
-        proteus
-            .world_mut()
-            .entity_mut(self.loading.error_text.id())
-            .insert(Visibility::HIDDEN);
+        let _ = self.loading.error_text.set_visible(proteus, false);
         self.state = AppState::Home;
     }
 
@@ -1765,8 +1752,8 @@ impl Demo {
         proteus
             .world_mut()
             .entity_mut(self.gallery.hires_overlay.id())
-            .remove::<Image>()
-            .insert(Visibility::HIDDEN);
+            .remove::<Image>();
+        let _ = self.gallery.hires_overlay.set_visible(proteus, false);
         self.gallery_hires_fade = 0.0;
 
         // `fetch_button`/`.fetch_button_label` fade out on their own
@@ -1819,10 +1806,7 @@ impl Demo {
     fn start_image_to_gallery(&mut self, proteus: &mut Proteus) {
         self.pending_gallery_hires_cancel = true;
         self.pending_gallery_hires_fetch = None;
-        proteus
-            .world_mut()
-            .entity_mut(self.gallery.hires_overlay.id())
-            .insert(Visibility::HIDDEN);
+        let _ = self.gallery.hires_overlay.set_visible(proteus, false);
         let targets = self.gallery.tiles;
         let _ = self.gallery.enlarged.split_to(
             proteus,
@@ -1849,10 +1833,7 @@ impl Demo {
     fn start_image_to_home(&mut self, proteus: &mut Proteus) {
         self.pending_gallery_hires_cancel = true;
         self.pending_gallery_hires_fetch = None;
-        proteus
-            .world_mut()
-            .entity_mut(self.gallery.hires_overlay.id())
-            .insert(Visibility::HIDDEN);
+        let _ = self.gallery.hires_overlay.set_visible(proteus, false);
         let targets = self.home.nav_buttons;
         let _ = self.gallery.enlarged.split_to(
             proteus,
@@ -1939,10 +1920,7 @@ impl Demo {
     fn hide_active_example_content(&mut self, proteus: &mut Proteus) {
         if let Some(idx) = self.active_example_category.take() {
             for handle in self.example_detail.content_handles(idx) {
-                proteus
-                    .world_mut()
-                    .entity_mut(handle.id())
-                    .insert(Visibility::HIDDEN);
+                let _ = handle.set_visible(proteus, false);
             }
         }
     }
@@ -1964,10 +1942,7 @@ impl Demo {
             if self.pending_reveals[i].elapsed >= self.pending_reveals[i].duration {
                 let reveal = self.pending_reveals.remove(i);
                 for e in reveal.entities {
-                    proteus
-                        .world_mut()
-                        .entity_mut(e.id())
-                        .insert(Visibility::VISIBLE);
+                    let _ = e.set_visible(proteus, true);
                 }
             } else {
                 i += 1;
@@ -2154,10 +2129,7 @@ impl Demo {
         self.gallery_fetch_elapsed += dt;
         if self.gallery_fetch_elapsed >= GALLERY_FETCH_TIMEOUT_SECS {
             self.gallery_error_shown = true;
-            proteus
-                .world_mut()
-                .entity_mut(self.loading.error_text.id())
-                .insert(Visibility::VISIBLE);
+            let _ = self.loading.error_text.set_visible(proteus, true);
             return;
         }
         let min_dwell = self.logo_frames.len() as f32 * splash::LOGO_FRAME_DURATION;
@@ -2209,15 +2181,7 @@ impl Demo {
             self.gallery_button_fade = (self.gallery_button_fade - step).max(target);
         }
         let fade = self.gallery_button_fade;
-        let vis = if fade > 0.0 {
-            Visibility::VISIBLE
-        } else {
-            Visibility::HIDDEN
-        };
-        proteus
-            .world_mut()
-            .entity_mut(self.gallery.fetch_button.id())
-            .insert(vis);
+        let _ = self.gallery.fetch_button.set_visible(proteus, fade > 0.0);
         if let Some(mut border) = proteus
             .world_mut()
             .get_mut::<Border>(self.gallery.fetch_button.id())
@@ -2346,15 +2310,10 @@ impl Demo {
             qs.corner_radius = base.geometry.corner_radius;
             qs.color.w = self.gallery_hires_fade;
         }
-        let vis = if has_bake && base.visible {
-            Visibility::VISIBLE
-        } else {
-            Visibility::HIDDEN
-        };
-        proteus
-            .world_mut()
-            .entity_mut(self.gallery.hires_overlay.id())
-            .insert(vis);
+        let _ = self
+            .gallery
+            .hires_overlay
+            .set_visible(proteus, has_bake && base.visible);
     }
 
     /// Finalizes `gallery.fetch_button`'s geometry once its label has
@@ -2745,15 +2704,11 @@ impl Demo {
             .unwrap_or(false);
         let visible =
             panel_visible && self.state == AppState::ExampleDetail(3) && self.stress_run.is_none();
-        let vis = if visible {
-            Visibility::VISIBLE
-        } else {
-            Visibility::HIDDEN
-        };
-        proteus
-            .world_mut()
-            .entity_mut(self.example_detail.stress.warning_text.id())
-            .insert(vis);
+        let _ = self
+            .example_detail
+            .stress
+            .warning_text
+            .set_visible(proteus, visible);
     }
 
     /// Ramps every registered [`HoverEntry`]'s progress toward 1 while
@@ -3003,14 +2958,10 @@ impl Demo {
         });
 
         let backdrop_visible = video_idx.is_some();
-        proteus
-            .world_mut()
-            .entity_mut(self.video_tiles.backdrop.id())
-            .insert(if backdrop_visible {
-                Visibility::VISIBLE
-            } else {
-                Visibility::HIDDEN
-            });
+        let _ = self
+            .video_tiles
+            .backdrop
+            .set_visible(proteus, backdrop_visible);
         if let Some(idx) = video_idx {
             if let Some(tile_state) = proteus.get(self.video_tiles.tiles[idx]) {
                 if let Some(mut qs) = proteus
@@ -3084,14 +3035,7 @@ impl Demo {
             && self.video_settled_elapsed >= video_tiles::VIDEO_DOT_SHOW_DELAY_SECS;
         let error_visible = settled_waiting && self.video_load_timed_out;
         for (i, &dot) in self.video_tiles.loading_dots.iter().enumerate() {
-            proteus
-                .world_mut()
-                .entity_mut(dot.id())
-                .insert(if dots_visible {
-                    Visibility::VISIBLE
-                } else {
-                    Visibility::HIDDEN
-                });
+            let _ = dot.set_visible(proteus, dots_visible);
             if dots_visible {
                 let phase = (self.video_dots_elapsed
                     - i as f32 * video_tiles::VIDEO_DOT_PULSE_STAGGER_SECS)
@@ -3105,14 +3049,10 @@ impl Demo {
                 }
             }
         }
-        proteus
-            .world_mut()
-            .entity_mut(self.video_tiles.error_text.id())
-            .insert(if error_visible {
-                Visibility::VISIBLE
-            } else {
-                Visibility::HIDDEN
-            });
+        let _ = self
+            .video_tiles
+            .error_text
+            .set_visible(proteus, error_visible);
     }
 
     /// Drives the whole light/dark theme system off `theme_progress` — see
@@ -3194,14 +3134,8 @@ impl Demo {
             1.0
         };
         if chrome_visible > 0.0 {
-            proteus
-                .world_mut()
-                .entity_mut(self.theme.sun.id())
-                .insert(Visibility::VISIBLE);
-            proteus
-                .world_mut()
-                .entity_mut(self.theme.moon.id())
-                .insert(Visibility::VISIBLE);
+            let _ = self.theme.sun.set_visible(proteus, true);
+            let _ = self.theme.moon.set_visible(proteus, true);
         }
         let fade_step = dt / theme::FADE_DURATION_SECS;
         for fade in &mut self.theme_icon_fade {
@@ -3469,10 +3403,7 @@ impl Demo {
         // Logo fades in alongside `home` (same target/duration), then stays
         // up (that target never returns to 0 past Splash).
         if home_target > 0.0 {
-            proteus
-                .world_mut()
-                .entity_mut(self.nav.lockup.id())
-                .insert(Visibility::VISIBLE);
+            let _ = self.nav.lockup.set_visible(proteus, true);
         }
         let logo_step = dt / nav::FADE_DURATION_SECS;
         if self.nav_lockup_fade < home_target {
@@ -3512,10 +3443,7 @@ impl Demo {
         for (i, &icon) in [self.nav.home, self.nav.back].iter().enumerate() {
             let target = targets[i];
             if target > 0.0 {
-                proteus
-                    .world_mut()
-                    .entity_mut(icon.id())
-                    .insert(Visibility::VISIBLE);
+                let _ = icon.set_visible(proteus, true);
             }
             let step = dt / nav::FADE_DURATION_SECS;
             if self.nav_icon_fade[i] < target {
@@ -3524,10 +3452,7 @@ impl Demo {
                 self.nav_icon_fade[i] = (self.nav_icon_fade[i] - step).max(target);
             }
             if target <= 0.0 && self.nav_icon_fade[i] <= 0.0 {
-                proteus
-                    .world_mut()
-                    .entity_mut(icon.id())
-                    .insert(Visibility::HIDDEN);
+                let _ = icon.set_visible(proteus, false);
             }
 
             // Position + fade only — hover glow/scale is `advance_hovers`'

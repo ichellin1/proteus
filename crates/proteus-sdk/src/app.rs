@@ -89,6 +89,13 @@ impl Proteus {
             self.world.world.entity_mut(entity).insert(Baked);
         }
 
+        if !spec.visible {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::Visibility::HIDDEN);
+        }
+
         if let Some(text) = spec.text {
             self.world.world.entity_mut(entity).insert(text);
         }

@@ -269,6 +269,18 @@ export class Handle {
   }
 
   /**
+   * Shows or hides this component. Hidden components stay in the world but
+   * are skipped by render, input and navigation; children cascade.
+   *
+   * {@link SignalHandle.set} already hides its `from` and reveals its `to`,
+   * so a signal-driven morph needs no call here. This is for visibility a
+   * signal doesn't own.
+   */
+  setVisible(visible: boolean): void {
+    this.app.wasmApp.setVisible(this.wasmHandle, visible);
+  }
+
+  /**
    * Shows an already-registered texture on this component, replacing
    * whatever image/text/composite it previously showed — `false` (no-op) if
    * `texture` is evicted/unknown. The sanctioned way to do frame-swap
