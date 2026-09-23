@@ -174,6 +174,51 @@ export interface ComponentSpec {
  * `allowNavigation` is accepted for forward-compatibility but is inert —
  * directional/tab navigation is still a stub, so nothing reads it yet.
  */
+/**
+ * Partial engine configuration for {@link mount}, applied on top of the web
+ * preset — anything omitted keeps the preset's value.
+ *
+ * Deliberately narrower than Rust's `ProteusConfig`: only knobs that
+ * currently *do* something appear here. The Rust struct also carries fields
+ * that are declared but not yet consumed (video sizing, MSAA, input tuning,
+ * custom easings, most debug flags); in Rust those read as documented
+ * placeholders, but here they would be controls that silently do nothing.
+ * They get added when they work.
+ *
+ * Misspellings are rejected rather than ignored — a config typo that quietly
+ * changes nothing is the failure this API is meant to prevent.
+ */
+export interface ProteusConfigOverrides {
+  render?: {
+    /** Linear RGBA, 0–1: the colour behind everything, and what shows through transparency. */
+    clearColor?: [number, number, number, number];
+    presentMode?:
+      | "autoVsync"
+      | "autoNoVsync"
+      | "fifo"
+      | "fifoRelaxed"
+      | "immediate"
+      | "mailbox";
+    powerPreference?: "none" | "lowPower" | "highPerformance";
+  };
+  memory?: {
+    /** Atlas page size/count. Larger than the device allows throws at mount. */
+    mainAtlas?: { pageSize?: number; pageCount?: number };
+    transitionAtlasSize?: number;
+    /** Upper bound on quads drawn in one frame. */
+    maxInstances?: number;
+  };
+  frame?: {
+    /** Upper bound on a frame's delta time — stops a backgrounded tab resuming with one huge step. */
+    dtClampSecs?: number;
+  };
+  resources?: {
+    /** Longest side an image is downscaled to before packing. `null` packs at native resolution. */
+    imageMaxSide?: number | null;
+    lazyLoad?: boolean;
+  };
+}
+
 /** How a texture should be packed into the atlas. */
 export interface TextureRequest {
   /**

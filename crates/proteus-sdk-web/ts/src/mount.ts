@@ -18,6 +18,7 @@ import { mount as wasmMount } from "../pkg-host/proteus_host_web.js";
 import type { ProteusApp as WasmApp } from "../pkg/proteus_sdk_web.js";
 
 import { ProteusApp } from "./index.js";
+import type { ProteusConfigOverrides } from "./types.js";
 
 export interface MountOptions {
   /** Called once, synchronously, before the first frame is queued. */
@@ -29,6 +30,25 @@ export interface MountOptions {
    * fresh {@link ProteusApp} wrapper every frame for no reason).
    */
   update?: (deltaSeconds: number) => void;
+  /**
+   * Partial engine configuration, applied on top of the web preset. Omit it,
+   * or omit any field, to keep the preset's value.
+   *
+   * ```ts
+   * await mount("canvas", {
+   *   setup,
+   *   config: {
+   *     render: { clearColor: [0.05, 0.05, 0.08, 1] },
+   *     resources: { imageMaxSide: 512 },
+   *   },
+   * });
+   * ```
+   *
+   * Rejects rather than guesses: a misspelled field, an unknown
+   * `presentMode`, or a value the device can't support (an atlas larger than
+   * WebGL2 allows, say) throws with the offending field named.
+   */
+  config?: ProteusConfigOverrides;
 }
 
 /** Mount a TS-authored app on the `<canvas>` element with the given id. */
@@ -40,5 +60,6 @@ export async function mount(
     canvasId,
     (rawApp: WasmApp) => opts.setup(new ProteusApp(rawApp)),
     opts.update ? (dt: number) => opts.update?.(dt) : undefined,
+    opts.config ?? null,
   );
 }

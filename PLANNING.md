@@ -4338,7 +4338,36 @@ Decisions:
 `examples/gallery` can drop `loadBaked`/`waitForBake` entirely; revisiting it is still pending
 (see A-01/A-02).
 
-##### A-05 — still to decide
+##### A-05 — engine config from TypeScript *(decided and built 2026-09-23)*
+
+`mount()` hardcoded `ProteusConfig::web()`, so a TS app could not set a clear colour, atlas
+sizes, `image_max_side` or a present mode.
+
+Decisions:
+
+- **Partial overrides, not a mirror.** `ProteusConfigDto` has every field optional, applied on
+  top of `ProteusConfig::web()`. A caller states only what it wants changed, and a new knob is a
+  new optional field — M13.5's "the shape only grows" rule holds on this side too.
+- **Only knobs that are wired.** `ProteusConfig` carries fields nothing consumes yet —
+  `memory.video.*`, `render.msaa_samples`, all of `input.*`, `transitions.custom_easings` (A-07),
+  most of `debug.*`. They're absent here on purpose: in Rust an inert field is a documented
+  placeholder, but in a TypeScript API it is a control that silently does nothing. Checked each
+  field for a real consumer before exposing it; nine qualified.
+- **Typos are rejected, not ignored** (`deny_unknown_fields`), as are unknown `presentMode` /
+  `powerPreference` strings. A config typo that quietly changes nothing is the exact failure this
+  API exists to prevent — different from the `splitTo` strategy tag, where leniency is fine
+  because the wrong branch is immediately visible on screen.
+- **Validation returns a JS error instead of aborting.** `Renderer::new` asserts its config and
+  would take the wasm module down; a TS caller's config is *input*, not a programmer error, so
+  `mount` runs `validate_atlas_config`/`validate_render_config` first and throws with the
+  offending field named. Both are now re-exported from `proteus-runtime` for that purpose.
+- **The DTO lives in `proteus-runtime`, not `proteus-host-web`.** It is a property of the config
+  rather than of the web, a native host loading settings from a file wants the same thing — and
+  `proteus-host-web` only compiles for wasm32, where nothing runs `cargo test`, so tests placed
+  there would never have run.
+
+`imageMaxSide` distinguishes absent from an explicit `null`: omitting it keeps the preset, while
+`null` means "pack at native resolution".
 - **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
   exposed by either SDK.
 - **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to

@@ -30,6 +30,7 @@ pub async fn mount(
     canvas_id: String,
     setup: js_sys::Function,
     update: Option<js_sys::Function>,
+    config: JsValue,
 ) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     wasm_logger::init(wasm_logger::Config::default());
@@ -43,10 +44,32 @@ pub async fn mount(
         .dyn_into::<web_sys::HtmlCanvasElement>()
         .map_err(|_| JsValue::from_str("element is not a canvas"))?;
 
-    let config = ProteusConfig::web();
+    // Partial overrides on top of `ProteusConfig::web()` — see
+    // `config_dto`. Absent/null is the preset unchanged, which is what the
+    // TS wrapper sends when a caller passes no config at all.
+    let config = if config.is_null() || config.is_undefined() {
+        ProteusConfig::web()
+    } else {
+        let dto: proteus_runtime::ProteusConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid config: {e}")))?;
+        dto.apply().map_err(|e| JsValue::from_str(&e))?
+    };
+
     let surface = WebSurface::new(&canvas, config.render).await?;
     let viewport = surface.viewport();
     let surface_format = surface.surface_format();
+
+    // `Renderer::new` asserts these and would abort the wasm module on a
+    // bad value. A TS caller's config is input, not a programmer error, so
+    // it comes back as a JS exception naming the offending field instead.
+    proteus_runtime::validate_atlas_config(surface.device(), &config.memory.main_atlas)
+        .map_err(|e| JsValue::from_str(&e))?;
+    proteus_runtime::validate_render_config(
+        surface.device(),
+        config.memory.transition_atlas_size,
+        config.memory.max_instances,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
 
     let proteus = Rc::new(RefCell::new(proteus_runtime::Proteus::new()));
     let renderer = Renderer::new(
