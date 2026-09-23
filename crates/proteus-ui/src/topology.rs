@@ -131,23 +131,20 @@ pub fn register_transition_alloc_hooks(world: &mut World) {
 // ChildBehaviorFn
 // ---------------------------------------------------------------------------
 
-/// Per-child transition config function for group transitions.
+/// Per-child transition configs for a group transition, index-aligned with
+/// the request's own targets (1→N) or sources (N→1).
 ///
-/// Called once per child during group setup. Returns the `TransitionConfig`
-/// to apply to that child's virtual entity (or direct target, for bake).
+/// This used to be `fn(idx, total) -> TransitionConfig`, evaluated inside the
+/// setup system. It is a list now because that function was a bare fn pointer
+/// — no captures — and is called once per child with nothing but `idx` and
+/// `total` in scope, so resolving it at request-construction time is exactly
+/// equivalent. Doing so lets a caller use a real closure, and lets the
+/// TypeScript SDK pass a JS function, neither of which a fn pointer allows.
+/// See `Handle::split_to_with_behavior`.
 ///
-/// ```rust,ignore
-/// fn stagger(idx: usize, total: usize) -> TransitionConfig {
-///     TransitionConfig {
-///         duration: 0.4,
-///         delay: idx as f32 * 0.08,
-///         easing: ease_out_cubic,
-///     }
-/// }
-/// ```
-///
-/// This is the Rust equivalent of the TypeScript `childBehavior` iterator.
-pub type ChildBehaviorFn = fn(idx: usize, total: usize) -> TransitionConfig;
+/// Shorter than the child count is fine: any index past the end falls back to
+/// the request's `default_config`.
+pub type ChildConfigs = Vec<TransitionConfig>;
 
 // ---------------------------------------------------------------------------
 // SplitStrategy
@@ -178,9 +175,9 @@ pub enum SplitStrategy {
     /// **Why experimental:** nothing in the reference demo uses it, so it is
     /// unexercised outside tests; and the per-target control it exists for
     /// is only half-exposed — `ChildBehaviorFn` can vary each target's
-    /// duration/delay/easing, but `proteus-sdk` hardcodes `child_behavior:
-    /// None`, so an SDK caller gets one shared config for all N. Until that
-    /// lands, this offers per-target *geometry* but not per-target *timing*.
+    /// duration/delay/easing via `Handle::split_to_with_behavior`, but
+    /// nothing in the reference demo uses it, so the combination is
+    /// unexercised outside tests.
     ///
     /// Completion is reported per target, not on the source — the source has
     /// no transition of its own here. See `Handle::on_transition_complete`.
@@ -228,12 +225,12 @@ pub struct OneToNRequest {
     /// Destination entities and their target geometric states.
     /// The order determines pairing with source slices: target 0 receives slice 0.
     pub targets: Vec<GroupTarget>,
-    /// Default transition config. Applied to all targets unless `child_behavior`
-    /// returns a different config for that index.
+    /// Default transition config. Applied to any target `child_configs`
+    /// doesn't cover.
     pub default_config: TransitionConfig,
-    /// Optional per-child config override. When `Some`, called once per target
-    /// with `(index, total)`. Overrides `default_config` for that child.
-    pub child_behavior: Option<ChildBehaviorFn>,
+    /// Optional per-target config overrides, index-aligned with `targets`.
+    /// Any index not covered falls back to `default_config`.
+    pub child_configs: Option<ChildConfigs>,
     /// Which strategy normalizes the 1→N to a set of 1→1 lerps.
     pub strategy: SplitStrategy,
 }
@@ -272,8 +269,9 @@ pub struct NToOneRequest {
     pub sources: Vec<GroupSource>,
     /// Default transition config.
     pub default_config: TransitionConfig,
-    /// Optional per-source config override.
-    pub child_behavior: Option<ChildBehaviorFn>,
+    /// Optional per-source config overrides, index-aligned with `sources`.
+    /// Any index not covered falls back to `default_config`.
+    pub child_configs: Option<ChildConfigs>,
     /// How the destination is divided into per-source slices.
     pub layout: MergeLayout,
 }
@@ -697,8 +695,9 @@ pub fn one_to_n_setup_system(
                 // Each target animates from the source geometry to its own position.
                 for (i, target) in request.targets.iter().enumerate() {
                     let cfg = request
-                        .child_behavior
-                        .map(|f| f(i, n))
+                        .child_configs
+                        .as_ref()
+                        .and_then(|c| c.get(i).copied())
                         .unwrap_or(request.default_config);
 
                     commands.entity(target.entity).insert(TransitionRequest {
@@ -792,8 +791,9 @@ pub fn one_to_n_setup_system(
                     slices.iter().zip(request.targets.iter()).enumerate()
                 {
                     let cfg = request
-                        .child_behavior
-                        .map(|f| f(i, n))
+                        .child_configs
+                        .as_ref()
+                        .and_then(|c| c.get(i).copied())
                         .unwrap_or(request.default_config);
 
                     let own_bake = target_bakes.get(i).copied().flatten();
@@ -993,8 +993,9 @@ pub fn n_to_one_setup_system(
             request.sources.iter().zip(target_slices.iter()).enumerate()
         {
             let cfg = request
-                .child_behavior
-                .map(|f| f(i, n))
+                .child_configs
+                .as_ref()
+                .and_then(|c| c.get(i).copied())
                 .unwrap_or(request.default_config);
 
             let own_bake = source_bakes.get(i).copied().flatten();

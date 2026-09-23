@@ -1001,6 +1001,134 @@ fn a_per_target_split_completes_on_its_targets_not_its_source() {
 }
 
 // ---------------------------------------------------------------------------
+// split_to_with_behavior / merge_from_with_behavior — A-09
+// ---------------------------------------------------------------------------
+
+#[test]
+fn split_to_with_behavior_staggers_each_target() {
+    use proteus_sdk::SplitStrategy;
+
+    // Phase A's childBehavior iterator, finally reachable from the SDK.
+    // Delay by index, so after 0.15s target 0 has finished its 0.1s morph
+    // and target 2 (delayed 0.2s) has not started.
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let targets: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(300.0 + i as f32 * 100.0, 0.0))))
+        .collect();
+
+    source
+        .split_to_with_behavior(
+            &mut app,
+            &targets,
+            cfg(0.1),
+            SplitStrategy::PerTarget,
+            |i, _total| TransitionConfig {
+                duration: 0.1,
+                delay: i as f32 * 0.1,
+                easing: proteus_sdk::linear,
+            },
+        )
+        .unwrap();
+
+    // Tick 1 converts the deferred TransitionRequests (see the PerTarget
+    // timing note); tick 2 advances 0.15s into them.
+    app.tick(0.0);
+    app.tick(0.15);
+
+    assert!(
+        app.get(targets[0]).unwrap().transition.is_none(),
+        "target 0 has no delay and a 0.1s duration — done by 0.15s"
+    );
+    assert!(
+        app.get(targets[2]).unwrap().transition.is_some(),
+        "target 2 is delayed 0.2s — still waiting at 0.15s"
+    );
+}
+
+#[test]
+fn split_to_with_behavior_falls_back_to_the_shared_config() {
+    use proteus_sdk::SplitStrategy;
+
+    // A behavior that returns the same config for every index must behave
+    // exactly like plain split_to — the eager resolution introduces nothing.
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let targets: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(300.0 + i as f32 * 100.0, 0.0))))
+        .collect();
+
+    source
+        .split_to_with_behavior(
+            &mut app,
+            &targets,
+            cfg(0.1),
+            SplitStrategy::PerTarget,
+            |_i, _total| cfg(0.1),
+        )
+        .unwrap();
+    app.tick(0.0);
+    app.tick(1.0);
+
+    for t in &targets {
+        assert!(app.get(*t).unwrap().transition.is_none());
+    }
+}
+
+#[test]
+fn merge_from_with_behavior_staggers_each_source() {
+    use proteus_sdk::MergeLayout;
+
+    let mut app = Proteus::new();
+    let sources: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 100.0, 0.0))))
+        .collect();
+    let dest = app.component(ComponentSpec::new(quad_at(500.0, 0.0)));
+    let count = completion_counter(&mut app, dest);
+
+    dest.merge_from_with_behavior(
+        &mut app,
+        &sources,
+        cfg(0.1),
+        MergeLayout::Horizontal,
+        |i, _total| TransitionConfig {
+            duration: 0.1,
+            delay: i as f32 * 0.1,
+            easing: proteus_sdk::linear,
+        },
+    )
+    .unwrap();
+
+    // The group can't complete until its slowest member does — source 2 is
+    // delayed 0.2s on top of a 0.1s morph.
+    app.tick(0.15);
+    assert_eq!(count.get(), 0, "still waiting on the staggered tail");
+    app.tick(1.0);
+    assert_eq!(count.get(), 1);
+}
+
+#[test]
+fn with_behavior_on_a_destroyed_handle_is_an_error_not_a_panic() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let target = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
+    source.destroy(&mut app).unwrap();
+
+    assert!(matches!(
+        source.split_to_with_behavior(
+            &mut app,
+            &[target],
+            cfg(0.1),
+            SplitStrategy::PerTarget,
+            |_, _| cfg(0.1),
+        ),
+        Err(HandleError::EntityNotFound)
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // split_to() / merge_from() — group transitions (M12.5 Step 2)
 // ---------------------------------------------------------------------------
 

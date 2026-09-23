@@ -4247,6 +4247,36 @@ but `proteus-sdk` hardcodes `child_behavior: None` (audit A-09), so an SDK calle
 Also fixed while renaming: the TS `splitTo` DTO fell back to this strategy for any unrecognized
 `kind`, so a typo silently selected the experimental path. It now falls back to `"slice"` and logs.
 
+##### A-09 — per-child transition configs, and a `split_to` doc fix *(decided and built 2026-09-23)*
+
+Two unrelated things under one finding.
+
+The doc bug: `Handle::split_to` said the source "is hidden by the underlying system once the
+transition completes". It is hidden **immediately**, in the same tick the split is set up
+(`topology.rs`, before the strategy match). What the viewer sees during the morph is the targets
+or virtual slices of a bake — never the source. Corrected on both `split_to` and its siblings.
+
+The gap: `ChildBehaviorFn` — Phase A's `childBehavior` iterator — existed only in `proteus-ui`
+and was `fn(idx, total) -> TransitionConfig`, a bare fn pointer. Neither SDK could pass one, so
+every group transition used a single shared config for all N children.
+
+Decision: **resolve per-child configs eagerly instead of lazily.** The type is now
+`ChildConfigs = Vec<TransitionConfig>`, index-aligned with the request's targets or sources, and
+the SDK evaluates the caller's closure once per child before enqueueing the request. This is
+provably equivalent — the old fn pointer had no captures and was called with nothing in scope but
+`idx` and `total`, so nothing could observe *when* it ran — and it buys two things a fn pointer
+cannot: a Rust caller can use a closure that captures, and TypeScript can pass a JS function.
+The two existing `proteus-ui` stagger tests pass unchanged through the new form, which is the
+equivalence argument made concrete.
+
+Surface: `Handle::split_to_with_behavior` / `merge_from_with_behavior` in Rust, and an optional
+fourth argument on `splitTo`/`mergeFrom` in TypeScript (the wrapper dispatches to a separate
+wasm export, so the plain path stays a single call). A `childBehavior` that throws or returns a
+malformed config raises an error naming the index rather than silently substituting a default.
+
+This is what `SplitStrategy::PerTarget` was missing: it now offers per-target *timing* as well as
+per-target geometry, which is the control it exists for.
+
 ##### A-03 … A-05 — still to decide
 - **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
   exposed by either SDK.

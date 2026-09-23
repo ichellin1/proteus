@@ -182,6 +182,27 @@ export interface TransitionConfig {
  * 1→1 lerps — see `proteus_ui::SplitStrategy`'s own doc for the visual
  * difference between each. `cols`/`rows` only apply to `"gridSlice"`.
  */
+/**
+ * Per-child transition config for a group transition — Phase A's
+ * `childBehavior` iterator. Called once per target (or source) with its
+ * index and the total, and its result overrides the shared config for that
+ * child. The usual reason is a stagger:
+ *
+ * ```ts
+ * source.splitTo(targets, config, { kind: "slice" },
+ *   (i) => ({ duration: 0.4, delay: i * 0.08, easing: "easeOutCubic" }));
+ * ```
+ *
+ * Called up front, when the transition is requested — never from inside the
+ * engine's own update, so an ordinary closure is safe. A throw, or a return
+ * value that isn't a {@link TransitionConfig}, raises an error naming the
+ * index rather than silently substituting a default.
+ */
+export type ChildBehavior = (
+  index: number,
+  total: number,
+) => TransitionConfig;
+
 export type SplitStrategy =
   /**
    * One independent 1-to-1 transition per target. **Experimental for V1.**

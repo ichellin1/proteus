@@ -163,6 +163,26 @@ fn wrap_dropped(
 /// with every other throw in this file. Promoting all of them to `Error`
 /// objects — which carry a stack trace — is a worthwhile follow-up, but not one
 /// to do halfway.
+/// Calls a JS `(index, total) => TransitionConfig` once per child, up front.
+/// A throw or a malformed return becomes an `Err` naming the index, rather
+/// than a silently-substituted default.
+fn resolve_child_behavior(
+    f: &js_sys::Function,
+    total: usize,
+) -> Result<Vec<sdk::TransitionConfig>, JsValue> {
+    (0..total)
+        .map(|i| {
+            let raw = f.call2(&JsValue::NULL, &(i as f64).into(), &(total as f64).into())?;
+            let dto: TransitionConfigDto = serde_wasm_bindgen::from_value(raw).map_err(|e| {
+                JsValue::from_str(&format!(
+                    "childBehavior({i}, {total}) returned an invalid TransitionConfig: {e}"
+                ))
+            })?;
+            Ok((&dto).into())
+        })
+        .collect()
+}
+
 fn handle_err(e: sdk::HandleError) -> JsValue {
     JsValue::from_str(&format!("proteus: {e}"))
 }
@@ -321,6 +341,73 @@ impl ProteusApp {
                 &sources,
                 (&config_dto).into(),
                 (&layout_dto).into(),
+            )
+            .map_err(handle_err)
+    }
+
+    /// [`Self::split_to`] with a per-target transition config (A-09).
+    ///
+    /// `child_behavior` is a JS `(index, total) => TransitionConfig`. It is
+    /// called once per target here, before the request is enqueued — never
+    /// from inside an ECS system — so an ordinary JS closure is safe.
+    #[wasm_bindgen(js_name = splitToWithBehavior)]
+    pub fn split_to_with_behavior(
+        &mut self,
+        handle: &Handle,
+        target_ids: Vec<f64>,
+        config: JsValue,
+        strategy: JsValue,
+        child_behavior: js_sys::Function,
+    ) -> Result<(), JsValue> {
+        let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+        let strategy_dto: SplitStrategyDto = serde_wasm_bindgen::from_value(strategy)
+            .map_err(|e| JsValue::from_str(&format!("invalid SplitStrategy: {e}")))?;
+        let targets: Vec<sdk::Handle> = target_ids
+            .into_iter()
+            .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
+            .collect();
+        let child_configs = resolve_child_behavior(&child_behavior, targets.len())?;
+        handle
+            .0
+            .split_to_with_behavior(
+                &mut self.0.borrow_mut(),
+                &targets,
+                (&config_dto).into(),
+                (&strategy_dto).into(),
+                |i, _total| child_configs[i],
+            )
+            .map_err(handle_err)
+    }
+
+    /// [`Self::merge_from`] with a per-source transition config (A-09). See
+    /// [`Self::split_to_with_behavior`].
+    #[wasm_bindgen(js_name = mergeFromWithBehavior)]
+    pub fn merge_from_with_behavior(
+        &mut self,
+        handle: &Handle,
+        source_ids: Vec<f64>,
+        config: JsValue,
+        layout: JsValue,
+        child_behavior: js_sys::Function,
+    ) -> Result<(), JsValue> {
+        let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+        let layout_dto: MergeLayoutDto = serde_wasm_bindgen::from_value(layout)
+            .map_err(|e| JsValue::from_str(&format!("invalid MergeLayout: {e}")))?;
+        let sources: Vec<sdk::Handle> = source_ids
+            .into_iter()
+            .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
+            .collect();
+        let child_configs = resolve_child_behavior(&child_behavior, sources.len())?;
+        handle
+            .0
+            .merge_from_with_behavior(
+                &mut self.0.borrow_mut(),
+                &sources,
+                (&config_dto).into(),
+                (&layout_dto).into(),
+                |i, _total| child_configs[i],
             )
             .map_err(handle_err)
     }

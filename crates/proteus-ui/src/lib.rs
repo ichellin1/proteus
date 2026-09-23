@@ -61,7 +61,7 @@ pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};
 pub use texture_ref::TextureRef;
 pub use topology::{
-    ActiveGroupTransition, ChildBehaviorFn, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
+    ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
     OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
 };
 pub use transition::{
