@@ -174,6 +174,22 @@ export interface ComponentSpec {
  * `allowNavigation` is accepted for forward-compatibility but is inert —
  * directional/tab navigation is still a stub, so nothing reads it yet.
  */
+/** How a texture should be packed into the atlas. */
+export interface TextureRequest {
+  /**
+   * Downscale cap (longest side, pixels) before packing. Omit to pack at
+   * native resolution — a photo straight off the network is usually far
+   * larger than it will ever be drawn.
+   */
+  maxSide?: number;
+  /**
+   * Pin the texture for the app's lifetime — never LRU-evicted. For assets
+   * referenced continuously, e.g. an animation frame set that must all stay
+   * resident.
+   */
+  eternal?: boolean;
+}
+
 export interface TransitioningConfig {
   allowInput?: boolean;
   allowNavigation?: boolean;

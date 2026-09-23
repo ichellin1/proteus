@@ -50,8 +50,12 @@ mod viewport;
 pub use app::{App, Frame, PlayingVideo};
 pub use config::ProteusConfig;
 pub use engine::Engine;
+/// Re-exported from `proteus-sdk`, where the type now lives: how a texture
+/// should be packed is app-authoring, not host-services. Hosts and apps keep
+/// naming it through `proteus_runtime`.
+pub use proteus_sdk::TextureRequest;
 pub use renderer::Renderer;
-pub use services::{FetchId, FetchResult, HostServices, TextureRequest, VideoFrame, VideoStream};
+pub use services::{FetchId, FetchResult, HostServices, VideoFrame, VideoStream};
 pub use viewport::{Insets, Viewport};
 
 // Re-exported so a host crate can depend on `proteus-runtime` alone and

@@ -22,6 +22,7 @@ import type {
   Geometry,
   MergeLayout,
   SplitStrategy,
+  TextureRequest,
   TextureState,
   TransitioningConfig,
   TransitionConfig,
@@ -495,6 +496,50 @@ export class ProteusApp {
 
   texture(id: number): TextureHandle {
     return new TextureHandle(this, this.wasmApp.texture(id));
+  }
+
+  /**
+   * Decode an encoded image (PNG, JPEG, …) and pack it into the atlas,
+   * returning a handle you can hand to {@link Handle.setTexture}.
+   *
+   * Synchronous — the pixels are on the GPU when this returns, so there is
+   * no "ready" event to wait for. You supply the bytes, so fetching stays
+   * yours:
+   *
+   * ```ts
+   * const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+   * const tex = app.loadTexture(bytes, { maxSide: 512 });
+   * if (tex) tile.setTexture(tex);
+   * ```
+   *
+   * `undefined` if the bytes could not be decoded. A decoded image that
+   * doesn't fit the atlas returns a handle that resolves to no texture — a
+   * capacity condition rather than bad input — so the component renders as
+   * nothing instead of throwing.
+   */
+  loadTexture(
+    bytes: Uint8Array,
+    request?: TextureRequest,
+  ): TextureHandle | undefined {
+    const wasm = this.wasmApp.loadTexture(bytes, request ?? null);
+    return wasm ? new TextureHandle(this, wasm) : undefined;
+  }
+
+  /**
+   * Pack already-decoded RGBA pixels into the atlas — the raw-pixel
+   * counterpart of {@link ProteusApp.loadTexture}, for procedurally
+   * generated content. `rgba.length` must be `width * height * 4`.
+   */
+  bakeTexture(
+    width: number,
+    height: number,
+    rgba: Uint8Array,
+    request?: TextureRequest,
+  ): TextureHandle {
+    return new TextureHandle(
+      this,
+      this.wasmApp.bakeTexture(width, height, rgba, request ?? null),
+    );
   }
 
   /** Reconstruct a {@link TextureHandle} from an id obtained from {@link TextureHandle.id}. */

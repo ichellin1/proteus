@@ -183,6 +183,22 @@ fn resolve_child_behavior(
         .collect()
 }
 
+/// `{maxSide?, eternal?}` from JS. An absent or malformed value is the
+/// default request — the fields are hints about packing, not correctness, so
+/// there is nothing here worth failing a call over.
+fn texture_request_from(value: JsValue) -> sdk::TextureRequest {
+    if value.is_null() || value.is_undefined() {
+        return sdk::TextureRequest::default();
+    }
+    match serde_wasm_bindgen::from_value::<dto::TextureRequestDto>(value) {
+        Ok(dto) => (&dto).into(),
+        Err(e) => {
+            log::warn!("invalid TextureRequest ({e}) — using defaults");
+            sdk::TextureRequest::default()
+        }
+    }
+}
+
 fn handle_err(e: sdk::HandleError) -> JsValue {
     JsValue::from_str(&format!("proteus: {e}"))
 }
@@ -751,6 +767,37 @@ impl ProteusApp {
             .0
             .set_opacity(&mut self.0.borrow_mut(), opacity)
             .map_err(handle_err)
+    }
+
+    /// Decode an encoded image (PNG/JPEG/…) and pack it into `main_atlas`,
+    /// returning a `TextureHandle` — A-04. Synchronous: the pixels are on
+    /// the GPU when this returns, so there is no "ready" event to wait for.
+    ///
+    /// `undefined` if the bytes could not be decoded. Replaces the old
+    /// workaround of spawning an off-screen component with `image: {bytes}`
+    /// and polling `bakedImageSize()` every frame.
+    #[wasm_bindgen(js_name = loadTexture)]
+    pub fn load_texture(&mut self, bytes: &[u8], request: JsValue) -> Option<TextureHandle> {
+        let req = texture_request_from(request);
+        self.0
+            .borrow_mut()
+            .load_texture(bytes, req)
+            .map(TextureHandle)
+    }
+
+    /// Pack already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
+    /// into `main_atlas` — the raw-pixel counterpart of
+    /// [`Self::load_texture`], for procedurally generated content.
+    #[wasm_bindgen(js_name = bakeTexture)]
+    pub fn bake_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        request: JsValue,
+    ) -> TextureHandle {
+        let req = texture_request_from(request);
+        TextureHandle(self.0.borrow_mut().bake_texture(width, height, rgba, req))
     }
 
     /// Disables or re-enables `handle` — see `proteus-sdk`'s

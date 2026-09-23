@@ -304,6 +304,25 @@ pub struct ComponentSpecDto {
     pub transitioning: Option<TransitioningConfigDto>,
 }
 
+/// `{maxSide?, eternal?}` — how a texture should be packed.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextureRequestDto {
+    #[serde(default)]
+    pub max_side: Option<u32>,
+    #[serde(default)]
+    pub eternal: bool,
+}
+
+impl From<&TextureRequestDto> for proteus_sdk::TextureRequest {
+    fn from(d: &TextureRequestDto) -> Self {
+        Self {
+            max_side: d.max_side,
+            eternal: d.eternal,
+        }
+    }
+}
+
 /// Per-entity opt-in to input while mid-transition. Both flags default to
 /// `false`; `allowNavigation` is accepted but inert until navigation exists.
 #[derive(Debug, Deserialize)]
@@ -446,7 +465,11 @@ impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
                 cols: d.cols.max(1),
                 rows: d.rows.max(1),
             },
-            _ => proteus_ui::SplitStrategy::PerTarget,
+            "perTarget" => proteus_ui::SplitStrategy::PerTarget,
+            other => {
+                log::warn!("unknown splitTo strategy {other:?} — falling back to \"slice\"");
+                proteus_ui::SplitStrategy::Slice
+            }
         }
     }
 }

@@ -2222,6 +2222,7 @@ dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
  "js-sys",
+ "log",
  "proteus-render",
  "proteus-sdk",
  "proteus-ui",

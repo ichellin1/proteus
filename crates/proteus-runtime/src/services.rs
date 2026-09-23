@@ -24,19 +24,6 @@
 
 use std::sync::Arc;
 
-/// Options for [`Frame::load_texture`](crate::Frame::load_texture) /
-/// [`Frame::bake_texture`](crate::Frame::bake_texture).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TextureRequest {
-    /// Downscale cap (longest side, pixels) before packing into `main_atlas`.
-    /// `None` = pack at native resolution.
-    pub max_side: Option<u32>,
-    /// Pin the texture in the atlas for the app's lifetime — never
-    /// LRU-evicted. For assets referenced continuously, e.g. an animation
-    /// frame set that must all stay resident.
-    pub eternal: bool,
-}
-
 /// Opaque identifier for an in-flight [`HostServices::fetch_async`] request —
 /// correlate with its eventual result via [`HostServices::poll_fetches`].
 /// Each `HostServices` impl mints its own ids; they're only meaningful
