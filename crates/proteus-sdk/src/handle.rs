@@ -558,12 +558,12 @@ impl Handle {
     ///   target.
     /// - [`Handle::merge_from`] — the **destination**, once, when every
     ///   source has arrived.
-    /// - [`Handle::split_to`] with [`SplitStrategy::Bake`] — the
-    ///   **targets**, each independently. **Not the source.** `Bake` is
-    ///   defined as N independent 1→1 transitions with no virtual entities,
-    ///   so the source has no transition of its own to finish: it hides and
-    ///   goes `Idle` in the same tick the split starts. Listen on the
-    ///   targets, or use `Slice` if you want one completion for the group.
+    /// - [`Handle::split_to`] with [`SplitStrategy::PerTarget`] — the
+    ///   **targets**, each independently, which is what the name says:
+    ///   there is no group, only N independent 1→1s. The source has no
+    ///   transition of its own to finish — it hides and goes `Idle` in the
+    ///   same tick the split starts. Use `Slice` if you want one completion
+    ///   for the whole thing.
     ///
     /// Persistent: it keeps firing for later transitions until the
     /// component is destroyed.

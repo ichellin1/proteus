@@ -183,8 +183,30 @@ export interface TransitionConfig {
  * difference between each. `cols`/`rows` only apply to `"gridSlice"`.
  */
 export type SplitStrategy =
-  | { kind: "bake" }
+  /**
+   * One independent 1-to-1 transition per target. **Experimental for V1.**
+   *
+   * Each target renders its own content, starting at the source's rectangle
+   * and moving to its own — not N copies of the source. No virtuals, no
+   * bake, no GPU work. The hand-authored option: you decide what each target
+   * is and where it lands, and you own whether the set reads well together.
+   *
+   * Experimental because nothing in the reference demo exercises it, and
+   * because the per-target control it exists for is only half-exposed —
+   * per-target *geometry* works, per-target *timing* needs `childBehavior`,
+   * which the SDK doesn't surface yet.
+   *
+   * Completion fires on each **target**, not on the source — see
+   * {@link Handle.onTransitionComplete}.
+   */
+  | { kind: "perTarget" }
+  /**
+   * Flattens the source — and its whole subtree — into one texture, then
+   * hands each target a crop of it to morph from. What you want when the
+   * pieces should read as parts of the thing that was there.
+   */
   | { kind: "slice" }
+  /** {@link SplitStrategy | `"slice"`}, but cropping a `cols`x`rows` grid rather than a row of strips. */
   | { kind: "gridSlice"; cols: number; rows: number };
 
 /**

@@ -102,7 +102,7 @@ fn horizontal_slices_total_width_equals_source() {
 }
 
 // ---------------------------------------------------------------------------
-// OneToNRequest — Bake strategy
+// OneToNRequest — PerTarget strategy
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -126,7 +126,7 @@ fn bake_1_to_n_hides_source() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_behavior: None,
-                strategy: SplitStrategy::Bake,
+                strategy: SplitStrategy::PerTarget,
             },
         ))
         .id();
@@ -164,7 +164,7 @@ fn bake_1_to_n_gives_each_target_a_transition_request() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_behavior: None,
-                strategy: SplitStrategy::Bake,
+                strategy: SplitStrategy::PerTarget,
             },
         ))
         .id();
@@ -203,7 +203,7 @@ fn bake_1_to_n_no_virtual_entities() {
             targets: group_targets,
             default_config: default_cfg(),
             child_behavior: None,
-            strategy: SplitStrategy::Bake,
+            strategy: SplitStrategy::PerTarget,
         },
     ));
 
@@ -244,7 +244,7 @@ fn bake_1_to_n_child_behavior_overrides_config() {
             targets: group_targets,
             default_config: default_cfg(),
             child_behavior: Some(stagger),
-            strategy: SplitStrategy::Bake,
+            strategy: SplitStrategy::PerTarget,
         },
     ));
 
@@ -937,7 +937,7 @@ fn slice_child_behavior_sets_per_virtual_duration() {
 ///
 /// With no children to animate there is nothing to coordinate, so
 /// `one_to_n_setup_system` should be a silent no-op with respect to virtual
-/// entity creation (both Bake and Slice strategies).
+/// entity creation (both PerTarget and Slice strategies).
 #[test]
 fn one_to_n_with_zero_targets_is_noop() {
     let mut world = make_world();
@@ -963,7 +963,7 @@ fn one_to_n_with_zero_targets_is_noop() {
         "zero targets must produce zero virtual entities"
     );
 
-    // Bake strategy with zero targets — also must not spawn anything.
+    // PerTarget strategy with zero targets — also must not spawn anything.
     world.spawn((
         red(),
         Lifecycle::Idle,
@@ -971,7 +971,7 @@ fn one_to_n_with_zero_targets_is_noop() {
             targets: vec![],
             default_config: default_cfg(),
             child_behavior: None,
-            strategy: SplitStrategy::Bake,
+            strategy: SplitStrategy::PerTarget,
         },
     ));
 

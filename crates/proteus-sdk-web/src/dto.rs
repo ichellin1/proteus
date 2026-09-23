@@ -393,10 +393,11 @@ impl From<&TransitionConfigDto> for TransitionConfig {
 
 /// Same flat `{kind, ...}` shape convention `easing` already uses above
 /// (a string tag instead of a nested JSON tagged-union) — `kind` is one of
-/// `"bake"` / `"slice"` / `"gridSlice"`; `cols`/`rows` only matter for
-/// `"gridSlice"`. An unrecognized `kind` falls back to `Bake`, mirroring
-/// `TransitionConfigDto::easing`'s identical "unknown string → sane default"
-/// leniency rather than erroring.
+/// `"perTarget"` / `"slice"` / `"gridSlice"`; `cols`/`rows` only matter for
+/// `"gridSlice"`. An unrecognized `kind` falls back to `Slice` and logs,
+/// keeping `TransitionConfigDto::easing`'s "unknown string → sane default"
+/// leniency rather than erroring. It used to fall back to `PerTarget`, which
+/// meant a typo silently selected the experimental strategy.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SplitStrategyDto {
@@ -415,7 +416,7 @@ impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
                 cols: d.cols.max(1),
                 rows: d.rows.max(1),
             },
-            _ => proteus_ui::SplitStrategy::Bake,
+            _ => proteus_ui::SplitStrategy::PerTarget,
         }
     }
 }
