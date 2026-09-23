@@ -445,6 +445,23 @@ Planned future work, not part of the V1 scope:
   way to trade it off. A capped or configurable render scale (independent of hires-fetch sizing)
   belongs to whoever tunes an app for production rather than in the framework's default — it
   would slot into `ProteusConfig::render` alongside the M13.5 fields.
+- **Composite-bake transition strategy.** PLANNING's Phase B designed this as "Strategy 1 —
+  Bake": before a group transition starts, flatten the N side into a *single* composite texture,
+  run one ordinary 1→1 morph between two quads, then discard the composite and restore the live
+  entities at their final positions. It was never built. `SplitStrategy::Bake` — the obvious
+  candidate for "the thing that became Strategy 1" — was something else entirely (N independent
+  1→1s that bake nothing), and was renamed `PerTarget` at the 2026-09-22 audit because the name
+  taught the wrong model.
+  The hypothesis is a performance one, and it is untested: on a constrained or low-end device,
+  flattening a compound subtree — a grid whose every tile carries images, text and buttons —
+  into one quad and morphing that should beat animating each item independently. Two shipped
+  things are close but are *not* this: `SplitStrategy::Slice` does flatten the source and its
+  whole subtree (`gather_bake_instances` recurses), but then hands out *crops* of that bake to N
+  virtuals, so it is still N moving pieces; and `ComponentSpec::bake()` (M10.5) flattens into one
+  quad permanently, destroying the children, rather than for a transition's duration.
+  M14's benchmarks are what would settle whether it's worth having — nothing else in the project
+  measures the per-item cost this is meant to avoid. Filed here so V2 planning can take it or
+  drop it deliberately rather than rediscovering the gap.
 - **Centered and outer border placement.** `QuadInstance::border_offset` and the TypeScript
   `borderAlignment: 'inner' | 'center' | 'outer'` were designed as a continuous -1.0…1.0 range,
   but only inner (`-1.0`) renders correctly: centered shows just the inner half of the band, and
