@@ -16,6 +16,7 @@ import {
 } from "../pkg/proteus_sdk_web.js";
 
 import type {
+  ChildBehavior,
   ComponentData,
   ComponentSpec,
   Geometry,
@@ -155,13 +156,20 @@ export class Handle {
     targets: Handle[],
     config: TransitionConfig,
     strategy: SplitStrategy,
+    childBehavior?: ChildBehavior,
   ): void {
-    this.app.wasmApp.splitTo(
-      this.wasmHandle,
-      new Float64Array(targets.map((t) => t.id())),
-      config,
-      strategy,
-    );
+    const ids = new Float64Array(targets.map((t) => t.id()));
+    if (childBehavior) {
+      this.app.wasmApp.splitToWithBehavior(
+        this.wasmHandle,
+        ids,
+        config,
+        strategy,
+        childBehavior,
+      );
+    } else {
+      this.app.wasmApp.splitTo(this.wasmHandle, ids, config, strategy);
+    }
   }
 
   /**
@@ -173,13 +181,20 @@ export class Handle {
     sources: Handle[],
     config: TransitionConfig,
     layout: MergeLayout,
+    childBehavior?: ChildBehavior,
   ): void {
-    this.app.wasmApp.mergeFrom(
-      this.wasmHandle,
-      new Float64Array(sources.map((s) => s.id())),
-      config,
-      layout,
-    );
+    const ids = new Float64Array(sources.map((s) => s.id()));
+    if (childBehavior) {
+      this.app.wasmApp.mergeFromWithBehavior(
+        this.wasmHandle,
+        ids,
+        config,
+        layout,
+        childBehavior,
+      );
+    } else {
+      this.app.wasmApp.mergeFrom(this.wasmHandle, ids, config, layout);
+    }
   }
 
   /**

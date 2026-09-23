@@ -125,7 +125,7 @@ fn bake_1_to_n_hides_source() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::PerTarget,
             },
         ))
@@ -163,7 +163,7 @@ fn bake_1_to_n_gives_each_target_a_transition_request() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::PerTarget,
             },
         ))
@@ -202,7 +202,7 @@ fn bake_1_to_n_no_virtual_entities() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::PerTarget,
         },
     ));
@@ -218,7 +218,7 @@ fn bake_1_to_n_no_virtual_entities() {
 }
 
 #[test]
-fn bake_1_to_n_child_behavior_overrides_config() {
+fn per_target_1_to_n_child_configs_override_the_default() {
     fn stagger(idx: usize, _total: usize) -> TransitionConfig {
         TransitionConfig {
             duration: 0.1 + idx as f32 * 0.1,
@@ -243,7 +243,7 @@ fn bake_1_to_n_child_behavior_overrides_config() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: Some(stagger),
+            child_configs: Some((0..3).map(|i| stagger(i, 3)).collect()),
             strategy: SplitStrategy::PerTarget,
         },
     ));
@@ -287,7 +287,7 @@ fn slice_1_to_n_creates_n_virtual_entities() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -323,7 +323,7 @@ fn slice_1_to_n_hides_source_and_targets() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))
@@ -366,7 +366,7 @@ fn slice_1_to_n_source_has_active_group_transition() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))
@@ -410,7 +410,7 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -450,7 +450,7 @@ fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))
@@ -519,7 +519,7 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
                 delay: 0.0,
                 easing: linear,
             },
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -598,7 +598,7 @@ fn n_to_one_hides_sources_and_dest() {
             NToOneRequest {
                 sources,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 layout: MergeLayout::Horizontal,
             },
         ))
@@ -644,7 +644,7 @@ fn n_to_one_creates_n_virtual_entities() {
         NToOneRequest {
             sources,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             layout: MergeLayout::Horizontal,
         },
     ));
@@ -681,7 +681,7 @@ fn n_to_one_complete_reveals_dest() {
             NToOneRequest {
                 sources,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 layout: MergeLayout::Horizontal,
             },
         ))
@@ -758,7 +758,7 @@ fn round_trip_button_list_button() {
             delay: 0.0,
             easing: linear,
         },
-        child_behavior: None,
+        child_configs: None,
         strategy: SplitStrategy::Slice,
     });
 
@@ -825,7 +825,7 @@ fn round_trip_button_list_button() {
             delay: 0.0,
             easing: linear,
         },
-        child_behavior: None,
+        child_configs: None,
         layout: MergeLayout::Horizontal,
     });
 
@@ -878,11 +878,11 @@ fn round_trip_button_list_button() {
 }
 
 // ---------------------------------------------------------------------------
-// ChildBehaviorFn — slice strategy per-child config
+// ChildConfigs — slice strategy per-child config
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_child_behavior_sets_per_virtual_duration() {
+fn slice_child_configs_set_per_virtual_duration() {
     fn per_child(idx: usize, _total: usize) -> TransitionConfig {
         TransitionConfig {
             duration: 0.1 * (idx + 1) as f32, // 0.1, 0.2, 0.3
@@ -908,7 +908,7 @@ fn slice_child_behavior_sets_per_virtual_duration() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: Some(per_child),
+            child_configs: Some((0..n).map(|i| per_child(i, n)).collect()),
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -949,7 +949,7 @@ fn one_to_n_with_zero_targets_is_noop() {
         OneToNRequest {
             targets: vec![], // empty — no children
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -970,7 +970,7 @@ fn one_to_n_with_zero_targets_is_noop() {
         OneToNRequest {
             targets: vec![],
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::PerTarget,
         },
     ));
@@ -1022,7 +1022,7 @@ fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() 
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))

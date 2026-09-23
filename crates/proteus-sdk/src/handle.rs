@@ -591,8 +591,12 @@ impl Handle {
     /// (M12.1's scope was 1→1 only), so this inserts the request directly,
     /// the same way `proteus-ui`'s own demo callers always have.
     ///
-    /// This component (the source) is hidden by the underlying system once
-    /// the transition completes — no separate visibility call needed.
+    /// This component (the source) is hidden by the underlying system
+    /// **immediately**, in the same tick the split is set up — not when the
+    /// transition completes. No separate visibility call needed. What the
+    /// viewer sees during the morph is the targets (`PerTarget`) or virtual
+    /// slices of a bake of this component (`Slice`/`GridSlice`), never this
+    /// entity itself.
     pub fn split_to(
         &self,
         app: &mut Proteus,
@@ -612,7 +616,55 @@ impl Handle {
         entity_mut(app, self.0, "split_to")?.insert(OneToNRequest {
             targets: group_targets,
             default_config: config,
-            child_behavior: None,
+            child_configs: None,
+            strategy,
+        });
+        Ok(())
+    }
+
+    /// [`Handle::split_to`], with a per-target transition config.
+    ///
+    /// `child_behavior` is called once per target with `(index, total)`
+    /// before the request is enqueued, and its result overrides `config` for
+    /// that target — Phase A's `childBehavior` iterator. The usual reason is
+    /// a stagger:
+    ///
+    /// ```rust,ignore
+    /// source.split_to_with_behavior(app, &targets, cfg, strategy, |i, _n| {
+    ///     TransitionConfig { duration: 0.4, delay: i as f32 * 0.08, easing: ease_out_cubic }
+    /// })?;
+    /// ```
+    ///
+    /// Resolved eagerly here rather than inside the setup system, which is
+    /// what lets this take a closure at all — see `proteus_ui::ChildConfigs`.
+    pub fn split_to_with_behavior(
+        &self,
+        app: &mut Proteus,
+        targets: &[Handle],
+        config: TransitionConfig,
+        strategy: SplitStrategy,
+        child_behavior: impl Fn(usize, usize) -> TransitionConfig,
+    ) -> Result<(), HandleError> {
+        check_alive(app, self.0, "split_to_with_behavior")?;
+        check_all_alive(
+            app,
+            targets.iter().map(|h| h.0),
+            "split_to_with_behavior",
+            "target",
+        )?;
+        let total = targets.len();
+        let child_configs = (0..total).map(|i| child_behavior(i, total)).collect();
+        let group_targets = targets
+            .iter()
+            .map(|h| GroupTarget {
+                entity: h.0,
+                state: declared_geometry(app, h.0),
+            })
+            .collect();
+        entity_mut(app, self.0, "split_to_with_behavior")?.insert(OneToNRequest {
+            targets: group_targets,
+            default_config: config,
+            child_configs: Some(child_configs),
             strategy,
         });
         Ok(())
@@ -655,8 +707,46 @@ impl Handle {
         entity_mut(app, self.0, "split_to_with_states")?.insert(OneToNRequest {
             targets: group_targets,
             default_config: config,
-            child_behavior: None,
+            child_configs: None,
             strategy,
+        });
+        Ok(())
+    }
+
+    /// [`Handle::merge_from`], with a per-source transition config.
+    ///
+    /// `child_behavior` is called once per source with `(index, total)`
+    /// before the request is enqueued, and its result overrides `config` for
+    /// that source. See [`Handle::split_to_with_behavior`].
+    pub fn merge_from_with_behavior(
+        &self,
+        app: &mut Proteus,
+        sources: &[Handle],
+        config: TransitionConfig,
+        layout: MergeLayout,
+        child_behavior: impl Fn(usize, usize) -> TransitionConfig,
+    ) -> Result<(), HandleError> {
+        check_alive(app, self.0, "merge_from_with_behavior")?;
+        check_all_alive(
+            app,
+            sources.iter().map(|h| h.0),
+            "merge_from_with_behavior",
+            "source",
+        )?;
+        let total = sources.len();
+        let child_configs = (0..total).map(|i| child_behavior(i, total)).collect();
+        let group_sources = sources
+            .iter()
+            .map(|h| GroupSource {
+                entity: h.0,
+                state: declared_geometry(app, h.0),
+            })
+            .collect();
+        entity_mut(app, self.0, "merge_from_with_behavior")?.insert(NToOneRequest {
+            sources: group_sources,
+            default_config: config,
+            child_configs: Some(child_configs),
+            layout,
         });
         Ok(())
     }
@@ -685,7 +775,7 @@ impl Handle {
         entity_mut(app, self.0, "merge_from")?.insert(NToOneRequest {
             sources: group_sources,
             default_config: config,
-            child_behavior: None,
+            child_configs: None,
             layout,
         });
         Ok(())
