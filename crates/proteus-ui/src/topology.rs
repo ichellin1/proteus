@@ -1084,6 +1084,7 @@ pub fn group_transition_complete_system(
         With<Virtual>,
     >,
     mut coordinators: Query<(&ActiveGroupTransition, &mut Lifecycle)>,
+    mut completed: ResMut<crate::transition::CompletedTransitions>,
 ) {
     // Build a map: coordinator_entity → (all_virtual_entities, complete_count).
     type CoordEntry = (Vec<(Entity, Option<TransitionAllocId>)>, usize);
@@ -1137,6 +1138,16 @@ pub fn group_transition_complete_system(
         // `on_remove` hooks that own that (see
         // `register_transition_alloc_hooks`). Keeping a second, parallel free
         // path here would double-free whichever region both paths touched.
+
+        // Record the coordinator as completed, alongside the 1:1 completions
+        // `transition_complete_system` already collects. Runs after that
+        // system (`ProteusSet::GroupTransitionComplete` follows
+        // `TransitionComplete`), which is what clears the bag — so appending
+        // here is safe. The coordinator is the entity the caller started the
+        // group from: the source for 1→N, the destination for N→1. The
+        // virtuals are excluded deliberately — they are machinery, and one
+        // group is one completion.
+        completed.entities.push(coord_entity);
 
         // Restore coordinator lifecycle and remove group state.
         *lifecycle = Lifecycle::Idle;

@@ -81,6 +81,31 @@ export class Handle {
     this.app.wasmApp.onClick(this.wasmHandle, cb);
   }
 
+  /**
+   * Fires each time a transition targeting this component finishes.
+   *
+   * Which component that is, per topology:
+   *
+   * - {@link Handle.animateTo} — this component.
+   * - {@link SignalHandle.set} — the `to` side.
+   * - {@link Handle.splitTo} with `"slice"` or `"gridSlice"` — the
+   *   **source**, once, when every target has arrived. One group is one
+   *   completion, not one per target.
+   * - {@link Handle.mergeFrom} — the **destination**, once, when every
+   *   source has arrived.
+   * - {@link Handle.splitTo} with `"bake"` — the **targets**, each
+   *   independently. *Not* the source: `bake` is N independent 1-to-1
+   *   transitions with no virtual entities, so the source has nothing of
+   *   its own to finish. Listen on the targets, or use `"slice"` if you
+   *   want one completion for the group.
+   *
+   * Persistent — it keeps firing for later transitions until the component
+   * is destroyed. Replaces guessing with `setTimeout(duration)`.
+   */
+  onTransitionComplete(cb: PlainCallback): void {
+    this.app.wasmApp.onTransitionComplete(this.wasmHandle, cb);
+  }
+
   onHoverEnter(cb: PlainCallback): void {
     this.app.wasmApp.onHoverEnter(this.wasmHandle, cb);
   }

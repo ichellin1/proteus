@@ -141,6 +141,11 @@ impl ActiveTransition {
 /// downstream system) reads and drains the list after calling `world.update()`.
 #[derive(Resource, Default)]
 pub struct CompletedTransitions {
+    /// Entities whose transition finished this frame. 1→1 completions come
+    /// from [`transition_complete_system`]; group completions
+    /// (1→N, N→1) come from `topology::group_transition_complete_system` and
+    /// name the *coordinator* — the source for 1→N, the destination for N→1
+    /// — never the virtual entities, which are machinery.
     pub entities: Vec<Entity>,
 }
 

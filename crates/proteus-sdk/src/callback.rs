@@ -34,6 +34,7 @@ pub(crate) enum EventKind {
     Release,
     Focus,
     Blur,
+    TransitionComplete,
 }
 
 type PlainCallback = Box<dyn FnMut(&mut Proteus)>;
