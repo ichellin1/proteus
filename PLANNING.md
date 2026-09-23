@@ -475,7 +475,7 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   > every item. Two nearby things are *not* it: `SplitStrategy::Slice` bakes the source and its
   > whole subtree but then hands out *crops* of that bake to N virtuals, so it is still N moving
   > pieces; and `ComponentSpec::bake()` (M10.5) flattens permanently, destroying the children,
-  > rather than for the duration of a transition. Needs a home on the roadmap if it's wanted.
+  > rather than for the duration of a transition. Filed under Post-V1 in `ROADMAP.md`.
 
   **Strategy 2 — Slice (via `childBehavior` iterator):**
   Normalize to **N→N**. The 1 side is baked and split into N virtual slice entities, each carrying a UV sub-region of the baked texture, positioned to tile and reconstruct the original. Paired 1:1 with the N entities on the other side. Each pair runs an independent 1→1 transition. At `t = 1.0`, virtual slices are discarded and live entities are revealed. More visually rich — shattering/assembling effect.
