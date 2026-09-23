@@ -753,6 +753,38 @@ impl ProteusApp {
             .map_err(handle_err)
     }
 
+    /// Disables or re-enables `handle` — see `proteus-sdk`'s
+    /// `Handle::set_disabled`.
+    #[wasm_bindgen(js_name = setDisabled)]
+    pub fn set_disabled(&mut self, handle: &Handle, disabled: bool) -> Result<(), JsValue> {
+        handle
+            .0
+            .set_disabled(&mut self.0.borrow_mut(), disabled)
+            .map_err(handle_err)
+    }
+
+    /// Sets whether `handle` receives input mid-transition. Pass `null` or
+    /// `undefined` to remove the opt-in — see `proteus-sdk`'s
+    /// `Handle::set_transitioning_config`.
+    #[wasm_bindgen(js_name = setTransitioningConfig)]
+    pub fn set_transitioning_config(
+        &mut self,
+        handle: &Handle,
+        config: JsValue,
+    ) -> Result<(), JsValue> {
+        let parsed = if config.is_null() || config.is_undefined() {
+            None
+        } else {
+            let dto: dto::TransitioningConfigDto = serde_wasm_bindgen::from_value(config)
+                .map_err(|e| JsValue::from_str(&format!("invalid TransitioningConfig: {e}")))?;
+            Some((&dto).into())
+        };
+        handle
+            .0
+            .set_transitioning_config(&mut self.0.borrow_mut(), parsed)
+            .map_err(handle_err)
+    }
+
     /// Shows an already-registered texture on `handle`, replacing whatever
     /// image/text/composite it previously showed (M13.8 parity audit) —
     /// `false` (no-op) if `texture` is evicted/unknown. See `proteus-sdk`'s

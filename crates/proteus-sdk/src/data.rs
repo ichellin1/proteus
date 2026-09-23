@@ -17,10 +17,22 @@ pub struct ComponentData {
     /// interpolated state when transitioning (same value as
     /// `transition.current` in that case).
     pub geometry: QuadState,
-    /// Current resolved interaction state. `Default` for an entity with no
-    /// `InteractionDef` (M12.2), or one `interaction_style_system` hasn't
-    /// processed yet.
+    /// Current resolved interaction *style* state.
+    ///
+    /// `Default` for an entity with no `InteractionDef` — a component that
+    /// declared no hover/pressed/focused/disabled styles has nothing to
+    /// resolve and stays `Default` forever, even while disabled. It also
+    /// lands one tick late: `interaction_style_system` writes
+    /// `InteractionState` through deferred commands, so a state entered this
+    /// tick is readable on the next.
+    ///
+    /// To ask whether a component is disabled, use
+    /// [`ComponentData::disabled`], which has neither caveat.
     pub state: InteractionStateKind,
+    /// Whether the component is disabled — read straight off the marker, so
+    /// it is true immediately and regardless of whether any interaction
+    /// style was declared. See `Handle::set_disabled`.
+    pub disabled: bool,
     /// Cascaded effective visibility when available (M10), falling back to
     /// the entity's own raw `Visibility` — same preference order
     /// `hit_test_system` already uses. Defaults to `true` when neither

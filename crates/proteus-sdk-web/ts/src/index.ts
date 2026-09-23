@@ -23,6 +23,7 @@ import type {
   MergeLayout,
   SplitStrategy,
   TextureState,
+  TransitioningConfig,
   TransitionConfig,
   TransitionDropped,
   Vec2,
@@ -338,6 +339,30 @@ export class Handle {
    */
   setOpacity(opacity: number): void {
     this.app.wasmApp.setOpacity(this.wasmHandle, opacity);
+  }
+
+  /**
+   * Disables or re-enables this component.
+   *
+   * A disabled component still renders and still cascades to its children;
+   * it is excluded from hit-testing entirely — no hover/press/click/focus —
+   * and wears whatever {@link ComponentSpec.disabled} style it declared, so
+   * it can look dimmed rather than merely stop responding.
+   *
+   * Not the same as {@link Handle.setInteractive}, which removes the
+   * component as a click target permanently and has no associated look.
+   */
+  setDisabled(disabled: boolean): void {
+    this.app.wasmApp.setDisabled(this.wasmHandle, disabled);
+  }
+
+  /**
+   * Sets whether this component receives input while mid-transition. Pass
+   * `undefined` to remove the opt-in, restoring the default of no
+   * interaction during a morph.
+   */
+  setTransitioningConfig(config: TransitioningConfig | undefined): void {
+    this.app.wasmApp.setTransitioningConfig(this.wasmHandle, config ?? null);
   }
 
   /**

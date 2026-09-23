@@ -876,6 +876,163 @@ fn set_interactive_toggles_whether_clicks_land() {
 }
 
 // ---------------------------------------------------------------------------
+// set_disabled / transitioning config — A-03
+// ---------------------------------------------------------------------------
+
+/// Registers a click counter and drives one click at `pos`.
+fn click_at(app: &mut Proteus, pos: Vec2) {
+    app.pointer_moved(Some(pos));
+    app.pointer_pressed();
+    app.tick(1.0);
+}
+
+#[test]
+fn a_disabled_component_does_not_hit_test_but_still_reports_its_state() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0)).disabled(StyleOverride {
+            color: Some(Vec4::new(0.5, 0.5, 0.5, 1.0)),
+            ..Default::default()
+        }),
+    );
+
+    let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let clone = clicked.clone();
+    button.on_click(&mut app, move |_app| clone.set(true));
+
+    click_at(&mut app, Vec2::new(100.0, 100.0));
+    assert!(clicked.get(), "enabled to begin with");
+
+    clicked.set(false);
+    button.set_disabled(&mut app, true).unwrap();
+    click_at(&mut app, Vec2::new(100.0, 100.0));
+    assert!(!clicked.get(), "disabled components are not hit-tested");
+    assert_eq!(
+        app.get(button).unwrap().state,
+        proteus_sdk::InteractionStateKind::Disabled,
+        "and the disabled style resolves, so it can look dimmed"
+    );
+
+    button.set_disabled(&mut app, false).unwrap();
+    click_at(&mut app, Vec2::new(100.0, 100.0));
+    assert!(clicked.get(), "re-enabling restores hit-testing");
+}
+
+#[test]
+fn start_disabled_spawns_in_the_disabled_state() {
+    let mut app = Proteus::new();
+    let plain = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let bare = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).start_disabled());
+    let styled = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .start_disabled()
+            .disabled(StyleOverride {
+                color: Some(Vec4::new(0.5, 0.5, 0.5, 1.0)),
+                ..Default::default()
+            }),
+    );
+    app.tick(0.0);
+
+    assert!(!app.get(plain).unwrap().disabled);
+    assert!(app.get(bare).unwrap().disabled);
+    assert!(app.get(styled).unwrap().disabled);
+
+    // `state` is style resolution, not the marker. Two ways it differs from
+    // `disabled`, both pinned here because both will surprise someone:
+    // it stays `Default` for a component that declared no styles, and it
+    // lands a tick late even for one that did, since
+    // `interaction_style_system` writes `InteractionState` through deferred
+    // commands. `disabled` reads the marker and is true immediately.
+    assert_eq!(
+        app.get(styled).unwrap().state,
+        proteus_sdk::InteractionStateKind::Default,
+        "style resolution hasn't been applied yet on the spawn tick"
+    );
+    app.tick(0.0);
+    assert_eq!(
+        app.get(styled).unwrap().state,
+        proteus_sdk::InteractionStateKind::Disabled
+    );
+    assert_eq!(
+        app.get(bare).unwrap().state,
+        proteus_sdk::InteractionStateKind::Default,
+        "no declared styles, so there is nothing to resolve, ever"
+    );
+}
+
+#[test]
+fn allow_input_lets_a_transitioning_component_still_be_clicked() {
+    use proteus_sdk::TransitioningConfig;
+
+    let mut app = Proteus::new();
+    let blocked = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    let allowed = app.component(ComponentSpec::new(quad_at(400.0, 100.0)).transitioning(
+        TransitioningConfig {
+            allow_input: true,
+            allow_navigation: false,
+        },
+    ));
+
+    let hits = std::rc::Rc::new(std::cell::Cell::new((false, false)));
+    let h1 = hits.clone();
+    blocked.on_click(&mut app, move |_| h1.set((true, h1.get().1)));
+    let h2 = hits.clone();
+    allowed.on_click(&mut app, move |_| h2.set((h2.get().0, true)));
+
+    // Put both mid-morph with a long duration.
+    let _ = blocked.animate_to(&mut app, quad_at(100.0, 100.0), cfg(10.0));
+    let _ = allowed.animate_to(&mut app, quad_at(400.0, 100.0), cfg(10.0));
+    app.tick(0.1);
+
+    click_at(&mut app, Vec2::new(100.0, 100.0));
+    click_at(&mut app, Vec2::new(400.0, 100.0));
+
+    assert_eq!(
+        hits.get(),
+        (false, true),
+        "no interaction mid-morph by default; allow_input opts back in"
+    );
+}
+
+#[test]
+fn set_transitioning_config_none_restores_the_default() {
+    use proteus_sdk::TransitioningConfig;
+
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(100.0, 100.0)).transitioning(
+        TransitioningConfig {
+            allow_input: true,
+            allow_navigation: false,
+        },
+    ));
+    let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let clone = clicked.clone();
+    handle.on_click(&mut app, move |_| clone.set(true));
+
+    handle.set_transitioning_config(&mut app, None).unwrap();
+    let _ = handle.animate_to(&mut app, quad_at(100.0, 100.0), cfg(10.0));
+    app.tick(0.1);
+    click_at(&mut app, Vec2::new(100.0, 100.0));
+
+    assert!(
+        !clicked.get(),
+        "opt-in removed, so back to blocked mid-morph"
+    );
+}
+
+#[test]
+fn set_disabled_on_a_destroyed_handle_is_an_error_not_a_panic() {
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    handle.destroy(&mut app).unwrap();
+
+    assert!(matches!(
+        handle.set_disabled(&mut app, true),
+        Err(HandleError::EntityNotFound)
+    ));
+}
+
+// ---------------------------------------------------------------------------
 // on_transition_complete — A-02
 // ---------------------------------------------------------------------------
 

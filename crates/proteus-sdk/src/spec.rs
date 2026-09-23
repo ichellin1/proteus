@@ -1,6 +1,8 @@
 //! [`ComponentSpec`] — the builder [`crate::Proteus::component`] takes.
 
-use proteus_ui::{Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text};
+use proteus_ui::{
+    Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text, TransitioningConfig,
+};
 
 use crate::handle::Handle;
 
@@ -26,6 +28,8 @@ pub struct ComponentSpec {
     pub(crate) non_interactive: bool,
     pub(crate) visible: bool,
     pub(crate) opacity: Option<f32>,
+    pub(crate) start_disabled: bool,
+    pub(crate) transitioning: Option<TransitioningConfig>,
 }
 
 impl Default for ComponentSpec {
@@ -47,6 +51,8 @@ impl Default for ComponentSpec {
             // Every other field's default is "absent"; this one's is "on".
             visible: true,
             opacity: None,
+            start_disabled: false,
+            transitioning: None,
         }
     }
 }
@@ -79,6 +85,30 @@ impl ComponentSpec {
         self
     }
 
+    /// Spawn this component already disabled: present and rendered, but
+    /// excluded from hit-testing, and wearing whatever
+    /// [`ComponentSpec::disabled`] style it declares.
+    ///
+    /// Distinct from [`ComponentSpec::non_interactive`], which is about a
+    /// component that is *never* a click target — a backdrop, a label.
+    /// Disabled is a state a real control moves in and out of, and it has a
+    /// look; non-interactive is a permanent property with none.
+    pub fn start_disabled(mut self) -> Self {
+        self.start_disabled = true;
+        self
+    }
+
+    /// Opt in to receiving input while this component is mid-transition.
+    ///
+    /// Both flags default to `false`: the framework's safe default is no
+    /// interaction during a morph. `allow_navigation` is accepted but inert
+    /// — directional/tab navigation is still a stub, so nothing reads it
+    /// yet.
+    pub fn transitioning(mut self, config: TransitioningConfig) -> Self {
+        self.transitioning = Some(config);
+        self
+    }
+
     /// Whether the component is visible when spawned. Defaults to `true`.
     ///
     /// `false` spawns it inert — skipped by render, input and navigation —
@@ -108,10 +138,9 @@ impl ComponentSpec {
         self
     }
 
-    /// Style applied while this component is disabled.
-    ///
-    /// Nothing on `Handle` toggles `Disabled` yet — attach
-    /// `proteus_ui::component::Disabled` via `Proteus::world_mut()` for now.
+    /// Style applied while this component is disabled — see
+    /// [`ComponentSpec::start_disabled`] and `Handle::set_disabled` for
+    /// entering that state.
     pub fn disabled(mut self, style: StyleOverride) -> Self {
         self.disabled = Some(style);
         self
