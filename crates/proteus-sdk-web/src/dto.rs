@@ -296,6 +296,8 @@ pub struct ComponentSpecDto {
     /// `bool::default()`.
     #[serde(default = "default_visible")]
     pub visible: bool,
+    #[serde(default)]
+    pub opacity: Option<f32>,
 }
 
 fn default_visible() -> bool {
@@ -342,6 +344,9 @@ impl ComponentSpecDto {
             spec = spec.non_interactive();
         }
         spec = spec.visible(self.visible);
+        if let Some(opacity) = self.opacity {
+            spec = spec.opacity(opacity);
+        }
         (spec, self.children)
     }
 }

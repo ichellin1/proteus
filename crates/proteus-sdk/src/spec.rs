@@ -25,6 +25,7 @@ pub struct ComponentSpec {
     pub(crate) drop_shadow: Option<DropShadow>,
     pub(crate) non_interactive: bool,
     pub(crate) visible: bool,
+    pub(crate) opacity: Option<f32>,
 }
 
 impl Default for ComponentSpec {
@@ -45,6 +46,7 @@ impl Default for ComponentSpec {
             non_interactive: false,
             // Every other field's default is "absent"; this one's is "on".
             visible: true,
+            opacity: None,
         }
     }
 }
@@ -59,6 +61,22 @@ impl ComponentSpec {
             geometry,
             ..Default::default()
         }
+    }
+
+    /// Alpha multiplier for this component and everything under it,
+    /// clamped to `0.0..=1.0`. Defaults to fully opaque.
+    ///
+    /// Cascades down: a child's effective opacity is its own times its
+    /// parent's effective, so `0.6` over `0.6` paints at `0.36`. A child
+    /// never affects its parent.
+    ///
+    /// Separate from [`ComponentSpec::visible`] and unrelated to it —
+    /// opacity is a paint multiplier, visibility is an ECS flag. An entity
+    /// at `0.0` opacity is invisible but still hit-tests; a hidden one
+    /// doesn't.
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = Some(opacity.clamp(0.0, 1.0));
+        self
     }
 
     /// Whether the component is visible when spawned. Defaults to `true`.

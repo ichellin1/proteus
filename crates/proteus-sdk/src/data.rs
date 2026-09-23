@@ -26,6 +26,11 @@ pub struct ComponentData {
     /// `hit_test_system` already uses. Defaults to `true` when neither
     /// component is present.
     pub visible: bool,
+    /// Cascaded effective opacity when available (M10), falling back to the
+    /// entity's own raw `Opacity`. Defaults to `1.0` when neither component
+    /// is present. Independent of [`ComponentData::visible`] — see
+    /// `Handle::set_opacity`.
+    pub opacity: f32,
     /// Direct children, in `bevy_ecs::hierarchy::Children` order.
     pub children: Vec<Handle>,
     /// `None` when idle; populated for the duration of an active transition.
