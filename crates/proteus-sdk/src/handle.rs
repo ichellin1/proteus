@@ -16,9 +16,10 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    BakedComposite, BakedImage, BakedText, GroupSource, GroupTarget, Interactable, MergeLayout,
-    NToOneRequest, OneToNRequest, Opacity, QuadState, SignalId, SplitStrategy, TextureRef,
-    TransitionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    BakedComposite, BakedImage, BakedText, Disabled, GroupSource, GroupTarget, Interactable,
+    MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SignalId, SplitStrategy,
+    TextureRef, TransitionConfig, TransitionRequest, TransitioningConfig, VideoCrossfade,
+    VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -496,6 +497,45 @@ impl Handle {
     /// looking at the component when they made it.
     pub fn set_visible(&self, app: &mut Proteus, visible: bool) -> Result<(), HandleError> {
         entity_mut(app, self.0, "set_visible")?.insert(Visibility { visible });
+        Ok(())
+    }
+
+    /// Disables or re-enables this component.
+    ///
+    /// A disabled component still renders and still cascades to its
+    /// children; it is excluded from hit-testing entirely — no
+    /// hover/press/click/focus — and wears whatever
+    /// [`crate::ComponentSpec::disabled`] style it declared, so it can look
+    /// dimmed rather than merely stop responding.
+    ///
+    /// Not the same as [`Handle::set_interactive`]. That removes
+    /// `Interactable` — the component is *never* a click target and has no
+    /// disabled look. Disabled is a state a real control moves in and out
+    /// of, and it has one. Use `set_interactive` for a backdrop that should
+    /// not swallow clicks; use this for a submit button that isn't ready.
+    pub fn set_disabled(&self, app: &mut Proteus, disabled: bool) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_disabled")?;
+        if disabled {
+            entity.insert(Disabled);
+        } else {
+            entity.remove::<Disabled>();
+        }
+        Ok(())
+    }
+
+    /// Sets whether this component receives input while mid-transition —
+    /// see [`crate::ComponentSpec::transitioning`]. Passing `None` removes
+    /// the opt-in, restoring the default of no interaction during a morph.
+    pub fn set_transitioning_config(
+        &self,
+        app: &mut Proteus,
+        config: Option<TransitioningConfig>,
+    ) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_transitioning_config")?;
+        match config {
+            Some(cfg) => entity.insert(cfg),
+            None => entity.remove::<TransitioningConfig>(),
+        };
         Ok(())
     }
 

@@ -4277,7 +4277,37 @@ malformed config raises an error naming the index rather than silently substitut
 This is what `SplitStrategy::PerTarget` was missing: it now offers per-target *timing* as well as
 per-target geometry, which is the control it exists for.
 
-##### A-03 … A-05 — still to decide
+##### A-03 — `Disabled` and `TransitioningConfig` on the SDK *(decided and built 2026-09-23)*
+
+TypeScript could declare a `disabled` *style* but had no way to put a component *into* that
+state, and neither SDK exposed `TransitioningConfig` at all — so Phase B's `allowInput` /
+`allowNavigation` were unreachable from any app.
+
+Decisions:
+
+- **`Handle::set_disabled(bool)` and `ComponentSpec::start_disabled()`**, plus `setDisabled()` and
+  `startDisabled?` in TS. `start_disabled()` is a no-arg marker rather than `disabled(bool)`
+  because `disabled(StyleOverride)` already means "the look", and the two would collide.
+- **Disabled is documented against `set_interactive`**, which is the confusion waiting to happen.
+  `set_interactive(false)` removes `Interactable`: the component is never a click target and has
+  no associated look — a backdrop, a label. `Disabled` keeps it a control, excludes it from
+  hit-testing, *and* resolves its declared disabled style. A submit button that isn't ready.
+- **`ComponentSpec::transitioning(TransitioningConfig)` and
+  `Handle::set_transitioning_config(Option<..>)`**, taking the struct rather than two positional
+  booleans. `allow_navigation` is exposed but inert — navigation is still a stub (A-06) — and
+  says so.
+- **`ComponentData` gains `disabled`.** Found while testing: `ComponentData::state` is *style*
+  resolution, so it stays `Default` forever for a component that declared no interaction styles,
+  even while disabled — `set_disabled(true)` was unobservable in that case. `disabled` reads the
+  marker directly.
+- **`ComponentData::state` lands one tick late**, because `interaction_style_system` writes
+  `InteractionState` through deferred commands. Documented and pinned; `disabled` has no such lag,
+  which is the other half of why it exists.
+
+Fixed in passing: `ComponentDataDto` never carried `opacity`, so A-10's `ComponentData::opacity`
+was unreadable from TypeScript. Both it and `disabled` cross now.
+
+##### A-04 … A-05 — still to decide
 - **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
   exposed by either SDK.
 - **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to

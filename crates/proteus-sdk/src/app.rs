@@ -96,6 +96,17 @@ impl Proteus {
                 .insert(proteus_ui::Visibility::HIDDEN);
         }
 
+        if spec.start_disabled {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::Disabled);
+        }
+
+        if let Some(transitioning) = spec.transitioning {
+            self.world.world.entity_mut(entity).insert(transitioning);
+        }
+
         if let Some(opacity) = spec.opacity {
             self.world
                 .world
@@ -173,6 +184,8 @@ impl Proteus {
                     .unwrap_or(true)
             });
 
+        let disabled = world.get::<proteus_ui::Disabled>(handle.0).is_some();
+
         let opacity = world
             .get::<EffectiveOpacity>(handle.0)
             .map(|o| o.0)
@@ -195,6 +208,7 @@ impl Proteus {
         Some(ComponentData {
             geometry,
             state,
+            disabled,
             visible,
             opacity,
             children,

@@ -153,6 +153,30 @@ export interface ComponentSpec {
    * at `0` opacity is invisible but still hit-tests; a hidden one doesn't.
    */
   opacity?: number;
+  /**
+   * Spawn already disabled: rendered, but excluded from hit-testing and
+   * wearing whatever {@link ComponentSpec.disabled} style is declared.
+   *
+   * Distinct from {@link ComponentSpec.nonInteractive}, which is for a
+   * component that is *never* a click target — a backdrop, a label.
+   * Disabled is a state a real control moves in and out of, and it has a
+   * look; non-interactive is a permanent property with none.
+   */
+  startDisabled?: boolean;
+  /** Opt in to receiving input while this component is mid-transition. */
+  transitioning?: TransitioningConfig;
+}
+
+/**
+ * Per-entity opt-in to input while mid-transition. Both default to `false`:
+ * the framework's safe default is no interaction during a morph.
+ *
+ * `allowNavigation` is accepted for forward-compatibility but is inert —
+ * directional/tab navigation is still a stub, so nothing reads it yet.
+ */
+export interface TransitioningConfig {
+  allowInput?: boolean;
+  allowNavigation?: boolean;
 }
 
 /**
@@ -258,8 +282,21 @@ export interface TransitionSnapshot {
 /** Return shape of {@link ProteusApp.get}/{@link Handle.get}. */
 export interface ComponentData {
   geometry: Geometry;
+  /**
+   * Current resolved interaction *style* state.
+   *
+   * `"default"` for a component that declared no hover/pressed/focused/
+   * disabled styles — there is nothing to resolve, so it stays `"default"`
+   * even while disabled. It also lands one tick late, since the engine
+   * writes it through deferred commands. To ask whether a component is
+   * disabled, read {@link ComponentData.disabled}, which has neither caveat.
+   */
   state: InteractionState;
+  /** Whether the component is disabled — the marker itself, immediate. */
+  disabled: boolean;
   visible: boolean;
+  /** Cascaded effective opacity: this component's own times its parent's. */
+  opacity: number;
   /** Child component ids ({@link Handle.id}) — reconstruct with {@link ProteusApp.handleFromId}. */
   children: number[];
   /**

@@ -298,6 +298,30 @@ pub struct ComponentSpecDto {
     pub visible: bool,
     #[serde(default)]
     pub opacity: Option<f32>,
+    #[serde(default)]
+    pub start_disabled: bool,
+    #[serde(default)]
+    pub transitioning: Option<TransitioningConfigDto>,
+}
+
+/// Per-entity opt-in to input while mid-transition. Both flags default to
+/// `false`; `allowNavigation` is accepted but inert until navigation exists.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitioningConfigDto {
+    #[serde(default)]
+    pub allow_input: bool,
+    #[serde(default)]
+    pub allow_navigation: bool,
+}
+
+impl From<&TransitioningConfigDto> for proteus_ui::TransitioningConfig {
+    fn from(d: &TransitioningConfigDto) -> Self {
+        Self {
+            allow_input: d.allow_input,
+            allow_navigation: d.allow_navigation,
+        }
+    }
 }
 
 fn default_visible() -> bool {
@@ -346,6 +370,12 @@ impl ComponentSpecDto {
         spec = spec.visible(self.visible);
         if let Some(opacity) = self.opacity {
             spec = spec.opacity(opacity);
+        }
+        if self.start_disabled {
+            spec = spec.start_disabled();
+        }
+        if let Some(transitioning) = &self.transitioning {
+            spec = spec.transitioning(transitioning.into());
         }
         (spec, self.children)
     }
@@ -466,7 +496,9 @@ pub struct TargetStateDto {
 pub struct ComponentDataDto {
     pub geometry: QuadStateDto,
     pub state: String,
+    pub disabled: bool,
     pub visible: bool,
+    pub opacity: f32,
     /// Child entity handles, as `Entity::to_bits()` values.
     pub children: Vec<f64>,
     pub transition: Option<TransitionDataDto>,
@@ -496,7 +528,9 @@ impl ComponentDataDto {
         Self {
             geometry: (&data.geometry).into(),
             state: interaction_state_str(data.state).to_string(),
+            disabled: data.disabled,
             visible: data.visible,
+            opacity: data.opacity,
             children: children_bits,
             transition: data.transition.as_ref().map(TransitionDataDto::from),
         }
