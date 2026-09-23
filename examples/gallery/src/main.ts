@@ -25,17 +25,16 @@
  *   - A tile → hero morph needs the hero to already carry an image *before*
  *     the geometry transition starts — a hero spawned blank shows an empty
  *     box that only grows, with the image popping in only once the hi-res
- *     fetch lands. `copyBakedImageFrom` works on an imageless entity
- *     precisely so the hero can start out showing an image and have it
- *     scale continuously with the box.
- *   - That initial image must be the tile's *uncropped* low-res fetch, not
- *     its (by-then square-cropped) own `BakedImage` — each grid tile keeps
- *     its uncropped low-res bake alive in an off-screen `full` handle (see
- *     `GridSlot.full`) for exactly this. Using the cropped tile instead
- *     would frame the photo differently than the eventual hi-res fetch,
- *     which shows up mid-crossfade as a "double exposure" (two
- *     differently-framed copies of the same photo blending together).
- *     Mirrors `proteus-demo`'s own `gallery.tile_full` stash.
+ *     fetch lands. `setTexture` works on an imageless component precisely
+ *     so the hero can start out showing an image and have it scale
+ *     continuously with the box.
+ *   - That initial image must be the photo's *uncropped* low-res fetch. The
+ *     grid tile wears the same texture but square-crops its own UVs in
+ *     place, so starting the hero from the tile's framing would differ from
+ *     the eventual hi-res fetch — visible mid-crossfade as a "double
+ *     exposure", two differently-framed copies of one photo blending
+ *     together. Cropping edits the entity, never the texture, so
+ *     `GridSlot.full` hands the hero the uncropped original.
  *   - There's no built-in single-entity image crossfade, so swapping in the
  *     hi-res image once it's fetched uses a second, transparent overlay
  *     entity that fades to opaque via `animateTo`'s `color.a` (the same
@@ -56,10 +55,30 @@
  *
  * One deliberate simplification: layout is computed once from the canvas's
  * size at load and never reflows on window resize.
+ *
+ * Written against the SDK as it stands after the 2026-09-22 audit. Three
+ * things this example used to do by hand, kept here as a note on what the
+ * API now covers:
+ *   - Getting pixels into the atlas meant spawning a throwaway off-screen
+ *     component with `image: { bytes }` and polling `bakedImageSize()` on
+ *     every frame until a bake system happened to run. `app.loadTexture`
+ *     (A-04) does it synchronously and hands back a texture.
+ *   - Knowing when a morph had finished meant `setTimeout` set to the
+ *     transition's own duration, plus a fudge factor.
+ *     `onTransitionComplete` (A-02) reports it.
+ *   - Neither of those was a framework limitation anyone had decided on;
+ *     both were gaps between what Phase A designed and what the SDK
+ *     exposed.
  */
 
 import { mount, colorFrom, topLeftToWorld } from "proteus-sdk";
-import type { ProteusApp, Geometry, Color, Handle } from "proteus-sdk";
+import type {
+  ProteusApp,
+  Geometry,
+  Color,
+  Handle,
+  TextureHandle,
+} from "proteus-sdk";
 
 const COLS = 4;
 const ROWS = 3;
@@ -191,36 +210,42 @@ async function fetchImageBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-function waitForBake(handles: Handle[]): Promise<void> {
-  return new Promise((resolve) => {
-    function check() {
-      if (handles.every((h) => h.bakedImageSize() !== undefined)) {
-        resolve();
-      } else {
-        requestAnimationFrame(check);
-      }
-    }
-    check();
-  });
-}
-
-async function loadBaked(url: string): Promise<Handle> {
+/**
+ * Fetch an image and pack it into the atlas, giving back a texture any
+ * component can wear via `setTexture`.
+ *
+ * `app.loadTexture` is synchronous — the pixels are on the GPU when it
+ * returns — so the only asynchrony here is the network. Nothing polls, and
+ * no component is spawned just to carry the bytes.
+ */
+async function fetchTexture(url: string): Promise<TextureHandle> {
   const bytes = await fetchImageBytes(url);
-  const loader = app.component({
-    geometry: geom(-9999, -9999, 1, 1),
-    image: { bytes },
-    nonInteractive: true,
+  const texture = app.loadTexture(bytes);
+  if (!texture) {
+    throw new Error(`could not decode image: ${url}`);
+  }
+  return texture;
+}
+
+/**
+ * Run `fn` the first time a transition targeting `handle` completes.
+ *
+ * `onTransitionComplete` is persistent — it keeps firing for later
+ * transitions on the same component — so anything that should happen once
+ * (destroying the thing that was morphed away from, say) guards itself.
+ */
+function afterTransition(handle: Handle, fn: () => void) {
+  let done = false;
+  handle.onTransitionComplete(() => {
+    if (done) return;
+    done = true;
+    fn();
   });
-  await waitForBake([loader]);
-  return loader;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function destroySoon(handle: Handle) {
-  setTimeout(() => handle.destroy(), TRANSITION.duration * 1000 + 150);
+/** {@link afterTransition} as a promise, for `await`-shaped code. */
+function whenSettled(handle: Handle): Promise<void> {
+  return new Promise((resolve) => afterTransition(handle, resolve));
 }
 
 function destroyUiChrome() {
@@ -254,14 +279,17 @@ interface GridSlot {
   /** The square-cropped tile shown in the grid. */
   handle: Handle;
   /**
-   * The same low-res fetch, kept alive off-screen *before* cropping —
-   * `handle`'s own `BakedImage` is square-cropped in place and so no longer
-   * matches the photo's real framing. `enterDetail` uses this, not
-   * `handle`, as the hero's initial image, so it starts out correctly
-   * framed (just low-res) instead of mismatched against the hi-res fetch
-   * that later crossfades in.
+   * The same low-res fetch as a texture, *uncropped*. `handle` wears this
+   * too, but square-crops its own copy of the UVs in place, so it no longer
+   * matches the photo's real framing. `enterDetail` starts the hero from
+   * this instead, so it is correctly framed (just low-res) rather than
+   * mismatched against the hi-res fetch that later crossfades in.
+   *
+   * A texture, not an off-screen component: cropping edits the *entity's*
+   * UVs, never the texture, so one texture can back both the cropped tile
+   * and the uncropped hero.
    */
-  full: Handle;
+  full: TextureHandle;
   photo: Photo;
 }
 
@@ -273,7 +301,7 @@ async function buildGrid(offset: number): Promise<GridSlot[]> {
   const loaded = await Promise.all(
     photos.map(async (photo) => {
       const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
-      const full = await loadBaked(photoUrl(photo.id, w, h));
+      const full = await fetchTexture(photoUrl(photo.id, w, h));
       return { photo, full };
     }),
   );
@@ -285,7 +313,7 @@ async function buildGrid(offset: number): Promise<GridSlot[]> {
     const cy = startY + row * (TILE + GAP) + TILE / 2;
 
     const handle = app.component({ geometry: geom(cx, cy, TILE, TILE), hover: { scale: 1.06 } });
-    handle.copyBakedImageFrom(full);
+    handle.setTexture(full);
     handle.centerCropToSquare();
 
     return { handle, full, photo };
@@ -310,7 +338,6 @@ async function showDetail(slot: GridSlot) {
   for (const s of gridSlots) {
     if (s.handle !== slot.handle) {
       s.handle.destroy();
-      s.full.destroy();
     }
   }
   gridSlots = [];
@@ -318,8 +345,9 @@ async function showDetail(slot: GridSlot) {
   await enterDetail(slot.photo, slot.full, (heroHandle) => {
     const sig = app.signal();
     sig.set(heroHandle, slot.handle, TRANSITION);
-    destroySoon(slot.handle);
-    destroySoon(slot.full);
+    // `set` reports completion on its `to` side — the hero — at which point
+    // the tile it grew out of has finished being the exit and can go.
+    afterTransition(heroHandle, () => slot.handle.destroy());
   });
 }
 
@@ -334,46 +362,47 @@ async function showDetail(slot: GridSlot) {
  * once the overlay has fully faded to opaque (so a later `splitTo`/
  * `mergeFrom` off this handle carries the sharp image, not the low-res one).
  */
-async function enterDetail(photo: Photo, lowResSource: Handle, startTransition: (hero: Handle) => void) {
+async function enterDetail(
+  photo: Photo,
+  lowRes: TextureHandle,
+  startTransition: (hero: Handle) => void,
+) {
   const box = fitBox(photo.width, photo.height, vw * 0.7, vh - TITLE_H - 140);
   const heroHandle = app.component({
     geometry: geom(vw / 2, TITLE_H + (vh - TITLE_H) / 2, box.w, box.h, CARD_COLOR, 16),
   });
-  heroHandle.copyBakedImageFrom(lowResSource);
+  heroHandle.setTexture(lowRes);
   startTransition(heroHandle);
 
   hero = heroHandle;
   buildDetailUi(photo.id);
 
+  // Both the hi-res fetch and the morph have to finish before the crossfade
+  // starts: the fetch so there is something to fade in, the morph so it
+  // isn't fading in over a box that is still moving. Waiting on the real
+  // completion rather than a timer set to the transition's duration.
   const [w, h] = fetchDimensions(photo.width, photo.height, 900);
-  const [loader] = await Promise.all([
-    loadBaked(photoUrl(photo.id, w, h)),
-    sleep(TRANSITION.duration * 1000),
+  const [hiRes] = await Promise.all([
+    fetchTexture(photoUrl(photo.id, w, h)),
+    whenSettled(heroHandle),
   ]);
-  if (hero !== heroHandle) {
-    loader.destroy();
-    return;
-  }
+  if (hero !== heroHandle) return;
 
   const heroData = heroHandle.get();
-  if (!heroData) {
-    loader.destroy();
-    return;
-  }
+  if (!heroData) return;
   const overlay = app.component({
     geometry: { ...heroData.geometry, color: { ...heroData.geometry.color, a: 0 } },
     nonInteractive: true,
   });
-  overlay.copyBakedImageFrom(loader);
+  overlay.setTexture(hiRes);
   overlay.animateTo({ ...heroData.geometry, color: { ...heroData.geometry.color, a: 1 } }, CROSSFADE);
 
-  setTimeout(() => {
+  afterTransition(overlay, () => {
     if (hero === heroHandle) {
-      heroHandle.copyBakedImageFrom(loader);
+      heroHandle.setTexture(hiRes);
     }
     overlay.destroy();
-    loader.destroy();
-  }, CROSSFADE.duration * 1000 + 50);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +420,6 @@ async function backToGrid() {
   if (screen !== "grid") {
     for (const s of slots) {
       s.handle.destroy();
-      s.full.destroy();
     }
     return;
   }
@@ -402,7 +430,10 @@ async function backToGrid() {
     TRANSITION,
     { kind: "gridSlice", cols: COLS, rows: ROWS },
   );
-  destroySoon(heroSource);
+  // A slicing split reports completion once, on the *source*, when every
+  // target has arrived — so the hero tidies itself up the moment the last
+  // tile lands.
+  afterTransition(heroSource, () => heroSource.destroy());
 }
 
 // ---------------------------------------------------------------------------

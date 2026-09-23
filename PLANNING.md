@@ -4335,8 +4335,29 @@ Decisions:
   image that doesn't fit the atlas (capacity, logged, renders as nothing) — matching the
   degradation the rest of the texture path already uses.
 
-`examples/gallery` can drop `loadBaked`/`waitForBake` entirely; revisiting it is still pending
-(see A-01/A-02).
+`examples/gallery` was rewritten against this and A-02 together — see below.
+
+##### `examples/gallery` rewritten *(2026-09-23)*
+
+The audit's step 6 noted the example "demonstrates the workarounds, not the model". With A-02 and
+A-04 landed it demonstrates the model:
+
+- Loading an image was a throwaway off-screen component carrying `image: { bytes }`, polled with
+  `bakedImageSize()` on every `requestAnimationFrame` until a bake system happened to run. It is
+  `app.loadTexture(bytes)` now, synchronous, with the texture worn via `setTexture`. `GridSlot`
+  holds a `TextureHandle` rather than a hidden `Handle` — and that is a better model as well as
+  less code, since cropping edits the *entity's* UVs and never the texture, so one texture backs
+  both the square-cropped grid tile and the uncropped hero.
+- Knowing when a morph finished was `setTimeout(duration * 1000 + 150)` in one place and
+  `sleep(duration * 1000)` raced against a fetch in another. Both are `onTransitionComplete` now,
+  through a small `afterTransition` helper that guards the once-only case — the callback is
+  persistent, which the helper's doc explains, since that is the first thing anyone will trip on.
+- The hero's self-cleanup after `splitTo` demonstrates A-02's group semantics directly: a slicing
+  split reports once, on the source, when every target has arrived.
+
+Net −69/+101 lines, most of the growth being comments that now explain the model instead of the
+workaround. The two topologies the example was built to show (1→1 via `signal.set`, 1→N via
+`splitTo`) are unchanged.
 
 ##### A-05 — engine config from TypeScript *(decided and built 2026-09-23)*
 
