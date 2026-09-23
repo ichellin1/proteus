@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# `ProteusConfigDto`: a partial, deserializable ProteusConfig — see config_dto.rs.
+serde = { workspace = true }
 # proteus-sdk stays headless; this crate is the first layer that knows about
 # the GPU surface. Hosts (proteus-host-winit, proteus-host-web) depend on
 # this crate only — never on proteus-render / proteus-ui directly.
@@ -21,6 +23,7 @@ wgpu = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 # GPU-backed test for `Frame::play_video`/`stop_video`'s registry bookkeeping —
 # same headless-device pattern `proteus-sdk`'s and `proteus-ui`'s own GPU tests
 # use, skipped gracefully when no adapter is available.

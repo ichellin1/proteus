@@ -42,6 +42,7 @@
 mod app;
 mod bake;
 pub mod config;
+mod config_dto;
 mod engine;
 mod renderer;
 mod services;
@@ -49,7 +50,13 @@ mod viewport;
 
 pub use app::{App, Frame, PlayingVideo};
 pub use config::ProteusConfig;
+pub use config_dto::ProteusConfigDto;
 pub use engine::Engine;
+/// Re-exported so a host can check a config *before* handing it to
+/// [`Renderer::new`], which asserts. A host taking config from outside the
+/// binary — `mount`'s JS caller, say — wants a reportable error, not an
+/// abort.
+pub use proteus_render::{validate_atlas_config, validate_render_config};
 /// Re-exported from `proteus-sdk`, where the type now lives: how a texture
 /// should be packed is app-authoring, not host-services. Hosts and apps keep
 /// naming it through `proteus_runtime`.
