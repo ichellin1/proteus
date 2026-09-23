@@ -556,7 +556,7 @@ fn retargeting_midtransition_starts_from_current_state() {
 ///
 /// `from_state: Some(..)` means "this morph visually originates somewhere other
 /// than where the entity currently sits": it's how a signal-driven 1→1 makes
-/// the destination appear to come from the source, and how `SplitStrategy::Bake`
+/// the destination appear to come from the source, and how `SplitStrategy::PerTarget`
 /// fans N targets out of one source. Until this was fixed, nothing wrote `from`
 /// to the entity's `QuadState`; only `transition_tick_system`'s first *lerping*
 /// tick did, as a side effect of `lerp(from, to, ~0)`. So during a `delay` the

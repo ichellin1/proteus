@@ -960,13 +960,13 @@ fn on_transition_complete_fires_once_on_the_destination_of_a_merge() {
 }
 
 #[test]
-fn a_bake_split_completes_on_its_targets_not_its_source() {
+fn a_per_target_split_completes_on_its_targets_not_its_source() {
     use proteus_sdk::SplitStrategy;
 
-    // Bake is defined as N independent 1->1 transitions with no virtuals, so
-    // the source has nothing of its own to finish — it hides and goes Idle
-    // in the same tick. Asymmetric with Slice on purpose; pinned so the
-    // doc on `on_transition_complete` can't quietly become wrong.
+    // PerTarget is N independent 1->1s with no virtuals, so the source has
+    // nothing of its own to finish — it hides and goes Idle in the same
+    // tick. Asymmetric with Slice by definition; pinned so the doc on
+    // `on_transition_complete` can't quietly become wrong.
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let target1 = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
@@ -976,9 +976,14 @@ fn a_bake_split_completes_on_its_targets_not_its_source() {
     let target1_count = completion_counter(&mut app, target1);
     let target2_count = completion_counter(&mut app, target2);
 
-    let _ = source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
+    let _ = source.split_to(
+        &mut app,
+        &[target1, target2],
+        cfg(0.1),
+        SplitStrategy::PerTarget,
+    );
 
-    // Bake needs two ticks where Slice needs one: `one_to_n_setup_system`
+    // PerTarget needs two ticks where Slice needs one: `one_to_n_setup_system`
     // inserts each target's `TransitionRequest` through deferred commands,
     // and `transition_setup_system` shares its schedule set, so the request
     // isn't picked up until the following tick.
@@ -986,7 +991,11 @@ fn a_bake_split_completes_on_its_targets_not_its_source() {
     assert_eq!(target1_count.get(), 0, "not converted to a transition yet");
     app.tick(1.0);
 
-    assert_eq!(source_count.get(), 0, "the Bake source never transitions");
+    assert_eq!(
+        source_count.get(),
+        0,
+        "the PerTarget source never transitions"
+    );
     assert_eq!(target1_count.get(), 1);
     assert_eq!(target2_count.get(), 1);
 }
@@ -996,7 +1005,7 @@ fn a_bake_split_completes_on_its_targets_not_its_source() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry() {
+fn split_to_per_target_hides_source_and_settles_targets_to_their_declared_geometry() {
     use proteus_sdk::SplitStrategy;
 
     let mut app = Proteus::new();
@@ -1011,7 +1020,12 @@ fn split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry() {
         ..quad_at(400.0, 0.0)
     }));
 
-    let _ = source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
+    let _ = source.split_to(
+        &mut app,
+        &[target1, target2],
+        cfg(0.1),
+        SplitStrategy::PerTarget,
+    );
     app.tick(0.0);
 
     let source_data = app.get(source).unwrap();
@@ -1099,7 +1113,7 @@ fn set_declared_geometry_updates_what_a_later_split_to_settles_targets_to() {
     };
     let _ = target.set_declared_geometry(&mut app, real_geometry.clone());
 
-    let _ = source.split_to(&mut app, &[target], cfg(0.1), SplitStrategy::Bake);
+    let _ = source.split_to(&mut app, &[target], cfg(0.1), SplitStrategy::PerTarget);
     app.tick(1.0);
 
     let target_data = app.get(target).unwrap();
@@ -1126,7 +1140,7 @@ fn split_to_with_states_uses_the_given_state_not_declared_geometry() {
         &mut app,
         &[(target, explicit_state.clone())],
         cfg(0.1),
-        SplitStrategy::Bake,
+        SplitStrategy::PerTarget,
     );
     // Two ticks: the first turns the just-inserted `OneToNRequest` into a
     // `TransitionRequest` (`one_to_n_setup_system` and `transition_setup_
@@ -1172,7 +1186,7 @@ fn split_to_with_states_is_safe_when_the_source_is_also_one_of_the_targets() {
             (sibling, sibling_state.clone()),
         ],
         cfg(0.1),
-        SplitStrategy::Bake,
+        SplitStrategy::PerTarget,
     );
     // Source geometry must be untouched immediately after the call — the
     // request has only been inserted, not processed yet.
@@ -1366,7 +1380,12 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
-        handle.split_to(&mut app, &[other], config, proteus_sdk::SplitStrategy::Bake),
+        handle.split_to(
+            &mut app,
+            &[other],
+            config,
+            proteus_sdk::SplitStrategy::PerTarget
+        ),
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
@@ -1374,7 +1393,7 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
             &mut app,
             &[(other, geometry.clone())],
             config,
-            proteus_sdk::SplitStrategy::Bake
+            proteus_sdk::SplitStrategy::PerTarget
         ),
         Err(HandleError::EntityNotFound)
     );
@@ -1439,7 +1458,7 @@ fn a_dead_handle_passed_into_a_live_one_reports_other_entity_not_found() {
             &mut app,
             &[dead],
             cfg(0.2),
-            proteus_sdk::SplitStrategy::Bake
+            proteus_sdk::SplitStrategy::PerTarget
         ),
         Err(HandleError::OtherEntityNotFound),
         "a group transition is all-or-nothing: one dead target fails the call \

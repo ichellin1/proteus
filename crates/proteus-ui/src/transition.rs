@@ -192,7 +192,7 @@ pub struct FrameTime {
 /// A declared `from_state` means "this morph visually originates somewhere
 /// other than where the entity currently sits" — how a signal-driven 1→1 makes
 /// the destination appear to come from the source, and how
-/// [`SplitStrategy::Bake`](crate::SplitStrategy::Bake) fans N targets out of one
+/// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) fans N targets out of one
 /// source. Nothing used to write it to the entity; the entity only arrived at
 /// `from` as a side effect of `transition_tick_system`'s first *lerping* tick
 /// computing `lerp(from, to, ~0)`. Two consequences, both fixed by applying it
@@ -200,7 +200,7 @@ pub struct FrameTime {
 ///
 /// - **During a `delay`,** the tick system deliberately doesn't lerp at all, so
 ///   the entity stayed at its pre-transition position for the whole delay and
-///   then jumped to `from`. For a staggered `Bake` split that inverts the
+///   then jumped to `from`. For a staggered `PerTarget` split that inverts the
 ///   intended effect: every target sits visible at its *final* position for the
 ///   length of its stagger, then snaps back to the source to animate out.
 /// - **Even at zero delay,** `ActiveTransition` is inserted through `Commands`,

@@ -156,14 +156,35 @@ pub type ChildBehaviorFn = fn(idx: usize, total: usize) -> TransitionConfig;
 /// How a 1→N transition is normalized to a set of 1→1 lerps.
 #[derive(Debug, Clone)]
 pub enum SplitStrategy {
-    /// **Bake** — normalize to 1→1 per target.
+    /// **PerTarget** — normalize to one independent 1→1 per target.
+    /// *Experimental for V1.*
     ///
     /// Each of the N target entities receives a `TransitionRequest` whose
-    /// `from_state` is set to the source entity's geometry. All N transitions
-    /// run simultaneously and independently. No virtual entities are created.
+    /// `from_state` is the source's geometry. All N run simultaneously and
+    /// independently. No virtual entities, no bake, no `transition_atlas`
+    /// allocation — nothing here touches the GPU.
     ///
-    /// Visual: N copies of the source fan out to their respective positions.
-    Bake,
+    /// Visual: each target renders **its own** content, starting at the
+    /// source's rectangle and moving to its own. Not N copies of the source:
+    /// `from_state` carries geometry, not appearance.
+    ///
+    /// This is the hand-authored option — the developer decides what each
+    /// target is and where it lands, and is responsible for the set making
+    /// visual sense together. [`SplitStrategy::Slice`] instead flattens the
+    /// source (and its whole subtree) into one texture and hands out crops
+    /// of it, which is what you want when the pieces should read as parts of
+    /// the thing that was there.
+    ///
+    /// **Why experimental:** nothing in the reference demo uses it, so it is
+    /// unexercised outside tests; and the per-target control it exists for
+    /// is only half-exposed — `ChildBehaviorFn` can vary each target's
+    /// duration/delay/easing, but `proteus-sdk` hardcodes `child_behavior:
+    /// None`, so an SDK caller gets one shared config for all N. Until that
+    /// lands, this offers per-target *geometry* but not per-target *timing*.
+    ///
+    /// Completion is reported per target, not on the source — the source has
+    /// no transition of its own here. See `Handle::on_transition_complete`.
+    PerTarget,
 
     /// **Slice** — normalize to N→N via virtual entities.
     ///
@@ -671,7 +692,7 @@ pub fn one_to_n_setup_system(
         commands.entity(source_entity).insert(Visibility::HIDDEN);
 
         match request.strategy {
-            SplitStrategy::Bake => {
+            SplitStrategy::PerTarget => {
                 // Normalize to N independent 1→1 transitions.
                 // Each target animates from the source geometry to its own position.
                 for (i, target) in request.targets.iter().enumerate() {

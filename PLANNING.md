@@ -463,6 +463,20 @@ The complexity of ECS is never exposed to the developer. The signal API is what 
   **Strategy 1 — Bake (via `childBehavior: 'bake'`):**
   Normalize to **1→1**. Before the transition begins, bake the N side into a single composite texture. The transition runs as a standard 1→1 morph between two quads. At `t = 1.0`, discard the composite and restore live entities at their final positions. Simpler visually — clean morph between two forms.
 
+  > ⚠️ **Never built.** No shipped code does this. `SplitStrategy::Bake` — which is what a reader
+  > naturally assumed this became — normalized to N *independent* 1→1s and baked nothing at all,
+  > which is neither this strategy nor Strategy 2. It was renamed `SplitStrategy::PerTarget` at
+  > the 2026-09-22 audit (see M14's A-series) precisely because the name taught this wrong model,
+  > and it misled the project's own author.
+  >
+  > The transition-time composite bake described here is still genuinely unbuilt and still
+  > genuinely interesting: on a constrained device, flattening a compound subtree (a grid of tiles,
+  > each with images, text and buttons) into one quad and morphing that may well beat animating
+  > every item. Two nearby things are *not* it: `SplitStrategy::Slice` bakes the source and its
+  > whole subtree but then hands out *crops* of that bake to N virtuals, so it is still N moving
+  > pieces; and `ComponentSpec::bake()` (M10.5) flattens permanently, destroying the children,
+  > rather than for the duration of a transition. Needs a home on the roadmap if it's wanted.
+
   **Strategy 2 — Slice (via `childBehavior` iterator):**
   Normalize to **N→N**. The 1 side is baked and split into N virtual slice entities, each carrying a UV sub-region of the baked texture, positioned to tile and reconstruct the original. Paired 1:1 with the N entities on the other side. Each pair runs an independent 1→1 transition. At `t = 1.0`, virtual slices are discarded and live entities are revealed. More visually rich — shattering/assembling effect.
 
@@ -4212,6 +4226,26 @@ Found while testing this: `split_to_bake_hides_source_and_settles_targets_to_the
 couldn't distinguish a completed transition from one that never ran — it asserted the target sat
 at its declared geometry with no `ActiveTransition`, which is also true of a target that never
 moved. It now asserts mid-flight state as well.
+
+##### `SplitStrategy::Bake` → `PerTarget`, experimental for V1 *(decided 2026-09-23)*
+
+Renamed. The old name claimed a behaviour the code didn't have — it baked nothing — and described
+Phase B's Strategy 1, which was never built. `PerTarget` says what it does: N independent 1→1s,
+one per target, no virtuals and no GPU work.
+
+The rename also retires the A-02 concern it raised. "Completion fires per target, not on the
+source" was a trap under the old name; under `PerTarget` it is the obvious reading, so the
+notification-only coordinator that was being weighed is unnecessary.
+
+**Marked experimental for V1.** Its use case is hand-authored control: the developer decides what
+each target is and where it lands, and owns whether the set reads well together. That is a real
+thing to want, but it is unproven — nothing in the reference demo exercises it, and the control
+it exists for is only half-exposed: `ChildBehaviorFn` can vary each target's duration/delay/easing,
+but `proteus-sdk` hardcodes `child_behavior: None` (audit A-09), so an SDK caller gets per-target
+*geometry* without per-target *timing*. Resolving A-09 is what would make it fully usable.
+
+Also fixed while renaming: the TS `splitTo` DTO fell back to this strategy for any unrecognized
+`kind`, so a typo silently selected the experimental path. It now falls back to `"slice"` and logs.
 
 ##### A-03 … A-05 — still to decide
 - **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
