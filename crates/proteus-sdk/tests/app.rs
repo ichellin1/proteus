@@ -876,6 +876,122 @@ fn set_interactive_toggles_whether_clicks_land() {
 }
 
 // ---------------------------------------------------------------------------
+// on_transition_complete — A-02
+// ---------------------------------------------------------------------------
+
+fn completion_counter(
+    app: &mut Proteus,
+    handle: proteus_sdk::Handle,
+) -> std::rc::Rc<std::cell::Cell<u32>> {
+    let count = std::rc::Rc::new(std::cell::Cell::new(0));
+    let clone = count.clone();
+    handle.on_transition_complete(app, move |_app| clone.set(clone.get() + 1));
+    count
+}
+
+#[test]
+fn on_transition_complete_fires_for_animate_to() {
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let count = completion_counter(&mut app, handle);
+
+    let _ = handle.animate_to(&mut app, quad_at(300.0, 0.0), cfg(0.1));
+    app.tick(1.0);
+    assert_eq!(count.get(), 1);
+
+    // Persistent, like on_click — a second transition fires it again.
+    let _ = handle.animate_to(&mut app, quad_at(0.0, 0.0), cfg(0.1));
+    app.tick(1.0);
+    assert_eq!(count.get(), 2);
+}
+
+#[test]
+fn on_transition_complete_fires_on_the_to_side_of_a_signal_set() {
+    let mut app = Proteus::new();
+    let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let to = app.component(ComponentSpec::new(quad_at(300.0, 0.0)).visible(false));
+    let to_count = completion_counter(&mut app, to);
+    let from_count = completion_counter(&mut app, from);
+
+    let signal = app.signal(None);
+    signal.set(&mut app, to, from, cfg(0.1), false);
+    app.tick(1.0);
+
+    assert_eq!(to_count.get(), 1, "the morphing side completes");
+    assert_eq!(from_count.get(), 0, "the exit has no transition of its own");
+}
+
+#[test]
+fn on_transition_complete_fires_once_on_the_source_of_a_slice_split() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let targets: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(300.0 + i as f32 * 100.0, 0.0))))
+        .collect();
+    let count = completion_counter(&mut app, source);
+
+    let _ = source.split_to(&mut app, &targets, cfg(0.1), SplitStrategy::Slice);
+    app.tick(1.0);
+
+    assert_eq!(
+        count.get(),
+        1,
+        "one group is one completion, not one per target"
+    );
+}
+
+#[test]
+fn on_transition_complete_fires_once_on_the_destination_of_a_merge() {
+    use proteus_sdk::MergeLayout;
+
+    let mut app = Proteus::new();
+    let sources: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 100.0, 0.0))))
+        .collect();
+    let dest = app.component(ComponentSpec::new(quad_at(500.0, 0.0)));
+    let count = completion_counter(&mut app, dest);
+
+    let _ = dest.merge_from(&mut app, &sources, cfg(0.1), MergeLayout::Horizontal);
+    app.tick(1.0);
+
+    assert_eq!(count.get(), 1);
+}
+
+#[test]
+fn a_bake_split_completes_on_its_targets_not_its_source() {
+    use proteus_sdk::SplitStrategy;
+
+    // Bake is defined as N independent 1->1 transitions with no virtuals, so
+    // the source has nothing of its own to finish — it hides and goes Idle
+    // in the same tick. Asymmetric with Slice on purpose; pinned so the
+    // doc on `on_transition_complete` can't quietly become wrong.
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let target1 = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
+    let target2 = app.component(ComponentSpec::new(quad_at(400.0, 0.0)));
+
+    let source_count = completion_counter(&mut app, source);
+    let target1_count = completion_counter(&mut app, target1);
+    let target2_count = completion_counter(&mut app, target2);
+
+    let _ = source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
+
+    // Bake needs two ticks where Slice needs one: `one_to_n_setup_system`
+    // inserts each target's `TransitionRequest` through deferred commands,
+    // and `transition_setup_system` shares its schedule set, so the request
+    // isn't picked up until the following tick.
+    app.tick(1.0);
+    assert_eq!(target1_count.get(), 0, "not converted to a transition yet");
+    app.tick(1.0);
+
+    assert_eq!(source_count.get(), 0, "the Bake source never transitions");
+    assert_eq!(target1_count.get(), 1);
+    assert_eq!(target2_count.get(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // split_to() / merge_from() — group transitions (M12.5 Step 2)
 // ---------------------------------------------------------------------------
 
@@ -896,7 +1012,7 @@ fn split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry() {
     }));
 
     let _ = source.split_to(&mut app, &[target1, target2], cfg(0.1), SplitStrategy::Bake);
-    app.tick(1.0);
+    app.tick(0.0);
 
     let source_data = app.get(source).unwrap();
     assert!(
@@ -904,12 +1020,28 @@ fn split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry() {
         "source must be hidden once the 1\u{2192}N transition starts"
     );
 
+    // Prove the target actually *moves*, not just that it ends up where it
+    // was declared. A target sits at its declared geometry from spawn, so
+    // asserting only the end state can't tell a completed transition from
+    // one that never ran — which is what this test did before.
+    app.tick(0.05);
+    let mid = app.get(target1).unwrap();
+    assert!(
+        mid.transition.is_some(),
+        "target should be mid-flight 0.05s into a 0.1s transition"
+    );
+    assert_ne!(
+        mid.geometry.position, target_geometry.position,
+        "mid-flight geometry must be between the source and the target"
+    );
+
+    app.tick(1.0);
     let target1_data = app.get(target1).unwrap();
     assert_eq!(target1_data.geometry.color, target_geometry.color);
     assert_eq!(target1_data.geometry.position, target_geometry.position);
     assert!(
         target1_data.transition.is_none(),
-        "target's transition should have settled within this one large-dt tick"
+        "target's transition should have settled"
     );
 }
 

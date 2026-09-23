@@ -546,6 +546,38 @@ impl Handle {
         self.on(app, EventKind::Blur, cb);
     }
 
+    /// Fires each time a transition targeting this component finishes.
+    ///
+    /// Which component that is, per topology:
+    ///
+    /// - [`Handle::animate_to`] — this component.
+    /// - [`SignalHandle::set`] — the `to` side.
+    /// - [`Handle::split_to`] with [`SplitStrategy::Slice`] or
+    ///   [`SplitStrategy::GridSlice`] — the **source**, once, when every
+    ///   target has arrived. One group is one completion, not one per
+    ///   target.
+    /// - [`Handle::merge_from`] — the **destination**, once, when every
+    ///   source has arrived.
+    /// - [`Handle::split_to`] with [`SplitStrategy::Bake`] — the
+    ///   **targets**, each independently. **Not the source.** `Bake` is
+    ///   defined as N independent 1→1 transitions with no virtual entities,
+    ///   so the source has no transition of its own to finish: it hides and
+    ///   goes `Idle` in the same tick the split starts. Listen on the
+    ///   targets, or use `Slice` if you want one completion for the group.
+    ///
+    /// Persistent: it keeps firing for later transitions until the
+    /// component is destroyed.
+    ///
+    /// Dispatched after the schedule, so work started from inside the
+    /// callback lands on the next tick — see [`Proteus::tick`].
+    pub fn on_transition_complete(
+        &self,
+        app: &mut Proteus,
+        cb: impl FnMut(&mut Proteus) + 'static,
+    ) {
+        self.on(app, EventKind::TransitionComplete, cb);
+    }
+
     pub fn on_drag(&self, app: &mut Proteus, cb: impl FnMut(&mut Proteus, Vec2) + 'static) {
         app.callbacks.register_drag(self.0, Box::new(cb));
     }

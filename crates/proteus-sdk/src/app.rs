@@ -269,6 +269,19 @@ impl Proteus {
             callback::fire_drag(self, e, delta);
         }
 
+        // Read rather than drain: `transition_complete_system` clears this
+        // at the top of every tick, and a `world_mut()` consumer may want to
+        // see the same frame's completions.
+        let completed = self
+            .world
+            .world
+            .resource::<proteus_ui::CompletedTransitions>()
+            .entities
+            .clone();
+        for e in completed {
+            callback::fire(self, e, callback::EventKind::TransitionComplete);
+        }
+
         let dropped = self
             .world
             .world

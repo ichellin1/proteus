@@ -4180,11 +4180,40 @@ Decisions:
   writing A-10's tests, judged correct rather than a bug, documented and pinned from both sides
   so the ordering can't change silently.
 
-##### A-02 … A-05 — still to decide
+##### A-02 — transition-completion callback *(decided and built 2026-09-23)*
 
-- **A-02** No transition-completion callback in the SDK. `CompletedTransitions` exists in
-  `proteus-ui` but neither `proteus-sdk` nor TS surfaces it, so `examples/gallery` guesses with
-  `setTimeout(duration + 150ms)`.
+Framed in the audit as "`CompletedTransitions` exists but isn't surfaced". Only half true: 1→1
+completions were recorded, but `group_transition_complete_system` recorded *nothing*, so for
+`split_to`/`merge_from` — the case `examples/gallery` actually needs — there was nothing to
+surface at any layer.
+
+Decisions:
+
+- **Group completion is recorded too.** `group_transition_complete_system` now pushes the
+  coordinator into `CompletedTransitions` alongside the 1→1 completions. It runs after
+  `transition_complete_system` (which is what clears the bag), so appending is safe. Virtual
+  entities are deliberately excluded — they are machinery, and one group is one completion.
+- **`Handle::on_transition_complete`, not `SignalHandle::on_complete`.** A signal's completion
+  *is* its `to` entity's completion, so a second spelling would be two names for one event.
+  `SignalHandle::on_dropped` stays signal-scoped because a drop genuinely is.
+- **The reporting entity is always the handle the caller started from**: `animate_to` → itself,
+  `signal.set` → `to`, `split_to` → the source, `merge_from` → the destination.
+- **Except `SplitStrategy::Bake`, which reports on its targets.** `Bake` is defined as N
+  independent 1→1 transitions with no virtuals, so the source has no transition of its own — it
+  hides and goes `Idle` in the same tick. Making it report uniformly would mean inventing group
+  bookkeeping for a strategy whose whole point is not having any. Documented on both the Rust and
+  TS methods instead, and pinned by a test, because a callback that silently never fires is worse
+  than an asymmetry a reader can see. Revisit if it trips anyone up.
+- **`Bake` also takes one more tick than `Slice`** to start: `one_to_n_setup_system` inserts each
+  target's `TransitionRequest` through deferred commands, and `transition_setup_system` shares its
+  schedule set, so the request isn't picked up until the following tick. Pinned, not changed.
+
+Found while testing this: `split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry`
+couldn't distinguish a completed transition from one that never ran — it asserted the target sat
+at its declared geometry with no `ActiveTransition`, which is also true of a target that never
+moved. It now asserts mid-flight state as well.
+
+##### A-03 … A-05 — still to decide
 - **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
   exposed by either SDK.
 - **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to

@@ -445,6 +445,16 @@ impl ProteusApp {
         handle.0.on_click(&mut self.0.borrow_mut(), wrap_plain(cb));
     }
 
+    /// Fires when a transition targeting `handle` finishes — see
+    /// `proteus-sdk`'s `Handle::on_transition_complete` for which handle
+    /// that is per topology.
+    #[wasm_bindgen(js_name = onTransitionComplete)]
+    pub fn on_transition_complete(&mut self, handle: &Handle, cb: js_sys::Function) {
+        handle
+            .0
+            .on_transition_complete(&mut self.0.borrow_mut(), wrap_plain(cb));
+    }
+
     #[wasm_bindgen(js_name = onHoverEnter)]
     pub fn on_hover_enter(&mut self, handle: &Handle, cb: js_sys::Function) {
         handle
