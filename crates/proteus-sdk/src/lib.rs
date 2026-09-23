@@ -30,7 +30,7 @@ mod spec;
 
 pub use app::Proteus;
 pub use data::{ComponentData, TransitionData};
-pub use handle::{Handle, HandleError, SignalHandle, TextureHandle};
+pub use handle::{Handle, HandleError, SignalHandle, TextureHandle, TextureRequest};
 pub use spec::ComponentSpec;
 
 // Re-exported so callers can build `QuadState`/`StyleOverride`/

@@ -4307,7 +4307,38 @@ Decisions:
 Fixed in passing: `ComponentDataDto` never carried `opacity`, so A-10's `ComponentData::opacity`
 was unreadable from TypeScript. Both it and `disabled` cross now.
 
-##### A-04 … A-05 — still to decide
+##### A-04 — texture loading on the SDK *(decided and built 2026-09-23)*
+
+TypeScript had no way to get pixels into the atlas. `examples/gallery` works around it by
+spawning a throwaway off-screen component with `image: { bytes }` and polling `bakedImageSize()`
+every frame until the bake system happens to run (`loadBaked`/`waitForBake`).
+
+Decisions:
+
+- **The primitive belongs in `proteus-sdk`, not `proteus-runtime`.** `bake_texture` needs nothing
+  but the world and `proteus-render` — both of which `proteus-sdk` already has — so it sat a
+  layer higher than necessary, out of reach of the one caller that needed it most.
+  `Proteus::bake_texture` is the implementation now and `Frame::bake_texture` delegates, so
+  there's one of it.
+- **`TextureRequest` moved down with it**, from `proteus-runtime::services` to `proteus-sdk`.
+  How a texture should be packed is app-authoring, not host-services. `proteus-runtime`
+  re-exports it, so hosts and apps that name it through `proteus_runtime` are unaffected.
+- **`Proteus::load_texture(bytes, request)`** decodes then bakes — the bytes-in-hand counterpart
+  of `Frame::load_texture(key, request)`, which fetches through the host. TS gets `loadTexture`
+  and `bakeTexture` on `ProteusApp`.
+- **No `onReady`, no promise.** Phase A sketched `texture({src})` with an `onReady` because it
+  assumed the SDK would do the fetching. It doesn't: the caller supplies bytes, and baking them
+  is synchronous, so the handle is usable the moment the call returns. The asynchrony the
+  gallery's polling was working around was never in the texture path — it was waiting for a
+  *bake system* to notice a component it had spawned.
+- Failure split by kind: `None` for undecodable bytes (bad input), a null handle for a decoded
+  image that doesn't fit the atlas (capacity, logged, renders as nothing) — matching the
+  degradation the rest of the texture path already uses.
+
+`examples/gallery` can drop `loadBaked`/`waitForBake` entirely; revisiting it is still pending
+(see A-01/A-02).
+
+##### A-05 — still to decide
 - **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
   exposed by either SDK.
 - **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to

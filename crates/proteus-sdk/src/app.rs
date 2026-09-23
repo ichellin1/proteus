@@ -6,15 +6,18 @@ use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::Component;
 use glam::Vec2;
 
-use proteus_render::TextureId;
 use proteus_ui::{
     create_signal, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
     InteractionDef, ProteusWorld, QuadState, Visibility,
 };
 
+use proteus_render::{
+    decode_image, resize_to_fit, DecodedImage, GpuContext, QuadPipeline, TextureId,
+};
+
 use crate::callback::{self, CallbackRegistry};
 use crate::data::{ComponentData, TransitionData};
-use crate::handle::{Handle, SignalHandle, TextureHandle};
+use crate::handle::{Handle, SignalHandle, TextureHandle, TextureRequest};
 use crate::spec::ComponentSpec;
 
 /// Captured by [`Proteus::component`] at creation time — the declared rest
@@ -214,6 +217,88 @@ impl Proteus {
             children,
             transition,
         })
+    }
+
+    /// Pack already-decoded RGBA pixels into `main_atlas` and return a
+    /// handle to them. `rgba.len()` must be `width * height * 4`.
+    ///
+    /// Synchronous: the pixels are on the GPU when this returns, so there is
+    /// no "ready" state to wait for. For procedurally generated content —
+    /// see [`Proteus::load_texture`] when you have an encoded PNG/JPEG.
+    ///
+    /// Returns a **null handle** if the atlas is full (logged), which
+    /// renders as nothing rather than failing the call — the same graceful
+    /// degradation the rest of the texture path uses. Needs the GPU
+    /// resources `Renderer::new` installs; without them the handle is null
+    /// too, which is what a headless test sees.
+    pub fn bake_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        request: TextureRequest,
+    ) -> TextureHandle {
+        let null = TextureHandle::from_texture_id(TextureId::default());
+
+        let mut decoded = DecodedImage {
+            width,
+            height,
+            rgba_pixels: rgba,
+        };
+        if let Some(cap) = request.max_side {
+            decoded = resize_to_fit(decoded, cap);
+        }
+
+        let world = self.world_mut();
+        let Some(queue) = world.get_resource::<GpuContext>().map(|g| g.queue.clone()) else {
+            return null;
+        };
+        let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
+            return null;
+        };
+        let Some(texture_id) = pipeline.texture_registry.register_static(
+            decoded.width,
+            decoded.height,
+            request.eternal,
+        ) else {
+            log::warn!(
+                "bake_texture: main_atlas full — could not register {}x{}",
+                decoded.width,
+                decoded.height,
+            );
+            return null;
+        };
+        let placement = pipeline
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .expect("just registered");
+        pipeline.write_to_main_atlas(&queue, placement, &decoded.rgba_pixels);
+        TextureHandle::from_texture_id(texture_id)
+    }
+
+    /// Decode an encoded image (PNG/JPEG/…) and pack it into `main_atlas`.
+    ///
+    /// The bytes-in-hand counterpart of `proteus_runtime::Frame::load_texture`,
+    /// which takes an asset *key* and fetches it through the host. Use this
+    /// when something else did the fetching — a TypeScript app that already
+    /// has an `ArrayBuffer`, say.
+    ///
+    /// Synchronous once the bytes exist, so no `onReady`: it returns a usable
+    /// handle or it doesn't. `None` means the bytes could not be decoded
+    /// (logged with the decoder's reason). A successfully-decoded image that
+    /// doesn't fit the atlas returns `Some(null handle)` — see
+    /// [`Proteus::bake_texture`] — because that is a capacity condition
+    /// rather than bad input.
+    pub fn load_texture(&mut self, bytes: &[u8], request: TextureRequest) -> Option<TextureHandle> {
+        match decode_image(bytes) {
+            Ok(decoded) => {
+                Some(self.bake_texture(decoded.width, decoded.height, decoded.rgba_pixels, request))
+            }
+            Err(e) => {
+                log::warn!("load_texture: could not decode {} bytes: {e}", bytes.len());
+                None
+            }
+        }
     }
 
     /// Advance one frame: runs the `proteus-ui` schedule, then dispatches

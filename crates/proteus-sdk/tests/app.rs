@@ -665,6 +665,131 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     Some((device, queue))
 }
 
+/// A `Proteus` with the GPU resources `Renderer::new` would install, or
+/// `None` when this machine has no adapter.
+fn gpu_app() -> Option<Proteus> {
+    use proteus_render::{AtlasConfig, GpuContext, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
+
+    let (device, queue) = pollster::block_on(make_device())?;
+    let pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        64,
+        AtlasConfig::default(),
+        DEFAULT_TRANSITION_ATLAS_SIZE,
+    );
+    let mut app = Proteus::new();
+    app.world_mut()
+        .insert_resource(GpuContext { device, queue });
+    app.world_mut().insert_resource(pipeline);
+    Some(app)
+}
+
+/// Skips with a message unless `REQUIRE_GPU` is set, in which case it panics
+/// — CI always has lavapipe, so a miss there is a broken driver install.
+macro_rules! gpu_app_or_skip {
+    () => {
+        match gpu_app() {
+            Some(app) => app,
+            None => {
+                if std::env::var("REQUIRE_GPU").is_ok() {
+                    panic!("REQUIRE_GPU is set but no GPU adapter was found");
+                }
+                eprintln!("proteus-sdk app test: no GPU adapter available — skipping");
+                return;
+            }
+        }
+    };
+}
+
+#[test]
+fn bake_texture_registers_pixels_and_returns_a_usable_handle() {
+    use proteus_sdk::TextureRequest;
+
+    let mut app = gpu_app_or_skip!();
+    let rgba = vec![255u8; 8 * 8 * 4];
+
+    let texture = app.bake_texture(8, 8, rgba, TextureRequest::default());
+    let (kind, w, h) = texture.state(&app).expect("texture should be registered");
+
+    assert_eq!((w, h), (8, 8));
+    assert_eq!(kind, proteus_render::TextureKind::Static);
+}
+
+#[test]
+fn bake_texture_honours_the_max_side_cap() {
+    use proteus_sdk::TextureRequest;
+
+    let mut app = gpu_app_or_skip!();
+    let rgba = vec![128u8; 32 * 16 * 4];
+
+    let texture = app.bake_texture(
+        32,
+        16,
+        rgba,
+        TextureRequest {
+            max_side: Some(8),
+            ..Default::default()
+        },
+    );
+    let (_, w, h) = texture.state(&app).expect("texture should be registered");
+
+    assert_eq!(
+        (w, h),
+        (8, 4),
+        "downscaled to the cap, aspect preserved, before packing"
+    );
+}
+
+#[test]
+fn load_texture_decodes_encoded_bytes() {
+    use proteus_sdk::TextureRequest;
+
+    let mut app = gpu_app_or_skip!();
+
+    // A 2x2 opaque-red RGBA PNG, inline so the test needs neither an asset
+    // file nor an encoder dev-dependency. Header says 2x2, colour type 6
+    // (RGBA), bit depth 8; the IDAT is zlib-compressed scanlines.
+    const RED_2X2_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x72,
+        0xb6, 0x0d, 0x24, 0x00, 0x00, 0x00, 0x11, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x84, 0x19, 0x60, 0x0c, 0x00, 0x47, 0xca, 0x07, 0xf9, 0x67, 0x59,
+        0x6e, 0xb7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let texture = app
+        .load_texture(RED_2X2_PNG, TextureRequest::default())
+        .expect("valid PNG should decode");
+    let (_, w, h) = texture.state(&app).expect("texture should be registered");
+    assert_eq!((w, h), (2, 2));
+}
+
+#[test]
+fn load_texture_returns_none_for_undecodable_bytes() {
+    use proteus_sdk::TextureRequest;
+
+    let mut app = gpu_app_or_skip!();
+    assert!(app
+        .load_texture(b"not an image", TextureRequest::default())
+        .is_none());
+}
+
+#[test]
+fn bake_texture_without_gpu_resources_yields_a_null_handle() {
+    use proteus_sdk::TextureRequest;
+
+    // No GPU needed: this is the headless degradation path.
+    let mut app = Proteus::new();
+    let texture = app.bake_texture(4, 4, vec![0u8; 4 * 4 * 4], TextureRequest::default());
+
+    assert!(
+        texture.state(&app).is_none(),
+        "a null handle resolves to no texture rather than panicking"
+    );
+}
+
 #[test]
 fn free_resources_decrefs_and_frees_the_texture_region() {
     use proteus_render::{AtlasConfig, GpuContext, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};

@@ -1016,6 +1016,21 @@ impl SignalHandle {
 // TextureHandle
 // ---------------------------------------------------------------------------
 
+/// How a texture should be packed into `main_atlas`.
+///
+/// Used by [`Proteus::bake_texture`]/[`Proteus::load_texture`] and, one layer
+/// up, by `proteus_runtime::Frame`'s key-based equivalents.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TextureRequest {
+    /// Downscale cap (longest side, pixels) before packing into `main_atlas`.
+    /// `None` = pack at native resolution.
+    pub max_side: Option<u32>,
+    /// Pin the texture in the atlas for the app's lifetime — never
+    /// LRU-evicted. For assets referenced continuously, e.g. an animation
+    /// frame set that must all stay resident.
+    pub eternal: bool,
+}
+
 /// Identity token for an already-registered `main_atlas`/video texture.
 ///
 /// **Inspection only — intentionally has no `.free()`.** M11's `TextureRef`

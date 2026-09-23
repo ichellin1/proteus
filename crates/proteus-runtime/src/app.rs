@@ -6,8 +6,9 @@ use std::sync::Arc;
 use proteus_render::{GpuContext, QuadPipeline, TextureId};
 use proteus_sdk::{Proteus, TextureHandle};
 
-use crate::services::{FetchId, FetchResult, HostServices, TextureRequest, VideoStream};
+use crate::services::{FetchId, FetchResult, HostServices, VideoStream};
 use crate::viewport::Viewport;
+use proteus_sdk::TextureRequest;
 
 /// The per-call context handed to [`App::setup`] and [`App::update`].
 ///
@@ -37,7 +38,7 @@ impl Frame<'_> {
     /// component per use won't do. A missing or undecodable asset yields a
     /// null handle that renders as nothing.
     pub fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle {
-        crate::bake::load_texture(self.proteus.world_mut(), self.services, key, req)
+        crate::bake::load_texture(self.proteus, self.services, key, req)
     }
 
     /// Bake already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
@@ -53,7 +54,7 @@ impl Frame<'_> {
         rgba: Vec<u8>,
         req: TextureRequest,
     ) -> TextureHandle {
-        crate::bake::bake_texture(self.proteus.world_mut(), width, height, rgba, req)
+        crate::bake::bake_texture(self.proteus, width, height, rgba, req)
     }
 
     /// Start an async fetch (see [`HostServices::fetch_async`]). Thin
