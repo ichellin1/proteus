@@ -4151,6 +4151,35 @@ Decisions:
 `Handle::set_visible` also retired 20 `world_mut().entity_mut(…).insert(Visibility::…)` calls in
 `proteus-demo` — the panicking `entity_mut` API that C-04 was about.
 
+##### A-10 — opacity on the SDK *(decided and built 2026-09-23)*
+
+Raised as "should opacity be its own milestone?" — it shouldn't, because the feature already
+shipped. M10 built the cascade (`opacity_system`: `own × parent.effective`, walked top-down),
+`collect_instances` paints it, two integration and three unit tests cover it, and
+`example_detail` has a row demonstrating `0.6 × 0.6 = 0.36` specifically to show cascaded
+`Opacity` rather than a flat `color.w`. What was missing was only the SDK surface — the demo
+reached the feature through `world_mut().entity_mut(…).insert(Opacity(…))`, the same escape
+hatch A-01 retired for visibility. So this is an A-series exposure gap, not new scope.
+
+Decisions:
+
+- **`ComponentSpec::opacity(f32)` and `Handle::set_opacity(f32)`**, plus `opacity?` and
+  `setOpacity()` in TS. `ComponentData::opacity` reports the cascaded effective value, mirroring
+  how `visible` already reports `EffectiveVisibility`.
+- **Clamped to `0.0..=1.0` at the SDK boundary.** Phase B specifies that range; the raw
+  `proteus_ui::Opacity` component stays unconstrained for internal use.
+- **Opacity and visibility do not interact.** Opacity multiplies during painting; visibility is
+  an ECS flag telling systems whether to act on the entity at all. The observable consequence:
+  an entity at `0.0` opacity is invisible but **still hit-tests**, while a hidden one doesn't.
+  That is deliberate — an invisible hit zone is a real thing to want — and is now documented on
+  both setters and pinned by a test.
+- **Hiding something stops hit-testing one tick later.** `hit_test_system` runs at the start of
+  the schedule and reads the `EffectiveVisibility` the cascade wrote at the end of the previous
+  one, so input resolves against what was last painted: a click arriving in the same tick as the
+  hide still lands, because the user was looking at the component when they made it. Found while
+  writing A-10's tests, judged correct rather than a bug, documented and pinned from both sides
+  so the ordering can't change silently.
+
 ##### A-02 … A-05 — still to decide
 
 - **A-02** No transition-completion callback in the SDK. `CompletedTransitions` exists in

@@ -140,6 +140,19 @@ export interface ComponentSpec {
    * into without a separate reveal call.
    */
   visible?: boolean;
+  /**
+   * Alpha multiplier for this component and everything under it, clamped to
+   * `0.0`–`1.0`. Defaults to fully opaque.
+   *
+   * Cascades down: a child's effective opacity is its own times its
+   * parent's effective, so `0.6` over `0.6` paints at `0.36`. A child never
+   * affects its parent.
+   *
+   * Separate from {@link ComponentSpec.visible} and unrelated to it —
+   * opacity is a paint multiplier, visibility is an ECS flag. A component
+   * at `0` opacity is invisible but still hit-tests; a hidden one doesn't.
+   */
+  opacity?: number;
 }
 
 /**

@@ -8,8 +8,8 @@ use glam::Vec2;
 
 use proteus_render::TextureId;
 use proteus_ui::{
-    create_signal, ActiveTransition, Baked, EffectiveVisibility, Interactable, InteractionDef,
-    ProteusWorld, QuadState, Visibility,
+    create_signal, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
+    InteractionDef, ProteusWorld, QuadState, Visibility,
 };
 
 use crate::callback::{self, CallbackRegistry};
@@ -96,6 +96,13 @@ impl Proteus {
                 .insert(proteus_ui::Visibility::HIDDEN);
         }
 
+        if let Some(opacity) = spec.opacity {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::Opacity(opacity));
+        }
+
         if let Some(text) = spec.text {
             self.world.world.entity_mut(entity).insert(text);
         }
@@ -166,6 +173,16 @@ impl Proteus {
                     .unwrap_or(true)
             });
 
+        let opacity = world
+            .get::<EffectiveOpacity>(handle.0)
+            .map(|o| o.0)
+            .unwrap_or_else(|| {
+                world
+                    .get::<proteus_ui::Opacity>(handle.0)
+                    .map(|o| o.0)
+                    .unwrap_or(1.0)
+            });
+
         let children = world
             .get::<Children>(handle.0)
             .map(|c| c.iter().map(|&e| Handle(e)).collect())
@@ -179,6 +196,7 @@ impl Proteus {
             geometry,
             state,
             visible,
+            opacity,
             children,
             transition,
         })

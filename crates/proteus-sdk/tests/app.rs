@@ -401,6 +401,111 @@ fn set_visible_on_a_destroyed_handle_is_an_error_not_a_panic() {
 }
 
 #[test]
+fn opacity_cascades_to_descendants_through_the_sdk() {
+    // The cascade itself is M10's and tested in proteus-ui; this pins that
+    // it is reachable and observable from the SDK, which it wasn't before —
+    // `Opacity` could only be inserted through `world_mut()`.
+    let mut app = Proteus::new();
+    let child = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).opacity(0.6));
+    let parent = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .opacity(0.6)
+            .child(child),
+    );
+
+    app.tick(0.0);
+
+    assert_eq!(app.get(parent).unwrap().opacity, 0.6);
+    assert!(
+        (app.get(child).unwrap().opacity - 0.36).abs() < 1e-6,
+        "child effective opacity should be 0.6 x 0.6, got {}",
+        app.get(child).unwrap().opacity
+    );
+}
+
+#[test]
+fn a_childs_opacity_does_not_affect_its_parent() {
+    let mut app = Proteus::new();
+    let child = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).opacity(0.2));
+    let parent = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).child(child));
+
+    app.tick(0.0);
+
+    assert_eq!(
+        app.get(parent).unwrap().opacity,
+        1.0,
+        "cascade is top-down only"
+    );
+}
+
+#[test]
+fn set_opacity_clamps_and_defaults_to_one() {
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    assert_eq!(app.get(handle).unwrap().opacity, 1.0, "absent means opaque");
+
+    handle.set_opacity(&mut app, 0.5).unwrap();
+    assert_eq!(app.get(handle).unwrap().opacity, 0.5);
+
+    handle.set_opacity(&mut app, 4.0).unwrap();
+    assert_eq!(app.get(handle).unwrap().opacity, 1.0);
+    handle.set_opacity(&mut app, -1.0).unwrap();
+    assert_eq!(app.get(handle).unwrap().opacity, 0.0);
+}
+
+#[test]
+fn fully_transparent_still_hit_tests_but_hidden_does_not() {
+    // Opacity is a paint multiplier; visibility is an ECS flag. They do not
+    // interact, and this is the observable consequence someone will trip
+    // over: an entity faded to nothing still swallows clicks.
+    let mut app = Proteus::new();
+    let transparent = app.component(ComponentSpec::new(quad_at(100.0, 100.0)).opacity(0.0));
+
+    let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let clicked_clone = clicked.clone();
+    transparent.on_click(&mut app, move |_app| clicked_clone.set(true));
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert!(
+        clicked.get(),
+        "opacity 0.0 must not remove the entity from hit-testing"
+    );
+
+    // Hiding it does — from the *next* tick. `hit_test_system` runs at the
+    // start of the schedule and reads the `EffectiveVisibility` the cascade
+    // wrote at the end of the previous one, so input is resolved against
+    // what was last painted. Pinned from both sides so the ordering can't
+    // change silently.
+    clicked.set(false);
+    transparent.set_visible(&mut app, false).unwrap();
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert!(
+        clicked.get(),
+        "the tick that hides it still hit-tests against the previous frame"
+    );
+
+    clicked.set(false);
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert!(!clicked.get(), "hidden from the next tick on");
+}
+
+#[test]
+fn set_opacity_on_a_destroyed_handle_is_an_error_not_a_panic() {
+    let mut app = Proteus::new();
+    let handle = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    handle.destroy(&mut app).unwrap();
+
+    assert!(matches!(
+        handle.set_opacity(&mut app, 0.5),
+        Err(HandleError::EntityNotFound)
+    ));
+}
+
+#[test]
 fn get_reflects_transition_progress_mid_flight() {
     let mut app = Proteus::new();
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));

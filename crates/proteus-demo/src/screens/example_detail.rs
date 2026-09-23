@@ -26,9 +26,7 @@
 
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_sdk::{
-    Border, ComponentSpec, DropShadow, Glow, Handle, Opacity, Proteus, QuadState, Text,
-};
+use proteus_sdk::{Border, ComponentSpec, DropShadow, Glow, Handle, Proteus, QuadState, Text};
 
 use super::examples_home::CATEGORY_TITLES;
 
@@ -414,9 +412,7 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     // panel — no bake/reparent hazard applies since neither entity is ever
     // `ChildOf` the panel itself.
     let nested_parent = effect_box(app, 64.0);
-    app.world_mut()
-        .entity_mut(nested_parent.id())
-        .insert(Opacity(0.6));
+    let _ = nested_parent.set_opacity(app, 0.6);
     let nested_child = app.component(
         ComponentSpec::new(QuadState {
             position: Vec3::ZERO,
@@ -427,11 +423,9 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
             color: ACCENT,
             corner_radius: 6.0,
         })
-        .non_interactive(),
+        .non_interactive()
+        .opacity(0.6),
     );
-    app.world_mut()
-        .entity_mut(nested_child.id())
-        .insert(Opacity(0.6));
     let _ = nested_parent.add_child(app, nested_child);
     opacity_boxes.push(nested_parent);
     opacity_item_labels.push(row_label(app, "0.6 × 0.6", 12.0));

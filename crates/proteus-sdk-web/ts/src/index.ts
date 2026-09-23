@@ -275,9 +275,29 @@ export class Handle {
    * {@link SignalHandle.set} already hides its `from` and reveals its `to`,
    * so a signal-driven morph needs no call here. This is for visibility a
    * signal doesn't own.
+   *
+   * Rendering stops on the next frame; hit-testing stops one tick after
+   * that. Input is resolved against what was last painted, so a click
+   * arriving in the same tick as the hide still lands.
    */
   setVisible(visible: boolean): void {
     this.app.wasmApp.setVisible(this.wasmHandle, visible);
+  }
+
+  /**
+   * Sets this component's alpha multiplier, clamped to `0.0`–`1.0`.
+   *
+   * Cascades down: a child's effective opacity is its own times its
+   * parent's effective, so `0.6` over `0.6` paints at `0.36`. A child never
+   * affects its parent.
+   *
+   * Unrelated to {@link Handle.setVisible} — opacity is a paint multiplier,
+   * visibility is an ECS flag. A component at `0` opacity is invisible but
+   * still hit-tests; a hidden one doesn't. Use visibility to take something
+   * out of the UI, opacity to fade it.
+   */
+  setOpacity(opacity: number): void {
+    this.app.wasmApp.setOpacity(this.wasmHandle, opacity);
   }
 
   /**

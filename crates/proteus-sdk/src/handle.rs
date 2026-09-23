@@ -17,8 +17,8 @@ use glam::Vec2;
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
     BakedComposite, BakedImage, BakedText, GroupSource, GroupTarget, Interactable, MergeLayout,
-    NToOneRequest, OneToNRequest, QuadState, SignalId, SplitStrategy, TextureRef, TransitionConfig,
-    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    NToOneRequest, OneToNRequest, Opacity, QuadState, SignalId, SplitStrategy, TextureRef,
+    TransitionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -487,8 +487,30 @@ impl Handle {
     /// a signal-driven morph needs no call here. This is for visibility a
     /// signal doesn't own — chrome that appears once past a splash screen,
     /// a panel toggled directly.
+    ///
+    /// Rendering stops on the next frame; **hit-testing stops one tick after
+    /// that**. `hit_test_system` runs at the start of the schedule and reads
+    /// the cascaded visibility written at the end of the previous one, so
+    /// input resolves against what was last painted — a click that arrives
+    /// in the same tick as the hide still lands, because the user was
+    /// looking at the component when they made it.
     pub fn set_visible(&self, app: &mut Proteus, visible: bool) -> Result<(), HandleError> {
         entity_mut(app, self.0, "set_visible")?.insert(Visibility { visible });
+        Ok(())
+    }
+
+    /// Sets this component's alpha multiplier, clamped to `0.0..=1.0`.
+    ///
+    /// Cascades down: a child's effective opacity is its own times its
+    /// parent's effective, so `0.6` over `0.6` paints at `0.36`. A child
+    /// never affects its parent.
+    ///
+    /// Unrelated to [`Handle::set_visible`] — opacity is a paint
+    /// multiplier, visibility is an ECS flag. An entity at `0.0` opacity is
+    /// invisible but still hit-tests; a hidden one doesn't. Use visibility
+    /// to take something out of the UI, opacity to fade it.
+    pub fn set_opacity(&self, app: &mut Proteus, opacity: f32) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "set_opacity")?.insert(Opacity(opacity.clamp(0.0, 1.0)));
         Ok(())
     }
 
