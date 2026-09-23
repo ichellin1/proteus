@@ -292,6 +292,14 @@ pub struct ComponentSpecDto {
     pub drop_shadow: Option<DropShadowDto>,
     #[serde(default)]
     pub non_interactive: bool,
+    /// Defaults to `true` — an omitted `visible` must mean "shown", not
+    /// `bool::default()`.
+    #[serde(default = "default_visible")]
+    pub visible: bool,
+}
+
+fn default_visible() -> bool {
+    true
 }
 
 impl ComponentSpecDto {
@@ -333,6 +341,7 @@ impl ComponentSpecDto {
         if self.non_interactive {
             spec = spec.non_interactive();
         }
+        spec = spec.visible(self.visible);
         (spec, self.children)
     }
 }

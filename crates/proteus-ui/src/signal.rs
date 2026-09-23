@@ -370,5 +370,8 @@ pub fn signal_dispatch_system(
         commands
             .entity(req.from)
             .insert(Visibility { visible: false });
+        // Reveal after the hide, so `set(x, x)` leaves `x` visible and
+        // degenerates into an `animate_to` rather than hiding it.
+        commands.entity(req.to).insert(Visibility::VISIBLE);
     }
 }

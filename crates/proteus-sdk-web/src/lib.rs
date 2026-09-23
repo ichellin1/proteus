@@ -637,6 +637,15 @@ impl ProteusApp {
             .map_err(handle_err)
     }
 
+    /// Shows or hides `handle` — see `proteus-sdk`'s `Handle::set_visible`.
+    #[wasm_bindgen(js_name = setVisible)]
+    pub fn set_visible(&mut self, handle: &Handle, visible: bool) -> Result<(), JsValue> {
+        handle
+            .0
+            .set_visible(&mut self.0.borrow_mut(), visible)
+            .map_err(handle_err)
+    }
+
     /// Shows an already-registered texture on `handle`, replacing whatever
     /// image/text/composite it previously showed (M13.8 parity audit) —
     /// `false` (no-op) if `texture` is evicted/unknown. See `proteus-sdk`'s

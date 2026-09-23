@@ -131,6 +131,15 @@ export interface ComponentSpec {
    * default unless this is set.
    */
   nonInteractive?: boolean;
+  /**
+   * Whether the component is visible when spawned. Defaults to `true`.
+   *
+   * `false` spawns it inert — skipped by render, input and navigation —
+   * until something reveals it. {@link SignalHandle.set} does that for its
+   * `to` side, so a component declared hidden here is ready to be morphed
+   * into without a separate reveal call.
+   */
+  visible?: boolean;
 }
 
 /**

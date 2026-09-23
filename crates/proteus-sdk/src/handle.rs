@@ -18,7 +18,7 @@ use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
     BakedComposite, BakedImage, BakedText, GroupSource, GroupTarget, Interactable, MergeLayout,
     NToOneRequest, OneToNRequest, QuadState, SignalId, SplitStrategy, TextureRef, TransitionConfig,
-    TransitionRequest, VideoCrossfade, VideoPlayer,
+    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -477,6 +477,18 @@ impl Handle {
         } else {
             entity.remove::<Interactable>();
         }
+        Ok(())
+    }
+
+    /// Shows or hides this component. Hidden components stay in the world
+    /// but are skipped by render, input and navigation; children cascade.
+    ///
+    /// `SignalHandle::set` already hides its `from` and reveals its `to`, so
+    /// a signal-driven morph needs no call here. This is for visibility a
+    /// signal doesn't own — chrome that appears once past a splash screen,
+    /// a panel toggled directly.
+    pub fn set_visible(&self, app: &mut Proteus, visible: bool) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "set_visible")?.insert(Visibility { visible });
         Ok(())
     }
 
