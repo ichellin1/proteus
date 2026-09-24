@@ -376,16 +376,14 @@ default; Rust is the performance path.
 
 ## M14 — Developer Release
 
-Documentation, ≥3 complete examples beyond the reference demo, pluggable interpolation interface
-public and documented, CHANGELOG and semantic versioning, contributing guide. An outside developer
-can install the SDK, follow the README, and build a working component with a transition. Also the
-final checkpoint for the macOS/Linux/Windows CI matrix and a last cross-shell parity audit. V1
-ships on the M13 platform architecture.
-
-Carries **both** benchmarks in its DoD: the native performance numbers it already owned, and the
-WASM-boundary benchmark vs. a hand-written TS/WebGL2 baseline. The latter was M1's box and was
-blocked on the TypeScript SDK until M12 shipped; it has had no owner since. See
-[BENCHMARKS.md](./BENCHMARKS.md).
+Makes Proteus ready for outside developers, and ends by publishing v0.1.0 to npm and crates.io.
+In order: a writing standard and a comment cleanup across every crate; custom easing; fixes for
+the bugs an app author could hit; documentation (Markdown guides, and API reference on GitHub
+Pages); at least three examples beyond the reference demo; a release process with a
+git-cliff-generated changelog; CI on macOS, Linux and Windows plus a native-vs-web parity check;
+native and web benchmarks (see [BENCHMARKS.md](./BENCHMARKS.md)); an `ARCHITECTURE.md` written from
+the code, with the V1 planning documents archived; and a fresh PLANNING and ROADMAP for V2. The
+step-by-step plan and each step's definition of done are in PLANNING.md § M14.
 
 ---
 
