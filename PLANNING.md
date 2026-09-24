@@ -4178,25 +4178,25 @@ are left alone on purpose: step 11 archives this file and rewrites its architect
 - [x] Every item from the previous checklist maps to a step (table at the end of this section).
 - [x] Every open audit finding is assigned to a step or to V2.
 
-#### Step 2 — Writing standard
+#### Step 2 — Writing standard *(done)*
 
 Agree what good comments and docs look like before rewriting hundreds of them, and prove it on
 one file.
 
-- [ ] `CONTRIBUTING.md` exists with a section on writing comments and docs:
+- [x] `CONTRIBUTING.md` exists with a section on writing comments and docs:
   - A doc comment says what the item does, what it returns or guarantees, and how it fails
     (`# Errors`, `# Panics`). It gives the reason only when the code can't show it.
-  - Comments never mention milestones, audit IDs, dates, PLANNING or its phases, how the code
-    used to work, or reasoning that only makes sense to someone who was in the design discussion.
+  - Comments never mention milestones, audit IDs, dates, external documents, how the code used
+    to work, or reasoning that only makes sense to someone who was in the design discussion.
   - Tests get plain `//` comments, not `///` doc comments, saying what behaviour the test locks in
     and why.
   - TypeScript exports get TSDoc; the main entry points get an `@example`.
   - A short glossary gives each concept one name (host, app, component, signal, bake, virtual…).
   - Commit types and scopes, as the changelog groups them.
-- [ ] One file, `crates/proteus-sdk/src/spec.rs`, rewritten to the standard and approved as the
+- [x] One file, `crates/proteus-sdk/src/spec.rs`, rewritten to the standard and approved as the
   model for step 3.
-- [ ] `scripts/check-comments.sh` fails on milestone references, audit IDs, dates, and
-  PLANNING/phase references in comments.
+- [x] `scripts/check-comments.sh` fails on milestone references, audit IDs, dates, references to
+  external documents, and "morph" in comments. Baseline across the tree: 548.
 
 #### Step 3 — Comment cleanup
 
@@ -4219,7 +4219,8 @@ comments; 411 `///` lines in test files; about 30 open audit findings about stal
 - [ ] K-01…K-30 closed, along with T-07 (stale test tables), T-08 and T-09 (tests that can't
   fail), and three defects found while planning: the stray copy of another method's doc on
   `Handle::set_declared_geometry`, `Handle::id` claiming `Disabled` isn't exposed, and a
-  duplicated doc block in `ts/src/types.ts`.
+  duplicated doc block in `ts/src/types.ts`, and `ProteusConfig`'s `lazy_load` doc saying it
+  isn't wired when the text and image bake reads it.
 - [ ] Only comments change; tests and clippy stay green. A bug a comment exposes is fixed in its
   own `fix:` commit.
 

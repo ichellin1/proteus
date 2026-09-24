@@ -1,4 +1,4 @@
-//! [`ComponentSpec`] — the builder [`crate::Proteus::component`] takes.
+//! [`ComponentSpec`], the builder passed to [`Proteus::component`](crate::Proteus::component).
 
 use proteus_ui::{
     Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text, TransitioningConfig,
@@ -6,11 +6,36 @@ use proteus_ui::{
 
 use crate::handle::Handle;
 
-/// Declares a component: its rest geometry, sparse per-state style overrides
-/// (Phase A: "only the properties that change for a given state need to be
-/// declared"), children, whether it should be permanently baked, and any of
-/// the visual/content components (`Text`/`Image`/`Border`/`Glow`/
-/// `DropShadow`) it should carry from the moment it's spawned.
+/// A description of a component, passed to
+/// [`Proteus::component`](crate::Proteus::component) to create it.
+///
+/// Starts from the component's declared geometry, then adds any of: styles
+/// for interaction states, children, content (text or an image), effects,
+/// and initial visibility, opacity and input settings. Interaction styles are
+/// sparse: declare only the fields that change in that state.
+///
+/// # Examples
+///
+/// ```
+/// use glam::{Vec2, Vec3, Vec4};
+/// use proteus_sdk::{ComponentSpec, Proteus, QuadState, StyleOverride};
+///
+/// let mut app = Proteus::new();
+/// let button = app.component(
+///     ComponentSpec::new(QuadState {
+///         position: Vec3::new(200.0, 120.0, 0.0),
+///         size: Vec2::new(160.0, 48.0),
+///         color: Vec4::new(0.2, 0.4, 0.9, 1.0),
+///         corner_radius: 8.0,
+///         ..QuadState::default()
+///     })
+///     .hover(StyleOverride {
+///         scale: Some(1.05),
+///         ..StyleOverride::default()
+///     }),
+/// );
+/// assert!(app.get(button).is_some());
+/// ```
 #[derive(Debug, Clone)]
 pub struct ComponentSpec {
     pub(crate) geometry: QuadState,
@@ -48,7 +73,7 @@ impl Default for ComponentSpec {
             glow: None,
             drop_shadow: None,
             non_interactive: false,
-            // Every other field's default is "absent"; this one's is "on".
+            // The only field whose default is "on" rather than "absent".
             visible: true,
             opacity: None,
             start_disabled: false,
@@ -58,10 +83,11 @@ impl Default for ComponentSpec {
 }
 
 impl ComponentSpec {
-    /// Start a new spec with `geometry` as the declared rest state — the
-    /// shape returned to whenever the component isn't hovered, pressed,
-    /// focused, or disabled, and the target `signal().set()` resolves to
-    /// automatically.
+    /// Creates a spec with `geometry` as the component's declared geometry.
+    ///
+    /// The declared geometry is what the component shows when no
+    /// interaction style applies, and where a transition into this component
+    /// lands.
     pub fn new(geometry: QuadState) -> Self {
         Self {
             geometry,
@@ -69,158 +95,153 @@ impl ComponentSpec {
         }
     }
 
-    /// Alpha multiplier for this component and everything under it,
-    /// clamped to `0.0..=1.0`. Defaults to fully opaque.
+    /// Sets the opacity of this component and everything under it, clamped
+    /// to `0.0..=1.0`. Defaults to `1.0`.
     ///
-    /// Cascades down: a child's effective opacity is its own times its
-    /// parent's effective, so `0.6` over `0.6` paints at `0.36`. A child
-    /// never affects its parent.
+    /// Opacity multiplies down the hierarchy: a child at `0.6` under a
+    /// parent at `0.6` is drawn at `0.36`.
     ///
-    /// Separate from [`ComponentSpec::visible`] and unrelated to it —
-    /// opacity is a paint multiplier, visibility is an ECS flag. An entity
-    /// at `0.0` opacity is invisible but still hit-tests; a hidden one
-    /// doesn't.
+    /// Opacity only affects drawing. A component at `0.0` is invisible but
+    /// still receives pointer input; use [`ComponentSpec::visible`] to take
+    /// it out of input as well.
     pub fn opacity(mut self, opacity: f32) -> Self {
         self.opacity = Some(opacity.clamp(0.0, 1.0));
         self
     }
 
-    /// Spawn this component already disabled: present and rendered, but
-    /// excluded from hit-testing, and wearing whatever
-    /// [`ComponentSpec::disabled`] style it declares.
+    /// Creates the component in the disabled state: drawn, but ignoring
+    /// pointer input and showing its [`ComponentSpec::disabled`] style.
     ///
-    /// Distinct from [`ComponentSpec::non_interactive`], which is about a
-    /// component that is *never* a click target — a backdrop, a label.
-    /// Disabled is a state a real control moves in and out of, and it has a
-    /// look; non-interactive is a permanent property with none.
+    /// Use this for a control that will be enabled later, with
+    /// [`Handle::set_disabled`]. For something that is never a control,
+    /// such as a background or a label, use
+    /// [`ComponentSpec::non_interactive`] instead.
     pub fn start_disabled(mut self) -> Self {
         self.start_disabled = true;
         self
     }
 
-    /// Opt in to receiving input while this component is mid-transition.
+    /// Sets whether this component accepts input while it is transitioning.
     ///
-    /// Both flags default to `false`: the framework's safe default is no
-    /// interaction during a morph. `allow_navigation` is accepted but inert
-    /// — directional/tab navigation is still a stub, so nothing reads it
-    /// yet.
+    /// Without this, a transitioning component ignores input.
+    /// `allow_navigation` is not read yet; it is reserved for keyboard
+    /// navigation.
     pub fn transitioning(mut self, config: TransitioningConfig) -> Self {
         self.transitioning = Some(config);
         self
     }
 
-    /// Whether the component is visible when spawned. Defaults to `true`.
+    /// Sets whether the component starts visible. Defaults to `true`.
     ///
-    /// `false` spawns it inert — skipped by render, input and navigation —
-    /// until something reveals it. `SignalHandle::set` does that for its
-    /// `to` side, so a component declared hidden here is ready to be morphed
-    /// into without a separate reveal call.
+    /// A hidden component is neither drawn nor hit-tested. A transition into
+    /// it through [`SignalHandle::set`](crate::SignalHandle::set) reveals it, so a component that
+    /// should first appear through a transition can start hidden.
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
-    /// Style applied while the pointer hovers this component.
+    /// Sets the style applied while the pointer is over this component.
     pub fn hover(mut self, style: StyleOverride) -> Self {
         self.hover = Some(style);
         self
     }
 
-    /// Style applied while this component is pressed.
+    /// Sets the style applied while this component is pressed.
     pub fn pressed(mut self, style: StyleOverride) -> Self {
         self.pressed = Some(style);
         self
     }
 
-    /// Style applied while this component has focus.
+    /// Sets the style applied while this component has focus.
     pub fn focused(mut self, style: StyleOverride) -> Self {
         self.focused = Some(style);
         self
     }
 
-    /// Style applied while this component is disabled — see
-    /// [`ComponentSpec::start_disabled`] and `Handle::set_disabled` for
-    /// entering that state.
+    /// Sets the style applied while this component is disabled.
+    ///
+    /// See [`ComponentSpec::start_disabled`] and [`Handle::set_disabled`].
     pub fn disabled(mut self, style: StyleOverride) -> Self {
         self.disabled = Some(style);
         self
     }
 
-    /// Declare `child` as a child of this component — its `QuadState` is
-    /// relative to this component's own, per M10's composition model.
+    /// Adds `child` as a child of this component.
+    ///
+    /// The child's geometry is relative to this component's, so it moves,
+    /// scales and fades with it.
     pub fn child(mut self, child: Handle) -> Self {
         self.children.push(child);
         self
     }
 
-    /// Collapse this component and its children into a single permanent
-    /// textured quad (M10.5). Requires `GpuContext`/`QuadPipeline` resources
-    /// to be present in the world to actually run — a no-op (retried every
-    /// frame) otherwise, matching `bake_system`'s own graceful-degradation
-    /// contract.
+    /// Bakes this component and its children into a single texture,
+    /// permanently.
+    ///
+    /// The host renders the subtree once and then destroys the children, so
+    /// their handles become stale. Suited to detailed content that never
+    /// changes. Baking happens the next time a host renders a frame.
     pub fn bake(mut self) -> Self {
         self.bake = true;
         self
     }
 
-    /// Render a single line of text on this component (M4). Rasterized and
-    /// baked into `main_atlas` by whichever bake path the host application
-    /// drives — `proteus-sdk` doesn't do this itself yet (see
-    /// `proteus_ui::text`'s module doc: baking is currently a shell
-    /// responsibility, not a scheduled system).
+    /// Draws a single line of text on this component.
+    ///
+    /// The host bakes the text the next time it renders a frame. Until then,
+    /// [`Handle::baked_text_size`] returns `None`.
     pub fn text(mut self, text: Text) -> Self {
         self.text = Some(text);
         self
     }
 
-    /// Attach a static image (M9.7), given its already-loaded bytes. Like
-    /// `.text()`, actually decoding/baking the bytes into `main_atlas` is
-    /// driven by the host application, not `proteus-sdk` itself.
+    /// Draws an image on this component, from its encoded bytes.
+    ///
+    /// The host decodes and bakes the image the next time it renders a
+    /// frame. Until then, [`Handle::baked_image_size`] returns `None`.
     pub fn image(mut self, image: Image) -> Self {
         self.image = Some(image);
         self
     }
 
-    /// Draw an SDF-based border around this component.
+    /// Draws a border around this component.
     pub fn border(mut self, border: Border) -> Self {
         self.border = Some(border);
         self
     }
 
-    /// Draw a soft radial glow behind this component. Mutually exclusive
-    /// with `.drop_shadow()` at the shader level — if both are set, the
-    /// drop shadow wins (matches `proteus_ui::effects`'s existing behavior;
-    /// this builder doesn't add its own validation on top of that).
+    /// Draws a soft glow behind this component.
+    ///
+    /// A component shows a glow or a drop shadow, not both. If both are set,
+    /// the drop shadow is drawn.
     pub fn glow(mut self, glow: Glow) -> Self {
         self.glow = Some(glow);
         self
     }
 
-    /// Draw an SDF-based drop shadow behind this component. See `.glow()`
-    /// for the mutual-exclusivity note.
+    /// Draws a drop shadow behind this component.
+    ///
+    /// Takes precedence over [`ComponentSpec::glow`] if both are set.
     pub fn drop_shadow(mut self, shadow: DropShadow) -> Self {
         self.drop_shadow = Some(shadow);
         self
     }
 
-    /// Opts this component out of `Interactable` entirely.
-    /// `Proteus::component` attaches it to everything by default (so
-    /// `.on_click`/etc. "just work" without a separate opt-in), which is
-    /// wrong for passive chrome like a full-window background: hit-testing
-    /// resolves overlapping candidates by "last hit wins, matches draw
-    /// order" (`proteus_ui::input::hit_test_system`'s own doc), so a quad
-    /// spanning the whole viewport — visited late enough in the query's
-    /// iteration order — can silently swallow clicks meant for a real
-    /// button underneath the cursor.
+    /// Makes this component ignore pointer input entirely.
+    ///
+    /// Components are interactive by default, so handlers such as
+    /// [`Handle::on_click`] work without an opt-in. A non-interactive
+    /// component is never hovered, pressed or focused. Use it for passive
+    /// elements such as backgrounds and labels.
     pub fn non_interactive(mut self) -> Self {
         self.non_interactive = true;
         self
     }
 
-    /// True if any per-state style was declared — used by `Proteus::component`
-    /// to decide whether to attach `InteractionDef` at all (avoids a
-    /// permanently-no-op mini-transition firing on every hover/press of a
-    /// component with no visual states).
+    /// Whether any interaction style was declared. A component with none
+    /// gets no interaction styling, so hovering or pressing it starts no
+    /// style transition.
     pub(crate) fn has_interaction_styles(&self) -> bool {
         self.hover.is_some()
             || self.pressed.is_some()

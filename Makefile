@@ -1,7 +1,7 @@
 # Proteus — developer convenience targets.
 # Run `make install-hooks` once after cloning to wire up the git hooks.
 
-.PHONY: install-hooks check fmt clippy test build-web serve-web build-sdk-web
+.PHONY: install-hooks check fmt clippy test check-comments build-web serve-web build-sdk-web
 
 ## Wire up the git hooks from scripts/git-hooks/ into .git/hooks/.
 install-hooks:
@@ -24,6 +24,11 @@ clippy:
 
 test:
 	cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
+
+## Check code comments against CONTRIBUTING.md. Pass paths with PATHS=...; the default is
+## every crate and example.
+check-comments:
+	scripts/check-comments.sh $(PATHS)
 
 ## Build the WebGL2 WASM demo with wasm-pack.
 ## Requires: cargo install wasm-pack
