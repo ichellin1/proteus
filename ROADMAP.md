@@ -382,7 +382,8 @@ the bugs an app author could hit; documentation (Markdown guides, and API refere
 Pages); at least three examples beyond the reference demo; a release process with a
 git-cliff-generated changelog; CI on macOS, Linux and Windows plus a native-vs-web parity check;
 native and web benchmarks (see [BENCHMARKS.md](./BENCHMARKS.md)); an `ARCHITECTURE.md` written from
-the code, with the V1 planning documents archived; and a fresh PLANNING and ROADMAP for V2. The
+the code, with the V1 planning documents archived; a fresh PLANNING and ROADMAP for V2; and
+last, a polished README with the Proteus logo. The
 step-by-step plan and each step's definition of done are in PLANNING.md § M14.
 
 ---
