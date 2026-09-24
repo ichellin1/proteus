@@ -13,7 +13,7 @@ use proteus_ui::{
     topology::{
         group_transition_complete_system, horizontal_slices, n_to_one_setup_system,
         one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout,
-        NToOneRequest, OneToNRequest, SplitStrategy, TransitionAtlasSize,
+        NToOneRequest, OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
     },
     transition::{
         linear, transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
@@ -102,7 +102,7 @@ fn horizontal_slices_total_width_equals_source() {
 }
 
 // ---------------------------------------------------------------------------
-// OneToNRequest — Bake strategy
+// OneToNRequest — PerTarget strategy
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -125,8 +125,8 @@ fn bake_1_to_n_hides_source() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
-                strategy: SplitStrategy::Bake,
+                child_configs: None,
+                strategy: SplitStrategy::PerTarget,
             },
         ))
         .id();
@@ -163,8 +163,8 @@ fn bake_1_to_n_gives_each_target_a_transition_request() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
-                strategy: SplitStrategy::Bake,
+                child_configs: None,
+                strategy: SplitStrategy::PerTarget,
             },
         ))
         .id();
@@ -202,8 +202,8 @@ fn bake_1_to_n_no_virtual_entities() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: None,
-            strategy: SplitStrategy::Bake,
+            child_configs: None,
+            strategy: SplitStrategy::PerTarget,
         },
     ));
 
@@ -218,7 +218,7 @@ fn bake_1_to_n_no_virtual_entities() {
 }
 
 #[test]
-fn bake_1_to_n_child_behavior_overrides_config() {
+fn per_target_1_to_n_child_configs_override_the_default() {
     fn stagger(idx: usize, _total: usize) -> TransitionConfig {
         TransitionConfig {
             duration: 0.1 + idx as f32 * 0.1,
@@ -243,8 +243,8 @@ fn bake_1_to_n_child_behavior_overrides_config() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: Some(stagger),
-            strategy: SplitStrategy::Bake,
+            child_configs: Some((0..3).map(|i| stagger(i, 3)).collect()),
+            strategy: SplitStrategy::PerTarget,
         },
     ));
 
@@ -287,7 +287,7 @@ fn slice_1_to_n_creates_n_virtual_entities() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -323,7 +323,7 @@ fn slice_1_to_n_hides_source_and_targets() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))
@@ -366,7 +366,7 @@ fn slice_1_to_n_source_has_active_group_transition() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))
@@ -378,8 +378,17 @@ fn slice_1_to_n_source_has_active_group_transition() {
     let coordinator = world
         .get::<ActiveGroupTransition>(source)
         .expect("source should carry ActiveGroupTransition");
-    assert_eq!(coordinator.total, n);
     assert_eq!(coordinator.reveal_on_complete.len(), n);
+
+    // The coordinator used to cache a `total` field; completion is now decided
+    // by counting the virtuals that actually carry `PartOfGroup(source)`, so
+    // that is what this pins.
+    let members = world
+        .query::<&PartOfGroup>()
+        .iter(&world)
+        .filter(|p| p.0 == source)
+        .count();
+    assert_eq!(members, n);
 }
 
 #[test]
@@ -401,7 +410,7 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -441,7 +450,7 @@ fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
             OneToNRequest {
                 targets: group_targets,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 strategy: SplitStrategy::Slice,
             },
         ))
@@ -510,7 +519,7 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
                 delay: 0.0,
                 easing: linear,
             },
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -589,7 +598,7 @@ fn n_to_one_hides_sources_and_dest() {
             NToOneRequest {
                 sources,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 layout: MergeLayout::Horizontal,
             },
         ))
@@ -635,7 +644,7 @@ fn n_to_one_creates_n_virtual_entities() {
         NToOneRequest {
             sources,
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             layout: MergeLayout::Horizontal,
         },
     ));
@@ -672,7 +681,7 @@ fn n_to_one_complete_reveals_dest() {
             NToOneRequest {
                 sources,
                 default_config: default_cfg(),
-                child_behavior: None,
+                child_configs: None,
                 layout: MergeLayout::Horizontal,
             },
         ))
@@ -749,7 +758,7 @@ fn round_trip_button_list_button() {
             delay: 0.0,
             easing: linear,
         },
-        child_behavior: None,
+        child_configs: None,
         strategy: SplitStrategy::Slice,
     });
 
@@ -816,7 +825,7 @@ fn round_trip_button_list_button() {
             delay: 0.0,
             easing: linear,
         },
-        child_behavior: None,
+        child_configs: None,
         layout: MergeLayout::Horizontal,
     });
 
@@ -869,11 +878,11 @@ fn round_trip_button_list_button() {
 }
 
 // ---------------------------------------------------------------------------
-// ChildBehaviorFn — slice strategy per-child config
+// ChildConfigs — slice strategy per-child config
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_child_behavior_sets_per_virtual_duration() {
+fn slice_child_configs_set_per_virtual_duration() {
     fn per_child(idx: usize, _total: usize) -> TransitionConfig {
         TransitionConfig {
             duration: 0.1 * (idx + 1) as f32, // 0.1, 0.2, 0.3
@@ -899,7 +908,7 @@ fn slice_child_behavior_sets_per_virtual_duration() {
         OneToNRequest {
             targets: group_targets,
             default_config: default_cfg(),
-            child_behavior: Some(per_child),
+            child_configs: Some((0..n).map(|i| per_child(i, n)).collect()),
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -928,7 +937,7 @@ fn slice_child_behavior_sets_per_virtual_duration() {
 ///
 /// With no children to animate there is nothing to coordinate, so
 /// `one_to_n_setup_system` should be a silent no-op with respect to virtual
-/// entity creation (both Bake and Slice strategies).
+/// entity creation (both PerTarget and Slice strategies).
 #[test]
 fn one_to_n_with_zero_targets_is_noop() {
     let mut world = make_world();
@@ -940,7 +949,7 @@ fn one_to_n_with_zero_targets_is_noop() {
         OneToNRequest {
             targets: vec![], // empty — no children
             default_config: default_cfg(),
-            child_behavior: None,
+            child_configs: None,
             strategy: SplitStrategy::Slice,
         },
     ));
@@ -954,15 +963,15 @@ fn one_to_n_with_zero_targets_is_noop() {
         "zero targets must produce zero virtual entities"
     );
 
-    // Bake strategy with zero targets — also must not spawn anything.
+    // PerTarget strategy with zero targets — also must not spawn anything.
     world.spawn((
         red(),
         Lifecycle::Idle,
         OneToNRequest {
             targets: vec![],
             default_config: default_cfg(),
-            child_behavior: None,
-            strategy: SplitStrategy::Bake,
+            child_configs: None,
+            strategy: SplitStrategy::PerTarget,
         },
     ));
 
@@ -973,5 +982,74 @@ fn one_to_n_with_zero_targets_is_noop() {
         count_with::<Virtual>(&mut world),
         0,
         "bake strategy with zero targets must also produce zero virtual entities"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A group transition whose coordinator disappears (audit C-07)
+// ---------------------------------------------------------------------------
+
+/// Destroying the coordinator mid-transition must not strand its virtuals.
+///
+/// `group_transition_complete_system` bails out when the coordinator is gone,
+/// because everything finalization needs (`reveal_on_complete`, the shared
+/// allocation, the `Lifecycle` to restore) lives on it. That left the virtual
+/// entities alive forever — still rendering, frozen at whatever `t` they
+/// reached — and leaked every `transition_atlas` region the group held.
+///
+/// Reachable from shipped code: `examples/gallery` calls `splitTo` and then
+/// destroys the source on a `setTimeout` sized to the transition. `setTimeout`
+/// keeps running while `requestAnimationFrame` is throttled, so backgrounding
+/// the tab in that window destroys the coordinator with the group in flight.
+#[test]
+fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() {
+    let mut world = make_world();
+
+    let n = 3;
+    let targets = spawn_targets(&mut world, n);
+    let group_targets: Vec<GroupTarget> = targets
+        .iter()
+        .map(|&e| GroupTarget {
+            entity: e,
+            state: world.get::<QuadState>(e).unwrap().clone(),
+        })
+        .collect();
+
+    let source = world
+        .spawn((
+            red(),
+            Lifecycle::Idle,
+            OneToNRequest {
+                targets: group_targets,
+                default_config: default_cfg(),
+                child_configs: None,
+                strategy: SplitStrategy::Slice,
+            },
+        ))
+        .id();
+
+    run(&mut world, one_to_n_setup_system);
+    world.flush();
+    assert_eq!(
+        count_with::<Virtual>(&mut world),
+        n,
+        "setup should have spawned one virtual per target"
+    );
+
+    // Mid-flight: advance a little, but nowhere near completion.
+    set_dt(&mut world, 0.05);
+    run(&mut world, transition_tick_system);
+
+    // The app destroys the coordinator out from under the transition.
+    world.despawn(source);
+
+    run(&mut world, group_transition_complete_system);
+    world.flush();
+
+    assert_eq!(
+        count_with::<Virtual>(&mut world),
+        0,
+        "virtuals whose coordinator is gone can never be finalized, so they must \
+         be cleaned up rather than left rendering forever"
     );
 }

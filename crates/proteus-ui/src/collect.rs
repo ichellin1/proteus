@@ -113,9 +113,7 @@ use proteus_render::{
 use crate::{
     bake::BakedComposite,
     effects::{Border, DropShadow, Glow},
-    hierarchy::{
-        compose_with_parent, resolve_world_position, EffectiveOpacity, EffectiveVisibility, Opacity,
-    },
+    hierarchy::{compose_with_parent, EffectiveOpacity, EffectiveVisibility, Opacity},
     spawn_order::SpawnOrder,
     video::{VideoCrossfade, VideoPlayer},
     ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual, Visibility,
@@ -133,7 +131,7 @@ use crate::{
 /// / `n_to_one_setup_system`): the source entity is baked once and sliced into
 /// N thirds (the `from_*` side, different per slice), and each target entity is
 /// baked once in full (the `to_*` side, one whole snapshot per slice — shape,
-/// border, *and* text). Each frame, [`push_entity_instances`] reads the
+/// border, *and* text). Each frame, `push_entity_instances` reads the
 /// entity's own [`ActiveTransition`] to compute `crossfade_t`, so the slice
 /// crossfades texel-for-texel from the source's cropped appearance to the
 /// target's real appearance — not just geometry, and not a flat-color
@@ -264,10 +262,9 @@ pub fn quad_state_to_instance(
 // ---------------------------------------------------------------------------
 
 /// Append one entity's instance(s) — background, plus a text overlay if it
-/// has baked glyph data — to `out`. Shared by [`collect_instances`] (which
-/// already has `qs` from its batched query) and [`collect_entity_instances`]
-/// (a single-entity convenience wrapper for callers outside the per-frame
-/// render loop, e.g. baking a source entity's appearance for a transition).
+/// has baked glyph data — to `out`. Called by [`collect_instances`], which
+/// already has `qs` from its batched query, and by `collect_subtree` for
+/// descendants.
 fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec<QuadInstance>) {
     // Cascaded opacity (M10). Prefers the cascaded `EffectiveOpacity` (written
     // by `opacity_system` when the full schedule runs); falls back to the
@@ -548,23 +545,4 @@ fn collect_subtree(
             out,
         );
     }
-}
-
-/// Build the [`QuadInstance`]s for a single entity **and its descendants**,
-/// ignoring [`Visibility`] throughout the whole subtree.
-///
-/// A convenience wrapper around the same per-entity logic [`collect_instances`]
-/// uses, for callers that need one entity's (composite) instances outside the
-/// normal per-frame render loop — e.g. baking a source entity's rendered
-/// appearance into a texture before a Slice group transition (see
-/// `QuadPipeline::bake_instances_to_main_atlas`). Returns an empty vec if the
-/// entity has no [`QuadState`].
-pub fn collect_entity_instances(world: &World, entity: Entity) -> Vec<QuadInstance> {
-    let mut out = Vec::new();
-    if let Some(qs) = world.get::<QuadState>(entity) {
-        let local_qs = qs.clone();
-        let world_qs = resolve_world_position(world, entity, &local_qs);
-        collect_subtree(world, entity, &world_qs, None, None, true, &mut out);
-    }
-    out
 }

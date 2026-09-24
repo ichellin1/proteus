@@ -134,19 +134,6 @@ impl ActiveTransition {
 // TransitionComplete event
 // ---------------------------------------------------------------------------
 
-/// Written by `transition_complete_system` when a transition reaches `t = 1.0`.
-///
-/// The shell drains `CompletedTransitions` once per frame (after `world.update()`)
-/// to react to finished transitions — e.g. to chain the next transition or
-/// update application state.
-///
-/// A plain struct rather than a bevy_ecs `Event` so there is no dependency on
-/// the event subsystem, which changed significantly between bevy_ecs releases.
-#[derive(Debug, Clone)]
-pub struct TransitionComplete {
-    pub entity: Entity,
-}
-
 /// Single-frame message bag: entities whose transitions completed this frame.
 ///
 /// `transition_complete_system` clears this at the start of each frame and then
@@ -154,6 +141,11 @@ pub struct TransitionComplete {
 /// downstream system) reads and drains the list after calling `world.update()`.
 #[derive(Resource, Default)]
 pub struct CompletedTransitions {
+    /// Entities whose transition finished this frame. 1→1 completions come
+    /// from [`transition_complete_system`]; group completions
+    /// (1→N, N→1) come from `topology::group_transition_complete_system` and
+    /// name the *coordinator* — the source for 1→N, the destination for N→1
+    /// — never the virtual entities, which are machinery.
     pub entities: Vec<Entity>,
 }
 
@@ -192,7 +184,33 @@ pub struct FrameTime {
 /// Converts `TransitionRequest` components into `ActiveTransition` components.
 ///
 /// Reads the current `QuadState` as the from-state (snapshot), inserts
-/// `ActiveTransition`, sets `Lifecycle::Transitioning`, and removes the request.
+/// `ActiveTransition`, **moves the entity to the from-state**, sets
+/// `Lifecycle::Transitioning`, and removes the request.
+///
+/// ## Why the from-state is applied here and not left to the first tick
+///
+/// A declared `from_state` means "this morph visually originates somewhere
+/// other than where the entity currently sits" — how a signal-driven 1→1 makes
+/// the destination appear to come from the source, and how
+/// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) fans N targets out of one
+/// source. Nothing used to write it to the entity; the entity only arrived at
+/// `from` as a side effect of `transition_tick_system`'s first *lerping* tick
+/// computing `lerp(from, to, ~0)`. Two consequences, both fixed by applying it
+/// at setup:
+///
+/// - **During a `delay`,** the tick system deliberately doesn't lerp at all, so
+///   the entity stayed at its pre-transition position for the whole delay and
+///   then jumped to `from`. For a staggered `PerTarget` split that inverts the
+///   intended effect: every target sits visible at its *final* position for the
+///   length of its stagger, then snaps back to the source to animate out.
+/// - **Even at zero delay,** `ActiveTransition` is inserted through `Commands`,
+///   so the tick system doesn't observe it until the next frame — leaving
+///   exactly one rendered frame at the stale position. Where the destination
+///   entity rests at its final geometry, that frame is a flash of the end state
+///   before the animation starts.
+///
+/// With `from_state: None` the origin *is* the current state, so this write is a
+/// no-op — which is every transition the reference demo creates.
 pub fn transition_setup_system(
     mut commands: Commands,
     // `&Lifecycle` is intentionally excluded: any entity with a TransitionRequest
@@ -200,18 +218,18 @@ pub fn transition_setup_system(
     query: Query<(Entity, &TransitionRequest, &QuadState)>,
 ) {
     for (entity, request, current_state) in query.iter() {
-        // `from_state` may override the entity's current position — this is how
-        // signal-driven transitions make a destination appear to originate from
-        // the source entity's geometry (used in 1→N bake strategy and 1→1 signals).
+        // `from_state` may override the entity's current position — see the
+        // doc above for why it's also written back to `QuadState` here.
         let from = request.from_state.as_ref().unwrap_or(current_state).clone();
         let active = ActiveTransition::new(
-            from,
+            from.clone(),
             request.to.clone(),
             request.config, // Copy — no .clone() needed
         );
         commands
             .entity(entity)
             .insert(active)
+            .insert(from)
             .insert(Lifecycle::Transitioning)
             .remove::<TransitionRequest>();
     }

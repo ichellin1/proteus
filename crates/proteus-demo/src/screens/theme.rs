@@ -11,8 +11,8 @@
 //! and its `sun_dark` overlay child loads the light-themed art (a solid
 //! disc); `Demo::advance_theme` crosses its alpha `1.0 - theme_progress`
 //! instead of the usual straight `theme_progress`. `moon` needs no such
-//! inversion. Mirrors `proteus-shell-native`'s own `SUN_ICON_PATH`/
-//! `SUN_ICON_DARK_PATH` doc for why.
+//! inversion: only the sun icon has a light-themed variant that has to fade
+//! *out* as the dark theme comes in.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -77,7 +77,7 @@ fn spawn_overlay(app: &mut Proteus, parent: Handle) -> Handle {
         // Display-only — the base icon is the click/hover target.
         .non_interactive(),
     );
-    parent.add_child(app, overlay);
+    let _ = parent.add_child(app, overlay);
     overlay
 }
 

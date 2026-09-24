@@ -16,12 +16,15 @@ import {
 } from "../pkg/proteus_sdk_web.js";
 
 import type {
+  ChildBehavior,
   ComponentData,
   ComponentSpec,
   Geometry,
   MergeLayout,
   SplitStrategy,
+  TextureRequest,
   TextureState,
+  TransitioningConfig,
   TransitionConfig,
   TransitionDropped,
   Vec2,
@@ -39,6 +42,25 @@ type DroppedCallback = (dropped: TransitionDropped) => void;
 // Handle
 // ---------------------------------------------------------------------------
 
+/**
+ * A handle to one component.
+ *
+ * ## Using a handle after its component is destroyed
+ *
+ * Every mutating method below **throws** if this handle's component is no
+ * longer alive — destroyed directly, despawned as a descendant of a destroyed
+ * parent, or reconstructed via {@link ProteusApp.handleFromId} from a stale
+ * id. Read-only accessors don't throw: {@link Handle.get} returns `undefined`,
+ * and {@link Handle.bakedTextSize}/{@link Handle.bakedImageSize} do too.
+ *
+ * These used to *panic* the wasm module instead, which freezes the canvas with
+ * no recovery short of a page reload. A throw is catchable and tells you which
+ * call went wrong; the Rust side logs a warning alongside it.
+ *
+ * A method returning `boolean` uses it for "there was nothing to do" — an image
+ * that hasn't finished baking, a texture that's been evicted — which is a
+ * routine state, not an error, and never throws.
+ */
 export class Handle {
   /**
    * Prefer {@link ProteusApp.component} or {@link ProteusApp.handleFromId}
@@ -60,6 +82,31 @@ export class Handle {
 
   onClick(cb: PlainCallback): void {
     this.app.wasmApp.onClick(this.wasmHandle, cb);
+  }
+
+  /**
+   * Fires each time a transition targeting this component finishes.
+   *
+   * Which component that is, per topology:
+   *
+   * - {@link Handle.animateTo} — this component.
+   * - {@link SignalHandle.set} — the `to` side.
+   * - {@link Handle.splitTo} with `"slice"` or `"gridSlice"` — the
+   *   **source**, once, when every target has arrived. One group is one
+   *   completion, not one per target.
+   * - {@link Handle.mergeFrom} — the **destination**, once, when every
+   *   source has arrived.
+   * - {@link Handle.splitTo} with `"bake"` — the **targets**, each
+   *   independently. *Not* the source: `bake` is N independent 1-to-1
+   *   transitions with no virtual entities, so the source has nothing of
+   *   its own to finish. Listen on the targets, or use `"slice"` if you
+   *   want one completion for the group.
+   *
+   * Persistent — it keeps firing for later transitions until the component
+   * is destroyed. Replaces guessing with `setTimeout(duration)`.
+   */
+  onTransitionComplete(cb: PlainCallback): void {
+    this.app.wasmApp.onTransitionComplete(this.wasmHandle, cb);
   }
 
   onHoverEnter(cb: PlainCallback): void {
@@ -111,13 +158,20 @@ export class Handle {
     targets: Handle[],
     config: TransitionConfig,
     strategy: SplitStrategy,
+    childBehavior?: ChildBehavior,
   ): void {
-    this.app.wasmApp.splitTo(
-      this.wasmHandle,
-      new Float64Array(targets.map((t) => t.id())),
-      config,
-      strategy,
-    );
+    const ids = new Float64Array(targets.map((t) => t.id()));
+    if (childBehavior) {
+      this.app.wasmApp.splitToWithBehavior(
+        this.wasmHandle,
+        ids,
+        config,
+        strategy,
+        childBehavior,
+      );
+    } else {
+      this.app.wasmApp.splitTo(this.wasmHandle, ids, config, strategy);
+    }
   }
 
   /**
@@ -129,15 +183,29 @@ export class Handle {
     sources: Handle[],
     config: TransitionConfig,
     layout: MergeLayout,
+    childBehavior?: ChildBehavior,
   ): void {
-    this.app.wasmApp.mergeFrom(
-      this.wasmHandle,
-      new Float64Array(sources.map((s) => s.id())),
-      config,
-      layout,
-    );
+    const ids = new Float64Array(sources.map((s) => s.id()));
+    if (childBehavior) {
+      this.app.wasmApp.mergeFromWithBehavior(
+        this.wasmHandle,
+        ids,
+        config,
+        layout,
+        childBehavior,
+      );
+    } else {
+      this.app.wasmApp.mergeFrom(this.wasmHandle, ids, config, layout);
+    }
   }
 
+  /**
+   * Destroys this component and (via `bevy_ecs`'s `ChildOf`/`Children`
+   * relationship) every descendant.
+   *
+   * @throws if this handle's component was already destroyed. Harmless to
+   * ignore, but reported so a double-destroy doesn't pass for a successful one.
+   */
   destroy(): void {
     this.app.wasmApp.destroy(this.wasmHandle);
   }
@@ -240,6 +308,62 @@ export class Handle {
    */
   setInteractive(interactive: boolean): void {
     this.app.wasmApp.setInteractive(this.wasmHandle, interactive);
+  }
+
+  /**
+   * Shows or hides this component. Hidden components stay in the world but
+   * are skipped by render, input and navigation; children cascade.
+   *
+   * {@link SignalHandle.set} already hides its `from` and reveals its `to`,
+   * so a signal-driven morph needs no call here. This is for visibility a
+   * signal doesn't own.
+   *
+   * Rendering stops on the next frame; hit-testing stops one tick after
+   * that. Input is resolved against what was last painted, so a click
+   * arriving in the same tick as the hide still lands.
+   */
+  setVisible(visible: boolean): void {
+    this.app.wasmApp.setVisible(this.wasmHandle, visible);
+  }
+
+  /**
+   * Sets this component's alpha multiplier, clamped to `0.0`–`1.0`.
+   *
+   * Cascades down: a child's effective opacity is its own times its
+   * parent's effective, so `0.6` over `0.6` paints at `0.36`. A child never
+   * affects its parent.
+   *
+   * Unrelated to {@link Handle.setVisible} — opacity is a paint multiplier,
+   * visibility is an ECS flag. A component at `0` opacity is invisible but
+   * still hit-tests; a hidden one doesn't. Use visibility to take something
+   * out of the UI, opacity to fade it.
+   */
+  setOpacity(opacity: number): void {
+    this.app.wasmApp.setOpacity(this.wasmHandle, opacity);
+  }
+
+  /**
+   * Disables or re-enables this component.
+   *
+   * A disabled component still renders and still cascades to its children;
+   * it is excluded from hit-testing entirely — no hover/press/click/focus —
+   * and wears whatever {@link ComponentSpec.disabled} style it declared, so
+   * it can look dimmed rather than merely stop responding.
+   *
+   * Not the same as {@link Handle.setInteractive}, which removes the
+   * component as a click target permanently and has no associated look.
+   */
+  setDisabled(disabled: boolean): void {
+    this.app.wasmApp.setDisabled(this.wasmHandle, disabled);
+  }
+
+  /**
+   * Sets whether this component receives input while mid-transition. Pass
+   * `undefined` to remove the opt-in, restoring the default of no
+   * interaction during a morph.
+   */
+  setTransitioningConfig(config: TransitioningConfig | undefined): void {
+    this.app.wasmApp.setTransitioningConfig(this.wasmHandle, config ?? null);
   }
 
   /**
@@ -354,6 +478,10 @@ export class ProteusApp {
   /**
    * Reconstruct a {@link Handle} from an id obtained from
    * {@link Handle.id} or a {@link ComponentData.children} entry.
+   *
+   * The id isn't checked against the live world here — if it names a component
+   * that has since been destroyed, the returned handle behaves like any other
+   * stale one: mutating methods throw, {@link Handle.get} returns `undefined`.
    */
   handleFromId(id: number): Handle {
     return new Handle(this, WasmHandle.fromId(id));
@@ -368,6 +496,50 @@ export class ProteusApp {
 
   texture(id: number): TextureHandle {
     return new TextureHandle(this, this.wasmApp.texture(id));
+  }
+
+  /**
+   * Decode an encoded image (PNG, JPEG, …) and pack it into the atlas,
+   * returning a handle you can hand to {@link Handle.setTexture}.
+   *
+   * Synchronous — the pixels are on the GPU when this returns, so there is
+   * no "ready" event to wait for. You supply the bytes, so fetching stays
+   * yours:
+   *
+   * ```ts
+   * const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+   * const tex = app.loadTexture(bytes, { maxSide: 512 });
+   * if (tex) tile.setTexture(tex);
+   * ```
+   *
+   * `undefined` if the bytes could not be decoded. A decoded image that
+   * doesn't fit the atlas returns a handle that resolves to no texture — a
+   * capacity condition rather than bad input — so the component renders as
+   * nothing instead of throwing.
+   */
+  loadTexture(
+    bytes: Uint8Array,
+    request?: TextureRequest,
+  ): TextureHandle | undefined {
+    const wasm = this.wasmApp.loadTexture(bytes, request ?? null);
+    return wasm ? new TextureHandle(this, wasm) : undefined;
+  }
+
+  /**
+   * Pack already-decoded RGBA pixels into the atlas — the raw-pixel
+   * counterpart of {@link ProteusApp.loadTexture}, for procedurally
+   * generated content. `rgba.length` must be `width * height * 4`.
+   */
+  bakeTexture(
+    width: number,
+    height: number,
+    rgba: Uint8Array,
+    request?: TextureRequest,
+  ): TextureHandle {
+    return new TextureHandle(
+      this,
+      this.wasmApp.bakeTexture(width, height, rgba, request ?? null),
+    );
   }
 
   /** Reconstruct a {@link TextureHandle} from an id obtained from {@link TextureHandle.id}. */

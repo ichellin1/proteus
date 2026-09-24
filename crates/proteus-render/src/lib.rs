@@ -1,6 +1,6 @@
 //! `proteus-render` — Layer 1: scene graph and instanced GPU render pipeline.
 //!
-//! Builds on [`proteus_gpu`] to provide:
+//! Provides:
 //! - The instanced quad pipeline — one buffer upload, one draw call per frame
 //! - The WGSL shader set (SDF corner radius, borders, texture crossfade)
 //! - The texture registry (reference counting, LRU eviction)
@@ -22,10 +22,8 @@
 
 pub mod font_atlas;
 pub mod main_atlas_allocator;
-pub mod material;
 pub mod mesh;
 pub mod pipeline;
-pub mod scene;
 pub mod static_texture;
 pub mod texture_registry;
 pub mod transition_atlas;
@@ -38,9 +36,9 @@ pub use mesh::{
     QUAD_INDICES, QUAD_VERTICES,
 };
 pub use pipeline::{
-    validate_atlas_config, validate_render_config, GpuContext, QuadPipeline, VideoFrameSender,
-    DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH, MAIN_ATLAS_PAGE_COUNT, MAIN_ATLAS_SIZE,
-    TRANSITION_ATLAS_SIZE,
+    validate_atlas_config, validate_render_config, GpuContext, QuadPipeline,
+    DEFAULT_MAIN_ATLAS_PAGE_COUNT, DEFAULT_MAIN_ATLAS_SIZE, DEFAULT_TRANSITION_ATLAS_SIZE,
+    DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
 };
 pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
 pub use texture_registry::{

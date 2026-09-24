@@ -49,7 +49,7 @@ impl TransitionRegion {
 /// transparent).
 pub(crate) const TRANSITION_BAKE_PAD: u32 = 2;
 
-/// Wraps `etagere::AtlasAllocator`, sized to [`crate::TRANSITION_ATLAS_SIZE`].
+/// Wraps `etagere::AtlasAllocator`, sized to [`crate::DEFAULT_TRANSITION_ATLAS_SIZE`].
 pub struct TransitionAtlasAllocator {
     inner: etagere::AtlasAllocator,
 }
@@ -62,7 +62,7 @@ impl TransitionAtlasAllocator {
     }
 
     /// Allocate a `width × height` region, reserving an extra
-    /// [`TRANSITION_BAKE_PAD`]-pixel transparent gutter on every side (not
+    /// `TRANSITION_BAKE_PAD`-pixel transparent gutter on every side (not
     /// reflected in the returned [`TransitionRegion`] — callers still bake
     /// and UV-address exactly the `width × height` they asked for; the
     /// gutter is an implementation detail shared only with

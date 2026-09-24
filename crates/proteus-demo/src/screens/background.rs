@@ -1,7 +1,7 @@
 //! The full-window background image — persistent across every screen, not
 //! specific to any one of them. Spawned once by `Demo::new()`; never hidden
-//! or touched by state transitions (matches
-//! `proteus-shell-native`'s own `background`/`background_dark` pair).
+//! or touched by state transitions — the light/dark pair is the only thing
+//! that ever changes about it.
 //!
 //! `dark` crossfades in over `light` as `Demo`'s `theme_progress` ramps
 //! toward 1 (`Demo::advance_theme`) — unconditionally, every frame,
@@ -43,6 +43,6 @@ pub fn spawn(app: &mut Proteus, size: Vec2) -> Background {
     let light = app.component(ComponentSpec::new(quad(Vec4::ONE)).non_interactive());
     let dark =
         app.component(ComponentSpec::new(quad(Vec4::new(1.0, 1.0, 1.0, 0.0))).non_interactive());
-    light.add_child(app, dark);
+    let _ = light.add_child(app, dark);
     Background { light, dark }
 }

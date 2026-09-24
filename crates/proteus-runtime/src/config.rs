@@ -128,7 +128,7 @@ pub struct MemoryConfig {
     /// `main_atlas` sizing (page size in pixels, page count).
     pub main_atlas: AtlasConfig,
     /// `transition_atlas` sizing, pixels (square) — was the hardcoded
-    /// `TRANSITION_ATLAS_SIZE` constant before M13.5.
+    /// `DEFAULT_TRANSITION_ATLAS_SIZE` constant before M13.5.
     pub transition_atlas_size: u32,
     /// Instance-buffer capacity — was a bare `QuadPipeline::new` argument
     /// with no upper-bound check before M13.5. Exceeding it silently clamps
@@ -141,7 +141,7 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             main_atlas: AtlasConfig::default(),
-            transition_atlas_size: proteus_render::TRANSITION_ATLAS_SIZE,
+            transition_atlas_size: proteus_render::DEFAULT_TRANSITION_ATLAS_SIZE,
             max_instances: 4096,
             video: VideoConfig::default(),
         }
@@ -155,15 +155,19 @@ impl Default for MemoryConfig {
 /// manifest's metadata) at the moment a video actually starts playing — the
 /// video atlas itself is a free 1×1 placeholder until then, so there is no
 /// eager allocation for these fields to gate yet. Real wiring (and
-/// `enabled: false` skipping video support entirely) is M13.4 territory,
-/// once video becomes a host service.
+/// `enabled: false` skipping video support entirely) still wants a pass;
+/// M13.4 moved video behind the `VideoStream` host service but left these
+/// fields inert. The shape is stable either way — per M13.5, wiring an
+/// inert field up later is not a breaking change.
 #[derive(Debug, Clone, Copy)]
 pub struct VideoConfig {
     pub default_size: (u32, u32),
     pub enabled: bool,
-    /// The BYOV frame channel's bound (today a hardcoded `sync_channel(2)`
-    /// in `QuadPipeline::init_video`) — how many decoded frames of
-    /// lookahead the decoder thread gets before it blocks.
+    /// How many decoded frames of lookahead a host's decoder should buffer
+    /// before it blocks. Inert: `proteus-render` no longer owns a frame
+    /// channel at all (M13.4 replaced it with the `VideoStream` seam), so
+    /// this is advisory for whoever implements one — the native host's
+    /// `Mp4Stream` hardcodes the equivalent bound today.
     pub channel_depth: usize,
 }
 

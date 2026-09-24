@@ -1,6 +1,8 @@
 //! [`ComponentSpec`] — the builder [`crate::Proteus::component`] takes.
 
-use proteus_ui::{Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text};
+use proteus_ui::{
+    Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text, TransitioningConfig,
+};
 
 use crate::handle::Handle;
 
@@ -9,7 +11,7 @@ use crate::handle::Handle;
 /// declared"), children, whether it should be permanently baked, and any of
 /// the visual/content components (`Text`/`Image`/`Border`/`Glow`/
 /// `DropShadow`) it should carry from the moment it's spawned.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ComponentSpec {
     pub(crate) geometry: QuadState,
     pub(crate) hover: Option<StyleOverride>,
@@ -24,6 +26,35 @@ pub struct ComponentSpec {
     pub(crate) glow: Option<Glow>,
     pub(crate) drop_shadow: Option<DropShadow>,
     pub(crate) non_interactive: bool,
+    pub(crate) visible: bool,
+    pub(crate) opacity: Option<f32>,
+    pub(crate) start_disabled: bool,
+    pub(crate) transitioning: Option<TransitioningConfig>,
+}
+
+impl Default for ComponentSpec {
+    fn default() -> Self {
+        Self {
+            geometry: QuadState::default(),
+            hover: None,
+            pressed: None,
+            focused: None,
+            disabled: None,
+            children: Vec::new(),
+            bake: false,
+            text: None,
+            image: None,
+            border: None,
+            glow: None,
+            drop_shadow: None,
+            non_interactive: false,
+            // Every other field's default is "absent"; this one's is "on".
+            visible: true,
+            opacity: None,
+            start_disabled: false,
+            transitioning: None,
+        }
+    }
 }
 
 impl ComponentSpec {
@@ -36,6 +67,57 @@ impl ComponentSpec {
             geometry,
             ..Default::default()
         }
+    }
+
+    /// Alpha multiplier for this component and everything under it,
+    /// clamped to `0.0..=1.0`. Defaults to fully opaque.
+    ///
+    /// Cascades down: a child's effective opacity is its own times its
+    /// parent's effective, so `0.6` over `0.6` paints at `0.36`. A child
+    /// never affects its parent.
+    ///
+    /// Separate from [`ComponentSpec::visible`] and unrelated to it —
+    /// opacity is a paint multiplier, visibility is an ECS flag. An entity
+    /// at `0.0` opacity is invisible but still hit-tests; a hidden one
+    /// doesn't.
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = Some(opacity.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Spawn this component already disabled: present and rendered, but
+    /// excluded from hit-testing, and wearing whatever
+    /// [`ComponentSpec::disabled`] style it declares.
+    ///
+    /// Distinct from [`ComponentSpec::non_interactive`], which is about a
+    /// component that is *never* a click target — a backdrop, a label.
+    /// Disabled is a state a real control moves in and out of, and it has a
+    /// look; non-interactive is a permanent property with none.
+    pub fn start_disabled(mut self) -> Self {
+        self.start_disabled = true;
+        self
+    }
+
+    /// Opt in to receiving input while this component is mid-transition.
+    ///
+    /// Both flags default to `false`: the framework's safe default is no
+    /// interaction during a morph. `allow_navigation` is accepted but inert
+    /// — directional/tab navigation is still a stub, so nothing reads it
+    /// yet.
+    pub fn transitioning(mut self, config: TransitioningConfig) -> Self {
+        self.transitioning = Some(config);
+        self
+    }
+
+    /// Whether the component is visible when spawned. Defaults to `true`.
+    ///
+    /// `false` spawns it inert — skipped by render, input and navigation —
+    /// until something reveals it. `SignalHandle::set` does that for its
+    /// `to` side, so a component declared hidden here is ready to be morphed
+    /// into without a separate reveal call.
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
     }
 
     /// Style applied while the pointer hovers this component.
@@ -56,10 +138,9 @@ impl ComponentSpec {
         self
     }
 
-    /// Style applied while this component is disabled
-    /// (`Handle`s don't carry a `disable()` toggle yet — attach
-    /// `proteus_ui::component::Disabled` directly via `Proteus::world_mut()`
-    /// until a `Handle`-level convenience lands).
+    /// Style applied while this component is disabled — see
+    /// [`ComponentSpec::start_disabled`] and `Handle::set_disabled` for
+    /// entering that state.
     pub fn disabled(mut self, style: StyleOverride) -> Self {
         self.disabled = Some(style);
         self

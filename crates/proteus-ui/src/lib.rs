@@ -11,7 +11,6 @@
 //! - [`component::Lifecycle`] — two-state machine: `Idle` / `Transitioning`
 //! - [`transition::ActiveTransition`] — per-entity transition state managed by the ECS systems
 //! - [`transition::TransitionConfig`] — duration, delay, easing declared at the call site
-//! - [`transition::TransitionComplete`] — record of one completed transition
 //! - [`transition::CompletedTransitions`] — resource; drain after `world.update()` to react
 //! - [`schedule::ProteusWorld`] — the ECS world + schedule; call `update(dt)` once per frame
 
@@ -36,9 +35,7 @@ pub mod video;
 pub use bake::{bake_system, Baked, BakedComposite};
 pub use bevy_ecs::hierarchy::{ChildOf, Children};
 pub use bevy_ecs::prelude::Entity;
-pub use collect::{
-    collect_entity_instances, collect_instances, quad_state_to_instance, BakedTexture,
-};
+pub use collect::{collect_instances, quad_state_to_instance, BakedTexture};
 pub use component::{
     Disabled, Lifecycle, QuadState, TransitionRequest, TransitioningConfig, Virtual, Visibility,
 };
@@ -64,11 +61,11 @@ pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};
 pub use texture_ref::TextureRef;
 pub use topology::{
-    ActiveGroupTransition, ChildBehaviorFn, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
+    ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
     OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
 };
 pub use transition::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,
-    CompletedTransitions, EasingFn, FrameTime, TransitionComplete, TransitionConfig,
+    CompletedTransitions, EasingFn, FrameTime, TransitionConfig,
 };
 pub use video::{VideoCrossfade, VideoPlayer};

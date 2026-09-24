@@ -1,8 +1,5 @@
 //! [`run`] — the Rust → web front door.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use proteus_runtime::wgpu;
 use proteus_runtime::{App, Engine, HostServices, ProteusConfig, Viewport};
 use wasm_bindgen::{JsCast, JsValue};
@@ -16,22 +13,16 @@ use crate::{FrameDriver, WebLoop};
 /// `App::setup` runs synchronously inside `Engine::new`, so any asset it
 /// needs must already be in hand).
 ///
-/// Returns the running [`WebLoop`] handle once the canvas/GPU/`Engine` are
-/// set up and the first `requestAnimationFrame` is queued — like native's
-/// `run`, this does not block; the browser's own event loop drives every
-/// frame after this returns. Most callers can drop the handle (the loop
-/// keeps running via its own internal clones — see [`WebLoop::start`]);
-/// it's returned so a concrete, `A`/`S`-specific host shell can poll
-/// [`WebLoop::driver_mut`]/[`RustDriver::app_mut`] for whatever isn't part
-/// of the generic `App` contract yet (see `proteus-shell-web`'s crate doc
-/// for its M13.4-debt video/gallery/texture-churn shim, the reason this
-/// exists).
+/// Returns once the canvas/GPU/`Engine` are set up and the first
+/// `requestAnimationFrame` is queued — like native's `run`, this does not
+/// block; the browser's own event loop drives every frame after it returns,
+/// and there is nothing left for the caller to hold.
 pub async fn run<A: App + 'static, S: HostServices + 'static>(
     mut app: A,
     canvas_id: &str,
     config: ProteusConfig,
     mut services: S,
-) -> Result<Rc<RefCell<WebLoop<RustDriver<A, S>>>>, JsValue> {
+) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
 
     let canvas = web_sys::window()
@@ -49,8 +40,8 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
     let surface_format = surface.surface_format();
 
     let engine = Engine::new(
-        &surface.device,
-        &surface.queue,
+        surface.device(),
+        surface.queue(),
         surface_format,
         viewport,
         config,
@@ -63,42 +54,14 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
         app,
         services,
     };
-    Ok(WebLoop::new(canvas, surface, driver).start())
+    WebLoop::new(canvas, surface, driver).start();
+    Ok(())
 }
 
-pub struct RustDriver<A: App, S: HostServices> {
+pub(crate) struct RustDriver<A: App, S: HostServices> {
     engine: Engine,
     app: A,
     services: S,
-}
-
-impl<A: App, S: HostServices> RustDriver<A, S> {
-    /// The running [`Engine`] — for a shim that needs `Proteus`/GPU-pipeline
-    /// access the generic `App`/`Frame` contract doesn't expose (e.g. video
-    /// texture registration, texture churn).
-    pub fn engine_mut(&mut self) -> &mut Engine {
-        &mut self.engine
-    }
-
-    /// The concrete app — for a shim that needs `A`-specific methods
-    /// (`Frame`'s contract stays generic, but a shim polling `Demo::
-    /// take_pending_*` needs the real type, not `&mut dyn App`).
-    pub fn app_mut(&mut self) -> &mut A {
-        &mut self.app
-    }
-
-    /// [`Self::engine_mut`] and [`Self::app_mut`] together, as two
-    /// independent borrows — needed whenever a shim must call into both in
-    /// the same expression (e.g. handing `Engine::proteus_mut()`'s `Proteus`
-    /// to a `Demo` method reached through `app_mut().demo_mut()`), which
-    /// two separate `&mut self` accessor calls can't do: the borrow checker
-    /// can't see across this crate's boundary that the two calls touch
-    /// disjoint fields, so it refuses to let both borrows live at once.
-    /// Splitting inside one `&mut self` method (which *can* see the two
-    /// fields are disjoint) launders that for the caller.
-    pub fn split_mut(&mut self) -> (&mut Engine, &mut A) {
-        (&mut self.engine, &mut self.app)
-    }
 }
 
 impl<A: App, S: HostServices> FrameDriver for RustDriver<A, S> {

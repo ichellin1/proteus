@@ -6,8 +6,9 @@ use std::sync::Arc;
 use proteus_render::{GpuContext, QuadPipeline, TextureId};
 use proteus_sdk::{Proteus, TextureHandle};
 
-use crate::services::{FetchId, FetchResult, HostServices, TextureRequest, VideoStream};
+use crate::services::{FetchId, FetchResult, HostServices, VideoStream};
 use crate::viewport::Viewport;
+use proteus_sdk::TextureRequest;
 
 /// The per-call context handed to [`App::setup`] and [`App::update`].
 ///
@@ -37,7 +38,7 @@ impl Frame<'_> {
     /// component per use won't do. A missing or undecodable asset yields a
     /// null handle that renders as nothing.
     pub fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle {
-        crate::bake::load_texture(self.proteus.world_mut(), self.services, key, req)
+        crate::bake::load_texture(self.proteus, self.services, key, req)
     }
 
     /// Bake already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
@@ -53,7 +54,7 @@ impl Frame<'_> {
         rgba: Vec<u8>,
         req: TextureRequest,
     ) -> TextureHandle {
-        crate::bake::bake_texture(self.proteus.world_mut(), width, height, rgba, req)
+        crate::bake::bake_texture(self.proteus, width, height, rgba, req)
     }
 
     /// Start an async fetch (see [`HostServices::fetch_async`]). Thin
@@ -91,9 +92,8 @@ impl Frame<'_> {
 
     /// Poll `playing` for a new frame and upload it if one landed. Returns
     /// `true` iff a frame was actually uploaded this call — e.g. to drive a
-    /// loading indicator until the first real frame shows, mirroring what
-    /// `QuadPipeline::consume_video_frame`'s own return value used to signal
-    /// before this seam existed. Call once per frame while `playing` is live.
+    /// loading indicator until the first real frame shows. Call once per
+    /// frame while `playing` is live.
     pub fn poll_video(&mut self, playing: &mut PlayingVideo) -> bool {
         let Some(frame) = playing.stream.poll_frame() else {
             return false;
@@ -105,14 +105,10 @@ impl Frame<'_> {
         };
         let mut pipeline = world.resource_mut::<QuadPipeline>();
         if playing.texture_id.is_none() {
-            let (texture_id, _sender) =
-                pipeline.init_video(&device, &queue, frame.width, frame.height);
-            // `_sender` (the BYOV channel's sending half `QuadPipeline` used
-            // before this seam existed) goes unused — `playing.stream`
-            // already delivers frames directly, so `upload_video_frame`
-            // below is called straight from here instead of routing through
-            // that channel. See `QuadPipeline::init_video`'s own doc.
-            playing.texture_id = Some(texture_id);
+            // Lazily, from the first frame's own dimensions — see
+            // `play_video`'s doc for why this can't happen at open time.
+            playing.texture_id =
+                Some(pipeline.init_video(&device, &queue, frame.width, frame.height));
         }
         pipeline.upload_video_frame(&queue, &frame.rgba);
         true
@@ -131,9 +127,14 @@ impl Frame<'_> {
         if let Some(texture_id) = playing.texture_id {
             let world = self.proteus.world_mut();
             let device = world.resource::<GpuContext>().device.clone();
-            world
-                .resource_mut::<QuadPipeline>()
-                .suspend_video(&device, texture_id);
+            let mut pipeline = world.resource_mut::<QuadPipeline>();
+            pipeline.suspend_video(&device, texture_id);
+            // `suspend_video` only marks the entry `Evicted` — it's built to be
+            // resumable. This video is finished, so drop the registry entry too;
+            // otherwise every play leaves a permanent record behind, and since
+            // eviction only ever considers `main_atlas` entries nothing would
+            // ever reclaim them.
+            pipeline.texture_registry.free(texture_id);
         }
     }
 }
@@ -176,5 +177,150 @@ pub trait App {
     /// [`Proteus::tick`]: proteus_sdk::Proteus::tick
     fn update(&mut self, f: &mut Frame, dt: f32) {
         let _ = (f, dt);
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+    use proteus_render::{AtlasConfig, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
+    use proteus_sdk::Proteus;
+
+    use crate::services::{FetchId, FetchResult, VideoFrame};
+    use crate::viewport::Viewport;
+
+    /// One frame, then nothing — enough to make `poll_video` allocate the GPU
+    /// texture and register it, which is the state `stop_video` has to clean up.
+    struct OneFrameStream {
+        delivered: bool,
+    }
+
+    impl VideoStream for OneFrameStream {
+        fn poll_frame(&mut self) -> Option<VideoFrame> {
+            if self.delivered {
+                return None;
+            }
+            self.delivered = true;
+            Some(VideoFrame {
+                width: 4,
+                height: 4,
+                rgba: Arc::from(vec![255u8; 4 * 4 * 4]),
+            })
+        }
+        fn stop(self: Box<Self>) {}
+    }
+
+    struct VideoServices;
+
+    impl HostServices for VideoServices {
+        fn load_asset(&mut self, _key: &str) -> Option<Arc<[u8]>> {
+            None
+        }
+        fn fetch_async(&mut self, _key_or_url: &str) -> FetchId {
+            FetchId(0)
+        }
+        fn poll_fetches(&mut self) -> Vec<FetchResult> {
+            Vec::new()
+        }
+        fn cancel_fetch(&mut self, _id: FetchId) {}
+        fn open_video(&mut self, _key: &str) -> Option<Box<dyn VideoStream>> {
+            Some(Box::new(OneFrameStream { delivered: false }))
+        }
+    }
+
+    async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok()?;
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("proteus-runtime-video-test"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                memory_hints: Default::default(),
+                ..Default::default()
+            })
+            .await
+            .ok()
+    }
+
+    /// Stopping a video must drop its `TextureRegistry` entry, not just mark it
+    /// evicted.
+    ///
+    /// `suspend_video` is deliberately resumable — it swaps the texture for a
+    /// 1×1 placeholder and sets the state to `Evicted`, leaving the entry in
+    /// place. That's right for backgrounding, wrong for "this video is over":
+    /// nothing else ever reclaims a `Video` entry, because eviction only
+    /// considers `main_atlas` ones (`is_eviction_candidate` requires
+    /// `AtlasRegion::Main`). Every play therefore left a permanent row behind.
+    #[test]
+    fn stopping_a_video_frees_its_registry_entry() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+
+        let mut proteus = Proteus::new();
+        proteus.world_mut().insert_resource(GpuContext {
+            device: device.clone(),
+            queue: queue.clone(),
+        });
+        proteus.world_mut().insert_resource(QuadPipeline::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            16,
+            AtlasConfig::default(),
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        ));
+
+        let mut services = VideoServices;
+        let mut frame = Frame {
+            proteus: &mut proteus,
+            services: &mut services,
+            viewport: Viewport::new(glam::Vec2::new(64.0, 64.0), 1.0),
+        };
+
+        let mut playing = frame
+            .play_video("anything")
+            .expect("host opened the stream");
+        assert!(
+            frame.poll_video(&mut playing),
+            "the stream's one frame should upload, allocating the texture"
+        );
+        let texture_id = playing.texture_id.expect("poll_video allocated a texture");
+
+        assert!(
+            frame
+                .proteus
+                .world()
+                .resource::<QuadPipeline>()
+                .texture_registry
+                .info(texture_id)
+                .is_some(),
+            "registered while playing"
+        );
+
+        frame.stop_video(playing);
+
+        assert!(
+            frame
+                .proteus
+                .world()
+                .resource::<QuadPipeline>()
+                .texture_registry
+                .info(texture_id)
+                .is_none(),
+            "a stopped video's registry entry must be freed, not left marked evicted"
+        );
     }
 }

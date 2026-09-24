@@ -87,7 +87,10 @@ pub struct Mp4Stream {
     stop_flag: Arc<AtomicBool>,
     child: Arc<Mutex<Option<Child>>>,
     join_handle: Option<JoinHandle<()>>,
-    rx: Receiver<Vec<u8>>,
+    /// `Option` purely so [`VideoStream::stop`] can drop the receiver *before*
+    /// joining the decode thread — see that method's own doc for the deadlock
+    /// this avoids. Always `Some` until then.
+    rx: Option<Receiver<Vec<u8>>>,
     width: u32,
     height: u32,
 }
@@ -100,7 +103,8 @@ impl VideoStream for Mp4Stream {
         // `QuadPipeline::consume_video_frame`'s identical pre-M13.4 policy.
         let mut latest: Option<Vec<u8>> = None;
         let mut drained = 0u32;
-        while let Ok(frame) = self.rx.try_recv() {
+        let rx = self.rx.as_ref()?;
+        while let Ok(frame) = rx.try_recv() {
             latest = Some(frame);
             drained += 1;
         }
@@ -120,11 +124,28 @@ impl VideoStream for Mp4Stream {
     /// Kills the `ffmpeg` child immediately (rather than waiting for it to
     /// notice the stop flag between frames) and blocks until the decode
     /// thread exits.
+    ///
+    /// ## Why the receiver is dropped before the join
+    ///
+    /// The frame channel is a `sync_channel(2)`, so the decode thread *blocks*
+    /// in `tx.send` whenever two frames are already queued — deliberate
+    /// backpressure, and the normal state any time the app stops polling for a
+    /// moment (a tab in the background, a long frame, or simply the couple of
+    /// frames between the last `poll_video` and this call).
+    ///
+    /// Killing `ffmpeg` does not release a thread already parked in `send`:
+    /// that wakes on the *receiver*, not on the child process. Joining while
+    /// the receiver is still alive therefore blocks forever, on whichever
+    /// thread called `stop` — the render thread. Dropping the receiver first
+    /// makes the pending `send` return `Err`, which `decode_once` treats as
+    /// "receiver dropped — pipeline is gone" and exits.
     fn stop(mut self: Box<Self>) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }
+        // Order matters — see above. Must happen before the join.
+        drop(self.rx.take());
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }
@@ -163,7 +184,7 @@ pub fn open(path: PathBuf) -> Option<Mp4Stream> {
         stop_flag,
         child: child_slot,
         join_handle: Some(join_handle),
-        rx,
+        rx: Some(rx),
         width,
         height,
     })
@@ -263,4 +284,64 @@ fn decode_once(
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
+
+    /// `stop()` must return even when the decode thread is parked in
+    /// `SyncSender::send` — the normal state whenever the app stops polling for
+    /// a moment, since the channel is a `sync_channel(2)` on purpose.
+    ///
+    /// Killing `ffmpeg` doesn't release a thread blocked on `send` (it wakes on
+    /// the receiver, not the child), so joining while the receiver is still
+    /// alive blocked forever — on the render thread, which is where `stop` is
+    /// called from. This reproduces that with a stand-in producer instead of a
+    /// real decode, so it needs no `ffmpeg` and runs everywhere.
+    ///
+    /// Asserted under a timeout because the failure mode is a *hang*: without
+    /// the fix this test would otherwise never finish rather than fail.
+    #[test]
+    fn stop_returns_even_when_the_decode_thread_is_blocked_on_a_full_channel() {
+        let (tx, rx) = sync_channel::<Vec<u8>>(2);
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        // Stands in for `decode_loop`: pushes frames as fast as it can and
+        // exits when the receiver goes away, exactly as `decode_once` does on
+        // a `send` error. With a 2-slot channel and nobody draining, it is
+        // parked in `send` almost immediately.
+        let join_handle = std::thread::spawn(move || while tx.send(vec![0u8; 16]).is_ok() {});
+
+        // Let it fill the channel and block.
+        std::thread::sleep(Duration::from_millis(50));
+
+        let stream = Mp4Stream {
+            stop_flag,
+            child: Arc::new(Mutex::new(None)), // no real ffmpeg child in this test
+            join_handle: Some(join_handle),
+            rx: Some(rx),
+            width: 4,
+            height: 4,
+        };
+
+        // `stop` blocks on the join, so run it off-thread and watch for it to
+        // finish rather than hanging the test runner if it regresses.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            Box::new(stream).stop();
+            let _ = done_tx.send(());
+        });
+
+        match done_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(()) => {}
+            Err(RecvTimeoutError::Timeout) => panic!(
+                "Mp4Stream::stop deadlocked: the decode thread was blocked in `send`, and \
+                 joining it without first dropping the receiver never returns"
+            ),
+            Err(RecvTimeoutError::Disconnected) => panic!("stop() panicked"),
+        }
+    }
 }

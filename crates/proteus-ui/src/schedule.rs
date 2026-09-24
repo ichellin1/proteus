@@ -37,7 +37,7 @@ use crate::spawn_order::register_spawn_order_hooks;
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
     group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system,
-    TransitionAtlasSize,
+    register_transition_alloc_hooks, TransitionAtlasSize,
 };
 use crate::transition::{
     transition_complete_system, transition_setup_system, transition_tick_system,
@@ -196,6 +196,9 @@ impl ProteusWorld {
         // auto-stamping hook — must be registered before any QuadState
         // exists.
         register_spawn_order_hooks(&mut world);
+        // Audit C-07: same requirement again, for the hooks that return a
+        // `transition_atlas` region when the component owning it goes away.
+        register_transition_alloc_hooks(&mut world);
 
         // --- Schedule ---
         let schedule = build_schedule();

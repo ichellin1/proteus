@@ -10,7 +10,7 @@
 
 use proteus_render::{
     pack_atlas_page, AtlasConfig, MainAtlasPlacement, QuadInstance, QuadPipeline,
-    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION, TRANSITION_ATLAS_SIZE,
+    ATLAS_SELECTOR_MAIN, ATLAS_SELECTOR_TRANSITION, DEFAULT_TRANSITION_ATLAS_SIZE,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ fn headless_quad_renders_to_expected_color() {
         FORMAT,
         16,
         AtlasConfig::default(),
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
@@ -110,10 +110,14 @@ fn headless_quad_renders_to_expected_color() {
 
     // Center (32, 32) — safely inside the red quad.
     //
-    // We don't assert R == 255 exactly. The atlas sampler (linear) blends the
-    // 1×1 white texel with adjacent uninitialized texels at sub-pixel UVs, so
-    // the exact byte value is hardware-dependent. The meaningful check is that
-    // the red channel dominates and the quad landed in the right place.
+    // The `> 200` tolerance is historical: it was justified by the sampler
+    // blending the white sentinel texel with adjacent uninitialized ones, which
+    // is no longer true (the sentinel samples the atlas corner, `ClampToEdge`
+    // keeps every tap on white, and the whole guard block is white anyway —
+    // see `WHITE_PIXEL_UV_OFFSET`). Left as-is rather than tightened: this test
+    // is about the quad landing in the right place with the right hue, and
+    // `untextured_quad_renders_at_full_intensity_on_a_non_default_page_size`
+    // below is the one that actually pins sentinel intensity.
     let center = pixel(HEIGHT / 2, WIDTH / 2);
     assert!(
         center[0] > 200,
@@ -164,7 +168,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         FORMAT,
         16,
         AtlasConfig::default(),
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
@@ -292,7 +296,7 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
             page_size,
             page_count: 2,
         },
-        TRANSITION_ATLAS_SIZE,
+        DEFAULT_TRANSITION_ATLAS_SIZE,
     );
     pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
 
@@ -363,6 +367,89 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
         page0[1] > 200 && page0[0] < 50,
         "page 0 at the same (x, y) must NOT show the content written to page 1 — got \
          {page0:?}. If this is red, the shader is ignoring the array-layer index."
+    );
+}
+
+/// An untextured quad must render its `color` at full intensity **whatever
+/// `AtlasConfig::page_size` is set to**.
+///
+/// `WHITE_PIXEL_UV_OFFSET` is a normalised UV, so the texel it lands on scales
+/// with the real page size. It used to be `0.5 / 2048` — the centre of texel 0
+/// only on a 2048px page. At 4096 (`ProteusConfig::desktop()`, a shipped public
+/// preset) that lands exactly on the texel 0/1 boundary on both axes, so the
+/// bilinear sampler averaged the one white texel with three never-written ones
+/// and every solid-colour quad in the app rendered at roughly quarter
+/// intensity. Nothing caught it because no host or test used a non-default
+/// page size.
+///
+/// Rendered here at 4096 against a green clear: a red quad must come back
+/// essentially pure red, not a quarter-strength wash of it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
+    let Some((device, queue)) = pollster::block_on(make_device_with_large_textures(4096)) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            eprintln!("headless_render: no 4096-capable adapter — skipping (REQUIRE_GPU only demands an adapter, not a size)");
+        }
+        return;
+    };
+
+    let mut pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        FORMAT,
+        16,
+        AtlasConfig {
+            page_size: 4096,
+            page_count: 1,
+        },
+        DEFAULT_TRANSITION_ATLAS_SIZE,
+    );
+    pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+
+    let instances = [QuadInstance {
+        position: [0.0, 0.0, 0.5],
+        size: [32.0, 32.0],
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: [0.5, 0.5],
+        color: [1.0, 0.0, 0.0, 1.0], // red
+        opacity: 1.0,
+        corner_radius: 0.0,
+        uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+        uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+        atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
+        base_uv_offset: [0.0, 0.0],
+        base_uv_scale: [0.0, 0.0],
+        crossfade_t: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_offset: 0.0,
+        shadow_params: [0.0, 0.0, 0.0, 0.0],
+        shadow_color: [0.0, 0.0, 0.0, 0.0],
+        base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+    }];
+
+    // Green clear, so a sentinel that samples partly-transparent texels shows up
+    // as red blended toward green rather than as a subtler dimming.
+    let green = wgpu::Color {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let pixels = render_and_read_back(&device, &queue, &mut pipeline, &instances, green);
+    let off = ((HEIGHT / 2) * BYTES_PER_ROW + (WIDTH / 2) * 4) as usize;
+    let center: [u8; 4] = pixels[off..off + 4].try_into().unwrap();
+
+    assert!(
+        center[0] > 240,
+        "centre should be essentially full red at page_size 4096, got {center:?} — the \
+         white-pixel sentinel is sampling outside the white block"
+    );
+    assert!(
+        center[1] < 15,
+        "no green should survive under an opaque quad, got {center:?}"
     );
 }
 
@@ -459,9 +546,34 @@ fn render_and_read_back(
     view.to_vec()
 }
 
+/// Like [`make_device`], but asks for `wgpu::Limits::default()` so the test can
+/// build an atlas larger than `downlevel_defaults`' 2048 cap. Returns `None` if
+/// no adapter exists *or* the one we get can't actually reach `min_dimension` —
+/// a software rasteriser on CI may legitimately be smaller, and that's a skip,
+/// not a failure.
+async fn make_device_with_large_textures(
+    min_dimension: u32,
+) -> Option<(wgpu::Device, wgpu::Queue)> {
+    let (device, queue) = make_device_with_limits(wgpu::Limits::default()).await?;
+    if device.limits().max_texture_dimension_2d < min_dimension {
+        eprintln!(
+            "headless_render: adapter caps max_texture_dimension_2d at {} (< {min_dimension}) — skipping",
+            device.limits().max_texture_dimension_2d,
+        );
+        return None;
+    }
+    Some((device, queue))
+}
+
 /// Try to get a wgpu device suitable for headless rendering.
 /// Returns `None` if no adapter is available so the test can skip gracefully.
 async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    // downlevel_defaults: permissive enough for software renderers,
+    // still enforces everything we actually use.
+    make_device_with_limits(wgpu::Limits::downlevel_defaults()).await
+}
+
+async fn make_device_with_limits(limits: wgpu::Limits) -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -498,9 +610,7 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("headless-test"),
             required_features: wgpu::Features::empty(),
-            // downlevel_defaults: permissive enough for software renderers,
-            // still enforces everything we actually use.
-            required_limits: wgpu::Limits::downlevel_defaults(),
+            required_limits: limits,
             memory_hints: Default::default(),
             ..Default::default()
         })

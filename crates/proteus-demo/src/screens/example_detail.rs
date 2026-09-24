@@ -12,12 +12,11 @@
 //!
 //! ## Standalone content, not `ChildOf` the panel
 //!
-//! `proteus-shell-native` parents each category's rows `ChildOf(panel)` and
-//! reparents only the *active* category onto it right before each merge
-//! transition — required there because the merge's bake step walks the
-//! panel's subtree ignoring `Visibility`, so any other category's rows
-//! would leak into the crossfade snapshot if left attached. This crate's
-//! group-transition system doesn't need that workaround: content here is
+//! The obvious shape — parent each category's rows `ChildOf(panel)` — forces
+//! a reparenting dance: only the *active* category can be attached when a
+//! merge starts, because the merge's bake step walks the panel's subtree
+//! ignoring `Visibility`, so any other category's rows would leak into the
+//! crossfade snapshot. Nothing here needs that workaround: content is
 //! spawned as ordinary standalone entities, positioned once in *absolute*
 //! world coordinates from the panel's known target rect (the panel's own
 //! `QuadState` never changes once a merge starts — it's the fixed
@@ -27,9 +26,7 @@
 
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_sdk::{
-    Border, ComponentSpec, DropShadow, Glow, Handle, Opacity, Proteus, QuadState, Text,
-};
+use proteus_sdk::{Border, ComponentSpec, DropShadow, Glow, Handle, Proteus, QuadState, Text};
 
 use super::examples_home::CATEGORY_TITLES;
 
@@ -39,11 +36,11 @@ const HEADING_PANEL_GAP_PX: f32 = 20.0;
 /// top of the panel; headings use 0.51 for the same reason.
 pub(crate) const CONTENT_Z: f32 = 0.51;
 
-/// `proteus-shell-native::SCREEN_CORNER_RADIUS` — also `panel`'s
-/// theme-blend target in `Demo::advance_theme` (unlike `screens::home`'s
-/// nav-button pair, this one's light/dark values are genuinely different).
+/// `panel`'s theme-blend target in `Demo::advance_theme`. Unlike
+/// `screens::home`'s nav-button pair, this one's light/dark values are
+/// genuinely different.
 pub const CORNER_RADIUS: f32 = 12.0;
-/// `proteus-shell-native::SCREEN_CORNER_RADIUS_DARK`.
+/// Dark-theme counterpart of [`CORNER_RADIUS`] — genuinely different here.
 pub const CORNER_RADIUS_DARK: f32 = 18.0;
 const BORDER_WIDTH: f32 = 3.0;
 /// Neutral grey (not violet-tinted like everything else in this demo) —
@@ -54,8 +51,7 @@ const BORDER_WIDTH: f32 = 3.0;
 /// variant in dark mode (`Demo::advance_theme` never touches `panel`'s own
 /// `color`, only its `Border`/corner radius) — a darkened panel read as
 /// near-black, at odds with the rest of the demo's dark-mode surfaces; this
-/// backdrop stays the same light grey in both themes. Mirrors
-/// `proteus-shell-native::example_panel_quad`'s own `light_grey` exactly.
+/// backdrop stays the same light grey in both themes.
 const LIGHT_GREY: Vec4 = Vec4::new(0.82, 0.82, 0.83, 1.0);
 /// A non-brand accent color, used only for the "different color" examples
 /// in the Glow/Border rows and the Text screen's Color row — everything
@@ -66,18 +62,15 @@ fn violet() -> Vec4 {
 }
 
 /// Vertical space reserved at the top of the viewport so the panel never
-/// overlaps `screens::nav`'s buttons — `proteus-shell-native`'s
-/// `ICON_ROW_RESERVED_PX` equivalent, sized for this crate's own (larger,
-/// placeholder) nav buttons rather than the original's icon row.
+/// overlaps `screens::nav`'s buttons. Sized for this crate's own (larger,
+/// placeholder) nav buttons, not for a bare icon row.
 const TOP_CLEARANCE_PX: f32 = 110.0;
 /// Vertical space reserved at the bottom of the viewport, for the Stress
-/// Tests panel's own bottom edge — `proteus-shell-native`'s
-/// `SCREEN_NAV_CLEARANCE_PX` equivalent.
+/// Tests panel's own bottom edge.
 const BOTTOM_CLEARANCE_PX: f32 = 40.0;
 
-/// `proteus-shell-native`'s `EFFECTS_CONTENT_HEIGHT_PX` /
-/// `TEXT_CONTENT_HEIGHT_PX` / `TRANSFORMS_CONTENT_HEIGHT_PX`, indexed by
-/// category. Category 3 (Stress Tests) isn't fixed-height — its panel
+/// Fixed content height per category, indexed by category (Effects, Text,
+/// Transforms & Animation). Category 3 (Stress Tests) isn't fixed-height — its panel
 /// stretches to the bottom clearance instead (see `stress_panel_target`).
 const CONTENT_HEIGHT: [f32; 3] = [
     3.0 * 90.0 + 64.0 + 18.0 + 18.0, // Effects = 370.0
@@ -85,9 +78,8 @@ const CONTENT_HEIGHT: [f32; 3] = [
     2.0 * 120.0 + 64.0 + 2.0 * 20.0, // Transforms = 344.0
 ];
 
-/// `proteus-shell-native::example_detail_target`'s flat placeholder content
-/// height for categories 4/5 (Layout, 3D) — not built yet, just tall enough
-/// to hold `placeholder_message`.
+/// Flat placeholder content height for categories 4/5 (Layout, 3D) — not
+/// built yet, just tall enough to hold `placeholder_message`.
 const PLACEHOLDER_CONTENT_HEIGHT_PX: f32 = 100.0;
 
 /// Rough line height for the 28px category-title font — used only to stack
@@ -160,11 +152,9 @@ pub struct ExampleDetail {
     pub stress: StressContent,
     /// The 6 category titles — `pub` so `Demo::advance_theme` can blend
     /// their color; unlike each category's own row labels/content, these
-    /// alone get the live theme lerp, matching
-    /// `proteus-shell-native::advance_theme`'s own selective scope exactly
-    /// (see that fn's doc for why the two aren't treated the same). Indices
-    /// 4/5 (Layout, 3D) aren't in source's own `example_heading_entity` at
-    /// all (`None` there, no heading shown) — spawned here anyway so
+    /// alone get the live theme lerp — see `Demo::advance_theme`'s doc for
+    /// why the two aren't treated the same. Indices 4/5 (Layout, 3D) get a
+    /// heading even though they have no real content, so
     /// `content_handles`/`layout_content` don't need a special case for
     /// "no heading", and because a bare `placeholder_message` with no title
     /// above it read as more broken than intentional once actually on
@@ -422,9 +412,7 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     // panel — no bake/reparent hazard applies since neither entity is ever
     // `ChildOf` the panel itself.
     let nested_parent = effect_box(app, 64.0);
-    app.world_mut()
-        .entity_mut(nested_parent.id())
-        .insert(Opacity(0.6));
+    let _ = nested_parent.set_opacity(app, 0.6);
     let nested_child = app.component(
         ComponentSpec::new(QuadState {
             position: Vec3::ZERO,
@@ -435,12 +423,10 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
             color: ACCENT,
             corner_radius: 6.0,
         })
-        .non_interactive(),
+        .non_interactive()
+        .opacity(0.6),
     );
-    app.world_mut()
-        .entity_mut(nested_child.id())
-        .insert(Opacity(0.6));
-    nested_parent.add_child(app, nested_child);
+    let _ = nested_parent.add_child(app, nested_child);
     opacity_boxes.push(nested_parent);
     opacity_item_labels.push(row_label(app, "0.6 × 0.6", 12.0));
 
@@ -537,10 +523,9 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
 
     // --- Stress Tests (category 3) ---
     // Same "no fill ever, border/glow only, violet label" Design System
-    // treatment as `screens::home`/`screens::examples_home`'s buttons —
-    // matches `proteus-shell-native`'s own `stress_buttons` spawn recipe
-    // exactly (identical constants). Hover registration lives in
-    // `Demo::new`, theme-color blend in `Demo::advance_theme`.
+    // treatment as `screens::home`/`screens::examples_home`'s buttons, down
+    // to the same constants. Hover registration lives in `Demo::new`,
+    // theme-color blend in `Demo::advance_theme`.
     let stress_button = |app: &mut Proteus, label: &str| -> (Handle, Handle) {
         let button = app.component(
             ComponentSpec::new(QuadState {
@@ -625,7 +610,7 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
 }
 
 /// The panel's target rest geometry for category `idx` — computed fresh
-/// each time (not cached), same as `proteus-shell-native::example_panel_quad`.
+/// each time, not cached.
 /// Corner radius here is the static light-theme value (`CORNER_RADIUS`) —
 /// `Demo::advance_theme` overwrites it every tick with the live blended
 /// value once the panel actually lands, same "settle to a hardcoded light
@@ -638,9 +623,7 @@ pub fn panel_target(idx: usize, viewport_size: Vec2) -> QuadState {
     let width = (viewport_size.x * 0.85).min(1000.0);
     let max_height = (viewport_size.y - 2.0 * TOP_CLEARANCE_PX).max(0.0);
     // 4/5 (Layout, 3D) aren't built yet — `PLACEHOLDER_CONTENT_HEIGHT_PX`,
-    // just tall enough for `placeholder_message`, same flat value
-    // `proteus-shell-native` itself uses for these two. Mirrors
-    // `proteus-shell-native::example_detail_target` exactly.
+    // just tall enough for `placeholder_message`.
     let content_height = match idx {
         0..=2 => CONTENT_HEIGHT[idx],
         4 | 5 => PLACEHOLDER_CONTENT_HEIGHT_PX,
@@ -662,7 +645,7 @@ pub fn panel_target(idx: usize, viewport_size: Vec2) -> QuadState {
 /// categories — instead the whole assembly (title, then the two buttons,
 /// then the panel) stacks top-down from the viewport's own top edge, and
 /// the panel stretches down to `BOTTOM_CLEARANCE_PX` above the viewport's
-/// bottom edge. Mirrors `proteus-shell-native::stress_panel_target`.
+/// bottom edge.
 fn stress_panel_target(viewport_size: Vec2) -> QuadState {
     let heading_top_y = viewport_size.y / 2.0 - TOP_CLEARANCE_PX;
     let heading_bottom_y = heading_top_y - STRESS_HEADING_HEIGHT_PX;
@@ -837,8 +820,7 @@ fn layout_transforms(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadStat
 /// `RESULT_TEXT_RESERVED_HEIGHT_PX`), and the warning text (centered on the
 /// panel). Stacking order top-to-bottom — title, then buttons, then the
 /// panel — mirrors `stress_panel_target`'s own derivation of the panel's
-/// top edge, so the two stay in sync. Mirrors
-/// `proteus-shell-native::layout_stress_content`.
+/// top edge, so the two stay in sync.
 fn layout_stress(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
     let panel_top_y = panel.position.y + panel.size.y / 2.0;
     let buttons_y = panel_top_y + HEADING_PANEL_GAP_PX + STRESS_BUTTON_HEIGHT_PX / 2.0;
@@ -903,8 +885,7 @@ fn layout_stress(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
 /// wrapped to `[0, 360)`; s=1, v=1 fixed) to RGB — standard six-sector
 /// conversion. Used only by `advance_continuous_animation`'s rainbow hue
 /// cycle, which has no other place in this demo to live given every other
-/// color is a fixed design token. Matches
-/// `proteus-shell-native::hsv_to_rgb` exactly.
+/// color is a fixed design token.
 pub(crate) fn hsv_to_rgb(hue_deg: f32) -> Vec3 {
     let h = hue_deg.rem_euclid(360.0) / 60.0;
     let x = 1.0 - (h % 2.0 - 1.0).abs();
@@ -923,8 +904,7 @@ pub(crate) fn hsv_to_rgb(hue_deg: f32) -> Vec3 {
 /// full hue cycle every 5s. `elapsed` accumulates only while this screen is
 /// active — the caller (`Demo::advance_example_animation`) is responsible
 /// for pausing (not resetting) it otherwise, so the animation resumes from
-/// wherever it left off rather than restarting. Mirrors
-/// `proteus-shell-native::advance_example_animation` exactly.
+/// wherever it left off rather than restarting.
 pub fn advance_continuous_animation(app: &mut Proteus, detail: &ExampleDetail, elapsed: f32) {
     const ROTATION_PERIOD_SECS: f32 = 4.0;
     const SCALE_PERIOD_SECS: f32 = 2.0;

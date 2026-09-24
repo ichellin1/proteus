@@ -16,8 +16,8 @@
 //! down the parent chain — see the function docs for the exact formula.
 //!
 //! This composition is a pure, on-demand function, not a cached component
-//! written by a schedule system. `collect_instances`/`collect_entity_instances`
-//! (`collect.rs`) and the transition-bake capture (`topology.rs`) call it fresh
+//! written by a schedule system. `collect_instances` (`collect.rs`) and the
+//! transition-bake capture (`topology.rs`) call it fresh
 //! every time they need an entity's world state. This sidesteps a same-frame
 //! staleness problem entirely (no system writes a `WorldQuadState` that another
 //! system must then read later in the same frame) and — as a bonus — means a

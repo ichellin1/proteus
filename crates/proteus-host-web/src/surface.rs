@@ -1,25 +1,31 @@
-//! [`WebSurface`] — canvas + wgpu device/surface setup, DPI-aware.
+//! [`WebSurface`] — the canvas-specific half of GPU setup: DPI sizing and the
+//! CSS-pixel bookkeeping the rest of the host reports as its `Viewport`.
+//!
+//! The wgpu half — instance, surface, adapter, device, swap-chain format —
+//! lives in `proteus-gpu` (`GpuSurface::create`), shared with
+//! `proteus-host-winit`; see `PLANNING.md` § M13.3's "shared GPU init". What
+//! stays here is genuinely web-only: reading `devicePixelRatio`, sizing the
+//! canvas backing store, and tracking logical size separately from physical.
 //!
 //! M13.2's one deliberate behaviour change from the M12 web shell: canvas
-//! backing-store resolution now tracks `devicePixelRatio` instead of being
-//! 1:1 CSS pixels. Retina/high-DPI displays get a sharper render; M6 web
-//! visual-regression baselines need re-capturing against this (see
-//! `PLANNING.md`'s M13.2 section).
+//! backing-store resolution tracks `devicePixelRatio` instead of being 1:1 CSS
+//! pixels, so high-DPI displays render sharper. (An earlier note here claimed
+//! M6 baselines needed re-capturing for it — that rested on a false premise;
+//! see `PLANNING.md` § M13.2's Definition of Done for why M6 is unaffected.)
 
 use proteus_runtime::config::RenderConfig;
 use proteus_runtime::wgpu;
-use proteus_runtime::Viewport;
+use proteus_runtime::{GpuSurface, SurfaceRequest, Viewport};
 use wasm_bindgen::JsValue;
 use web_sys::HtmlCanvasElement;
 
 pub struct WebSurface {
-    pub surface: wgpu::Surface<'static>,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-    pub config: wgpu::SurfaceConfiguration,
+    /// Device, queue, surface and swap-chain config — created by
+    /// `proteus-gpu`, identically to the native host.
+    gpu: GpuSurface,
     /// CSS pixel size — `Viewport.logical_size` — tracked separately from
-    /// `config.width/height` (physical px) so `resize`/`viewport` don't need
-    /// to re-read `devicePixelRatio` (it can change mid-session, e.g.
+    /// `gpu.config.width/height` (physical px) so `resize`/`viewport` don't
+    /// need to re-read `devicePixelRatio` (it can change mid-session, e.g.
     /// dragging a window between a retina and a non-retina display; the
     /// `ResizeObserver` callback re-reads it fresh each time regardless).
     logical_size: (f64, f64),
@@ -43,74 +49,47 @@ impl WebSurface {
         canvas.set_width(physical_w);
         canvas.set_height(physical_h);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-
-        let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-            .map_err(|e| JsValue::from_str(&format!("create_surface: {e}")))?;
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
+        let gpu = GpuSurface::create(
+            wgpu::SurfaceTarget::Canvas(canvas.clone()),
+            SurfaceRequest {
+                label: "proteus-host-web",
+                size: (physical_w, physical_h),
                 power_preference: render.power_preference,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|_| JsValue::from_str("no suitable WebGPU or WebGL2 adapter"))?;
-        log::info!(
-            "proteus-host-web: adapter {} (backend {:?})",
-            adapter.get_info().name,
-            adapter.get_info().backend
-        );
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("proteus-host-web"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                memory_hints: Default::default(),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| JsValue::from_str(&format!("request_device: {e}")))?;
-
-        let surface_caps = surface.get_capabilities(&adapter);
-        // Non-sRGB on purpose — see proteus-host-winit's identical choice
-        // and comment; colours here are authored gamma-space.
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .find(|f| !f.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: physical_w,
-            height: physical_h,
-            present_mode: render.present_mode,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
+                present_mode: render.present_mode,
+                // The real per-platform difference: WebGL2 is the fallback
+                // path, so the device must be requestable under its limits.
+                limits: wgpu::Limits::downlevel_webgl2_defaults(),
+            },
+        )
+        .await
+        .map_err(|e| JsValue::from_str(&format!("GPU setup failed: {e}")))?;
+        log::info!("proteus-host-web: adapter {}", gpu.adapter_description());
 
         Ok(Self {
-            surface,
-            device,
-            queue,
-            config,
+            gpu,
             logical_size: (css_w, css_h),
             scale_factor,
         })
     }
 
+    /// The live device — the `WebLoop` hands this to `Engine`/`Renderer` and a
+    /// shell shim may need it for GPU work outside the generic bake pass.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.gpu.device
+    }
+
+    /// The live queue. See [`WebSurface::device`].
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.gpu.queue
+    }
+
+    /// The swap chain, for acquiring each frame's texture.
+    pub fn surface(&self) -> &wgpu::Surface<'static> {
+        &self.gpu.surface
+    }
+
     pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.config.format
+        self.gpu.format()
     }
 
     pub fn viewport(&self) -> Viewport {
@@ -133,9 +112,7 @@ impl WebSurface {
             .max(0.1);
         let (physical_w, physical_h) = to_physical(css_width, css_height, scale_factor);
 
-        self.config.width = physical_w;
-        self.config.height = physical_h;
-        self.surface.configure(&self.device, &self.config);
+        self.gpu.resize(physical_w, physical_h);
 
         self.logical_size = (css_width, css_height);
         self.scale_factor = scale_factor;
@@ -146,7 +123,7 @@ impl WebSurface {
     /// errors and `webglcontextrestored`, neither of which changed the
     /// canvas's own size.
     pub fn reconfigure(&self) {
-        self.surface.configure(&self.device, &self.config);
+        self.gpu.reconfigure();
     }
 }
 

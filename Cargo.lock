@@ -1332,6 +1332,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
 name = "jiff"
 version = "0.2.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2152,6 +2158,7 @@ dependencies = [
  "log",
  "proteus-runtime",
  "proteus-sdk-web",
+ "serde-wasm-bindgen",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-logger",
@@ -2182,7 +2189,6 @@ dependencies = [
  "image",
  "log",
  "pollster",
- "proteus-gpu",
  "slotmap",
  "thiserror 2.0.18",
  "wgpu",
@@ -2195,9 +2201,13 @@ dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
  "log",
+ "pollster",
+ "proteus-gpu",
  "proteus-render",
  "proteus-sdk",
  "proteus-ui",
+ "serde",
+ "serde_json",
  "wgpu",
 ]
 
@@ -2207,6 +2217,7 @@ version = "0.1.0"
 dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
+ "log",
  "pollster",
  "proteus-render",
  "proteus-ui",
@@ -2220,6 +2231,7 @@ dependencies = [
  "bevy_ecs",
  "glam 0.29.3",
  "js-sys",
+ "log",
  "proteus-render",
  "proteus-sdk",
  "proteus-ui",
@@ -2568,6 +2580,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -3893,6 +3918,12 @@ dependencies = [
  "quote",
  "syn 2.0.118",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zune-core"
