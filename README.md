@@ -14,30 +14,37 @@ Proteus is a cross-platform UI framework written in Rust. Its defining idea: **U
 
 ```
 crates/
-  proteus-gpu/          # Layer 0: wgpu device abstraction
-  proteus-render/       # Layer 1: scene graph, instanced render pipeline, transition pipeline
+  proteus-gpu/          # Layer 0: surface + device/queue/swap-chain setup, shared by both hosts
+  proteus-render/       # Layer 1: instanced render pipeline, atlases, offscreen bake pipeline
   proteus-ui/           # Layer 2: metamorphic component model, transition topologies
   proteus-sdk/          # Layer 2.5: generic app-authoring API (component/signal/texture) — headless
   proteus-sdk-web/      # Layer 2.5 (web): wasm-bindgen bridge + npm-publishable TypeScript SDK (ts/)
-  proteus-runtime/      # Layer 2.75: Renderer + Engine + App/Host/HostServices contracts (M13.1)
-  proteus-demo/         # the shared reference demo (an App), linked by both shells below
-  proteus-shell-web/    # Layer 3: WebGL2/WebGPU WASM shell (reference demo)
-  proteus-shell-native/ # Layer 3: native windowing shell (winit)
+  proteus-runtime/      # Layer 2.75: Renderer + Engine + the App / HostServices contracts
+  proteus-host-winit/   # Layer 3: native host — winit window, frame loop, file-backed assets
+  proteus-host-web/     # Layer 3: wasm host — canvas, rAF loop, fetched assets, HLS video
+  proteus-demo/         # the reference demo, written once as an App
+  proteus-shell-native/ # Layer 4: a `main()` that hands the demo to proteus-host-winit
+  proteus-shell-web/    # Layer 4: a wasm entry point that hands it to proteus-host-web
+examples/
+  gallery/              # the TypeScript front door — the SDK driven from TS, no Rust
 ```
 
-> **M13 — Application Platform Architecture (in progress):** `proteus-runtime` is the new seam
-> that decouples an application from its platform shell. A `Host` (winit, web, …) owns the GPU
-> surface and frame loop and drives an `Engine` that owns `Proteus`; an application implements the
-> `App` trait instead of forking a shell. The `proteus-host-winit` / `proteus-host-web` crates and
-> the collapse of both shells to thin entry points land across M13.1–M13.3. See
-> [PLANNING.md](./PLANNING.md) § M13.
+**Writing an app** means implementing `proteus_runtime::App` (`setup` once, `update` per frame)
+and handing it to a host's `run()`. The host owns the window or canvas, the GPU surface, the
+frame loop and input; `Engine` owns `Proteus` and calls into the app. Nothing forks a shell, and
+the same app runs on both platforms — `proteus-demo` is exactly this, and the two `proteus-shell-*`
+crates below it are thin entry points. From TypeScript, `mount()` plays the host's role instead;
+see `examples/gallery`.
 
-## Reference Demo 
-The **[reference demo](https://ichellin1.github.io/proteus/)** — See Proteus in action while three sections that demonstrate video playback, a photo gallery, and other framework examples.
+## Reference Demo
+
+The **[reference demo](https://ichellin1.github.io/proteus/)** shows Proteus in action across
+three sections: real video playback, a photo gallery backed by live image fetches, and a set of
+framework examples (effects, text, transforms, stress tests).
 
 ## Build & Run Reference Demo
 
-The reference demo runs on both shells from the same `proteus-ui`/`proteus-render` core.
+One `proteus-demo` crate drives both platforms; each shell just picks the host.
 
 See **[GETTING_STARTED.md](./GETTING_STARTED.md)** for dependency installation, demo-asset
 setup, and full run/test instructions for both shells. Quick version, once dependencies and
@@ -50,6 +57,12 @@ make serve-web                      # web (builds, then serves on :8080)
 
 The native shell is currently only built and verified on macOS; the web shell runs in any
 WebGL2-capable browser.
+
+To build the TypeScript SDK and its example instead:
+
+```
+make build-sdk-web                  # wasm + tsc, into crates/proteus-sdk-web/ts/dist
+```
 
 ## License
 

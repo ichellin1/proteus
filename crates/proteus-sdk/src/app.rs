@@ -6,15 +6,18 @@ use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::Component;
 use glam::Vec2;
 
-use proteus_render::TextureId;
 use proteus_ui::{
-    create_signal, ActiveTransition, Baked, EffectiveVisibility, Interactable, InteractionDef,
-    ProteusWorld, QuadState, Visibility,
+    create_signal, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
+    InteractionDef, ProteusWorld, QuadState, Visibility,
+};
+
+use proteus_render::{
+    decode_image, resize_to_fit, DecodedImage, GpuContext, QuadPipeline, TextureId,
 };
 
 use crate::callback::{self, CallbackRegistry};
 use crate::data::{ComponentData, TransitionData};
-use crate::handle::{Handle, SignalHandle, TextureHandle};
+use crate::handle::{Handle, SignalHandle, TextureHandle, TextureRequest};
 use crate::spec::ComponentSpec;
 
 /// Captured by [`Proteus::component`] at creation time — the declared rest
@@ -89,6 +92,31 @@ impl Proteus {
             self.world.world.entity_mut(entity).insert(Baked);
         }
 
+        if !spec.visible {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::Visibility::HIDDEN);
+        }
+
+        if spec.start_disabled {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::Disabled);
+        }
+
+        if let Some(transitioning) = spec.transitioning {
+            self.world.world.entity_mut(entity).insert(transitioning);
+        }
+
+        if let Some(opacity) = spec.opacity {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::Opacity(opacity));
+        }
+
         if let Some(text) = spec.text {
             self.world.world.entity_mut(entity).insert(text);
         }
@@ -106,7 +134,20 @@ impl Proteus {
         }
 
         for child in spec.children {
-            self.world.world.entity_mut(child.0).insert(ChildOf(entity));
+            // A dead handle in `children` skips that child rather than
+            // panicking the whole `component()` call — same contract as
+            // `Handle::add_child`, which this is the declarative form of.
+            // (Every other `entity_mut` in this function targets `entity`,
+            // which was spawned three lines up and is always alive.)
+            match self.world.world.get_entity_mut(child.0) {
+                Ok(mut child_entity) => {
+                    child_entity.insert(ChildOf(entity));
+                }
+                Err(_) => log::warn!(
+                    "Proteus::component: child entity {:?} is no longer alive — not attached",
+                    child.0
+                ),
+            }
         }
 
         Handle(entity)
@@ -146,6 +187,18 @@ impl Proteus {
                     .unwrap_or(true)
             });
 
+        let disabled = world.get::<proteus_ui::Disabled>(handle.0).is_some();
+
+        let opacity = world
+            .get::<EffectiveOpacity>(handle.0)
+            .map(|o| o.0)
+            .unwrap_or_else(|| {
+                world
+                    .get::<proteus_ui::Opacity>(handle.0)
+                    .map(|o| o.0)
+                    .unwrap_or(1.0)
+            });
+
         let children = world
             .get::<Children>(handle.0)
             .map(|c| c.iter().map(|&e| Handle(e)).collect())
@@ -158,14 +211,108 @@ impl Proteus {
         Some(ComponentData {
             geometry,
             state,
+            disabled,
             visible,
+            opacity,
             children,
             transition,
         })
     }
 
+    /// Pack already-decoded RGBA pixels into `main_atlas` and return a
+    /// handle to them. `rgba.len()` must be `width * height * 4`.
+    ///
+    /// Synchronous: the pixels are on the GPU when this returns, so there is
+    /// no "ready" state to wait for. For procedurally generated content —
+    /// see [`Proteus::load_texture`] when you have an encoded PNG/JPEG.
+    ///
+    /// Returns a **null handle** if the atlas is full (logged), which
+    /// renders as nothing rather than failing the call — the same graceful
+    /// degradation the rest of the texture path uses. Needs the GPU
+    /// resources `Renderer::new` installs; without them the handle is null
+    /// too, which is what a headless test sees.
+    pub fn bake_texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        request: TextureRequest,
+    ) -> TextureHandle {
+        let null = TextureHandle::from_texture_id(TextureId::default());
+
+        let mut decoded = DecodedImage {
+            width,
+            height,
+            rgba_pixels: rgba,
+        };
+        if let Some(cap) = request.max_side {
+            decoded = resize_to_fit(decoded, cap);
+        }
+
+        let world = self.world_mut();
+        let Some(queue) = world.get_resource::<GpuContext>().map(|g| g.queue.clone()) else {
+            return null;
+        };
+        let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
+            return null;
+        };
+        let Some(texture_id) = pipeline.texture_registry.register_static(
+            decoded.width,
+            decoded.height,
+            request.eternal,
+        ) else {
+            log::warn!(
+                "bake_texture: main_atlas full — could not register {}x{}",
+                decoded.width,
+                decoded.height,
+            );
+            return null;
+        };
+        let placement = pipeline
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .expect("just registered");
+        pipeline.write_to_main_atlas(&queue, placement, &decoded.rgba_pixels);
+        TextureHandle::from_texture_id(texture_id)
+    }
+
+    /// Decode an encoded image (PNG/JPEG/…) and pack it into `main_atlas`.
+    ///
+    /// The bytes-in-hand counterpart of `proteus_runtime::Frame::load_texture`,
+    /// which takes an asset *key* and fetches it through the host. Use this
+    /// when something else did the fetching — a TypeScript app that already
+    /// has an `ArrayBuffer`, say.
+    ///
+    /// Synchronous once the bytes exist, so no `onReady`: it returns a usable
+    /// handle or it doesn't. `None` means the bytes could not be decoded
+    /// (logged with the decoder's reason). A successfully-decoded image that
+    /// doesn't fit the atlas returns `Some(null handle)` — see
+    /// [`Proteus::bake_texture`] — because that is a capacity condition
+    /// rather than bad input.
+    pub fn load_texture(&mut self, bytes: &[u8], request: TextureRequest) -> Option<TextureHandle> {
+        match decode_image(bytes) {
+            Ok(decoded) => {
+                Some(self.bake_texture(decoded.width, decoded.height, decoded.rgba_pixels, request))
+            }
+            Err(e) => {
+                log::warn!("load_texture: could not decode {} bytes: {e}", bytes.len());
+                None
+            }
+        }
+    }
+
     /// Advance one frame: runs the `proteus-ui` schedule, then dispatches
     /// this frame's interaction/signal-drop events to registered callbacks.
+    ///
+    /// **Callbacks run after the schedule, so anything one of them starts
+    /// takes effect on the next tick.** A `signal.set` from inside an
+    /// `on_click` handler queues a `TransitionRequest` that
+    /// `transition_setup_system` has already run past this frame; the morph
+    /// begins on the following `tick`. That is one frame — invisible at
+    /// 60fps — and it is what makes dispatch re-entrant-safe, since a
+    /// handler can mutate the world freely without racing a system that is
+    /// mid-iteration. Pinned by
+    /// `signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick`.
     ///
     /// Clears `just_pressed`/`just_released` after processing — callers only
     /// need to call `pointer_pressed`/`pointer_released` once per physical
@@ -219,6 +366,19 @@ impl Proteus {
         }
         for (e, delta) in dragged {
             callback::fire_drag(self, e, delta);
+        }
+
+        // Read rather than drain: `transition_complete_system` clears this
+        // at the top of every tick, and a `world_mut()` consumer may want to
+        // see the same frame's completions.
+        let completed = self
+            .world
+            .world
+            .resource::<proteus_ui::CompletedTransitions>()
+            .entities
+            .clone();
+        for e in completed {
+            callback::fire(self, e, callback::EventKind::TransitionComplete);
         }
 
         let dropped = self
@@ -277,8 +437,129 @@ impl Proteus {
     }
 }
 
+impl Proteus {
+    /// How many callbacks are currently registered, across every kind.
+    /// Test-only: a leaked closure is otherwise invisible from outside.
+    #[cfg(test)]
+    pub(crate) fn callback_count(&self) -> usize {
+        self.callbacks.len()
+    }
+}
+
 impl Default for Proteus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ComponentSpec;
+
+    /// Destroying a component must drop the closures registered against it.
+    ///
+    /// The registry is keyed by `(Entity, EventKind)`, and `bevy_ecs` bumps an
+    /// entity's generation on despawn — so a recycled index never collides with
+    /// the dead key, nothing ever overwrote it, and nothing removed it. An app
+    /// that destroys and rebuilds components grew without bound; until there's
+    /// a way to *hide* a component, destroy-and-rebuild is the only way to swap
+    /// a screen, so this is the normal path rather than an unusual one.
+    #[test]
+    fn destroying_a_component_forgets_its_callbacks() {
+        let mut app = Proteus::new();
+        assert_eq!(app.callback_count(), 0);
+
+        let handle = app.component(ComponentSpec::new(QuadState::default()));
+        handle.on_click(&mut app, |_| {});
+        handle.on_hover_enter(&mut app, |_| {});
+        handle.on_drag(&mut app, |_, _| {});
+        assert_eq!(app.callback_count(), 3);
+
+        handle.destroy(&mut app).unwrap();
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "every handler registered against a destroyed component must go with it"
+        );
+    }
+
+    /// `bevy_ecs` cascades a despawn to descendants, so a destroyed parent takes
+    /// its children's callbacks with it too.
+    #[test]
+    fn destroying_a_parent_forgets_its_descendants_callbacks() {
+        let mut app = Proteus::new();
+        let grandchild = app.component(ComponentSpec::new(QuadState::default()));
+        let child = app.component(ComponentSpec::new(QuadState::default()).child(grandchild));
+        let parent = app.component(ComponentSpec::new(QuadState::default()).child(child));
+
+        for h in [parent, child, grandchild] {
+            h.on_click(&mut app, |_| {});
+        }
+        assert_eq!(app.callback_count(), 3);
+
+        parent.destroy(&mut app).unwrap();
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "descendants are despawned with the parent, so their handlers must go too"
+        );
+        assert!(app.get(grandchild).is_none(), "cascade really happened");
+    }
+
+    /// A handler that destroys its own component is a real pattern ("this
+    /// button dismisses the thing it belongs to"), and it races the
+    /// take-call-put-back that makes dispatch re-entrant: the handlers are held
+    /// *outside* the map during the call, where `destroy`'s pruning can't see
+    /// them, so putting them back unconditionally resurrects them.
+    #[test]
+    fn a_callback_that_destroys_its_own_component_does_not_resurrect_its_handlers() {
+        let mut app = Proteus::new();
+        let handle = app.component(ComponentSpec::new(QuadState {
+            position: glam::Vec3::new(0.0, 0.0, 0.0),
+            size: glam::Vec2::new(100.0, 100.0),
+            ..Default::default()
+        }));
+        handle.on_click(&mut app, move |app| {
+            let _ = handle.destroy(app);
+        });
+        assert_eq!(app.callback_count(), 1);
+
+        app.pointer_moved(Some(glam::Vec2::ZERO));
+        app.pointer_pressed();
+        app.tick(0.016);
+
+        assert!(app.get(handle).is_none(), "the callback destroyed it");
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "the handler must not be put back for an entity that can never fire again"
+        );
+    }
+
+    /// Destroying a signal drops its `on_dropped` handlers, and destroying an
+    /// entity that *owns* signals drops theirs too — `proteus-ui` already
+    /// destroys owned signals on despawn, but that only clears its own registry,
+    /// not this crate's separate handler map.
+    #[test]
+    fn destroying_signals_and_their_owners_forgets_dropped_handlers() {
+        let mut app = Proteus::new();
+
+        let unowned = app.signal(None);
+        unowned.on_dropped(&mut app, |_, _| {});
+        assert_eq!(app.callback_count(), 1);
+        unowned.destroy(&mut app);
+        assert_eq!(app.callback_count(), 0, "explicit signal destroy");
+
+        let owner = app.component(ComponentSpec::new(QuadState::default()));
+        let owned = app.signal(Some(owner));
+        owned.on_dropped(&mut app, |_, _| {});
+        assert_eq!(app.callback_count(), 1);
+        owner.destroy(&mut app).unwrap();
+        assert_eq!(
+            app.callback_count(),
+            0,
+            "an owned signal's handlers go when its owner does"
+        );
     }
 }

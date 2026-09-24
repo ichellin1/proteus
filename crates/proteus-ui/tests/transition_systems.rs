@@ -545,3 +545,140 @@ fn retargeting_midtransition_starts_from_current_state() {
         new_active.elapsed
     );
 }
+
+// ---------------------------------------------------------------------------
+// The declared `from_state` takes effect when the transition is set up,
+// not when the first lerp tick lands (audit C-08)
+// ---------------------------------------------------------------------------
+
+/// A transition with an explicit `from_state` must put the entity *at* that
+/// state as soon as it is set up — including for the whole of any `delay`.
+///
+/// `from_state: Some(..)` means "this morph visually originates somewhere other
+/// than where the entity currently sits": it's how a signal-driven 1→1 makes
+/// the destination appear to come from the source, and how `SplitStrategy::PerTarget`
+/// fans N targets out of one source. Until this was fixed, nothing wrote `from`
+/// to the entity's `QuadState`; only `transition_tick_system`'s first *lerping*
+/// tick did, as a side effect of `lerp(from, to, ~0)`. So during a `delay` the
+/// entity kept rendering wherever it already was — for a staggered `Bake` split,
+/// every target sat fully visible at its **final** position for the length of
+/// its stagger, then jumped back to the source and animated out again. The exact
+/// inverse of the intended effect.
+#[test]
+fn a_delayed_transition_sits_at_its_from_state_for_the_whole_delay() {
+    let cfg = TransitionConfig {
+        duration: 1.0,
+        delay: 0.5,
+        easing: linear,
+    };
+    let mut world = make_world();
+
+    // The entity currently sits at `blue()` — its own resting state, and also
+    // where this transition is heading. The morph is declared to originate from
+    // `red()` instead.
+    let entity = world
+        .spawn((
+            blue(),
+            Lifecycle::Idle,
+            TransitionRequest {
+                to: blue(),
+                from_state: Some(red()),
+                config: cfg,
+            },
+        ))
+        .id();
+
+    run(&mut world, transition_setup_system);
+    world.flush();
+
+    assert_eq!(
+        world.get::<QuadState>(entity).unwrap().position,
+        red().position,
+        "setup must place the entity at `from_state` immediately — otherwise it \
+         renders at its pre-transition position until the first lerping tick"
+    );
+
+    // Tick entirely within the delay: still parked at `from`, not drifting and
+    // not back at its old position.
+    set_dt(&mut world, 0.2);
+    run(&mut world, transition_tick_system);
+    assert_eq!(
+        world.get::<QuadState>(entity).unwrap().position,
+        red().position,
+        "must stay at `from_state` for the whole delay"
+    );
+
+    // Burn the rest of the delay plus a little: now it should finally move.
+    set_dt(&mut world, 0.4);
+    run(&mut world, transition_tick_system);
+    let moved = world.get::<QuadState>(entity).unwrap().position;
+    assert_ne!(
+        moved,
+        red().position,
+        "once the delay is exhausted the lerp should start"
+    );
+}
+
+/// The same fix, at zero delay: the frame a transition is set up must already
+/// render `from`, not the entity's pre-transition position.
+///
+/// `transition_setup_system` inserts `ActiveTransition` through `Commands`, so
+/// `transition_tick_system` doesn't see it until the following frame — meaning
+/// there was exactly one rendered frame showing the entity where it used to be.
+/// For a signal-driven morph, where the destination entity sits at its *final*
+/// geometry until the morph moves it, that frame is a flash of the end state
+/// before the animation begins.
+#[test]
+fn a_transition_renders_its_from_state_on_the_frame_it_is_set_up() {
+    let mut world = make_world();
+    let entity = world
+        .spawn((
+            blue(),
+            Lifecycle::Idle,
+            TransitionRequest {
+                to: blue(),
+                from_state: Some(red()),
+                config: config(1.0),
+            },
+        ))
+        .id();
+
+    run(&mut world, transition_setup_system);
+    world.flush();
+
+    assert_eq!(
+        world.get::<QuadState>(entity).unwrap().position,
+        red().position,
+        "the setup frame itself must show `from`, not the stale pre-transition state"
+    );
+}
+
+/// The no-op half of the contract: with `from_state: None` the origin *is* the
+/// entity's current state, so setup must leave it exactly where it is. This is
+/// every transition the reference demo creates (`animate_to`, interaction
+/// styling, and the Slice/GridSlice group paths), which is why the fix above
+/// cannot change how the demo looks.
+#[test]
+fn setup_without_a_from_state_leaves_the_entity_where_it_is() {
+    let mut world = make_world();
+    let entity = world
+        .spawn((
+            red(),
+            Lifecycle::Idle,
+            TransitionRequest {
+                to: blue(),
+                from_state: None,
+                config: config(1.0),
+            },
+        ))
+        .id();
+
+    run(&mut world, transition_setup_system);
+    world.flush();
+
+    assert_eq!(
+        world.get::<QuadState>(entity).unwrap().position,
+        red().position,
+        "no declared origin means the entity is already at its origin"
+    );
+}

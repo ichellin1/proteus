@@ -137,33 +137,38 @@ WebGL2 is the primary web rendering target. It has near-universal browser suppor
 WebGPU Shading Language, native to WebGPU and supported by wgpu across all backends including WebGL2.
 
 **Web bindings: wasm-bindgen + TypeScript SDK**
-The web shell exposes a fully idiomatic TypeScript API. Developers targeting the web write TypeScript — they do not need to know Rust. The TypeScript SDK is the first planned language binding and is treated as a first-class consumer of the framework, not a thin wrapper. The WASM boundary is kept clean and well-defined so that additional language bindings (Python, Swift, Kotlin, and others) can be added without changes to the core.
+Proteus exposes a fully idiomatic TypeScript API (`proteus-sdk-web` and its `ts/` package). Developers targeting the web write TypeScript — they do not need to know Rust. The TypeScript SDK is the first planned language binding and is treated as a first-class consumer of the framework, not a thin wrapper. The WASM boundary is kept clean and well-defined so that additional language bindings (Python, Swift, Kotlin, and others) can be added without changes to the core.
 
 ---
 
-## Crate Structure
+## Structure
 
-```
-proteus-gpu          Layer 0 — wgpu device abstraction (no UI opinion)
-proteus-render       Layer 1 — scene graph, mesh, materials, transition pipeline
-proteus-ui           Layer 2 — metamorphic component model, transition topologies
-proteus-shell-web    Layer 3 — WebGL2/WebGPU WASM shell, TypeScript bridge
-proteus-shell-native Layer 3 — winit native shell (macOS, Linux, Windows)
-```
+Proteus is layered: a GPU layer with no UI opinion, a render layer with no component opinion, a
+component/transition layer with no platform opinion, an authoring API above that, and a *host*
+per platform that owns the window or canvas, the frame loop and input. An application is written
+once against the authoring API and handed to a host — it does not fork a shell, and it names no
+platform types.
 
-| Platform | Primary Backend | Secondary Backend | Shell |
+VISION.md intentionally does not enumerate the crates; that list changes as the project does and
+lives in [README.md](./README.md).
+
+| Platform | Primary Backend | Secondary Backend | Host |
 |---|---|---|---|
-| Web | WebGL2 | WebGPU (auto-upgrade) | `proteus-shell-web` |
-| macOS | Metal | — | `proteus-shell-native` |
-| Linux | Vulkan | OpenGL ES | `proteus-shell-native` |
-| Windows | DX12 | Vulkan | `proteus-shell-native` |
+| Web | WebGL2 | WebGPU (auto-upgrade) | `proteus-host-web` |
+| macOS | Metal | — | `proteus-host-winit` |
+| Linux | Vulkan | OpenGL ES | `proteus-host-winit` |
+| Windows | DX12 | Vulkan | `proteus-host-winit` |
 | XR | WebXR / OpenXR | — | *(future)* |
+
+The native host is deliberately named for its windowing library, not for "native": a host that
+talks to DRM/KMS, SDL2 or a mobile surface is a pure addition beside it, not a change to anything
+below.
 
 ---
 
 ## Roadmap
 
-The detailed project roadmap — milestones M0 through M12, post-release scope, and planning phases — lives in [PLANNING.md](./PLANNING.md). VISION.md intentionally does not duplicate it. PLANNING.md is the single source of truth for sequencing, milestones, and build decisions.
+The detailed project roadmap — milestones, post-release scope, and planning phases — lives in [ROADMAP.md](./ROADMAP.md) (sequencing) and [PLANNING.md](./PLANNING.md) (architecture decisions and definitions of done). VISION.md intentionally does not duplicate them; those two are the source of truth for sequencing, milestones, and build decisions.
 
 ---
 
@@ -181,7 +186,7 @@ Transitions are first-class objects. They can be reused across components, seque
 Transitions never impede the user. No matter what morph is in progress, the system continues processing input and events. A running transition is a visual concern, not a blocking one. This is enforced architecturally — the GPU pipeline runs independently of the input/event loop.
 
 **4. Performant**
-Proteus is GPU-native by design. Rendering and transition computation happen on the GPU, not the CPU. The target is smooth 60fps+ on any modern device capable of running a browser. Performance is not an optimization pass — it is a foundational constraint.
+Proteus is GPU-native by design. Rendering happens on the GPU, and a transition's *cost* lives there too: a morph is a per-instance interpolation the CPU advances by one scalar per frame, uploaded as one buffer and drawn in one pass — not a per-frame re-layout, re-rasterize and re-composite. The target is smooth 60fps+ on any modern device capable of running a browser. Performance is not an optimization pass — it is a foundational constraint.
 
 **5. Developer Friendly**
 Low ceremony. A developer should be able to define a component, declare a transition, and see something working with minimal boilerplate. The API should feel natural to write by hand and easy to understand when reading someone else's code.

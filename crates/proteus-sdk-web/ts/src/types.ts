@@ -131,6 +131,113 @@ export interface ComponentSpec {
    * default unless this is set.
    */
   nonInteractive?: boolean;
+  /**
+   * Whether the component is visible when spawned. Defaults to `true`.
+   *
+   * `false` spawns it inert — skipped by render, input and navigation —
+   * until something reveals it. {@link SignalHandle.set} does that for its
+   * `to` side, so a component declared hidden here is ready to be morphed
+   * into without a separate reveal call.
+   */
+  visible?: boolean;
+  /**
+   * Alpha multiplier for this component and everything under it, clamped to
+   * `0.0`–`1.0`. Defaults to fully opaque.
+   *
+   * Cascades down: a child's effective opacity is its own times its
+   * parent's effective, so `0.6` over `0.6` paints at `0.36`. A child never
+   * affects its parent.
+   *
+   * Separate from {@link ComponentSpec.visible} and unrelated to it —
+   * opacity is a paint multiplier, visibility is an ECS flag. A component
+   * at `0` opacity is invisible but still hit-tests; a hidden one doesn't.
+   */
+  opacity?: number;
+  /**
+   * Spawn already disabled: rendered, but excluded from hit-testing and
+   * wearing whatever {@link ComponentSpec.disabled} style is declared.
+   *
+   * Distinct from {@link ComponentSpec.nonInteractive}, which is for a
+   * component that is *never* a click target — a backdrop, a label.
+   * Disabled is a state a real control moves in and out of, and it has a
+   * look; non-interactive is a permanent property with none.
+   */
+  startDisabled?: boolean;
+  /** Opt in to receiving input while this component is mid-transition. */
+  transitioning?: TransitioningConfig;
+}
+
+/**
+ * Per-entity opt-in to input while mid-transition. Both default to `false`:
+ * the framework's safe default is no interaction during a morph.
+ *
+ * `allowNavigation` is accepted for forward-compatibility but is inert —
+ * directional/tab navigation is still a stub, so nothing reads it yet.
+ */
+/**
+ * Partial engine configuration for {@link mount}, applied on top of the web
+ * preset — anything omitted keeps the preset's value.
+ *
+ * Deliberately narrower than Rust's `ProteusConfig`: only knobs that
+ * currently *do* something appear here. The Rust struct also carries fields
+ * that are declared but not yet consumed (video sizing, MSAA, input tuning,
+ * custom easings, most debug flags); in Rust those read as documented
+ * placeholders, but here they would be controls that silently do nothing.
+ * They get added when they work.
+ *
+ * Misspellings are rejected rather than ignored — a config typo that quietly
+ * changes nothing is the failure this API is meant to prevent.
+ */
+export interface ProteusConfigOverrides {
+  render?: {
+    /** Linear RGBA, 0–1: the colour behind everything, and what shows through transparency. */
+    clearColor?: [number, number, number, number];
+    presentMode?:
+      | "autoVsync"
+      | "autoNoVsync"
+      | "fifo"
+      | "fifoRelaxed"
+      | "immediate"
+      | "mailbox";
+    powerPreference?: "none" | "lowPower" | "highPerformance";
+  };
+  memory?: {
+    /** Atlas page size/count. Larger than the device allows throws at mount. */
+    mainAtlas?: { pageSize?: number; pageCount?: number };
+    transitionAtlasSize?: number;
+    /** Upper bound on quads drawn in one frame. */
+    maxInstances?: number;
+  };
+  frame?: {
+    /** Upper bound on a frame's delta time — stops a backgrounded tab resuming with one huge step. */
+    dtClampSecs?: number;
+  };
+  resources?: {
+    /** Longest side an image is downscaled to before packing. `null` packs at native resolution. */
+    imageMaxSide?: number | null;
+    lazyLoad?: boolean;
+  };
+}
+
+/** How a texture should be packed into the atlas. */
+export interface TextureRequest {
+  /**
+   * Downscale cap (longest side, pixels) before packing. Omit to pack at
+   * native resolution — a photo straight off the network is usually far
+   * larger than it will ever be drawn.
+   */
+  maxSide?: number;
+  /**
+   * Pin the texture for the app's lifetime — never LRU-evicted. For assets
+   * referenced continuously, e.g. an animation frame set that must all stay
+   * resident.
+   */
+  eternal?: boolean;
+}
+
+export interface TransitioningConfig {
+  allowInput?: boolean;
+  allowNavigation?: boolean;
 }
 
 /**
@@ -160,9 +267,52 @@ export interface TransitionConfig {
  * 1→1 lerps — see `proteus_ui::SplitStrategy`'s own doc for the visual
  * difference between each. `cols`/`rows` only apply to `"gridSlice"`.
  */
+/**
+ * Per-child transition config for a group transition — Phase A's
+ * `childBehavior` iterator. Called once per target (or source) with its
+ * index and the total, and its result overrides the shared config for that
+ * child. The usual reason is a stagger:
+ *
+ * ```ts
+ * source.splitTo(targets, config, { kind: "slice" },
+ *   (i) => ({ duration: 0.4, delay: i * 0.08, easing: "easeOutCubic" }));
+ * ```
+ *
+ * Called up front, when the transition is requested — never from inside the
+ * engine's own update, so an ordinary closure is safe. A throw, or a return
+ * value that isn't a {@link TransitionConfig}, raises an error naming the
+ * index rather than silently substituting a default.
+ */
+export type ChildBehavior = (
+  index: number,
+  total: number,
+) => TransitionConfig;
+
 export type SplitStrategy =
-  | { kind: "bake" }
+  /**
+   * One independent 1-to-1 transition per target. **Experimental for V1.**
+   *
+   * Each target renders its own content, starting at the source's rectangle
+   * and moving to its own — not N copies of the source. No virtuals, no
+   * bake, no GPU work. The hand-authored option: you decide what each target
+   * is and where it lands, and you own whether the set reads well together.
+   *
+   * Experimental because nothing in the reference demo exercises it, and
+   * because the per-target control it exists for is only half-exposed —
+   * per-target *geometry* works, per-target *timing* needs `childBehavior`,
+   * which the SDK doesn't surface yet.
+   *
+   * Completion fires on each **target**, not on the source — see
+   * {@link Handle.onTransitionComplete}.
+   */
+  | { kind: "perTarget" }
+  /**
+   * Flattens the source — and its whole subtree — into one texture, then
+   * hands each target a crop of it to morph from. What you want when the
+   * pieces should read as parts of the thing that was there.
+   */
   | { kind: "slice" }
+  /** {@link SplitStrategy | `"slice"`}, but cropping a `cols`x`rows` grid rather than a row of strips. */
   | { kind: "gridSlice"; cols: number; rows: number };
 
 /**
@@ -193,8 +343,21 @@ export interface TransitionSnapshot {
 /** Return shape of {@link ProteusApp.get}/{@link Handle.get}. */
 export interface ComponentData {
   geometry: Geometry;
+  /**
+   * Current resolved interaction *style* state.
+   *
+   * `"default"` for a component that declared no hover/pressed/focused/
+   * disabled styles — there is nothing to resolve, so it stays `"default"`
+   * even while disabled. It also lands one tick late, since the engine
+   * writes it through deferred commands. To ask whether a component is
+   * disabled, read {@link ComponentData.disabled}, which has neither caveat.
+   */
   state: InteractionState;
+  /** Whether the component is disabled — the marker itself, immediate. */
+  disabled: boolean;
   visible: boolean;
+  /** Cascaded effective opacity: this component's own times its parent's. */
+  opacity: number;
   /** Child component ids ({@link Handle.id}) — reconstruct with {@link ProteusApp.handleFromId}. */
   children: number[];
   /**

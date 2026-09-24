@@ -40,7 +40,7 @@ use glam::Vec4;
 
 use proteus_render::{
     pack_atlas_page, GpuContext, QuadInstance, QuadPipeline, TransitionAllocId, TransitionRegion,
-    ATLAS_SELECTOR_MAIN, TRANSITION_ATLAS_SIZE,
+    ATLAS_SELECTOR_MAIN, DEFAULT_TRANSITION_ATLAS_SIZE,
 };
 
 use crate::collect::{quad_state_to_instance, BakedTexture};
@@ -58,7 +58,8 @@ use crate::transition::{ActiveTransition, TransitionConfig};
 /// The `transition_atlas`'s real pixel dimensions, mirrored into the ECS
 /// world so this module's UV-normalisation math (`region_uv*`) doesn't have
 /// to assume the compile-time default (M13.5: `transition_atlas_size` is now
-/// a [`proteus_runtime::ProteusConfig`] field). `Engine::new` overwrites this
+/// a `proteus_runtime::ProteusConfig` field — not linkable from here, since
+/// that crate sits a layer above this one). `Engine::new` overwrites this
 /// resource with the configured value alongside inserting `QuadPipeline`,
 /// the same "world resource set post-hoc by the render layer" pattern
 /// `GpuContext`/`QuadPipeline` already use.
@@ -67,31 +68,83 @@ pub struct TransitionAtlasSize(pub u32);
 
 impl Default for TransitionAtlasSize {
     fn default() -> Self {
-        Self(TRANSITION_ATLAS_SIZE)
+        Self(DEFAULT_TRANSITION_ATLAS_SIZE)
     }
+}
+
+// ---------------------------------------------------------------------------
+// transition_atlas reclamation
+// ---------------------------------------------------------------------------
+
+/// Tie every `transition_atlas` region to the lifetime of the component that
+/// owns it, so the region is reclaimed whether the transition finished normally
+/// or the entity holding it simply went away.
+///
+/// Mirrors [`crate::texture_ref::register_texture_ref_hooks`]'s treatment of
+/// `main_atlas` regions: the component *is* the ownership record, so `on_remove`
+/// — which fires on explicit removal **and** on despawn — is the one place that
+/// can't be skipped.
+///
+/// Before this, both frees lived in [`group_transition_complete_system`], which
+/// bails out when the coordinator no longer exists. Destroy a coordinator
+/// mid-transition and its virtuals were never despawned (they kept rendering,
+/// frozen, forever) and every region the group had allocated — one shared bake
+/// plus one per virtual — leaked for the life of the process.
+///
+/// That is reachable from shipped code, not just in principle:
+/// `examples/gallery` calls `splitTo` and then destroys the source on a
+/// `setTimeout` sized to the transition's duration. A `setTimeout` keeps running
+/// while `requestAnimationFrame` is throttled, so backgrounding the tab during
+/// that window destroys the coordinator with the group still in flight.
+///
+/// Registered once, from `ProteusWorld::new()`, before any entity can exist —
+/// `bevy_ecs` panics if a hook is added after the component is already in an
+/// archetype.
+pub fn register_transition_alloc_hooks(world: &mut World) {
+    world
+        .register_component_hooks::<ActiveGroupTransition>()
+        .on_remove(|mut world, ctx| {
+            let Some(shared) = world
+                .get::<ActiveGroupTransition>(ctx.entity)
+                .and_then(|g| g.shared_alloc)
+            else {
+                return;
+            };
+            if let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() {
+                pipeline.free_transition_region(shared);
+            }
+        });
+
+    world
+        .register_component_hooks::<BakedTexture>()
+        .on_remove(|mut world, ctx| {
+            let Some(own) = world.get::<BakedTexture>(ctx.entity).map(|b| b.own_alloc) else {
+                return;
+            };
+            if let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() {
+                pipeline.free_transition_region(own);
+            }
+        });
 }
 
 // ---------------------------------------------------------------------------
 // ChildBehaviorFn
 // ---------------------------------------------------------------------------
 
-/// Per-child transition config function for group transitions.
+/// Per-child transition configs for a group transition, index-aligned with
+/// the request's own targets (1→N) or sources (N→1).
 ///
-/// Called once per child during group setup. Returns the `TransitionConfig`
-/// to apply to that child's virtual entity (or direct target, for bake).
+/// This used to be `fn(idx, total) -> TransitionConfig`, evaluated inside the
+/// setup system. It is a list now because that function was a bare fn pointer
+/// — no captures — and is called once per child with nothing but `idx` and
+/// `total` in scope, so resolving it at request-construction time is exactly
+/// equivalent. Doing so lets a caller use a real closure, and lets the
+/// TypeScript SDK pass a JS function, neither of which a fn pointer allows.
+/// See `Handle::split_to_with_behavior`.
 ///
-/// ```rust,ignore
-/// fn stagger(idx: usize, total: usize) -> TransitionConfig {
-///     TransitionConfig {
-///         duration: 0.4,
-///         delay: idx as f32 * 0.08,
-///         easing: ease_out_cubic,
-///     }
-/// }
-/// ```
-///
-/// This is the Rust equivalent of the TypeScript `childBehavior` iterator.
-pub type ChildBehaviorFn = fn(idx: usize, total: usize) -> TransitionConfig;
+/// Shorter than the child count is fine: any index past the end falls back to
+/// the request's `default_config`.
+pub type ChildConfigs = Vec<TransitionConfig>;
 
 // ---------------------------------------------------------------------------
 // SplitStrategy
@@ -100,14 +153,35 @@ pub type ChildBehaviorFn = fn(idx: usize, total: usize) -> TransitionConfig;
 /// How a 1→N transition is normalized to a set of 1→1 lerps.
 #[derive(Debug, Clone)]
 pub enum SplitStrategy {
-    /// **Bake** — normalize to 1→1 per target.
+    /// **PerTarget** — normalize to one independent 1→1 per target.
+    /// *Experimental for V1.*
     ///
     /// Each of the N target entities receives a `TransitionRequest` whose
-    /// `from_state` is set to the source entity's geometry. All N transitions
-    /// run simultaneously and independently. No virtual entities are created.
+    /// `from_state` is the source's geometry. All N run simultaneously and
+    /// independently. No virtual entities, no bake, no `transition_atlas`
+    /// allocation — nothing here touches the GPU.
     ///
-    /// Visual: N copies of the source fan out to their respective positions.
-    Bake,
+    /// Visual: each target renders **its own** content, starting at the
+    /// source's rectangle and moving to its own. Not N copies of the source:
+    /// `from_state` carries geometry, not appearance.
+    ///
+    /// This is the hand-authored option — the developer decides what each
+    /// target is and where it lands, and is responsible for the set making
+    /// visual sense together. [`SplitStrategy::Slice`] instead flattens the
+    /// source (and its whole subtree) into one texture and hands out crops
+    /// of it, which is what you want when the pieces should read as parts of
+    /// the thing that was there.
+    ///
+    /// **Why experimental:** nothing in the reference demo uses it, so it is
+    /// unexercised outside tests; and the per-target control it exists for
+    /// is only half-exposed — `ChildBehaviorFn` can vary each target's
+    /// duration/delay/easing via `Handle::split_to_with_behavior`, but
+    /// nothing in the reference demo uses it, so the combination is
+    /// unexercised outside tests.
+    ///
+    /// Completion is reported per target, not on the source — the source has
+    /// no transition of its own here. See `Handle::on_transition_complete`.
+    PerTarget,
 
     /// **Slice** — normalize to N→N via virtual entities.
     ///
@@ -151,12 +225,12 @@ pub struct OneToNRequest {
     /// Destination entities and their target geometric states.
     /// The order determines pairing with source slices: target 0 receives slice 0.
     pub targets: Vec<GroupTarget>,
-    /// Default transition config. Applied to all targets unless `child_behavior`
-    /// returns a different config for that index.
+    /// Default transition config. Applied to any target `child_configs`
+    /// doesn't cover.
     pub default_config: TransitionConfig,
-    /// Optional per-child config override. When `Some`, called once per target
-    /// with `(index, total)`. Overrides `default_config` for that child.
-    pub child_behavior: Option<ChildBehaviorFn>,
+    /// Optional per-target config overrides, index-aligned with `targets`.
+    /// Any index not covered falls back to `default_config`.
+    pub child_configs: Option<ChildConfigs>,
     /// Which strategy normalizes the 1→N to a set of 1→1 lerps.
     pub strategy: SplitStrategy,
 }
@@ -195,8 +269,9 @@ pub struct NToOneRequest {
     pub sources: Vec<GroupSource>,
     /// Default transition config.
     pub default_config: TransitionConfig,
-    /// Optional per-source config override.
-    pub child_behavior: Option<ChildBehaviorFn>,
+    /// Optional per-source config overrides, index-aligned with `sources`.
+    /// Any index not covered falls back to `default_config`.
+    pub child_configs: Option<ChildConfigs>,
     /// How the destination is divided into per-source slices.
     pub layout: MergeLayout,
 }
@@ -245,11 +320,6 @@ pub struct GroupSource {
 pub struct ActiveGroupTransition {
     /// Entities to make visible (`Visibility::VISIBLE`) when all virtuals complete.
     pub reveal_on_complete: Vec<Entity>,
-    /// Total virtual entities created for this group transition.
-    ///
-    /// Used to detect completion: when the count of complete virtuals that
-    /// carry `PartOfGroup(coordinator)` equals `total`, the group is done.
-    pub total: usize,
     /// The one `transition_atlas` bake shared by every virtual in this group
     /// (the source's bake for 1→N, the destination's bake for N→1) — as
     /// opposed to each virtual's own individual bake, tracked per-virtual on
@@ -315,30 +385,9 @@ pub fn horizontal_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
         .collect()
 }
 
-/// Divide `source` into `n` equal vertical strips (top-to-bottom rows, Y-down).
-///
-/// Each strip has the full width of the source and `source.height / n` height.
-pub fn vertical_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
-    assert!(n > 0, "vertical_slices: n must be > 0");
-    let slice_h = source.size.y / n as f32;
-    // Y-down: the topmost strip has the highest Y (most negative in world space).
-    // Position top strip at the top of the source's bounding box.
-    let topmost_center = source.position.y + source.size.y * 0.5 - slice_h * 0.5;
-    (0..n)
-        .map(|i| {
-            let y = topmost_center - slice_h * i as f32;
-            QuadState {
-                position: glam::Vec3::new(source.position.x, y, source.position.z),
-                size: glam::Vec2::new(source.size.x, slice_h),
-                ..source.clone()
-            }
-        })
-        .collect()
-}
-
 /// Divide `source` into an equal `cols`×`rows` grid, row-major (index =
-/// `row * cols + col`; row 0 is the top, same convention as `vertical_slices`).
-/// The two-axis counterpart of `horizontal_slices`/`vertical_slices` — used
+/// `row * cols + col`; row 0 is the top). The two-axis counterpart of
+/// `horizontal_slices` — used
 /// when pairing with a same-shaped grid of targets, so each cell starts at
 /// the position within `source` that already corresponds to its own row/col
 /// rather than every cell starting along one shared axis (see
@@ -641,13 +690,14 @@ pub fn one_to_n_setup_system(
         commands.entity(source_entity).insert(Visibility::HIDDEN);
 
         match request.strategy {
-            SplitStrategy::Bake => {
+            SplitStrategy::PerTarget => {
                 // Normalize to N independent 1→1 transitions.
                 // Each target animates from the source geometry to its own position.
                 for (i, target) in request.targets.iter().enumerate() {
                     let cfg = request
-                        .child_behavior
-                        .map(|f| f(i, n))
+                        .child_configs
+                        .as_ref()
+                        .and_then(|c| c.get(i).copied())
                         .unwrap_or(request.default_config);
 
                     commands.entity(target.entity).insert(TransitionRequest {
@@ -741,8 +791,9 @@ pub fn one_to_n_setup_system(
                     slices.iter().zip(request.targets.iter()).enumerate()
                 {
                     let cfg = request
-                        .child_behavior
-                        .map(|f| f(i, n))
+                        .child_configs
+                        .as_ref()
+                        .and_then(|c| c.get(i).copied())
                         .unwrap_or(request.default_config);
 
                     let own_bake = target_bakes.get(i).copied().flatten();
@@ -829,7 +880,6 @@ pub fn one_to_n_setup_system(
                     Lifecycle::Transitioning,
                     ActiveGroupTransition {
                         reveal_on_complete: reveal,
-                        total: n,
                         shared_alloc,
                     },
                 ));
@@ -943,8 +993,9 @@ pub fn n_to_one_setup_system(
             request.sources.iter().zip(target_slices.iter()).enumerate()
         {
             let cfg = request
-                .child_behavior
-                .map(|f| f(i, n))
+                .child_configs
+                .as_ref()
+                .and_then(|c| c.get(i).copied())
                 .unwrap_or(request.default_config);
 
             let own_bake = source_bakes.get(i).copied().flatten();
@@ -1017,7 +1068,6 @@ pub fn n_to_one_setup_system(
         // Coordinator: destination entity tracks group completion.
         commands.entity(dest_entity).insert(ActiveGroupTransition {
             reveal_on_complete: vec![dest_entity],
-            total: n,
             shared_alloc,
         });
     }
@@ -1056,7 +1106,7 @@ pub fn group_transition_complete_system(
         With<Virtual>,
     >,
     mut coordinators: Query<(&ActiveGroupTransition, &mut Lifecycle)>,
-    mut pipeline: Option<ResMut<QuadPipeline>>,
+    mut completed: ResMut<crate::transition::CompletedTransitions>,
 ) {
     // Build a map: coordinator_entity → (all_virtual_entities, complete_count).
     type CoordEntry = (Vec<(Entity, Option<TransitionAllocId>)>, usize);
@@ -1072,6 +1122,25 @@ pub fn group_transition_complete_system(
 
     for (coord_entity, (v_entities, complete_count)) in by_coord {
         let total = v_entities.len();
+
+        // Coordinator gone (destroyed mid-transition) — these virtuals can
+        // never be finalized, because everything finalization needs lives on
+        // the coordinator. Despawn them rather than leaving them rendering
+        // frozen forever; their `transition_atlas` regions come back via
+        // `BakedTexture`'s own on_remove hook, and the shared bake via the
+        // coordinator's, which already fired when it was despawned.
+        if !coordinators.contains(coord_entity) {
+            log::warn!(
+                "group transition coordinator {coord_entity:?} disappeared with {} virtual(s) \
+                 still in flight — cleaning them up",
+                v_entities.len()
+            );
+            for (v_entity, _) in v_entities {
+                commands.entity(v_entity).despawn();
+            }
+            continue;
+        }
+
         if complete_count < total {
             continue; // still waiting on some virtuals
         }
@@ -1086,17 +1155,21 @@ pub fn group_transition_complete_system(
             commands.entity(entity).insert(Visibility::VISIBLE);
         }
 
-        // Free the transition_atlas allocations this group used, if any.
-        if let Some(pipeline) = pipeline.as_deref_mut() {
-            if let Some(shared) = group.shared_alloc {
-                pipeline.free_transition_region(shared);
-            }
-            for (_, own_alloc) in &v_entities {
-                if let Some(id) = own_alloc {
-                    pipeline.free_transition_region(*id);
-                }
-            }
-        }
+        // The `transition_atlas` regions are *not* freed here — removing
+        // `ActiveGroupTransition` below and despawning the virtuals fires the
+        // `on_remove` hooks that own that (see
+        // `register_transition_alloc_hooks`). Keeping a second, parallel free
+        // path here would double-free whichever region both paths touched.
+
+        // Record the coordinator as completed, alongside the 1:1 completions
+        // `transition_complete_system` already collects. Runs after that
+        // system (`ProteusSet::GroupTransitionComplete` follows
+        // `TransitionComplete`), which is what clears the bag — so appending
+        // here is safe. The coordinator is the entity the caller started the
+        // group from: the source for 1→N, the destination for N→1. The
+        // virtuals are excluded deliberately — they are machinery, and one
+        // group is one completion.
+        completed.entities.push(coord_entity);
 
         // Restore coordinator lifecycle and remove group state.
         *lifecycle = Lifecycle::Idle;
@@ -1343,23 +1416,6 @@ mod tests {
                 s.corner_radius,
             );
             assert!(s.corner_radius > 0.0, "clamping should not zero it out");
-        }
-    }
-
-    #[test]
-    fn vertical_slices_count() {
-        let slices = vertical_slices(&source(), 4);
-        assert_eq!(slices.len(), 4);
-    }
-
-    #[test]
-    fn vertical_slices_height() {
-        let slices = vertical_slices(&source(), 4);
-        for s in &slices {
-            assert!(
-                (s.size.y - 25.0).abs() < 1e-4,
-                "each slice should be 25px tall"
-            );
         }
     }
 

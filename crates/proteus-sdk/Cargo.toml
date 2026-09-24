@@ -12,6 +12,10 @@ proteus-ui = { path = "../proteus-ui" }
 proteus-render = { path = "../proteus-render" }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
+# `Handle`'s methods log the failure path before returning `Err`, so a caller
+# that deliberately ignores the `Result` still leaves a trace — see
+# `HandleError`'s own doc.
+log = { workspace = true }
 
 [dev-dependencies]
 # wgpu/pollster: headless-GPU integration test for free_resources(), same

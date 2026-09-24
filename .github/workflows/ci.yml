@@ -43,6 +43,17 @@ jobs:
         # clippy-checked against wasm32 in the `wasm` job below instead.
         run: cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
 
+      - name: Docs
+        # -D warnings catches broken intra-doc links, which are otherwise
+        # invisible: rustdoc renders a dead `[`Foo`]` as plain text, so a
+        # reference silently stops being a link when the item it names is
+        # renamed, deleted or made private. The 2026-09-22 audit (§ R-08)
+        # found 13 of these, several pointing at types removed milestones
+        # ago.
+        run: cargo doc --workspace --exclude proteus-shell-web --exclude proteus-host-web --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       - name: Run tests
         run: cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
         env:
@@ -83,6 +94,13 @@ jobs:
 
       - name: Clippy (proteus-shell-web + proteus-host-web, wasm32)
         run: cargo clippy -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+
+      - name: Docs (wasm32)
+        # Same rationale as the `test` job's own docs step; these two crates
+        # can only be documented against wasm32.
+        run: cargo doc -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
 
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web

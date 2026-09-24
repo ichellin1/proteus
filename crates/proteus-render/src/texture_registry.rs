@@ -49,7 +49,7 @@
 //! No explicit "repack/defragment a page" step exists, and testing found none is needed for the
 //! case that seemed likeliest to require it: fully emptying a page (mixed-size regions, freed in
 //! scattered order) already recovers its *entire* original space via `etagere`'s own coalescing —
-//! see [`TextureRegistry::free_internal`]'s doc for how this was verified rather than assumed. The
+//! see `TextureRegistry::free_internal`'s doc for how this was verified rather than assumed. The
 //! harder case — repacking a page that's still *partially* full, with some content still
 //! referenced — is a real gap, but not one this fixes: it needs the same referenced-content
 //! relocation mechanism already deferred to Post-V1 above (moving a referenced region's pixels
@@ -86,8 +86,8 @@ pub struct AtlasConfig {
 impl Default for AtlasConfig {
     fn default() -> Self {
         Self {
-            page_size: crate::MAIN_ATLAS_SIZE,
-            page_count: crate::MAIN_ATLAS_PAGE_COUNT,
+            page_size: crate::DEFAULT_MAIN_ATLAS_SIZE,
+            page_count: crate::DEFAULT_MAIN_ATLAS_PAGE_COUNT,
         }
     }
 }
@@ -118,16 +118,18 @@ pub enum TextureKind {
 }
 
 /// Lifecycle state of a registered texture.
+///
+/// Registration and upload are one synchronous step here — a `register_*`
+/// method either returns a `TextureId` whose pixels are already on the GPU or
+/// doesn't return one at all — so there is no "loading" or "failed" state in
+/// between for an entry to sit in. (An earlier revision declared both; neither
+/// was ever constructed. If asynchronous uploads land, they come back.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureState {
-    /// Registered but not yet uploaded.
-    Loading,
     /// Uploaded and safe to sample.
     Ready,
     /// GPU memory released (eviction, or `suspend_video`) — not safe to sample.
     Evicted,
-    /// Registration or upload failed.
-    Failed,
 }
 
 /// Where a registered texture's pixels physically live.
@@ -1091,6 +1093,37 @@ mod tests {
         assert!(!reg.is_active(id));
         reg.mark_active(id);
         assert!(reg.is_active(id));
+    }
+
+    /// A finished video's registry entry must actually go away.
+    ///
+    /// `QuadPipeline::suspend_video` only marks the entry `Evicted` — it's built
+    /// to be resumable — so stopping playback left the entry behind forever.
+    /// Nothing reclaims it either: eviction only ever considers `main_atlas`
+    /// entries (`is_eviction_candidate` requires `AtlasRegion::Main`), and a
+    /// `Video` entry has no packed region to reclaim. Every play therefore added
+    /// a permanent row to the slotmap.
+    #[test]
+    fn a_video_entry_can_be_freed_once_playback_is_over() {
+        let mut reg = TextureRegistry::new(single_page(256));
+        let id = reg.register_video(1280, 720);
+        assert!(reg.info(id).is_some());
+
+        // What `suspend_video` does on its own: still registered, just not
+        // safe to sample.
+        reg.mark_suspended(id);
+        assert!(!reg.is_active(id));
+        assert!(
+            reg.info(id).is_some(),
+            "suspend alone must not drop the entry — it's resumable"
+        );
+
+        // What stopping for good now additionally does.
+        reg.free(id);
+        assert!(
+            reg.info(id).is_none(),
+            "a freed video entry must be gone from the registry"
+        );
     }
 
     #[test]

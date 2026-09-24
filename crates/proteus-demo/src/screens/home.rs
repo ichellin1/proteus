@@ -3,10 +3,9 @@
 //! `Loading`/`Gallery`, `ExamplesHome`).
 //!
 //! Design-System treatment: fully transparent fill (border+glow only —
-//! `Demo::start_screen_to_home` reasserts this every Home entry, matching
-//! the original's own "no fill ever" convention), violet border/glow/label,
-//! sized from each label's own baked width (`+2×PADDING_PX`) rather than a
-//! fixed size. Mirrors `proteus-shell-native::layout_nav_buttons` exactly.
+//! `Demo::start_screen_to_home` reasserts this every Home entry, holding the
+//! "no fill ever" convention), violet border/glow/label, sized from each
+//! label's own baked width (`+2×PADDING_PX`) rather than a fixed size.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -42,9 +41,10 @@ pub fn spawn(app: &mut Proteus) -> Home {
         let button = app.component(
             ComponentSpec::new(QuadState {
                 // z=0.5, not 0.0 — `collect_instances` draws roots in
-                // ascending z order; tied with `screens::background`'s
-                // z=0.0, draw order falls back to ECS iteration order,
-                // which isn't guaranteed to put this above the background.
+                // ascending z order and breaks ties by spawn order. Tied
+                // with `screens::background`'s z=0.0, that would put this
+                // above the background only by accident of spawn sequence;
+                // an explicit z says it outright.
                 position: Vec3::new(0.0, 0.0, 0.5),
                 size: FALLBACK_SIZE,
                 rotation: 0.0,
@@ -84,7 +84,7 @@ pub fn spawn(app: &mut Proteus) -> Home {
             // the label text itself rather than the surrounding padding.
             .non_interactive(),
         );
-        button.add_child(app, text);
+        let _ = button.add_child(app, text);
 
         nav_buttons.push(button);
         nav_labels.push(text);
@@ -108,9 +108,8 @@ pub fn spawn(app: &mut Proteus) -> Home {
 /// "compute the real target geometry immediately before the transition
 /// starts" ordering — *not* on some earlier recurring gate, which is the
 /// bug an earlier version of this function had (see the M12.5.5 plan's own
-/// notes on that regression). Mirrors
-/// `proteus-shell-native::layout_nav_buttons` exactly, including its
-/// per-label (not all-or-nothing) fallback.
+/// notes on that regression). The fallback is per-label, not
+/// all-or-nothing: one unbaked label doesn't stall the other two.
 pub fn layout(app: &Proteus, home: &Home) -> [QuadState; 3] {
     let sizes: [Vec2; 3] = std::array::from_fn(|i| {
         home.nav_labels[i]

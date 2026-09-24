@@ -16,13 +16,12 @@ use std::sync::Arc;
 use bevy_ecs::prelude::{Entity, Without};
 use bevy_ecs::world::World;
 
-use proteus_render::{
-    decode_image, resize_to_fit, DecodedImage, FontAtlas, GpuContext, QuadPipeline, TextureId,
-};
+use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, TextureId};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{BakedImage, BakedText, EffectiveVisibility, Image, Text, TextureRef, Visibility};
 
-use crate::services::{HostServices, TextureRequest};
+use crate::services::HostServices;
+use proteus_sdk::TextureRequest;
 
 /// Same "prefer the cascaded `EffectiveVisibility`, fall back to the
 /// entity's own raw `Visibility`, default visible" convention
@@ -47,7 +46,7 @@ fn is_visible(vis: Option<&Visibility>, eff_vis: Option<&EffectiveVisibility>) -
 /// [`Frame::load_texture`]: crate::Frame::load_texture
 /// [`Frame::bake_texture`]: crate::Frame::bake_texture
 pub(crate) fn load_texture(
-    world: &mut World,
+    proteus: &mut proteus_sdk::Proteus,
     services: &mut dyn HostServices,
     key: &str,
     req: TextureRequest,
@@ -63,67 +62,31 @@ pub(crate) fn load_texture(
             return TextureHandle::from_texture_id(TextureId::default());
         }
     };
+    // Decoded here rather than through `Proteus::load_texture` so the
+    // failure log can name the key, which that layer has no way to know.
     bake_texture(
-        world,
+        proteus,
         decoded.width,
         decoded.height,
         decoded.rgba_pixels,
         req,
     )
 }
-
-/// Bake already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
-/// directly into `main_atlas` and return a handle — the bake-alone half of
-/// [`load_texture`], for a caller that already has bytes in hand instead of
-/// an asset key to fetch (M13.4; backs [`Frame::bake_texture`]). `req.max_side`
-/// still applies, same as `load_texture`'s own downscale.
+/// Bake already-decoded RGBA pixels into `main_atlas`.
 ///
-/// A full atlas or a missing `QuadPipeline` both yield a null `TextureHandle`
-/// — `Handle::set_texture` and the collect path both no-op on an unknown id,
-/// so the component renders as nothing. Same graceful degradation the M12
-/// shells' `set_*` asset paths had.
-///
-/// [`Frame::bake_texture`]: crate::Frame::bake_texture
+/// Delegates to [`proteus_sdk::Proteus::bake_texture`], which is where this
+/// lives now — it needs nothing but the world and `proteus-render`, so it
+/// belongs a layer down where an SDK caller (including TypeScript) can reach
+/// it. `Frame` keeps the method so an app that already has a `Frame` in hand
+/// doesn't have to reach past it.
 pub(crate) fn bake_texture(
-    world: &mut World,
+    proteus: &mut proteus_sdk::Proteus,
     width: u32,
     height: u32,
     rgba: Vec<u8>,
     req: TextureRequest,
 ) -> TextureHandle {
-    let null = TextureHandle::from_texture_id(TextureId::default());
-
-    let mut decoded = DecodedImage {
-        width,
-        height,
-        rgba_pixels: rgba,
-    };
-    if let Some(cap) = req.max_side {
-        decoded = resize_to_fit(decoded, cap);
-    }
-
-    let queue = world.resource::<GpuContext>().queue.clone();
-    let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
-        return null;
-    };
-    let Some(texture_id) =
-        pipeline
-            .texture_registry
-            .register_static(decoded.width, decoded.height, req.eternal)
-    else {
-        log::warn!(
-            "bake_texture: main_atlas full — could not register {}x{}",
-            decoded.width,
-            decoded.height,
-        );
-        return null;
-    };
-    let placement = pipeline
-        .texture_registry
-        .main_atlas_region(texture_id)
-        .expect("just registered");
-    pipeline.write_to_main_atlas(&queue, placement, &decoded.rgba_pixels);
-    TextureHandle::from_texture_id(texture_id)
+    proteus.bake_texture(width, height, rgba, req)
 }
 
 /// Rasterize and upload every `Text` entity that has no `BakedText` yet. If

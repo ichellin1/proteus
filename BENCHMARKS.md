@@ -66,11 +66,12 @@ This is intentionally naïve — it represents the pattern that most hand-writte
 
 ### Results
 
-> ⏳ **Pending.** The web shell itself has run in-browser since well before this was last updated
-> (M1–M9.8 are all complete — see [ROADMAP.md](./ROADMAP.md)). What's actually missing is the
-> *harness*: a JS baseline implementation to compare against, and ideally the TypeScript SDK
-> (M12) so the comparison uses the same public API a real developer would. Results will be
-> recorded here once both exist.
+> ⏳ **Pending.** Not blocked any more, just unbuilt. The web shell has run in-browser since M1,
+> and the TypeScript SDK the comparison wants to be written against shipped at M12 — what's
+> missing is the *harness*: a JS/WebGL2 baseline to compare against, plus the runner under
+> `benches/browser/`. M1's DoD originally carried this box; **M14 (Developer Release) owns it
+> now**, alongside the native benchmark below, since that is the milestone where published
+> numbers matter.
 
 #### Median frame time (ms) — Chrome, Apple M-series
 
@@ -98,7 +99,8 @@ This is intentionally naïve — it represents the pattern that most hand-writte
 > ⏳ **Pending** — M14 (Developer Release), which carries the native performance benchmark
 > requirement in its Definition of Done (moved there when M11 — Native Parity was retired as its
 > own milestone; renumbered from M13 when M13 became Application Platform Architecture — see
-> [PLANNING.md](./PLANNING.md)).
+> [PLANNING.md](./PLANNING.md)). As of the 2026-09-22 audit it carries the WASM-boundary
+> benchmark above too.
 
 Instanced rendering on native (Metal / Vulkan / DX12) with bevy_ecs driving the scene graph. Measures frames per second at component counts up to 100 000, and GPU time via `wgpu::QuerySet` timestamp queries.
 
@@ -110,7 +112,7 @@ Instanced rendering on native (Metal / Vulkan / DX12) with bevy_ecs driving the 
 # Rust CPU-side microbenchmarks (criterion)
 cargo bench -p proteus-render
 
-# Browser benchmark harness (needs M12 — TypeScript SDK)
+# Browser benchmark harness (not yet written — see above)
 cd benches/browser
 npm install
 npm run bench
