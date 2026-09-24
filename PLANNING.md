@@ -4155,34 +4155,225 @@ What the SDK gained, in both Rust and TypeScript (TS names are the camelCase equ
 
 `examples/gallery` was rewritten against these and no longer works around the SDK.
 
-Findings still open are listed in the audit document. The steps below decide which of them
-M14 takes on.
+Findings the audit left open are assigned to steps below; the rest go to V2 (see the table at
+the end of this section).
 
-**Definition of done:**
-- [ ] Public documentation: README covers installation, quickstart, and links to full docs;
-  a `docs/` directory with API reference and at least a getting-started guide
-- [ ] **Comment cleanup pass.** Doc comments across the codebase are wordy and carry context from
-  design conversations — "matching source's own selective scope", "per this pass's design
-  decision", rationale that only makes sense to whoever was in the room. A reader wants what the
-  code does and why, not the deliberation that produced it. The 2026-09-22 audit's K-31 sweep did
-  this for one class of it (157 references to a deleted shell); this is the general pass. New
-  comments written from here should be short and self-contained.
-- [ ] ≥3 complete examples in an `examples/` directory, beyond the reference demo — each
-  demonstrating a distinct use case or transition pattern
-- [ ] Pluggable interpolation interface is public, stable, and documented with an example
-  custom easing function
-- [ ] `CHANGELOG.md` exists; project is on semantic versioning (v0.1.0 minimum)
-- [ ] `CONTRIBUTING.md` covers: how to build, how to run tests, PR process
-- [ ] An outside developer with no prior codebase knowledge can follow the README,
-  install the SDK, and produce a working component with a transition
-- [ ] Final cross-shell parity audit: every V1 feature confirmed working identically on native and
-  web, as a last check on the standing per-milestone requirement (not a re-test from scratch)
-- [ ] CI runs the test suite across macOS, Linux, and Windows (GitHub Actions matrix) for the
-  native shell specifically — this is *cross-platform* parity within native, distinct from the
-  native-vs-web parity checked above
-- [ ] No platform-specific behavioral differences in transitions, input handling, or text
-  rendering across macOS/Linux/Windows
-- [ ] Performance benchmarks on native documented in `BENCHMARKS.md`
+#### How M14 runs
+
+Thirteen steps, done in order, each reviewed and approved before the next begins. Steps that
+touch many files are reviewed one commit at a time. Commits use Conventional Commits
+(`type(scope): subject`), which is what the release changelog is generated from.
+
+M14 ends by tagging **v0.1.0** and publishing it to npm and crates.io.
+
+#### Step 0 — Condense the audit record *(done)*
+
+The audit's decisions had been copied into this section at full length. They are now the summary
+above, with the detail left in the audit document. Shorter audit notes elsewhere in this file
+are left alone on purpose: step 11 archives this file and rewrites its architecture content.
+
+#### Step 1 — Plan M14 *(done)*
+
+- [x] Every step has its own definition of done.
+- [x] Every item from the previous checklist maps to a step (table at the end of this section).
+- [x] Every open audit finding is assigned to a step or to V2.
+
+#### Step 2 — Writing standard
+
+Agree what good comments and docs look like before rewriting hundreds of them, and prove it on
+one file.
+
+- [ ] `CONTRIBUTING.md` exists with a section on writing comments and docs:
+  - A doc comment says what the item does, what it returns or guarantees, and how it fails
+    (`# Errors`, `# Panics`). It gives the reason only when the code can't show it.
+  - Comments never mention milestones, audit IDs, dates, PLANNING or its phases, how the code
+    used to work, or reasoning that only makes sense to someone who was in the design discussion.
+  - Tests get plain `//` comments, not `///` doc comments, saying what behaviour the test locks in
+    and why.
+  - TypeScript exports get TSDoc; the main entry points get an `@example`.
+  - A short glossary gives each concept one name (host, app, component, signal, bake, virtual…).
+  - Commit types and scopes, as the changelog groups them.
+- [ ] One file, `crates/proteus-sdk/src/spec.rs`, rewritten to the standard and approved as the
+  model for step 3.
+- [ ] `scripts/check-comments.sh` fails on milestone references, audit IDs, dates, and
+  PLANNING/phase references in comments.
+
+#### Step 3 — Comment cleanup
+
+One commit per crate, in the order developers read them: `proteus-sdk`, `proteus-sdk-web`
+(Rust and TypeScript), `proteus-runtime`, `proteus-ui`, `proteus-render`, `proteus-gpu`,
+`proteus-host-winit`, `proteus-host-web`, `proteus-demo`, the two shells, `examples/gallery`.
+
+Starting point: 352 milestone references, 59 PLANNING/phase references and 26 audit IDs in
+comments; 411 `///` lines in test files; about 30 open audit findings about stale comments
+(K-01…K-30); undocumented public items in `proteus-runtime` (130), `proteus-host-winit` (131),
+`proteus-sdk` (85), `proteus-ui` (72), `proteus-render` (27) and `proteus-gpu` (8).
+
+- [ ] `check-comments.sh` passes on every crate's `src/` and `tests/`, and runs in CI.
+- [ ] `missing_docs` is enforced in CI, with no warnings, on every library crate: `proteus-gpu`,
+  `-render`, `-ui`, `-sdk`, `-runtime`, `-host-winit`, `-host-web`, `-sdk-web`. `proteus-demo`
+  and the shells are exempt; they still get the style cleanup.
+- [ ] `proteus-sdk` and `proteus-runtime` open with a crate-level doc whose example compiles as a
+  doctest.
+- [ ] `typedoc` reports no undocumented TypeScript export.
+- [ ] K-01…K-30 closed, along with T-07 (stale test tables), T-08 and T-09 (tests that can't
+  fail), and three defects found while planning: the stray copy of another method's doc on
+  `Handle::set_declared_geometry`, `Handle::id` claiming `Disabled` isn't exposed, and a
+  duplicated doc block in `ts/src/types.ts`.
+- [ ] Only comments change; tests and clippy stay green. A bug a comment exposes is fixed in its
+  own `fix:` commit.
+
+#### Step 4 — Custom easing (A-07)
+
+Today a Rust caller can already pass any `fn(f32) -> f32` through `TransitionConfig.easing`, but
+the type isn't re-exported from `proteus-sdk` and nothing documents it. TypeScript accepts only
+the five built-in names. `ProteusConfig.transitions.custom_easings` is declared and never read.
+
+- [ ] Design chosen at the start of the step. Options: cubic-bézier control points (plain data,
+  familiar from CSS), named JavaScript functions registered once, or a JS function called every
+  frame.
+- [ ] A TypeScript caller can use an easing curve that isn't built in.
+- [ ] A Rust caller can do the same through `proteus-sdk` alone.
+- [ ] `custom_easings` is either wired up or removed.
+- [ ] Tested, and documented with an example in both languages.
+
+#### Step 5 — Fixes
+
+Bugs an app author could hit, and test gaps a reviewer would ask about. Each fix comes with a
+test that fails without it.
+
+- [ ] C-10 — a texture from `load_texture` / `bake_texture` can be evicted before it is attached.
+- [ ] C-12 — dispatching a pointer event from inside the web `update` callback panics.
+- [ ] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
+- [ ] C-15 — a baked component with its own text draws that text twice.
+- [ ] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
+- [ ] C-18 — native fetches have no timeout, so a hung request pins a thread.
+- [ ] C-14 — confirm A-01 fixed it and a test covers it, then close.
+- [ ] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
+- [ ] T-04 — tests for the `desktop()` and `constrained()` config presets and for
+  `validate_render_config`.
+
+#### Step 6 — Documentation
+
+Plain Markdown in `docs/`, readable on GitHub. The generated API reference (rustdoc and typedoc)
+is deployed to GitHub Pages alongside the demo.
+
+- [ ] `README.md` is the front door: what Proteus is, a picture of the demo, a short quickstart,
+  install instructions, links, and a note that 0.x is an early release.
+- [ ] Getting-started guides for TypeScript and for Rust.
+- [ ] Concept guides: components and geometry; 1→1 transitions; 1→N and N→1 transitions;
+  interaction; text, images and video; configuration; hosts and platforms.
+- [ ] Short how-to pages for common tasks (chaining transitions, staggering a group, loading an
+  image, custom easing, …).
+- [ ] API reference builds in CI and deploys to GitHub Pages.
+- [ ] `GETTING_STARTED.md`'s build-from-source content moves into `CONTRIBUTING.md` (R-05).
+- [ ] Every code snippet in the guides compiles or type-checks in CI.
+- [ ] No developer-facing page links into PLANNING.
+
+#### Step 7 — Examples
+
+Which examples to build is decided at the start of the step.
+
+- [ ] At least three complete examples in `examples/` beyond the reference demo, each showing a
+  distinct use case or transition pattern.
+- [ ] Each has a README and runs with one command.
+- [ ] Each is built in CI and linked from the relevant guide.
+- [ ] `examples/gallery`'s README no longer points into PLANNING.
+
+#### Step 8 — Release process
+
+One version for every crate and the npm package. Library crates publish to crates.io;
+`proteus-demo` and the shells are `publish = false`.
+
+- [ ] `cliff.toml` configures git-cliff; `CHANGELOG.md` is generated, never hand-edited. The
+  commits before M14 aren't conventional, so v0.1.0 opens with one hand-written summary.
+- [ ] A script bumps the version everywhere and regenerates the changelog; the result lands as a
+  normal pull request.
+- [ ] `release.yml` runs on a `vX.Y.Z` tag: checks that versions match, runs CI, creates the
+  GitHub Release with that version's changelog as its notes, and publishes to npm and crates.io.
+- [ ] Every published crate and the npm package have complete metadata, and every dependency
+  between workspace crates carries a version so crates.io accepts it.
+- [ ] `CONTRIBUTING.md` completed: building from source, running tests (including GPU tests), the
+  pull-request process, commit conventions.
+- [ ] `RELEASING.md` covers both releasing the library and deploying the demo.
+- [ ] Repository cleanup: unused committed video removed and the HLS build script tracked
+  (R-02); one demo asset directory instead of two drifted copies (R-03); `design/` and `brand/`
+  reduced to what is source (R-04). History is not rewritten.
+- [ ] A dry run of v0.1.0 passes end to end: a draft GitHub Release with generated notes, and
+  `npm publish --dry-run` / `cargo publish --dry-run` succeeding for every package.
+
+#### Step 9 — Platform checks
+
+- [ ] CI builds and tests the native crates on macOS, Linux and Windows. No behaviour in
+  transitions, input or text rendering differs between them.
+- [ ] Each GPU test either runs or is reported as skipped by name — never skipped silently
+  (T-13). Linux uses lavapipe and Windows can use WARP; macOS runner GPU support is checked at
+  the step.
+- [ ] Tests that can never run today do (T-05): the HLS manifest parser moves where
+  `cargo test` reaches it. CI's lack of wasm32 tests is recorded as known (R-07).
+- [ ] The native demo is run for real on macOS. Real runs on Linux and Windows are Post-V1.
+- [ ] A native-vs-web parity checklist of V1 features is signed off after visual review.
+- [ ] The README no longer says native has only been verified on macOS, and states what is
+  tested where.
+
+#### Step 10 — Benchmarks
+
+- [ ] The per-frame overheads the audit flagged (C-19) are measured, and fixed if they would
+  distort the results.
+- [ ] Native: frame time as component count grows, and under heavy transition load.
+- [ ] Web: the WebAssembly renderer against a hand-written TypeScript/WebGL2 baseline, per the
+  method in `BENCHMARKS.md`, with a batched baseline added or the naive baseline's limits stated
+  plainly.
+- [ ] `BENCHMARKS.md` has real results with hardware and browser recorded, and the harness is in
+  the repo so anyone can rerun it.
+
+#### Step 11 — Architecture document, and archive the V1 planning
+
+- [ ] `ARCHITECTURE.md` at the repo root, written from the current code: crates and layers, the
+  component model and per-frame order, rendering (one instanced draw, atlases, baking),
+  transitions and the three topologies, input, texture lifetime, the app/host contract, and a
+  short list of key design decisions with a paragraph each.
+- [ ] Every claim in it checked against the code.
+- [ ] This file, the V1 `ROADMAP.md` and the audit move to `docs/archive/`, each with a line at the
+  top saying it is archived and where to look instead. D-16 (the missing link to the original
+  proof of concept) is noted there or dropped.
+- [ ] No live document links into the archive except as history. `VISION.md` stays.
+
+#### Step 12 — Start V2
+
+- [ ] A new `PLANNING.md` and `ROADMAP.md` at the repo root for V2. The first V2 milestone is
+  **V2 Planning**; everything else on the V2 roadmap is an unordered candidate list until it runs.
+- [ ] The candidate list includes every Post-Release item below and every audit finding left for
+  V2, checked against both lists.
+- [ ] The new PLANNING states its own rule: it records decisions and definitions of done, and
+  reasoning longer than a paragraph goes in a separate design note.
+
+#### Release — v0.1.0
+
+- [ ] The step 8 release process runs for real: tag, changelog, GitHub Release, npm and crates.io.
+  Publishing cannot be undone, so it goes ahead only on explicit approval.
+
+#### Where the previous checklist went
+
+| Previous item | Step |
+|---|---|
+| Public documentation, `docs/`, getting-started guide | 6 |
+| Comment cleanup pass | 2, 3 |
+| At least three examples | 7 |
+| Pluggable interpolation interface | 4 |
+| `CHANGELOG.md` and semantic versioning | 8 |
+| `CONTRIBUTING.md` | 2, 8 |
+| An outside developer can follow the README to a working transition | 6 (the getting-started guides) |
+| Final cross-shell parity audit | 9 |
+| macOS/Linux/Windows CI matrix | 9 |
+| No platform differences across macOS/Linux/Windows | 9 |
+| Native benchmarks in `BENCHMARKS.md` | 10 (also the web benchmark, per ROADMAP) |
+
+#### Audit findings left for V2
+
+A-06 (keyboard navigation), A-08 (outer and centered borders), D-17 (parent/child transition
+priority), T-06 (the demo never uses interaction styles), T-11 (zero-duration transitions from
+TypeScript), T-12 (a WGSL layout test that breaks on reformatting), R-06 (repository size).
 
 ---
 
@@ -4194,6 +4385,8 @@ load-bearing — this section tracks their *implementation*, which is deferred t
 via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
 not V1.**
 
+- Real runs of the native host on Linux and Windows. V1 tests both in CI but has only been run
+  by hand on macOS (M14 step 9).
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
