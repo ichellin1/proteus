@@ -4132,272 +4132,31 @@ concerns that were tracked continuously rather than as their own milestone — s
 note above on why Native Parity was retired as a standalone milestone in favor of an ongoing
 cross-shell requirement.
 
-#### SDK gaps the 2026-09-22 audit found (A-01 … A-05)
+#### Pre-release audit
 
-Reading `examples/gallery` as an outside developer would surfaced five places where the shipped
-SDK can't express what Phase A promises. These aren't bugs in what exists; they change what "an
-outside developer can build a working component with a transition" means, so they're settled
-before the rest of M14's polish.
+A full audit ran between M13 and M14 and is recorded in
+[audit/AUDIT-2026-09-21.md](./audit/AUDIT-2026-09-21.md). It fixed the correctness bugs, leaks,
+dead code and documentation drift it found, and closed the gaps between what the SDK exposed and
+what Phase A promised. The audit document holds each finding and the reasoning behind its fix;
+the resulting behaviour is documented on the API itself.
 
-##### A-01 — visibility control *(decided and built 2026-09-23)*
+What the SDK gained, in both Rust and TypeScript (TS names are the camelCase equivalents):
 
-`signal_dispatch_system` hid `from` without ever revealing `to`, so Phase A's button → list →
-button round trip was impossible: the return leg animated an invisible entity. That is why
-`examples/gallery`'s `backToGrid()` rebuilds all 12 tiles from scratch and routes through
-`splitTo` instead of the 1→1 signal path.
+| Finding | Added |
+|---|---|
+| A-01 | `ComponentSpec::visible`, `Handle::set_visible`; `signal.set` now reveals its target |
+| A-10 | `ComponentSpec::opacity`, `Handle::set_opacity`; `ComponentData::opacity` reports the cascaded value |
+| A-02 | `Handle::on_transition_complete`, which also fires for `split_to` / `merge_from` |
+| A-11 | `SplitStrategy::Bake` renamed `PerTarget` (it never baked) and marked experimental for V1 |
+| A-09 | Per-child transition configs: `split_to_with_behavior` / `merge_from_with_behavior` |
+| A-03 | `Handle::set_disabled`, `ComponentSpec::start_disabled`, and `TransitioningConfig` on both |
+| A-04 | `Proteus::load_texture` / `bake_texture`, synchronous |
+| A-05 | `mount(canvas, { config })`: validated partial overrides on `ProteusConfig::web()` |
 
-Decisions:
+`examples/gallery` was rewritten against these and no longer works around the SDK.
 
-- **Dispatch reveals `to`.** Symmetric with the `from` hide it already did. At *setup*, not
-  completion — in a 1→1 the `to` entity is what animates, so it has to be visible for the whole
-  morph. The group path reveals at completion (`reveal_on_complete`) because there it's virtuals
-  that animate and the real targets are only waiting. That asymmetry is deliberate.
-- **Reveal is ordered after the hide**, so `set(x, x)` degenerates into `animate_to` semantics
-  rather than silently hiding `x`.
-- **The `from`-must-be-visible guard stays.** "Morph from something the user can't see" is a
-  caller error worth reporting.
-- **Both `ComponentSpec::visible(bool)` and `Handle::set_visible(bool)`**, mirroring the existing
-  `non_interactive()` / `set_interactive()` pair. `ComponentSpec` deliberately had no `.hidden()`
-  builder before this; that call was about not spawning hidden *by default*, which would leave a
-  developer wondering why an element never appeared. An opt-in builder doesn't do that. The
-  `Default` impl is now hand-written so `visible` defaults to `true` rather than `bool::default()`.
-
-`Handle::set_visible` also retired 20 `world_mut().entity_mut(…).insert(Visibility::…)` calls in
-`proteus-demo` — the panicking `entity_mut` API that C-04 was about.
-
-##### A-10 — opacity on the SDK *(decided and built 2026-09-23)*
-
-Raised as "should opacity be its own milestone?" — it shouldn't, because the feature already
-shipped. M10 built the cascade (`opacity_system`: `own × parent.effective`, walked top-down),
-`collect_instances` paints it, two integration and three unit tests cover it, and
-`example_detail` has a row demonstrating `0.6 × 0.6 = 0.36` specifically to show cascaded
-`Opacity` rather than a flat `color.w`. What was missing was only the SDK surface — the demo
-reached the feature through `world_mut().entity_mut(…).insert(Opacity(…))`, the same escape
-hatch A-01 retired for visibility. So this is an A-series exposure gap, not new scope.
-
-Decisions:
-
-- **`ComponentSpec::opacity(f32)` and `Handle::set_opacity(f32)`**, plus `opacity?` and
-  `setOpacity()` in TS. `ComponentData::opacity` reports the cascaded effective value, mirroring
-  how `visible` already reports `EffectiveVisibility`.
-- **Clamped to `0.0..=1.0` at the SDK boundary.** Phase B specifies that range; the raw
-  `proteus_ui::Opacity` component stays unconstrained for internal use.
-- **Opacity and visibility do not interact.** Opacity multiplies during painting; visibility is
-  an ECS flag telling systems whether to act on the entity at all. The observable consequence:
-  an entity at `0.0` opacity is invisible but **still hit-tests**, while a hidden one doesn't.
-  That is deliberate — an invisible hit zone is a real thing to want — and is now documented on
-  both setters and pinned by a test.
-- **Hiding something stops hit-testing one tick later.** `hit_test_system` runs at the start of
-  the schedule and reads the `EffectiveVisibility` the cascade wrote at the end of the previous
-  one, so input resolves against what was last painted: a click arriving in the same tick as the
-  hide still lands, because the user was looking at the component when they made it. Found while
-  writing A-10's tests, judged correct rather than a bug, documented and pinned from both sides
-  so the ordering can't change silently.
-
-##### A-02 — transition-completion callback *(decided and built 2026-09-23)*
-
-Framed in the audit as "`CompletedTransitions` exists but isn't surfaced". Only half true: 1→1
-completions were recorded, but `group_transition_complete_system` recorded *nothing*, so for
-`split_to`/`merge_from` — the case `examples/gallery` actually needs — there was nothing to
-surface at any layer.
-
-Decisions:
-
-- **Group completion is recorded too.** `group_transition_complete_system` now pushes the
-  coordinator into `CompletedTransitions` alongside the 1→1 completions. It runs after
-  `transition_complete_system` (which is what clears the bag), so appending is safe. Virtual
-  entities are deliberately excluded — they are machinery, and one group is one completion.
-- **`Handle::on_transition_complete`, not `SignalHandle::on_complete`.** A signal's completion
-  *is* its `to` entity's completion, so a second spelling would be two names for one event.
-  `SignalHandle::on_dropped` stays signal-scoped because a drop genuinely is.
-- **The reporting entity is always the handle the caller started from**: `animate_to` → itself,
-  `signal.set` → `to`, `split_to` → the source, `merge_from` → the destination.
-- **Except `SplitStrategy::Bake`, which reports on its targets.** `Bake` is defined as N
-  independent 1→1 transitions with no virtuals, so the source has no transition of its own — it
-  hides and goes `Idle` in the same tick. Making it report uniformly would mean inventing group
-  bookkeeping for a strategy whose whole point is not having any. Documented on both the Rust and
-  TS methods instead, and pinned by a test, because a callback that silently never fires is worse
-  than an asymmetry a reader can see. Revisit if it trips anyone up.
-- **`Bake` also takes one more tick than `Slice`** to start: `one_to_n_setup_system` inserts each
-  target's `TransitionRequest` through deferred commands, and `transition_setup_system` shares its
-  schedule set, so the request isn't picked up until the following tick. Pinned, not changed.
-
-Found while testing this: `split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry`
-couldn't distinguish a completed transition from one that never ran — it asserted the target sat
-at its declared geometry with no `ActiveTransition`, which is also true of a target that never
-moved. It now asserts mid-flight state as well.
-
-##### `SplitStrategy::Bake` → `PerTarget`, experimental for V1 *(decided 2026-09-23)*
-
-Renamed. The old name claimed a behaviour the code didn't have — it baked nothing — and described
-Phase B's Strategy 1, which was never built. `PerTarget` says what it does: N independent 1→1s,
-one per target, no virtuals and no GPU work.
-
-The rename also retires the A-02 concern it raised. "Completion fires per target, not on the
-source" was a trap under the old name; under `PerTarget` it is the obvious reading, so the
-notification-only coordinator that was being weighed is unnecessary.
-
-**Marked experimental for V1.** Its use case is hand-authored control: the developer decides what
-each target is and where it lands, and owns whether the set reads well together. That is a real
-thing to want, but it is unproven — nothing in the reference demo exercises it, and the control
-it exists for is only half-exposed: `ChildBehaviorFn` can vary each target's duration/delay/easing,
-but `proteus-sdk` hardcodes `child_behavior: None` (audit A-09), so an SDK caller gets per-target
-*geometry* without per-target *timing*. Resolving A-09 is what would make it fully usable.
-
-Also fixed while renaming: the TS `splitTo` DTO fell back to this strategy for any unrecognized
-`kind`, so a typo silently selected the experimental path. It now falls back to `"slice"` and logs.
-
-##### A-09 — per-child transition configs, and a `split_to` doc fix *(decided and built 2026-09-23)*
-
-Two unrelated things under one finding.
-
-The doc bug: `Handle::split_to` said the source "is hidden by the underlying system once the
-transition completes". It is hidden **immediately**, in the same tick the split is set up
-(`topology.rs`, before the strategy match). What the viewer sees during the morph is the targets
-or virtual slices of a bake — never the source. Corrected on both `split_to` and its siblings.
-
-The gap: `ChildBehaviorFn` — Phase A's `childBehavior` iterator — existed only in `proteus-ui`
-and was `fn(idx, total) -> TransitionConfig`, a bare fn pointer. Neither SDK could pass one, so
-every group transition used a single shared config for all N children.
-
-Decision: **resolve per-child configs eagerly instead of lazily.** The type is now
-`ChildConfigs = Vec<TransitionConfig>`, index-aligned with the request's targets or sources, and
-the SDK evaluates the caller's closure once per child before enqueueing the request. This is
-provably equivalent — the old fn pointer had no captures and was called with nothing in scope but
-`idx` and `total`, so nothing could observe *when* it ran — and it buys two things a fn pointer
-cannot: a Rust caller can use a closure that captures, and TypeScript can pass a JS function.
-The two existing `proteus-ui` stagger tests pass unchanged through the new form, which is the
-equivalence argument made concrete.
-
-Surface: `Handle::split_to_with_behavior` / `merge_from_with_behavior` in Rust, and an optional
-fourth argument on `splitTo`/`mergeFrom` in TypeScript (the wrapper dispatches to a separate
-wasm export, so the plain path stays a single call). A `childBehavior` that throws or returns a
-malformed config raises an error naming the index rather than silently substituting a default.
-
-This is what `SplitStrategy::PerTarget` was missing: it now offers per-target *timing* as well as
-per-target geometry, which is the control it exists for.
-
-##### A-03 — `Disabled` and `TransitioningConfig` on the SDK *(decided and built 2026-09-23)*
-
-TypeScript could declare a `disabled` *style* but had no way to put a component *into* that
-state, and neither SDK exposed `TransitioningConfig` at all — so Phase B's `allowInput` /
-`allowNavigation` were unreachable from any app.
-
-Decisions:
-
-- **`Handle::set_disabled(bool)` and `ComponentSpec::start_disabled()`**, plus `setDisabled()` and
-  `startDisabled?` in TS. `start_disabled()` is a no-arg marker rather than `disabled(bool)`
-  because `disabled(StyleOverride)` already means "the look", and the two would collide.
-- **Disabled is documented against `set_interactive`**, which is the confusion waiting to happen.
-  `set_interactive(false)` removes `Interactable`: the component is never a click target and has
-  no associated look — a backdrop, a label. `Disabled` keeps it a control, excludes it from
-  hit-testing, *and* resolves its declared disabled style. A submit button that isn't ready.
-- **`ComponentSpec::transitioning(TransitioningConfig)` and
-  `Handle::set_transitioning_config(Option<..>)`**, taking the struct rather than two positional
-  booleans. `allow_navigation` is exposed but inert — navigation is still a stub (A-06) — and
-  says so.
-- **`ComponentData` gains `disabled`.** Found while testing: `ComponentData::state` is *style*
-  resolution, so it stays `Default` forever for a component that declared no interaction styles,
-  even while disabled — `set_disabled(true)` was unobservable in that case. `disabled` reads the
-  marker directly.
-- **`ComponentData::state` lands one tick late**, because `interaction_style_system` writes
-  `InteractionState` through deferred commands. Documented and pinned; `disabled` has no such lag,
-  which is the other half of why it exists.
-
-Fixed in passing: `ComponentDataDto` never carried `opacity`, so A-10's `ComponentData::opacity`
-was unreadable from TypeScript. Both it and `disabled` cross now.
-
-##### A-04 — texture loading on the SDK *(decided and built 2026-09-23)*
-
-TypeScript had no way to get pixels into the atlas. `examples/gallery` works around it by
-spawning a throwaway off-screen component with `image: { bytes }` and polling `bakedImageSize()`
-every frame until the bake system happens to run (`loadBaked`/`waitForBake`).
-
-Decisions:
-
-- **The primitive belongs in `proteus-sdk`, not `proteus-runtime`.** `bake_texture` needs nothing
-  but the world and `proteus-render` — both of which `proteus-sdk` already has — so it sat a
-  layer higher than necessary, out of reach of the one caller that needed it most.
-  `Proteus::bake_texture` is the implementation now and `Frame::bake_texture` delegates, so
-  there's one of it.
-- **`TextureRequest` moved down with it**, from `proteus-runtime::services` to `proteus-sdk`.
-  How a texture should be packed is app-authoring, not host-services. `proteus-runtime`
-  re-exports it, so hosts and apps that name it through `proteus_runtime` are unaffected.
-- **`Proteus::load_texture(bytes, request)`** decodes then bakes — the bytes-in-hand counterpart
-  of `Frame::load_texture(key, request)`, which fetches through the host. TS gets `loadTexture`
-  and `bakeTexture` on `ProteusApp`.
-- **No `onReady`, no promise.** Phase A sketched `texture({src})` with an `onReady` because it
-  assumed the SDK would do the fetching. It doesn't: the caller supplies bytes, and baking them
-  is synchronous, so the handle is usable the moment the call returns. The asynchrony the
-  gallery's polling was working around was never in the texture path — it was waiting for a
-  *bake system* to notice a component it had spawned.
-- Failure split by kind: `None` for undecodable bytes (bad input), a null handle for a decoded
-  image that doesn't fit the atlas (capacity, logged, renders as nothing) — matching the
-  degradation the rest of the texture path already uses.
-
-`examples/gallery` was rewritten against this and A-02 together — see below.
-
-##### `examples/gallery` rewritten *(2026-09-23)*
-
-The audit's step 6 noted the example "demonstrates the workarounds, not the model". With A-02 and
-A-04 landed it demonstrates the model:
-
-- Loading an image was a throwaway off-screen component carrying `image: { bytes }`, polled with
-  `bakedImageSize()` on every `requestAnimationFrame` until a bake system happened to run. It is
-  `app.loadTexture(bytes)` now, synchronous, with the texture worn via `setTexture`. `GridSlot`
-  holds a `TextureHandle` rather than a hidden `Handle` — and that is a better model as well as
-  less code, since cropping edits the *entity's* UVs and never the texture, so one texture backs
-  both the square-cropped grid tile and the uncropped hero.
-- Knowing when a morph finished was `setTimeout(duration * 1000 + 150)` in one place and
-  `sleep(duration * 1000)` raced against a fetch in another. Both are `onTransitionComplete` now,
-  through a small `afterTransition` helper that guards the once-only case — the callback is
-  persistent, which the helper's doc explains, since that is the first thing anyone will trip on.
-- The hero's self-cleanup after `splitTo` demonstrates A-02's group semantics directly: a slicing
-  split reports once, on the source, when every target has arrived.
-
-Net −69/+101 lines, most of the growth being comments that now explain the model instead of the
-workaround. The two topologies the example was built to show (1→1 via `signal.set`, 1→N via
-`splitTo`) are unchanged.
-
-##### A-05 — engine config from TypeScript *(decided and built 2026-09-23)*
-
-`mount()` hardcoded `ProteusConfig::web()`, so a TS app could not set a clear colour, atlas
-sizes, `image_max_side` or a present mode.
-
-Decisions:
-
-- **Partial overrides, not a mirror.** `ProteusConfigDto` has every field optional, applied on
-  top of `ProteusConfig::web()`. A caller states only what it wants changed, and a new knob is a
-  new optional field — M13.5's "the shape only grows" rule holds on this side too.
-- **Only knobs that are wired.** `ProteusConfig` carries fields nothing consumes yet —
-  `memory.video.*`, `render.msaa_samples`, all of `input.*`, `transitions.custom_easings` (A-07),
-  most of `debug.*`. They're absent here on purpose: in Rust an inert field is a documented
-  placeholder, but in a TypeScript API it is a control that silently does nothing. Checked each
-  field for a real consumer before exposing it; nine qualified.
-- **Typos are rejected, not ignored** (`deny_unknown_fields`), as are unknown `presentMode` /
-  `powerPreference` strings. A config typo that quietly changes nothing is the exact failure this
-  API exists to prevent — different from the `splitTo` strategy tag, where leniency is fine
-  because the wrong branch is immediately visible on screen.
-- **Validation returns a JS error instead of aborting.** `Renderer::new` asserts its config and
-  would take the wasm module down; a TS caller's config is *input*, not a programmer error, so
-  `mount` runs `validate_atlas_config`/`validate_render_config` first and throws with the
-  offending field named. Both are now re-exported from `proteus-runtime` for that purpose.
-- **The DTO lives in `proteus-runtime`, not `proteus-host-web`.** It is a property of the config
-  rather than of the web, a native host loading settings from a file wants the same thing — and
-  `proteus-host-web` only compiles for wasm32, where nothing runs `cargo test`, so tests placed
-  there would never have run.
-
-`imageMaxSide` distinguishes absent from an explicit `null`: omitting it keeps the preset, while
-`null` means "pack at native resolution".
-- **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
-  exposed by either SDK.
-- **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to
-  spawn a throwaway off-screen component and poll `bakedImageSize()` every frame.
-- **A-05** `mount()` hardcodes `ProteusConfig::web()`, so a TS app can't set `clear_color`,
-  atlas sizes, `image_max_side` or `present_mode`.
-
-`examples/gallery` should be revisited once A-01/A-02 have both landed — it currently
-demonstrates the workarounds rather than the model.
+Findings still open are listed in the audit document. The steps below decide which of them
+M14 takes on.
 
 **Definition of done:**
 - [ ] Public documentation: README covers installation, quickstart, and links to full docs;
