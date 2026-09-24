@@ -4160,7 +4160,7 @@ the end of this section).
 
 #### How M14 runs
 
-Thirteen steps, done in order, each reviewed and approved before the next begins. Steps that
+Fourteen steps, done in order, each reviewed and approved before the next begins. Steps that
 touch many files are reviewed one commit at a time. Commits use Conventional Commits
 (`type(scope): subject`), which is what the release changelog is generated from.
 
@@ -4258,8 +4258,7 @@ test that fails without it.
 Plain Markdown in `docs/`, readable on GitHub. The generated API reference (rustdoc and typedoc)
 is deployed to GitHub Pages alongside the demo.
 
-- [ ] `README.md` is the front door: what Proteus is, a picture of the demo, a short quickstart,
-  install instructions, links, and a note that 0.x is an early release.
+- [ ] `README.md` links to the guides and API reference. Its full rewrite is step 13.
 - [ ] Getting-started guides for TypeScript and for Rust.
 - [ ] Concept guides: components and geometry; 1→1 transitions; 1→N and N→1 transitions;
   interaction; text, images and video; configuration; hosts and platforms.
@@ -4298,7 +4297,8 @@ One version for every crate and the npm package. Library crates publish to crate
 - [ ] `RELEASING.md` covers both releasing the library and deploying the demo.
 - [ ] Repository cleanup: unused committed video removed and the HLS build script tracked
   (R-02); one demo asset directory instead of two drifted copies (R-03); `design/` and `brand/`
-  reduced to what is source (R-04). History is not rewritten.
+  reduced to what is source (R-04), keeping the logo assets step 13 uses. History is not
+  rewritten.
 - [ ] A dry run of v0.1.0 passes end to end: a draft GitHub Release with generated notes, and
   `npm publish --dry-run` / `cargo publish --dry-run` succeeding for every package.
 
@@ -4348,6 +4348,19 @@ One version for every crate and the npm package. Library crates publish to crate
 - [ ] The new PLANNING states its own rule: it records decisions and definitions of done, and
   reasoning longer than a paragraph goes in a separate design note.
 
+#### Step 13 — README
+
+The README is what everyone sees first, on GitHub, npm and crates.io. Done last, so it can point
+at finished docs, examples and benchmarks.
+
+- [ ] The Proteus logo at the top, switching between the light and dark lockups to match the
+  reader's theme (`brand/logo/assets/`).
+- [ ] In order: what Proteus is in a sentence or two, a picture or short clip of the demo, a
+  quickstart, install instructions for TypeScript and Rust, links to the docs, examples, demo
+  and architecture, project status (0.x is an early release), and license.
+- [ ] Renders correctly on GitHub, npm and crates.io; images use URLs that work off GitHub.
+- [ ] The quickstart code is checked in CI like the guides' snippets.
+
 #### Release — v0.1.0
 
 - [ ] The step 8 release process runs for real: tag, changelog, GitHub Release, npm and crates.io.
@@ -4357,7 +4370,7 @@ One version for every crate and the npm package. Library crates publish to crate
 
 | Previous item | Step |
 |---|---|
-| Public documentation, `docs/`, getting-started guide | 6 |
+| Public documentation, `docs/`, getting-started guide | 6, 13 (README) |
 | Comment cleanup pass | 2, 3 |
 | At least three examples | 7 |
 | Pluggable interpolation interface | 4 |
