@@ -1,67 +1,60 @@
-//! `ComponentData` — the read-only shape [`crate::Proteus::get`] returns.
+//! The types [`Proteus::get`](crate::Proteus::get) returns when you read a
+//! component's state.
 //!
-//! Mirrors PLANNING.md Phase A's `proteus.get(id)` sketch: `geometry` is
-//! always "what is this component right now" (declared state when idle, the
-//! live interpolated state when transitioning); `transition` is `None` when
-//! idle, populated with `base`/`target`/`current`/`progress` otherwise.
+//! [`ComponentData`] is a copy of the component's state at the moment `get`
+//! was called. If the component is transitioning, its `transition` field holds
+//! a [`TransitionData`] describing the transition. Neither updates afterwards;
+//! call `get` again to see later changes.
 
 use proteus_ui::{ActiveTransition, InteractionStateKind, QuadState};
 
 use crate::handle::Handle;
 
-/// One completed read of an entity's current state, as of the moment
-/// [`crate::Proteus::get`] was called — not a live view.
+/// A snapshot of a component's state, taken when
+/// [`Proteus::get`](crate::Proteus::get) was called. It does not update
+/// afterwards.
 #[derive(Debug, Clone)]
 pub struct ComponentData {
-    /// Current resolved geometry — the declared state when idle, the live
-    /// interpolated state when transitioning (same value as
-    /// `transition.current` in that case).
+    /// The component's current geometry: its declared geometry when idle, or
+    /// its in-progress geometry while transitioning (the same as
+    /// `transition.current`).
     pub geometry: QuadState,
-    /// Current resolved interaction *style* state.
+    /// The interaction style currently applied.
     ///
-    /// `Default` for an entity with no `InteractionDef` — a component that
-    /// declared no hover/pressed/focused/disabled styles has nothing to
-    /// resolve and stays `Default` forever, even while disabled. It also
-    /// lands one tick late: `interaction_style_system` writes
-    /// `InteractionState` through deferred commands, so a state entered this
-    /// tick is readable on the next.
-    ///
-    /// To ask whether a component is disabled, use
-    /// [`ComponentData::disabled`], which has neither caveat.
+    /// Stays `Default` for a component that declared no interaction styles,
+    /// even while it is disabled, and updates one tick after the change. To
+    /// check whether a component is disabled, use [`ComponentData::disabled`].
     pub state: InteractionStateKind,
-    /// Whether the component is disabled — read straight off the marker, so
-    /// it is true immediately and regardless of whether any interaction
-    /// style was declared. See `Handle::set_disabled`.
+    /// Whether the component is disabled.
+    ///
+    /// Unlike [`ComponentData::state`], this changes as soon as
+    /// [`Handle::set_disabled`] is called, and is correct for every component,
+    /// including one with no interaction styles.
     pub disabled: bool,
-    /// Cascaded effective visibility when available (M10), falling back to
-    /// the entity's own raw `Visibility` — same preference order
-    /// `hit_test_system` already uses. Defaults to `true` when neither
-    /// component is present.
+    /// Whether the component is visible. A component inside a hidden parent
+    /// is not. Updated each tick.
     pub visible: bool,
-    /// Cascaded effective opacity when available (M10), falling back to the
-    /// entity's own raw `Opacity`. Defaults to `1.0` when neither component
-    /// is present. Independent of [`ComponentData::visible`] — see
-    /// `Handle::set_opacity`.
+    /// The opacity the component is drawn with: its own opacity multiplied
+    /// by its parents'. Updated each tick.
     pub opacity: f32,
-    /// Direct children, in `bevy_ecs::hierarchy::Children` order.
+    /// The component's direct children, in order.
     pub children: Vec<Handle>,
-    /// `None` when idle; populated for the duration of an active transition.
+    /// The transition in progress, or `None` when idle.
     pub transition: Option<TransitionData>,
 }
 
-/// Snapshot of an in-flight transition, derived from `ActiveTransition`.
+/// A snapshot of a transition in progress.
 #[derive(Debug, Clone)]
 pub struct TransitionData {
-    /// Geometry at the start of the transition.
+    /// The geometry the transition started from.
     pub base: QuadState,
-    /// Geometry the transition is heading toward.
+    /// The geometry the transition ends at.
     pub target: QuadState,
-    /// Current interpolated geometry — identical to the enclosing
-    /// [`ComponentData::geometry`].
+    /// The current geometry, the same as [`ComponentData::geometry`].
     pub current: QuadState,
-    /// Raw (pre-easing) progress in `[0, 1]`, i.e. `elapsed / duration`
-    /// clamped — the same `t` PLANNING.md's Phase A describes as "useful for
-    /// dependent animations, progress indicators, or cancellation logic."
+    /// Progress through the transition, from `0.0` to `1.0`, before easing is
+    /// applied. Useful for keeping other animation in step with the
+    /// transition.
     pub progress: f32,
 }
 

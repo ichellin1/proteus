@@ -109,10 +109,10 @@ impl ComponentSpec {
         self
     }
 
-    /// Creates the component in the disabled state: drawn, but ignoring
-    /// pointer input and showing its [`ComponentSpec::disabled`] style.
+    /// Creates the component in the disabled state: drawn, but ignoring all
+    /// input and showing its [`ComponentSpec::disabled`] style.
     ///
-    /// Use this for a control that will be enabled later, with
+    /// Use this for a control that is enabled later with
     /// [`Handle::set_disabled`]. For something that is never a control,
     /// such as a background or a label, use
     /// [`ComponentSpec::non_interactive`] instead.
@@ -228,12 +228,13 @@ impl ComponentSpec {
         self
     }
 
-    /// Makes this component ignore pointer input entirely.
+    /// Makes this component ignore all input.
     ///
     /// Components are interactive by default, so handlers such as
     /// [`Handle::on_click`] work without an opt-in. A non-interactive
-    /// component is never hovered, pressed or focused. Use it for passive
-    /// elements such as backgrounds and labels.
+    /// component is never the target of any input, whether pointer, touch,
+    /// keyboard, gamepad or remote. Use it for passive elements such as
+    /// backgrounds and labels. See [`Handle::set_interactive`].
     pub fn non_interactive(mut self) -> Self {
         self.non_interactive = true;
         self
