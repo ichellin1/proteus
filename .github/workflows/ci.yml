@@ -36,6 +36,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check comments
+        # Paths are added as each crate is brought up to CONTRIBUTING.md's
+        # comment rules.
+        run: scripts/check-comments.sh crates/proteus-sdk/src
+
       - name: Clippy
         # proteus-shell-web / proteus-host-web are wasm32-only
         # (wgpu::SurfaceTarget::Canvas is #[cfg(web)]-gated) — neither can

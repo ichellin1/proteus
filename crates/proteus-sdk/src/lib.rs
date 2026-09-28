@@ -1,26 +1,56 @@
-//! `proteus-sdk` — Layer 2.5: the generic app-authoring API PLANNING.md's
-//! Phase A designed, implemented in Rust for the first time (M12.3).
+//! The app-authoring API for Proteus: create components, connect them, and
+//! transition between them.
 //!
-//! ```text
-//! Proteus::component(spec) -> Handle       — declare a component
-//! Proteus::signal(owner)   -> SignalHandle — declare a signal
-//! Proteus::texture(id)     -> TextureHandle — wrap an already-registered texture
-//! Proteus::get(handle)     -> ComponentData — read current state
-//! Proteus::tick(dt)                         — advance one frame, dispatch callbacks
+//! [`Proteus`] holds an app's components, signals and callbacks. The handles it
+//! returns ([`Handle`], [`SignalHandle`], [`TextureHandle`]) are small `Copy` IDs,
+//! and their methods take the `Proteus` they came from:
+//!
+//! ```
+//! use glam::Vec2;
+//! use proteus_sdk::{ComponentSpec, Proteus, QuadState, TransitionConfig};
+//!
+//! let mut app = Proteus::new();
+//!
+//! let button = app.component(ComponentSpec::new(QuadState {
+//!     size: Vec2::new(160.0, 48.0),
+//!     ..QuadState::default()
+//! }));
+//! let panel = app.component(
+//!     ComponentSpec::new(QuadState {
+//!         size: Vec2::new(480.0, 320.0),
+//!         ..QuadState::default()
+//!     })
+//!     .visible(false),
+//! );
+//!
+//! // Clicking the button transitions it into the panel.
+//! let open = app.signal(None);
+//! button.on_click(&mut app, move |app| {
+//!     open.set(app, panel, button, TransitionConfig::default(), false);
+//! });
+//!
+//! // Click the button, then let the transition start.
+//! app.pointer_moved(Some(Vec2::ZERO));
+//! app.pointer_pressed();
+//! app.tick(1.0 / 60.0);
+//! app.tick(1.0 / 60.0);
+//! assert!(app.get(panel).unwrap().transition.is_some());
 //! ```
 //!
-//! ## Rust vs. the JS-oriented Phase A sketch
+//! | Call | What it does |
+//! |---|---|
+//! | [`Proteus::component`] | Creates a component from a [`ComponentSpec`] |
+//! | [`Proteus::signal`], [`SignalHandle::set`] | Transitions one component into another (1→1) |
+//! | [`Handle::split_to`], [`Handle::merge_from`] | Transitions one component into many (1→N), or many into one (N→1) |
+//! | [`Handle::animate_to`] | Transitions a component to new geometry |
+//! | [`Proteus::get`] | Reads a component's current state |
+//! | [`Proteus::tick`] | Advances the app and runs callbacks |
 //!
-//! Phase A's TypeScript sketch has handles capture behavior freely in
-//! closures — `button.onClick(() => ...)` — relying on JS's implicit shared
-//! mutable state. Rust has none, so [`Handle`]/[`SignalHandle`] stay thin
-//! `Copy` identity tokens and their behavioral methods take `&mut Proteus`
-//! explicitly: `button.on_click(&mut app, |app| { ... })`. This is the
-//! idiomatic Rust adaptation, not a literal port.
-//!
-//! This crate is usable directly by native Rust apps (no wasm required) and
-//! is the layer `proteus-sdk-web`'s wasm-bindgen bridge (M12.4) wraps 1:1 for
-//! JS/TypeScript.
+//! This crate draws nothing by itself. To put an app on screen, implement
+//! `proteus_runtime::App` and run it on a host: `proteus-host-winit` natively, or
+//! `proteus-host-web` in the browser. The TypeScript SDK exposes this same API.
+
+#![warn(missing_docs)]
 
 mod app;
 mod callback;
@@ -33,12 +63,8 @@ pub use data::{ComponentData, TransitionData};
 pub use handle::{Handle, HandleError, SignalHandle, TextureHandle, TextureRequest};
 pub use spec::ComponentSpec;
 
-// Re-exported so callers can build `QuadState`/`StyleOverride`/
-// `TransitionConfig` values, pick an easing function, inspect a signal
-// drop's reason, construct the visual/content components
-// `ComponentSpec::text`/`image`/`border`/`glow`/`drop_shadow` take, and pick
-// a strategy/layout for `Handle::split_to`/`merge_from`'s group
-// transitions — all without a direct `proteus-ui` dependency of their own.
+// The value types this API takes and returns, so an app needs no direct
+// `proteus-ui` dependency.
 pub use proteus_ui::{
     ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, Border, DropReason,
     DropShadow, Glow, Image, InteractionStateKind, MergeLayout, Opacity, QuadState, SplitStrategy,
