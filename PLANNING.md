@@ -4206,8 +4206,9 @@ One commit per crate, in the order developers read them: `proteus-sdk`, `proteus
 
 Starting point: 352 milestone references, 59 PLANNING/phase references and 26 audit IDs in
 comments; 411 `///` lines in test files; about 30 open audit findings about stale comments
-(K-01…K-30); undocumented public items in `proteus-runtime` (130), `proteus-host-winit` (131),
-`proteus-sdk` (85), `proteus-ui` (72), `proteus-render` (27) and `proteus-gpu` (8).
+(K-01…K-30); undocumented public items in `proteus-ui` (45), `proteus-runtime` (37),
+`proteus-render` (27), `proteus-sdk-web` (22), `proteus-sdk` (13), `proteus-gpu` (8),
+`proteus-host-winit` (1) and `proteus-host-web` (1).
 
 - [ ] `check-comments.sh` passes on every crate's `src/` and `tests/`, and runs in CI.
 - [ ] `missing_docs` is enforced in CI, with no warnings, on every library crate: `proteus-gpu`,
@@ -4253,6 +4254,76 @@ test that fails without it.
 - [ ] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
 - [ ] T-04 — tests for the `desktop()` and `constrained()` config presets and for
   `validate_render_config`.
+- [ ] An `on_dropped` handler that destroys its own signal leaves that signal's handlers
+  registered: `fire_dropped` puts them back without checking that the signal still exists, and
+  they fire again if the stale handle is used. Give it the same check `fire` has, with a test.
+- [ ] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
+  existing handlers for the same event. Keep registration order, or document the order.
+- [ ] Replace `Handle::center_crop_to_square` (and TypeScript `centerCropToSquare`) with a
+  general `crop_image(ImageCrop)`. `center_crop_to_square` compounds when called twice, because
+  it crops the current crop window, and a crop can't be undone. `ImageCrop` always crops from the
+  full image. Variants: `None` (whole image), `CenteredSquare`, `Aspect { ratio, anchor }` (the
+  largest region with that width-to-height ratio, placed by `anchor`) and `Rect` (an explicit
+  region in fractions of the image). No other presets, and not `#[non_exhaustive]`: a new
+  variant needs a real, recurring use that `Aspect` or `Rect` can't express well. Both callers
+  (the demo's gallery tiles and `examples/gallery`) move to it.
+- [ ] Make disabled and non-interactive genuinely different. Today both drop the component from
+  hit-testing, so both are click-through and differ only in that disabled has a look. Decided:
+  - **Non-interactive** (`set_interactive(false)`, `non_interactive()`): the component is not
+    there for input. It has no look of its own, and input goes to whatever is behind it. For
+    things that are never controls, such as backgrounds and labels.
+  - **Disabled** (`set_disabled`, `start_disabled`): the component is there but inert. It still
+    blocks input from reaching what is behind it, fires no events, and shows its disabled style.
+    For a control that is temporarily unavailable, as a disabled control behaves on the web.
+
+  In `hit_test_system`, a disabled component can be the topmost hit, and then no events are
+  emitted. Tested both ways (a disabled component over a clickable one absorbs the click; a
+  non-interactive one passes it through). Update the Rust and TypeScript docs of all four
+  methods and `input.rs`'s module doc to state the difference.
+- [ ] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
+  disabled style animates through an ordinary `TransitionRequest` (`interaction_style_system`),
+  and its completion is recorded like any other, so a component with a hover style reports a
+  "completed transition" every time the pointer moves onto or off it. A once-only completion
+  helper, like `examples/gallery`'s `afterTransition`, attached to such a component would run on
+  a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
+  a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
+  TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
+- [ ] Drop `remove_child`'s `destroy` flag, in Rust and TypeScript. `destroy: true` does exactly
+  what `Handle::destroy` does, and a bare `true` or `false` at the call site hides whether the
+  child is kept or destroyed, which is easy to miss in review. `remove_child(child)` only
+  detaches and keeps the child; destroying it is `child.destroy()`. Update the tests that pass the
+  flag, and the doc (which also notes that a detached child moves on screen, because its geometry
+  is no longer relative to the parent).
+- [ ] `remove_child` doesn't check that `child` belongs to `self`: it removes the child's parent
+  link wherever it points, so `list_a.remove_child(item_of_list_b)` detaches the item from
+  `list_b` and reports success. Fail instead when `child` has a different parent or none,
+  probably with a new `HandleError` variant (decided at the step). Rust and TypeScript, with a
+  test. Do it together with dropping the `destroy` flag, since both change the same method.
+- [ ] `free_resources` doesn't stay freed for text or images, and is the only way to change a
+  component's text. It removes a component's baked result and its texture references, but leaves
+  the `Text` or `Image` in place, so the host bakes it again on the next frame and takes new
+  atlas space. The demo relies on this to update a label (`proteus-demo`, `lib.rs` around line
+  2659: edit `Text` through `world_mut()`, then `free_resources`). Also check what it does to a
+  component made with `.bake()`, which keeps its bake flag after its children were destroyed by
+  the first bake. Likely fix: `set_text` / `set_image` to replace content (the host bakes the
+  new version), and a `free_resources` that removes the content too, so nothing is re-baked. In
+  Rust and TypeScript, with tests, and the demo moved off `world_mut()`. Update the docs, which
+  must also say that releasing references doesn't free atlas space immediately: a texture with
+  no references becomes available for reuse, the atlas reclaims it when it needs room, and
+  `eternal` textures are never reclaimed.
+- [ ] A component keeps only one texture reference, so a second texture can be reclaimed while
+  it is still drawn. Baked text, an image and baked content (`.bake()`) each insert the same
+  `TextureRef` (`proteus-runtime/src/bake.rs` for text and images, `proteus-ui/src/bake.rs` for
+  baked content), and `Handle::set_texture` inserts it too. On a component with both text and an
+  image, the atlas treats one of the two as unreferenced; under memory pressure it can be
+  reclaimed and reused, and the component then draws another texture's pixels. The demo avoids it
+  only by putting text on child components. Fix: one reference per texture kind, not per
+  component. Test: a component with text and an image, then allocation pressure, keeps both.
+- [ ] `SignalHandle::set` on a destroyed signal is silent: the request is dropped with
+  `SignalNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
+  would have heard it. A `Handle` method on a destroyed component logs a warning; make `set` do
+  the same, checking at call time that the signal exists. Rust and TypeScript, with a test, and
+  `SignalHandle::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
 
 #### Step 6 — Documentation
 
@@ -4389,6 +4460,15 @@ A-06 (keyboard navigation), A-08 (outer and centered borders), D-17 (parent/chil
 priority), T-06 (the demo never uses interaction styles), T-11 (zero-duration transitions from
 TypeScript), T-12 (a WGSL layout test that breaks on reformatting), R-06 (repository size).
 
+**Decided for A-06, to carry into V2:** non-interactive and disabled components ignore *all*
+input, not just the pointer: mouse, touch, pen, keyboard, gamepad and TV remote. The Rust SDK
+docs (`Handle::set_interactive`, `Handle::set_disabled`, `ComponentSpec::non_interactive`,
+`ComponentSpec::start_disabled`) state this intent, with a note that only pointer input exists
+today; the TypeScript equivalents get the same wording in step 3. When keyboard navigation or any
+other input is built, keyboard focus and every other input path must skip non-interactive and
+disabled components, and the "currently handles pointer input only" notes must be updated to
+match.
+
 ---
 
 ### Post-Release
@@ -4399,6 +4479,17 @@ load-bearing — this section tracks their *implementation*, which is deferred t
 via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
 not V1.**
 
+- Image fit: an image fills its component's shape and the crop follows the component's size as
+  it changes, like CSS `object-fit: cover`. During a transition from a square tile to a wide
+  view, the crop would widen with it. Needs the crop recomputed from the in-progress size each
+  frame, so it is a rendering feature rather than an SDK one; builds on M14's `ImageCrop`.
+- Masking: shape a component's content with a mask (a shape, or another image's alpha). Its own
+  method, separate from `crop_image`, so a crop and a mask can be used together: the crop picks
+  which part of the image to show, and the mask shapes it.
+- An `on_destroy` callback for components and signals. Most destruction is started by the app, so
+  it already knows, but two cases happen as side effects: destroying a parent destroys its
+  children, and destroying a component destroys the signals it owns. An app holding those handles
+  is never told.
 - Real runs of the native host on Linux and Windows. V1 tests both in CI but has only been run
   by hand on macOS (M14 step 9).
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
