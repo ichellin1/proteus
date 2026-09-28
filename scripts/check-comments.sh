@@ -25,6 +25,7 @@ rules=(
   'date|-E|\b20[0-9]{2}-[0-9]{2}(-[0-9]{2})?\b'
   'external document|-E|\b[A-Z][A-Z_]+\.md\b|\bPLANNING\b|\bROADMAP\b|\bPhase [A-E]\b'
   'say "transition", not "morph"|-iE|\bmorph'
+  'say "all the other" or "any other", not "every other"|-iE|\bevery other\b'
 )
 
 files=$(find "$@" -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.wgsl' \) \

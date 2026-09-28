@@ -27,6 +27,9 @@ repository.
    default, or a trade-off the caller must know about. One or two sentences.
 6. **Keep it short.** A doc that needs more than about ten lines probably belongs in a guide in
    `docs/`.
+7. **Write plain, natural sentences**, the way you would explain the item to a colleague. Use
+   the API's own terms, and don't introduce things it doesn't have: the pointer is "pressed",
+   not "a button went down".
 
 ### Plain comments
 
@@ -81,6 +84,7 @@ catches the rest.
 | **app** | Anything that implements `App` | |
 | **bake** | Render into an atlas texture. Always say what: bake text, bake an image, or bake a component (flatten it and its children into one texture, permanently). | a bare "bake" |
 | **virtual** | A temporary component a split or merge creates, and removes when it completes | |
+| **all the other**, **any other** | Everything except the item just mentioned | "every other", which can also mean alternate items |
 
 ## Commit messages
 
