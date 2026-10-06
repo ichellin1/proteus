@@ -1,16 +1,5 @@
-//! M10.5 static component baking regression tests.
-//!
-//! ## Test matrix
-//!
-//! | Test | What it guards |
-//! |---|---|
-//! | `bake_system_is_noop_without_gpu_resources` | Graceful no-op when GpuContext/QuadPipeline/FontAtlas are absent (headless unit-test worlds) |
-//! | `bake_system_bakes_quad_and_text_composite` | Full pipeline: child despawned, BakedComposite present, own Border/color/corner_radius neutralized, collect_instances renders one stable textured quad |
-//! | (same test) dynamic runtime creation | A composite `Baked` *after* the schedule has already ticked once bakes correctly too, not just one declared at startup |
-//!
-//! The GPU-backed test follows `proteus-render/tests/headless_render.rs`'s
-//! pattern exactly: skip with a warning (not a failure) if no adapter is
-//! available, so this passes in restricted CI environments the same way.
+// Tests of baking a component with `Baked`. The GPU tests skip with a warning
+// when no adapter is available, as in `proteus-render`'s tests.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -39,9 +28,9 @@ fn quad_at(x: f32, y: f32, w: f32, h: f32) -> QuadState {
     }
 }
 
-/// Same shape as `proteus-render/tests/headless_render.rs::make_device` —
-/// try a real adapter, fall back to the software renderer, return `None` if
-/// neither is available so the caller can skip gracefully.
+// Same shape as `proteus-render/tests/headless_render.rs::make_device` —
+// try a real adapter, fall back to the software renderer, return `None` if
+// neither is available so the caller can skip gracefully.
 async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
@@ -85,12 +74,9 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
 // No-GPU graceful degradation
 // ---------------------------------------------------------------------------
 
-/// Without `GpuContext`/`QuadPipeline`/`FontAtlas` resources present (the
-/// convention every other GPU-touching system in this crate already follows,
-/// e.g. `one_to_n_setup_system`), `bake_system` must not panic, and must
-/// leave a `Baked` entity untouched — no `BakedComposite`, children not
-/// despawned — so it's naturally retried once those resources do become
-/// available, rather than silently failing forever.
+// Without GPU resources, `bake_system` must not panic and must leave a `Baked`
+// entity alone, with no `BakedComposite` and its children still there, so the
+// bake happens once the resources exist.
 #[test]
 fn bake_system_is_noop_without_gpu_resources() {
     let mut world = ProteusWorld::new();
@@ -120,10 +106,10 @@ fn bake_system_is_noop_without_gpu_resources() {
 // Full headless-GPU bake
 // ---------------------------------------------------------------------------
 
-/// Bakes a `Quad` parent (with a `Border`) + `Text` child into a single
-/// textured quad, and separately proves a composite declared *after* the
-/// schedule has already run once (dynamic runtime creation, not just
-/// startup) bakes correctly too.
+// Bakes a `Quad` parent (with a `Border`) + `Text` child into a single
+// textured quad, and separately proves a composite declared *after* the
+// schedule has already run once (dynamic runtime creation, not just
+// startup) bakes correctly too.
 #[test]
 fn bake_system_bakes_quad_and_text_composite() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
@@ -173,11 +159,8 @@ fn bake_system_bakes_quad_and_text_composite() {
         ))
         .id();
 
-    // Bake the child's text the same way bake_pending_text does (a shell
-    // method in the reference demo, not something proteus-ui itself exposes
-    // as a standalone function) — needed so gather_bake_instances captures
-    // real glyph pixels, not just an untextured background. M11: rasterize
-    // (FontAtlas) then register (TextureRegistry) are two separate steps now.
+    // Bake the child's text as the renderer does, so the component bake
+    // includes real glyphs: rasterize, then register in the atlas.
     let glyphs = font_atlas
         .rasterize_text("Hi", 16.0)
         .expect("text rasterize should succeed in a fresh font atlas");
@@ -283,15 +266,15 @@ fn bake_system_bakes_quad_and_text_composite() {
 }
 
 // ---------------------------------------------------------------------------
-// M11 — TextureRef ref-counting and free-on-despawn
+// TextureRef reference counting, and freeing on destroy
 // ---------------------------------------------------------------------------
 
-/// `bake_system` inserts `TextureRef` alongside `BakedComposite`; its
-/// `ComponentHooks` ref-count the `main_atlas` region against the baked
-/// entity's lifetime. A freshly baked entity holds the only reference (an
-/// explicit `free()` must be refused); despawning it decrements the ref count
-/// to zero (`on_replace` fires uniformly on despawn, before `on_remove`), and
-/// the region becomes genuinely reusable — not just marked absent.
+// `bake_system` inserts `TextureRef` alongside `BakedComposite`; its
+// `ComponentHooks` ref-count the `main_atlas` region against the baked
+// entity's lifetime. A freshly baked entity holds the only reference (an
+// explicit `free()` must be refused); despawning it decrements the ref count
+// to zero (`on_replace` fires uniformly on despawn, before `on_remove`), and
+// the region becomes genuinely reusable — not just marked absent.
 #[test]
 fn bake_ref_counts_texture_and_frees_region_on_despawn() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {

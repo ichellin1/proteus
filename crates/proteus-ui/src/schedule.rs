@@ -1,27 +1,25 @@
-//! ECS world and system schedule for Proteus.
+//! The ECS world and the order its systems run in each tick.
 //!
-//! [`ProteusWorld`] wraps a `bevy_ecs` `World` + `Schedule` and wires up the
-//! full system order from Phase B of PLANNING.md:
+//! [`ProteusWorld`] holds a `bevy_ecs` `World` and `Schedule`. Each tick runs
+//! these stages, in order, each finishing before the next starts:
 //!
 //! ```text
-//! flush_commands       drain deferred mutations from last tick (CommandQueue, M12.1)
-//! input                process pointer / keyboard events  [stub M2]
-//! interaction_style    resolve hover/press/focus/disabled → mini-transition (M12.2)
-//! navigation           directional focus movement         [stub M2]
-//! signal_dispatch      pending signal::set() calls → TransitionRequest (M12.1)
-//! transition_setup     TransitionRequest → ActiveTransition
-//! transition_tick      advance t, lerp QuadState
-//! transition_complete  t=1.0 → fire event, restore Idle
-//! visibility           cascade Visibility → EffectiveVisibility  [real since M10]
-//! opacity              cascade Opacity → EffectiveOpacity        [real since M10]
-//! cascade_flush        ApplyDeferred so Bake/Render see this frame's cascades [M10]
-//! bake                 static composite baking (M10.5) / offscreen texture composites
-//! bake_flush           ApplyDeferred so Render sees this frame's bake [M10.5]
-//! render               build instance buffer, draw        [stub M2]
+//! flush_commands       apply mutations queued during the last tick
+//! input                hit-test the pointer and record input events
+//! interaction_style    start style transitions for hover, press, focus and disabled
+//! navigation           keyboard focus movement (placeholder, does nothing yet)
+//! signal_dispatch      turn signal requests into transition requests
+//! transition_setup     start requested transitions, including splits and merges
+//! transition_tick      advance transitions and interpolate geometry
+//! transition_complete  finish transitions that have reached the end
+//! group_complete       finish splits and merges whose pieces have all arrived
+//! visibility           work out each entity's visibility from its ancestors'
+//! opacity              work out each entity's opacity from its ancestors'
+//! cascade_flush        apply those results before baking reads them
+//! bake                 bake components marked for baking
+//! bake_flush           apply the bake results
+//! render               placeholder; drawing is done outside the schedule
 //! ```
-//!
-//! The schedule is fixed and linear — each stage must complete before the next
-//! begins. This makes reasoning about per-frame state straightforward.
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ApplyDeferred;
@@ -48,29 +46,29 @@ use crate::transition::{
 // System sets — define the canonical stage order
 // ---------------------------------------------------------------------------
 
-/// Labels for the sequential stages in the Proteus frame loop.
+/// The stages of a tick, in the order they run. See the module docs.
 ///
-/// Systems added without an explicit set run last. Add all real and stub
-/// systems to one of these sets to keep ordering deterministic.
+/// A system added without one of these sets runs last, so every system is
+/// added to one, which keeps the order fixed.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProteusSet {
     /// Apply deferred `Commands` queued during the previous frame.
     FlushCommands,
-    /// Process pointer and keyboard input events.
+    /// Hit-test the pointer and record this tick's input events.
     Input,
-    /// Resolve hover/pressed/focused/disabled precedence into a style
-    /// mini-transition (M12.2).
+    /// Work out which interaction style applies to each component, and start
+    /// a short transition to it.
     InteractionStyle,
-    /// Handle directional and tab navigation.
+    /// Keyboard focus movement. A placeholder that does nothing yet.
     Navigation,
-    /// Drain pending `signal::set()` calls into `TransitionRequest` components
-    /// (M12.1).
+    /// Turn pending `signal::set` calls into `TransitionRequest` components.
     SignalDispatch,
     /// Convert `TransitionRequest` components into `ActiveTransition`.
     TransitionSetup,
     /// Advance `t`, lerp `QuadState`.
     TransitionTick,
-    /// Detect `t = 1.0`, fire `TransitionComplete`, clean up.
+    /// Finish transitions that have reached `t = 1.0` and record them in
+    /// `CompletedTransitions`.
     TransitionComplete,
     /// Finalize group transitions when all virtual entities complete.
     GroupTransitionComplete,
@@ -78,62 +76,50 @@ pub enum ProteusSet {
     Visibility,
     /// Compute effective opacity down the hierarchy.
     Opacity,
-    /// Apply the deferred `Commands` `Visibility`/`Opacity` cascades queued
-    /// this frame, so `Bake`/`Render` read fresh (not last-frame-stale)
-    /// `EffectiveVisibility`/`EffectiveOpacity`.
+    /// Apply the visibility and opacity results, so baking sees this tick's
+    /// values rather than last tick's.
     CascadeFlush,
-    /// Static composite baking (M10.5) — collapses a `Baked` subtree into a
-    /// single textured quad.
+    /// Bake each component marked `Baked`, with its children, into one
+    /// texture.
     Bake,
-    /// Apply the deferred `Commands` `bake_system` queued this frame (insert
-    /// `BakedComposite`, despawn baked children, neutralize the root's own
-    /// visual-effect components), so `Render` sees this frame's bake instead
-    /// of last frame's — same reasoning as `CascadeFlush`.
+    /// Apply the bake results, so they are drawn this tick.
     BakeFlush,
-    /// Build the GPU instance buffer and submit the draw call.
+    /// A placeholder. Drawing happens after the tick, outside the schedule.
     Render,
 }
 
 // ---------------------------------------------------------------------------
-// CommandQueue — deferred mutation for re-entrancy safety (M12.1)
+// CommandQueue: mutations deferred to the start of the next tick
 // ---------------------------------------------------------------------------
 
-/// A deferred mutation, boxed so [`CommandQueue`] can hold arbitrary closures.
+/// A deferred mutation.
 ///
-/// `Sync` (in addition to `Send`) is required because `bevy_ecs::Resource`
-/// itself requires it — the queue is never actually accessed from more than
-/// one thread at once, but the bound has to be satisfied for `CommandQueue`
-/// to be a `Resource` at all. Closures that only capture plain data
-/// (`Entity`, `SignalId`, `QuadState`, ...) satisfy it automatically.
+/// `Sync` because a `bevy_ecs` resource must be, even though the queue is only
+/// used from one thread. A closure that captures only plain data, such as an
+/// `Entity`, is `Sync`.
 type BoxedCommand = Box<dyn FnOnce(&mut World) + Send + Sync>;
 
-/// Deferred-mutation queue for re-entrant callback safety (PLANNING.md Phase
-/// B's `CommandQueue`).
+/// Mutations to apply to the world at the start of the next tick.
 ///
-/// Interaction callbacks (M12.2) and, later, Rust/JS SDK closures (M12.3/4)
-/// run *during* a system's execution — they don't have `&mut World` access,
-/// and mutating the `World` mid-schedule-run (e.g. calling
-/// [`crate::signal::set`] from inside `hit_test_system`) would be unsound.
-/// Push a closure here instead; [`flush_commands_system`] (runs first, in
-/// [`ProteusSet::FlushCommands`]) drains and applies every queued mutation at
-/// the start of the next frame, before any other system runs.
+/// Code that runs during a system can't change the world directly. It pushes a
+/// closure here instead, and [`flush_commands_system`] applies every queued
+/// closure first thing next tick, before any other system runs.
 #[derive(Resource, Default)]
 pub struct CommandQueue {
     pending: Vec<BoxedCommand>,
 }
 
 impl CommandQueue {
-    /// Queue a mutation to run against the `World` at the start of next frame.
+    /// Queues a mutation to apply at the start of the next tick.
     pub fn push(&mut self, cmd: impl FnOnce(&mut World) + Send + Sync + 'static) {
         self.pending.push(Box::new(cmd));
     }
 }
 
-/// Drains [`CommandQueue`] and applies every mutation in FIFO order.
+/// Applies every mutation in [`CommandQueue`], in the order they were queued.
 ///
-/// Runs before the pre-existing `ApplyDeferred` in [`ProteusSet::FlushCommands`]
-/// — so a queued closure that itself uses `Commands` still gets its deferred
-/// writes flushed before `Input` runs.
+/// Runs before the `ApplyDeferred` in [`ProteusSet::FlushCommands`], so that a
+/// queued closure that uses `Commands` is also applied before input runs.
 pub fn flush_commands_system(world: &mut World) {
     let pending = std::mem::take(&mut world.resource_mut::<CommandQueue>().pending);
     for cmd in pending {
@@ -144,8 +130,7 @@ pub fn flush_commands_system(world: &mut World) {
 // ---------------------------------------------------------------------------
 // Stub systems for unimplemented stages
 // ---------------------------------------------------------------------------
-// These do nothing but hold the stage slot so the ordering constraints are
-// in place before the real implementations land in later milestones.
+// Placeholders that hold their stage's place in the order.
 
 fn stub_navigation_system() {}
 fn stub_render_system() {}
@@ -154,20 +139,20 @@ fn stub_render_system() {}
 // ProteusWorld
 // ---------------------------------------------------------------------------
 
-/// The top-level ECS runtime. One instance per Proteus application.
-///
-/// The shell (native or WASM) holds a `ProteusWorld` and calls `update(dt)`
-/// once per frame with the elapsed wall-clock seconds.
+/// The ECS world and its schedule: everything a Proteus app's state is made
+/// of. [`ProteusWorld::update`] runs one tick.
 pub struct ProteusWorld {
+    /// The ECS world.
     pub world: World,
+    /// The systems run each tick.
     pub schedule: Schedule,
-    /// Just the Visibility/Opacity cascade (+ its deferred-command flush),
-    /// see [`ProteusWorld::refresh_cascades`].
+    // Only the visibility and opacity systems; see `refresh_cascades`.
     cascade_schedule: Schedule,
 }
 
 impl ProteusWorld {
-    /// Create and initialize the world with all resources and the full schedule.
+    /// Creates the world with every resource and hook it needs, and the
+    /// schedule.
     pub fn new() -> Self {
         let mut world = World::new();
 
@@ -180,24 +165,19 @@ impl ProteusWorld {
         world.init_resource::<PressedEntity>();
         world.init_resource::<FocusState>();
         world.init_resource::<CommandQueue>();
-        // M13.5: default until `Engine::new` overwrites it with the real
-        // `ProteusConfig.memory.transition_atlas_size`.
+        // A default, replaced with the configured size when a renderer is
+        // created.
         world.init_resource::<TransitionAtlasSize>();
         signal::init_resources(&mut world);
 
-        // M11: TextureRef's ref-counting hooks must be registered before any
-        // TextureRef component can exist in an archetype — bevy_ecs panics
-        // otherwise. Doing this here, at world construction, guarantees that.
+        // Component hooks must be registered before any entity has the
+        // component, or bevy_ecs panics, so register them all here:
+        // `TextureRef` reference counting, removing a component's owned
+        // signals when it is destroyed, stamping `SpawnOrder`, and returning
+        // transition-atlas space when its owner goes away.
         register_texture_ref_hooks(&mut world);
-        // M12.1: same requirement, same reasoning, for OwnedSignals's
-        // despawn-cleanup hook.
         register_signal_hooks(&mut world);
-        // M13.8: same requirement, same reasoning, for SpawnOrder's
-        // auto-stamping hook — must be registered before any QuadState
-        // exists.
         register_spawn_order_hooks(&mut world);
-        // Audit C-07: same requirement again, for the hooks that return a
-        // `transition_atlas` region when the component owning it goes away.
         register_transition_alloc_hooks(&mut world);
 
         // --- Schedule ---
@@ -211,29 +191,19 @@ impl ProteusWorld {
         }
     }
 
-    /// Advance one frame by `delta_secs` wall-clock seconds.
-    ///
-    /// Call this from the render loop after acquiring the swap-chain frame and
-    /// before encoding the GPU commands.
+    /// Runs one tick, advancing time by `delta_secs` seconds.
     pub fn update(&mut self, delta_secs: f32) {
         // Inject the frame delta before running systems.
         self.world.resource_mut::<FrameTime>().delta_secs = delta_secs;
         self.schedule.run(&mut self.world);
     }
 
-    /// Re-runs just the Visibility → `EffectiveVisibility` and Opacity →
-    /// `EffectiveOpacity` cascades (plus their deferred-command flush) — not
-    /// the full per-frame `schedule` (no input/transition/bake re-run).
+    /// Recomputes effective visibility and opacity without running a full
+    /// tick.
     ///
-    /// `update()`'s own cascade pass reflects `Visibility`/`Opacity` as they
-    /// stood *before* this frame's game logic ran. A shell's post-`update()`
-    /// code (e.g. a state machine's `settle()` step) routinely mutates
-    /// `Visibility` directly afterward — without a second cascade pass,
-    /// `collect_instances` (which prefers the cascaded `EffectiveVisibility`
-    /// over raw `Visibility`, see its module doc) would render that mutation
-    /// one frame late, showing whatever was cascaded before it. Call this
-    /// after all such per-frame mutations, immediately before
-    /// `collect_instances`.
+    /// [`ProteusWorld::update`] computes them before app code runs, so a change
+    /// the app makes afterwards would be drawn one frame late. Call this after
+    /// such changes and before `collect_instances`.
     pub fn refresh_cascades(&mut self) {
         self.cascade_schedule.run(&mut self.world);
     }
@@ -246,18 +216,15 @@ impl Default for ProteusWorld {
 }
 
 // ---------------------------------------------------------------------------
-// Schedule construction — separated so tests can call it directly
+// Schedule construction
 // ---------------------------------------------------------------------------
 
-/// Build the Proteus system schedule with correct stage ordering.
-///
-/// Exported so integration tests can construct a minimal world without
-/// going through `ProteusWorld::new()`.
+/// Builds the schedule, with every system in its stage. Public so that tests
+/// can build a world without [`ProteusWorld::new`].
 pub fn build_schedule() -> Schedule {
     let mut schedule = Schedule::default();
 
-    // Chain all sets in the canonical order — each set runs to completion
-    // before the next begins.
+    // Each set runs to completion before the next begins.
     schedule.configure_sets(
         (
             ProteusSet::FlushCommands,
@@ -279,55 +246,42 @@ pub fn build_schedule() -> Schedule {
             .chain(),
     );
 
-    // M12.1: drain CommandQueue (re-entrant callback mutations) first, then
-    // drain bevy_ecs's own deferred Commands that accumulated during the
-    // last frame — a queued closure that itself uses Commands still needs
-    // this second flush.
+    // Apply the CommandQueue first, then bevy_ecs's own deferred Commands,
+    // which include any a queued closure issued.
     schedule.add_systems(
         (flush_commands_system, ApplyDeferred)
             .chain()
             .in_set(ProteusSet::FlushCommands),
     );
 
-    // M7: real hit-test system replaces the input stub.
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
-    // M12.2: resolves this frame's hit-test output into interaction styling.
     schedule.add_systems(interaction_style_system.in_set(ProteusSet::InteractionStyle));
-    // Stub systems — hold their slot until real implementations land.
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
-    // M12.1: real signal dispatch replaces the (never-existent) stub for this slot.
     schedule.add_systems(signal_dispatch_system.in_set(ProteusSet::SignalDispatch));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
 
-    // M10.5: real bake system replaces the stub. Writes via Commands
-    // (insert BakedComposite, despawn baked children, neutralize the root's
-    // own visual-effect components), so BakeFlush's ApplyDeferred must run
-    // before Render reads the result — otherwise it'd see last frame's stale
-    // (unbaked) state.
+    // bake_system writes through Commands, so BakeFlush applies them before
+    // anything reads the result.
     schedule.add_systems(bake_system.in_set(ProteusSet::Bake));
-    // M11: bumps every live TextureRef's LRU recency once per frame. No
-    // ordering dependency with bake_system — eviction only ever considers
-    // zero-ref entries, and touch only ever updates referenced ones, so the
-    // two systems never contend over the same entry.
+    // Marks every texture in use as recently used, for eviction. Independent
+    // of bake_system: eviction only considers unreferenced textures, and this
+    // only touches referenced ones.
     schedule.add_systems(touch_texture_refs_system.in_set(ProteusSet::Bake));
     schedule.add_systems(ApplyDeferred.in_set(ProteusSet::BakeFlush));
 
-    // M10: real cascade systems replace the visibility/opacity stubs. Both
-    // write via `Commands` (deferred), so `CascadeFlush`'s `ApplyDeferred`
-    // must run before `Bake`/`Render` read the result — otherwise they'd see
-    // last frame's stale `EffectiveVisibility`/`EffectiveOpacity`.
+    // Both write through Commands, so CascadeFlush applies them before baking
+    // reads the results.
     schedule.add_systems(visibility_system.in_set(ProteusSet::Visibility));
     schedule.add_systems(opacity_system.in_set(ProteusSet::Opacity));
     schedule.add_systems(ApplyDeferred.in_set(ProteusSet::CascadeFlush));
 
-    // Real transition systems — the heart of M2.
+    // Transitions.
     schedule.add_systems(transition_setup_system.in_set(ProteusSet::TransitionSetup));
     schedule.add_systems(transition_tick_system.in_set(ProteusSet::TransitionTick));
     schedule.add_systems(transition_complete_system.in_set(ProteusSet::TransitionComplete));
 
-    // Group topology systems — M3.
-    // Setup systems run in the same TransitionSetup slot; ordering within the
-    // set is undefined but both are independent of each other.
+    // Splits and merges. Their setup systems share TransitionSetup; their
+    // order within it is undefined, and they don't depend on each other.
     schedule.add_systems(one_to_n_setup_system.in_set(ProteusSet::TransitionSetup));
     schedule.add_systems(n_to_one_setup_system.in_set(ProteusSet::TransitionSetup));
     schedule
@@ -336,10 +290,8 @@ pub fn build_schedule() -> Schedule {
     schedule
 }
 
-/// Build the standalone Visibility/Opacity cascade schedule used by
-/// [`ProteusWorld::refresh_cascades`] — the same two systems `build_schedule`
-/// runs in its `Visibility`/`Opacity` sets, plus their `ApplyDeferred` flush,
-/// with no input/transition/bake stages around them.
+/// Builds the schedule [`ProteusWorld::refresh_cascades`] runs: only the
+/// visibility and opacity systems, and applying their results.
 fn build_cascade_schedule() -> Schedule {
     let mut schedule = Schedule::default();
     schedule.add_systems((visibility_system, opacity_system, ApplyDeferred).chain());

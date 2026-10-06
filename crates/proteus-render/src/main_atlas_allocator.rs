@@ -1,65 +1,58 @@
-//! Sub-region allocator for `main_atlas` (M11 — Resource Management).
+//! Space allocation within one main-atlas page.
 //!
-//! Structurally identical to [`crate::transition_atlas::TransitionAtlasAllocator`] — both wrap
-//! `etagere::AtlasAllocator`, a maintained, dependency-free shelf-based packer supporting real
-//! `allocate`/`deallocate`. Before M11, `main_atlas` was packed by `FontAtlas`'s own append-only
-//! shelf cursor (never freed); this allocator replaces that, giving `main_atlas` regions the same
-//! real free/reuse `transition_atlas` regions already had.
+//! It works like [`crate::transition_atlas::TransitionAtlasAllocator`]: both
+//! wrap `etagere::AtlasAllocator`, a shelf packer that can free and reuse
+//! regions.
 //!
 //! ## Guard region
 //!
-//! Unlike `TransitionAtlasAllocator`, [`MainAtlasAllocator::new`] immediately claims (and never
-//! frees) a small region at the atlas origin. `QuadPipeline::create_atlases` writes a 1×1 white
-//! pixel directly into `main_atlas` **layer 0** at `(0, 0)` outside of any allocator's
-//! bookkeeping — without this guard, the very first real allocation on that layer could land
-//! exactly on that texel and silently overwrite it (etagere's shelf packer starts allocating
-//! from the origin).
+//! [`MainAtlasAllocator::new`] permanently reserves a small block at the
+//! origin, where `QuadPipeline::create_atlases` paints the white pixel that
+//! untextured components sample. Without it, the first allocation, which
+//! `etagere` places at the origin, would overwrite it.
 //!
-//! Since M11.2, `main_atlas` is a multi-page pool (one `MainAtlasAllocator` per array layer) —
-//! the white-pixel sentinel only ever lives on layer 0, so only that layer's allocator needs the
-//! guard. Layers 1.. use [`MainAtlasAllocator::new_without_guard`], where `(0, 0)` is ordinary
-//! free space.
+//! Only page 0 has the white pixel, so only its allocator reserves the block.
+//! The other pages use [`MainAtlasAllocator::new_without_guard`].
 
-/// Opaque handle to one allocated region within `main_atlas`.
-///
-/// Returned by [`crate::texture_registry::TextureRegistry::register_static`]; freed automatically
-/// by the registry's `free`/`evict_unused`/eviction-under-pressure paths — callers never handle
-/// this directly.
+/// Identifies one allocated main-atlas region. The
+/// [`crate::texture_registry::TextureRegistry`] allocates and frees these;
+/// callers don't handle them.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MainAtlasAllocId(etagere::AllocId);
 
-/// A `width × height` region of `main_atlas`, in atlas pixel coordinates.
+/// A region of a main-atlas page, in pixels.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MainAtlasRegion {
+    /// Left edge.
     pub x: u32,
+    /// Top edge.
     pub y: u32,
+    /// Width.
     pub width: u32,
+    /// Height.
     pub height: u32,
 }
 
-/// Pixel dimensions of the guard region reserved at atlas origin — see the module docs.
-///
-/// `pub(crate)` so [`crate::QuadPipeline::create_atlases`] can fill exactly this block with
-/// white: the allocator reserving the region and the pipeline painting it are two halves of one
-/// invariant, and they must not drift apart.
+/// The size, in pixels, of the block reserved at page 0's origin; see the
+/// module docs. [`crate::QuadPipeline::create_atlases`] paints exactly this
+/// block white, so the two must agree.
 pub(crate) const WHITE_PIXEL_GUARD_SIZE: u32 = 4;
 
-/// Wraps `etagere::AtlasAllocator`, sized to [`crate::pipeline::DEFAULT_MAIN_ATLAS_SIZE`].
+/// Allocates regions within one main-atlas page, using
+/// `etagere::AtlasAllocator`.
 pub struct MainAtlasAllocator {
     inner: etagere::AtlasAllocator,
 }
 
 impl MainAtlasAllocator {
-    /// Allocator for `main_atlas` **layer 0**. Reserves the origin guard — see the module docs:
-    /// `QuadPipeline::create_atlases` writes the 1×1 white-pixel sentinel to `(0, 0)` of layer 0
-    /// outside any allocator's bookkeeping, and `QuadPipeline::WHITE_PIXEL_UV_OFFSET` hard-codes
-    /// that location.
+    /// An allocator for page 0, which reserves the white-pixel block at the
+    /// origin; see the module docs.
     pub fn new(size: u32) -> Self {
         Self::with_origin_guard(size, true)
     }
 
-    /// Allocator for `main_atlas` layers **1..N** (M11.2). No origin guard: the white-pixel
-    /// sentinel lives on layer 0 only, so `(0, 0)` on every other page is ordinary free space.
+    /// An allocator for pages after the first, which reserves nothing: only
+    /// page 0 has the white pixel.
     pub fn new_without_guard(size: u32) -> Self {
         Self::with_origin_guard(size, false)
     }
@@ -67,8 +60,8 @@ impl MainAtlasAllocator {
     fn with_origin_guard(size: u32, guard: bool) -> Self {
         let mut inner = etagere::AtlasAllocator::new(etagere::size2(size as i32, size as i32));
         if guard {
-            // Permanently reserve the origin corner — see the module docs. The
-            // returned id is intentionally discarded: this region is never freed.
+            // Reserve the origin corner for good; see the module docs. The ID is
+            // discarded, since the region is never freed.
             let _ = inner.allocate(etagere::size2(
                 WHITE_PIXEL_GUARD_SIZE as i32,
                 WHITE_PIXEL_GUARD_SIZE as i32,
@@ -77,8 +70,8 @@ impl MainAtlasAllocator {
         Self { inner }
     }
 
-    /// Allocate a `width × height` region. Returns `None` if the atlas is full —
-    /// callers should treat this the same as any other bake failure.
+    /// Allocates a `width × height` region, or returns `None` if the page is
+    /// full.
     pub fn allocate(
         &mut self,
         width: u32,
@@ -97,7 +90,7 @@ impl MainAtlasAllocator {
         Some((MainAtlasAllocId(alloc.id), region))
     }
 
-    /// Release a previously allocated region back to the packer.
+    /// Frees a region allocated by [`MainAtlasAllocator::allocate`].
     pub fn free(&mut self, id: MainAtlasAllocId) {
         self.inner.deallocate(id.0);
     }
@@ -166,9 +159,9 @@ mod tests {
 
     #[test]
     fn new_without_guard_allows_allocating_at_the_origin() {
-        // Mirror of `new_reserves_the_origin_guard_region` — a non-layer-0 page has no
-        // white-pixel sentinel, so (0, 0) is ordinary free space and the very first
-        // allocation should be able to land there.
+        // The reverse of `new_reserves_the_origin_guard_region`: a page after the
+        // first has no white pixel, so the first allocation can be at the
+        // origin.
         let mut a = MainAtlasAllocator::new_without_guard(64);
         let (_, region) = a.allocate(4, 4).expect("allocation should succeed");
         assert_eq!(

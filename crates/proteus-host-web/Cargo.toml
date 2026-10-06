@@ -1,6 +1,6 @@
 [package]
 name = "proteus-host-web"
-description = "Layer 3: WebGPU/WebGL2 wasm host for proteus-runtime (M13.2)"
+description = "Runs a Proteus app on an HTML canvas with WebGPU or WebGL2, from Rust or TypeScript."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,11 +11,10 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Hosts depend on proteus-runtime only for the Rust-facing App/Host/Engine
-# seam — it re-exports wgpu + glam at the versions it builds against. The
-# TS-facing front door additionally depends on proteus-sdk-web, purely
-# additively (see PLANNING.md's M13.2 decision): the headless bridge stays
-# usable alone.
+# proteus-runtime for running a Rust app (`run`); it re-exports wgpu and
+# glam at the versions it builds against. proteus-sdk-web for running a
+# TypeScript app (`mount`). proteus-sdk-web doesn't depend on this crate,
+# so it can still be used on its own.
 proteus-runtime = { path = "../proteus-runtime" }
 proteus-sdk-web = { path = "../proteus-sdk-web" }
 # mount() deserializes a partial ProteusConfig from JS.
@@ -28,8 +27,8 @@ web-sys = { workspace = true, features = [
     "PointerEvent", "EventTarget", "AddEventListenerOptions",
     "VisibilityState", "Request", "RequestInit", "Response",
     "AbortController", "AbortSignal",
-    # M13.4 step 4b: real HLS playback (<video>/MediaSource/SourceBuffer,
-    # canvas pixel readback) — see src/hls_video.rs.
+    # The reference HLS player: <video>, MediaSource and SourceBuffer, and
+    # canvas readback of each frame. See src/hls_video.rs.
     "HtmlElement", "HtmlVideoElement", "HtmlMediaElement", "CssStyleDeclaration",
     "MediaSource", "MediaSourceReadyState", "SourceBuffer", "Url",
     "CanvasRenderingContext2d", "ImageData", "Node",

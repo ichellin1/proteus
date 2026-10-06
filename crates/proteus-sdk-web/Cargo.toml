@@ -1,6 +1,6 @@
 [package]
 name = "proteus-sdk-web"
-description = "Layer 2.5 (web): thin wasm-bindgen bridge over proteus-sdk's generic app API"
+description = "WebAssembly bindings that expose proteus-sdk to JavaScript, for the Proteus TypeScript SDK."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

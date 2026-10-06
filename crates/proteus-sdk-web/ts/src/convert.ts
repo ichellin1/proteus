@@ -1,27 +1,21 @@
-/**
- * Convenience conversions between familiar web conventions (degrees, hex/
- * named colors, top-left screen coordinates) and the raw values every
- * `proteus-sdk` API actually expects (radians, RGBA floats, world-space
- * center-origin Y-up coordinates). The wasm bridge (`proteus-sdk-web`'s
- * Rust side) stays unit-agnostic-free — these conversions are TS-only, by
- * design (see `../src/lib.rs`'s top doc).
- */
+// Conversions from familiar web conventions (degrees, hex and named colors,
+// page coordinates) to the values the SDK takes (radians, RGBA from 0 to 1,
+// world units with the origin at the viewport center and y up).
 
 import type { Color, Vec2 } from "./types.js";
 
+/** Converts degrees to radians, the unit {@link Geometry.rotation} uses. */
 export function degreesToRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
+/** Converts radians to degrees. */
 export function radiansToDegrees(radians: number): number {
   return (radians * 180) / Math.PI;
 }
 
-/**
- * A deliberately small set of CSS named colors — enough for quick
- * prototyping, not a full palette. Extend as needed; not this SDK's job to
- * bundle a complete named-color table.
- */
+// A small set of CSS color names for quick prototyping. Deliberately not the
+// full CSS list.
 const NAMED_COLORS: Readonly<Record<string, string>> = {
   black: "#000000",
   white: "#ffffff",
@@ -37,9 +31,13 @@ const NAMED_COLORS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Parses `#rgb`, `#rrggbb`, `#rrggbbaa` (with or without the leading `#`),
- * or one of {@link NAMED_COLORS}, into a `proteus-sdk` {@link Color}
- * (each channel `0`–`1`).
+ * Converts a hex color or a color name to a {@link Color}.
+ *
+ * Accepts `#rgb`, `#rrggbb` and `#rrggbbaa`, with or without the `#`, and the
+ * names black, white, red, green, blue, yellow, orange, purple, gray (or grey)
+ * and transparent.
+ *
+ * @throws if `input` isn't one of those.
  */
 export function colorFrom(input: string): Color {
   const named = NAMED_COLORS[input.toLowerCase()];
@@ -73,10 +71,10 @@ export function colorFrom(input: string): Color {
 }
 
 /**
- * Converts a top-left-origin, Y-down position (the CSS/canvas/DOM
- * convention) into `proteus-sdk`'s world-space (viewport-center origin,
- * Y-up). `viewportWidth`/`viewportHeight` are the canvas's current logical
- * size, in the same units as `x`/`y`.
+ * Converts a position measured from the canvas's top-left corner, with y
+ * pointing down (the usual page and canvas convention), to world units, with
+ * the origin at the center and y pointing up. `viewportWidth` and
+ * `viewportHeight` are the canvas's size in the same units as `x` and `y`.
  */
 export function topLeftToWorld(
   x: number,
@@ -87,7 +85,7 @@ export function topLeftToWorld(
   return { x: x - viewportWidth / 2, y: viewportHeight / 2 - y };
 }
 
-/** Inverse of {@link topLeftToWorld}. */
+/** Converts world units back to a position from the top-left; the inverse of {@link topLeftToWorld}. */
 export function worldToTopLeft(
   x: number,
   y: number,

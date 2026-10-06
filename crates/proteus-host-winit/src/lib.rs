@@ -1,8 +1,8 @@
-//! `proteus-host-winit` — Layer 3: a winit + wgpu native host for
-//! [`proteus_runtime`] (M13.1 minimal build / M13.3).
+//! The native host: runs a Proteus [`App`] in a desktop
+//! window, using winit and wgpu.
 //!
-//! Owns a winit window plus its [`proteus_runtime::GpuSurface`] and drives an
-//! [`Engine`] from winit's event loop. A native app is then just:
+//! [`run`] opens the window, sets up the GPU, and drives an [`Engine`] from
+//! winit's event loop:
 //!
 //! ```no_run
 //! # struct MyApp;
@@ -11,13 +11,12 @@
 //! proteus_host_winit::run(my_app, proteus_host_winit::RunConfig::default());
 //! ```
 //!
-//! ## M13.1 scope
-//!
-//! Window, surface, frame loop, pointer input, resize + `ScaleFactorChanged`.
-//! `suspended` / `resumed` surface recreation (real only on winit's mobile
-//! backends), the `proteus-gpu` GPU-init consolidation, and keyboard →
-//! navigation plumbing are M13.3 proper. Asset loading is a synchronous
-//! directory read ([`DirHostServices`]) — the async story is M13.2 / M13.4.
+//! It handles the window, the frame loop, pointer input, resizing and changes of
+//! display scale. Assets are read from a directory ([`DirHostServices`]).
+//! Keyboard input is not handled yet, and the surface is not recreated after
+//! the app is suspended, which only happens on mobile platforms.
+
+#![warn(missing_docs)]
 
 mod mp4_player;
 
@@ -44,38 +43,28 @@ use winit::window::{Window, WindowAttributes, WindowId};
 // DirHostServices
 // ---------------------------------------------------------------------------
 
-/// Resolves asset keys as paths under a base directory, read synchronously.
+/// [`HostServices`] that read assets from a directory.
 ///
-/// `load_asset("nav/home-idle.png")` → `std::fs::read(base/nav/home-idle.png)`.
-/// A missing / unreadable file logs a warning and returns `None` — the same
-/// graceful degradation the M12 shells had (that quad just stays blank).
+/// `load_asset("nav/home-idle.png")` reads `base/nav/home-idle.png`. A missing
+/// or unreadable file logs a warning and returns `None`.
 ///
-/// [`fetch_async`](HostServices::fetch_async) (M13.4) additionally accepts a
-/// full `http(s)://` URL — fetched on its own background thread via `ureq`
-/// (blocking/sync, exactly what a plain `std::thread` wants; this crate has
-/// no async runtime otherwise), one thread per fetch for concurrency, same
-/// shape the reference demo's own former `gallery_fetch.rs` used before this
-/// became a real `HostServices` primitive. A plain key still resolves via
-/// [`load_asset`] inline — local disk reads are fast enough that a
-/// background thread would only add latency, not remove it — but the result
-/// still arrives through the same [`poll_fetches`](HostServices::poll_fetches)
-/// channel, so callers see one uniform async story regardless of which path
-/// a given request took.
-///
-/// [`load_asset`]: HostServices::load_asset
+/// [`fetch_async`](HostServices::fetch_async) also accepts an `http://` or
+/// `https://` URL, fetched on a background thread, one thread per request. A
+/// plain key is read immediately, since a local file read is fast, but its
+/// result is still delivered through
+/// [`poll_fetches`](HostServices::poll_fetches) like any other fetch.
 pub struct DirHostServices {
     base: PathBuf,
     next_id: u64,
     fetch_tx: Sender<FetchResult>,
     fetch_rx: Receiver<FetchResult>,
-    /// Ids [`cancel_fetch`](HostServices::cancel_fetch) has been told to
-    /// drop — a blocking `ureq` call already running on its own thread can't
-    /// be interrupted, so this just discards the result in
-    /// [`poll_fetches`](HostServices::poll_fetches) instead of delivering it.
+    // Cancelled fetches. A request already running can't be interrupted, so
+    // its result is discarded when it arrives.
     cancelled: HashSet<FetchId>,
 }
 
 impl DirHostServices {
+    /// Reads assets from the directory `base`.
     pub fn new(base: impl Into<PathBuf>) -> Self {
         let (fetch_tx, fetch_rx) = mpsc::channel();
         Self {
@@ -133,8 +122,7 @@ impl HostServices for DirHostServices {
                 })
                 .expect("failed to spawn fetch thread");
         } else {
-            // Local key: resolved inline (see this type's own doc for why),
-            // but still delivered through the same channel as the URL case.
+            // A local key: read now, but delivered like any other fetch.
             let bytes = self.load_asset(key_or_url);
             let _ = self.fetch_tx.send((id, bytes));
         }
@@ -156,11 +144,10 @@ impl HostServices for DirHostServices {
         self.cancelled.insert(id);
     }
 
-    /// `key` is a literal filesystem path here, unlike [`Self::load_asset`]
-    /// — video files don't live under `self.base` in the reference demo
-    /// (`assets/videos/`, separate from the image `base`), and there's no
-    /// established "video keyspace" convention yet to resolve a bare key
-    /// against. `.mp4` decode via `ffmpeg`/`ffprobe` — see `mp4_player`.
+    // other assets? Today they are file paths.
+    // Opens an MP4 file for playback, decoded with `ffmpeg`. Unlike
+    // [`Self::load_asset`], `key` is a file path, not a path under the asset
+    // directory.
     fn open_video(&mut self, key: &str) -> Option<Box<dyn VideoStream>> {
         mp4_player::open(PathBuf::from(key)).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
     }
@@ -170,15 +157,15 @@ impl HostServices for DirHostServices {
 // RunConfig
 // ---------------------------------------------------------------------------
 
-/// Window + asset configuration for [`run`].
+/// Window, asset and engine settings for [`run`].
 pub struct RunConfig {
     /// Window title.
     pub title: String,
-    /// Initial inner size in logical pixels.
+    /// The window's initial content size, in logical pixels.
     pub initial_size: (u32, u32),
-    /// Base directory for [`DirHostServices`] asset resolution.
+    /// The directory [`DirHostServices`] reads assets from.
     pub asset_dir: PathBuf,
-    /// Renderer / atlas configuration (clear colour, atlas sizing).
+    /// Engine settings.
     pub proteus: ProteusConfig,
 }
 
@@ -197,9 +184,11 @@ impl Default for RunConfig {
 // run
 // ---------------------------------------------------------------------------
 
-/// Open a window and run `app` until it closes. Panics on GPU or window
-/// setup failure — the same "fatal, print and abort" posture the M12 native
-/// shell had.
+/// Opens a window and runs `app` until the window is closed.
+///
+/// # Panics
+///
+/// If the window or the GPU can't be set up.
 pub fn run<A: App>(app: A, config: RunConfig) {
     let event_loop = EventLoop::new().expect("failed to create winit event loop");
     let mut host = WinitHostApp {
@@ -242,8 +231,7 @@ impl Running {
     }
 
     fn render(&mut self, app: &mut dyn App) {
-        // M13.5: the dt clamp itself now lives in `Engine::frame`
-        // (`ProteusConfig.frame.dt_clamp_secs`) — this host just measures.
+        // `Engine::frame` clamps this; the host only measures it.
         let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
 
@@ -273,9 +261,9 @@ impl Running {
 impl<A: App> ApplicationHandler for WinitHostApp<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(running) = self.running.as_ref() {
-            // Already initialised (desktop: resumed fires once; other
-            // backends may re-fire) — just keep drawing. Surface recreation
-            // on a genuine suspend/resume is M13.3 proper.
+            // Already set up: `resumed` fires once on desktop, but may fire
+            // again elsewhere. The surface isn't recreated after a real
+            // suspend yet.
             running.window.request_redraw();
             return;
         }
@@ -343,8 +331,9 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
                 running.resize(size.width, size.height);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // `position` is physical px; the engine wants world-space,
-                // logical, centre-origin, Y-up.
+                // `position` is in physical pixels from the top-left; the
+                // engine wants world units: logical, origin at the center, y
+                // up.
                 let scale = running.window.scale_factor() as f32;
                 let w = running.gpu.config.width as f32 / scale;
                 let h = running.gpu.config.height as f32 / scale;
@@ -371,7 +360,7 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
 // helpers
 // ---------------------------------------------------------------------------
 
-/// Logical viewport from a window's scale factor and a physical surface size.
+/// The viewport for a window's scale factor and physical size.
 fn viewport_for(window: &Window, physical_w: u32, physical_h: u32) -> Viewport {
     let scale = window.scale_factor() as f32;
     Viewport::new(
@@ -380,11 +369,7 @@ fn viewport_for(window: &Window, physical_w: u32, physical_h: u32) -> Viewport {
     )
 }
 
-/// Window + GPU bring-up. The wgpu half now lives in `proteus-gpu`
-/// (`GpuSurface::create`) — see `PLANNING.md` § M13.3's "shared GPU init":
-/// this host and `proteus-host-web` each carried a copy of the same instance →
-/// surface → adapter → device → format-choice → configure sequence, differing
-/// only in device limits and where the initial size comes from.
+/// Creates the window and sets up its GPU surface with `GpuSurface::create`.
 async fn init_gpu(window: Arc<Window>, render: RenderConfig) -> GpuSurface {
     let size = window.inner_size();
     GpuSurface::create(
@@ -394,9 +379,9 @@ async fn init_gpu(window: Arc<Window>, render: RenderConfig) -> GpuSurface {
             size: (size.width, size.height),
             power_preference: render.power_preference,
             present_mode: render.present_mode,
-            // Native asks for the full default limits; the pipeline still never
-            // relies on anything above the WebGL2 floor, so the same shaders
-            // run on both hosts.
+            // Native asks for the full default limits, which larger settings
+            // such as `ProteusConfig::desktop()` need. The shaders use nothing
+            // beyond WebGL2, so they run on both hosts.
             limits: wgpu::Limits::default(),
         },
     )

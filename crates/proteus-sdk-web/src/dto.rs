@@ -1,25 +1,13 @@
-//! JS-facing DTOs and their conversions to/from `proteus-sdk`/`proteus-ui`
-//! types, crossing the wasm boundary via `serde-wasm-bindgen`.
+//! The JavaScript shapes of `proteus-sdk`'s types, and conversions between
+//! them, for values that cross into wasm through `serde-wasm-bindgen`.
 //!
-//! Defined here rather than adding `Serialize`/`Deserialize` to `QuadState`/
-//! `StyleOverride`/`ComponentSpec`/`ComponentData` directly: those types
-//! don't derive it today, and `TransitionConfig::easing` (a raw
-//! `fn(f32) -> f32`) can't derive it at all. Keeping the DTOs local to this
-//! crate means M12.1–3's shipped code needs no changes. `easing` becomes a
-//! string naming one of `proteus_ui`'s five existing, already-tested easing
-//! functions (`linear`/`easeInQuad`/`easeOutQuad`/`easeInOutQuad`/
-//! `easeOutCubic`) — wiring through what already works, not new
-//! interpolation logic. A genuinely different thing — letting a caller
-//! register an arbitrary *custom* easing function — is M13's job
-//! ("pluggable interpolation interface"), not this.
+//! They are separate types because `proteus-sdk`'s types aren't serializable,
+//! and `TransitionConfig::easing`, a function pointer, can't be. Easing crosses
+//! as the name of a built-in curve. Field names must match `ts/src/types.ts`.
 //!
-//! An entity handle crosses as `Entity::to_bits(): u64` cast to `f64` (both
-//! `to_bits`/`from_bits` are `proteus-ui`'s own public round-trip pair, not
-//! feature-gated). `f64` can represent every integer up to 2^53 exactly;
-//! `to_bits` packs a small generation counter into the high bits, so this
-//! only loses precision past roughly two million generations reused on a
-//! single entity index — not realistic for a UI app. Documented rather than
-//! solved with a custom index/generation struct.
+//! An entity crosses as its `Entity::to_bits()` value, as an `f64`. That is
+//! exact up to 2^53, which only fails after about two million reuses of one
+//! entity index: not a concern for a UI app.
 
 use serde::{Deserialize, Serialize};
 
@@ -154,8 +142,7 @@ impl From<&StyleOverrideDto> for StyleOverride {
 }
 
 // ---------------------------------------------------------------------------
-// Text / Image / Border / Glow / DropShadow (M13.8 — TS/JS parity audit;
-// previously only reachable from Rust)
+// Text / Image / Border / Glow / DropShadow
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -180,10 +167,8 @@ impl From<&TextDto> for Text {
     }
 }
 
-/// `bytes` is raw PNG/JPEG file bytes (format sniffed from the data, not a
-/// file extension — see `proteus_ui::Image`'s own doc), e.g. straight from a
-/// `fetch()` response's `Uint8Array`, not decoded pixels — decoding happens
-/// during baking, same as the Rust-only path.
+/// An image as encoded PNG or JPEG bytes. The format is detected from the
+/// data, and decoding happens when the host bakes it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageDto {
@@ -274,8 +259,7 @@ pub struct ComponentSpecDto {
     pub focused: Option<StyleOverrideDto>,
     #[serde(default)]
     pub disabled: Option<StyleOverrideDto>,
-    /// Child entity handles, as `Entity::to_bits()` values — see this
-    /// module's top doc.
+    /// Children, as `Entity::to_bits()` values.
     #[serde(default)]
     pub children: Vec<f64>,
     #[serde(default)]
@@ -292,8 +276,7 @@ pub struct ComponentSpecDto {
     pub drop_shadow: Option<DropShadowDto>,
     #[serde(default)]
     pub non_interactive: bool,
-    /// Defaults to `true` — an omitted `visible` must mean "shown", not
-    /// `bool::default()`.
+    /// Defaults to `true`: an omitted `visible` means shown.
     #[serde(default = "default_visible")]
     pub visible: bool,
     #[serde(default)]
@@ -304,7 +287,7 @@ pub struct ComponentSpecDto {
     pub transitioning: Option<TransitioningConfigDto>,
 }
 
-/// `{maxSide?, eternal?}` — how a texture should be packed.
+/// `{ maxSide?, eternal? }`: how to add a texture to the atlas.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextureRequestDto {
@@ -323,8 +306,9 @@ impl From<&TextureRequestDto> for proteus_sdk::TextureRequest {
     }
 }
 
-/// Per-entity opt-in to input while mid-transition. Both flags default to
-/// `false`; `allowNavigation` is accepted but inert until navigation exists.
+/// Whether a component accepts input while transitioning. Both default to
+/// `false`. `allowNavigation` is not read yet; it is reserved for keyboard
+/// navigation.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransitioningConfigDto {
@@ -348,9 +332,8 @@ fn default_visible() -> bool {
 }
 
 impl ComponentSpecDto {
-    /// Consumes `self`, building a real `ComponentSpec`. `children` still
-    /// needs the caller to resolve each bits-value into a `proteus_sdk::Handle`
-    /// (this DTO alone can't do that — it has no access to the live world).
+    /// Builds a `ComponentSpec` from everything except `children`, which are
+    /// returned separately for the caller to attach.
     pub fn into_spec_without_children(self) -> (ComponentSpec, Vec<f64>) {
         let mut spec = ComponentSpec::new((&self.geometry).into());
         if let Some(hover) = &self.hover {
@@ -436,17 +419,13 @@ impl From<&TransitionConfigDto> for TransitionConfig {
 }
 
 // ---------------------------------------------------------------------------
-// SplitStrategy / MergeLayout (M13.8 — group transitions, previously
-// Rust-only)
+// SplitStrategy / MergeLayout
 // ---------------------------------------------------------------------------
 
-/// Same flat `{kind, ...}` shape convention `easing` already uses above
-/// (a string tag instead of a nested JSON tagged-union) — `kind` is one of
-/// `"perTarget"` / `"slice"` / `"gridSlice"`; `cols`/`rows` only matter for
-/// `"gridSlice"`. An unrecognized `kind` falls back to `Slice` and logs,
-/// keeping `TransitionConfigDto::easing`'s "unknown string → sane default"
-/// leniency rather than erroring. It used to fall back to `PerTarget`, which
-/// meant a typo silently selected the experimental strategy.
+/// `{ kind, cols?, rows? }`, where `kind` is `"perTarget"`, `"slice"` or
+/// `"gridSlice"`, and `cols` and `rows` apply to `"gridSlice"` only. An
+/// unknown `kind` falls back to `"slice"` with a warning, not to the
+/// experimental `"perTarget"`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SplitStrategyDto {
@@ -474,9 +453,9 @@ impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
     }
 }
 
-/// `kind` is `"horizontal"` / `"grid"`; `cols`/`rows` only matter for
-/// `"grid"`. Unrecognized `kind` falls back to `Horizontal` — same
-/// leniency convention as [`SplitStrategyDto`].
+/// `{ kind, cols?, rows? }`, where `kind` is `"horizontal"` or `"grid"`, and
+/// `cols` and `rows` apply to `"grid"` only. An unknown `kind` falls back to
+/// `"horizontal"`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeLayoutDto {
@@ -499,10 +478,8 @@ impl From<&MergeLayoutDto> for proteus_ui::MergeLayout {
     }
 }
 
-/// One entry of `splitToWithStates`'s target list — `id` is a `Handle.id()`
-/// value (see this module's top doc), `state` the explicit rest geometry to
-/// use instead of resolving it from the target's own declared/live
-/// `QuadState` (mirrors `proteus-sdk`'s `Handle::split_to_with_states`).
+/// One target of `splitToWithStates`: its handle ID and the geometry it should
+/// end at.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetStateDto {

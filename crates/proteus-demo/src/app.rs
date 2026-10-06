@@ -1,29 +1,16 @@
-//! [`DemoApp`] — the reference demo as a [`proteus_runtime::App`] (M13.1).
+//! [`DemoApp`]: the reference demo as a [`proteus_runtime::App`].
 //!
-//! Wraps [`Demo`] (which no longer owns its `Proteus`) and owns the asset
-//! loading the M12 shells used to hand-roll: every `set_*` call now pulls
-//! bytes from the host via [`Frame::load_asset`] / [`Frame::load_texture`].
+//! [`Demo`] holds the demo's logic, and has no access to the GPU, the network
+//! or assets, so it can be tested without them. `DemoApp` wraps it and does
+//! that work in `update` through [`Frame`]: it loads assets with
+//! [`Frame::load_asset`] and [`Frame::load_texture`], bakes the textures `Demo`
+//! generates with [`Frame::bake_texture`], fetches gallery photos with
+//! [`Frame::fetch_async`] (see [`crate::gallery_fetch`]), and plays video with
+//! [`Frame::play_video`].
 //!
-//! Texture churn (M13.4 step 1), the photo gallery (M13.4 step 3), and video
-//! on hosts that have migrated it (M13.4 step 4a, native only so far — see
-//! [`DemoApp::new`]'s own doc) are all baked/fetched/played here now too:
-//! `Demo` still only generates the synthetic RGBA bytes / requests *that*
-//! something happen (it stays headless, with no `Frame`/GPU/network access
-//! of its own, on purpose — see its own crate-root doc), but `DemoApp::
-//! update` — which does have `Frame` — drains those requests and does the
-//! actual work via [`Frame::bake_texture`]/[`Frame::fetch_async`]/
-//! [`Frame::play_video`] instead of leaving it to a shell-side shim reaching
-//! past `Frame` into the `Engine`. Which photo to fetch and how
-//! to build its URL is [`crate::gallery_fetch`] — shared here instead of
-//! duplicated per shell, now that there's one real async-fetch primitive
-//! both shells can drive identically.
-//!
-//! Video reaches both hosts the same way, through
-//! [`Frame::play_video`]/[`Frame::poll_video`] over
-//! `HostServices::open_video` — natively an `ffmpeg`-backed `Mp4Stream`, on
-//! the web `proteus-host-web`'s `hls_video` (`<video>`/`MediaSource`, no JS).
-//! Only the *keyspace* differs, and that is the host's business: see
-//! [`DemoApp::new`]'s `video_keys`.
+//! Video works the same on both hosts, through `HostServices::open_video`:
+//! natively an `ffmpeg`-backed MP4 stream, on the web an HLS stream in a
+//! `<video>` element. Only the video keys differ; see [`DemoApp::new`].
 
 use std::collections::HashMap;
 
@@ -32,26 +19,23 @@ use proteus_runtime::{App, FetchId, Frame, TextureRequest};
 use crate::screens::gallery::TILE_COUNT as GALLERY_TILE_COUNT;
 use crate::{gallery_fetch, Demo};
 
-/// Source frame art (208×288) is larger than the mark's on-screen footprint;
-/// downscale before packing. Matches the M12 shells' `LOGO_FRAME_MAX_SIDE`.
+/// The logo frames (208×288) are larger than the logo is drawn, so they are
+/// scaled down to this before packing.
 const LOGO_FRAME_MAX_SIDE: u32 = 220;
 
 /// Number of frames in each (light / dark) logo hatch-sweep set.
 const LOGO_FRAME_COUNT: u32 = 19;
 
-/// Matches the M12 shells' own `MAX_TILE_IMAGE_SIDE`/`MAX_IMAGE_SIDE` cap for
-/// a gallery grid tile — a big viewport shouldn't fetch far more bytes than
-/// a ~186px tile can ever show.
+/// The largest side, in pixels, of a gallery tile's photo. A large window
+/// shouldn't fetch much more than a tile of about 186 pixels can show.
 const MAX_TILE_IMAGE_SIDE_PX: f32 = 400.0;
 
-/// Matches the M12 shells' own `GALLERY_LARGE_IMAGE_MAX_SIDE` — the one
-/// place a bigger image is the whole point, so its own, higher cap.
+/// The largest side, in pixels, of an enlarged gallery photo, where a bigger
+/// image is the point.
 const GALLERY_LARGE_IMAGE_MAX_SIDE_PX: f32 = 900.0;
 
-/// What a completed [`Frame::fetch_async`] result routes back to — looked up
-/// by [`FetchId`] as fetches complete, since gallery fetches aren't the only
-/// possible use of `fetch_async`/`poll_fetches` in principle (any future
-/// caller's own ids simply won't be in this map and are ignored).
+/// What a completed [`Frame::fetch_async`] is for, looked up by its
+/// [`FetchId`]. A fetch that isn't in the map is ignored.
 enum PendingGalleryFetch {
     Tile(usize, glam::Vec2),
     Hires(usize),
@@ -60,33 +44,24 @@ enum PendingGalleryFetch {
 /// The reference demo, ready to hand to a host's `run()`.
 pub struct DemoApp {
     demo: Option<Demo>,
-    /// Which picsum photo id each tile's low-res fetch landed on — reused
-    /// to fetch the *same* photo bigger when it's enlarged. `Demo` itself
-    /// never tracks this (it only knows aspect ratios, not photo ids).
+    /// The picsum photo ID each tile shows, so an enlarged tile can fetch the
+    /// same photo at a larger size. `Demo` only knows the photos' shapes.
     tile_photo_id: [Option<u32>; GALLERY_TILE_COUNT],
     gallery_fetches: HashMap<FetchId, PendingGalleryFetch>,
-    /// The single in-flight hires fetch, if any — at most one at a time,
-    /// same invariant the M12 shells' own single-slot channel had. Tracked
-    /// separately from `gallery_fetches` (which also holds this same id)
-    /// purely so `take_pending_gallery_hires_cancel` has something to look
-    /// up without scanning the map for a `Hires` entry.
+    /// The large-photo fetch in progress, if any; there is at most one. It is
+    /// also in `gallery_fetches`, but kept here so it can be cancelled without
+    /// searching the map.
     hires_fetch: Option<FetchId>,
-    /// `Some([left, center, right])` — the keys this module hands
-    /// `Frame::play_video`, resolved by whatever keyspace the host's own
-    /// `HostServices::open_video` expects (native: literal filesystem paths;
-    /// web: an HLS manifest path plus a codec string). Both shells pass
-    /// `Some`.
+    /// The video keys for the left, center and right tiles, passed to
+    /// `Frame::play_video`. Their format is the host's: file paths natively,
+    /// an HLS directory and codec string on the web.
     ///
-    /// `None` means "this host has no video at all": `advance_video` becomes
-    /// a no-op and the video tiles' pending requests are simply never
-    /// drained. No shell needs it today — it's kept so a host without video
-    /// support can still run the demo, and it's what the `resize` test
-    /// builds against.
+    /// `None` runs the demo without video: its video requests are ignored.
+    /// Both shells pass `Some`.
     video_keys: Option<[String; 3]>,
     playing_video: Option<proteus_runtime::PlayingVideo>,
-    /// Last viewport size handed to `Demo::set_viewport_size`, so `update` can
-    /// notice a resize. `Engine::resize` keeps `Frame::viewport` current, but
-    /// nothing was reading it after `setup` — see `advance_viewport`.
+    /// The viewport size last given to `Demo::set_viewport_size`, so that
+    /// `update` can tell when it changes. See `advance_viewport`.
     last_viewport: Option<glam::Vec2>,
 }
 
@@ -104,33 +79,18 @@ impl DemoApp {
         }
     }
 
-    /// The wrapped [`Demo`] once `setup` has run; `None` before the first
-    /// frame.
-    ///
-    /// Test-only. Every host-side shim that used to reach through this —
-    /// texture churn, the gallery, and finally video at M13.4 — now goes
-    /// through `Frame` inside `update`, so nothing outside this crate needs
-    /// to see the `Demo` itself any more.
+    /// The wrapped [`Demo`], once `setup` has run. For tests.
     #[cfg(test)]
     pub(crate) fn demo_mut(&mut self) -> Option<&mut Demo> {
         self.demo.as_mut()
     }
 
-    /// Forwards a changed viewport to [`Demo::set_viewport_size`].
+    /// Passes a changed viewport size to [`Demo::set_viewport_size`], so the
+    /// background, the gallery layout and the corner icons follow the window.
     ///
-    /// `Demo::set_viewport_size`'s own doc says "call on every resize", and
-    /// `Engine::resize` does keep `Frame::viewport` up to date — but nothing
-    /// read it after `setup`, so the demo stayed laid out for whatever size the
-    /// window happened to open at. The background quad kept its startup size,
-    /// the gallery's declared cell geometry went stale, and the nav/theme icons
-    /// stayed pinned to the old corners (they position from
-    /// `Demo::viewport_size` every frame). A regression from the pre-M13
-    /// shells, which called this from their own `Resized` handler.
-    ///
-    /// Compared rather than called unconditionally: `set_viewport_size` rewrites
-    /// every gallery tile's declared geometry, which is real work and — more to
-    /// the point — would clobber a tile's declared state mid-transition on every
-    /// frame.
+    /// Only when the size changes: `set_viewport_size` recomputes every
+    /// gallery tile's declared geometry, which would disturb a tile that is
+    /// transitioning.
     fn advance_viewport(&mut self, demo: &mut Demo, f: &mut Frame) {
         let size = f.viewport.logical_size;
         if self.last_viewport == Some(size) {
@@ -140,9 +100,8 @@ impl DemoApp {
         demo.set_viewport_size(f.proteus, size);
     }
 
-    /// Kicks off / drains this frame's video, on a host that's migrated it
-    /// (see `video_keys`'s own doc) — a no-op on a host without video. Split out of
-    /// `update` purely for readability — not part of the `App` trait.
+    /// Starts this frame's requested videos and uploads their frames. Does
+    /// nothing without video keys.
     fn advance_video(&mut self, demo: &mut Demo, f: &mut Frame) {
         let Some(video_keys) = &self.video_keys else {
             return;
@@ -174,8 +133,8 @@ impl DemoApp {
         }
     }
 
-    /// Kicks off / drains this frame's gallery fetches. Split out of
-    /// `update` purely for readability — not part of the `App` trait.
+    /// Starts this frame's requested gallery fetches and handles the ones that
+    /// completed.
     fn advance_gallery(&mut self, demo: &mut Demo, f: &mut Frame) {
         let scale = f.viewport.scale_factor;
 
@@ -249,8 +208,7 @@ impl DemoApp {
 }
 
 impl Default for DemoApp {
-    /// Defaults to shell-managed video (`None`) — a host opts into
-    /// `HostServices`-driven video explicitly via [`Self::new`].
+    /// A demo without video. Use [`Self::new`] to give it video keys.
     fn default() -> Self {
         Self::new(None)
     }
@@ -285,8 +243,8 @@ impl App for DemoApp {
     }
 }
 
-/// One image asset's bytes, or `None` if the host can't find it (the demo
-/// degrades to a blank quad — same as the M12 shells).
+/// One image asset's bytes, or `None` if the host can't find it, in which
+/// case that part of the demo stays blank.
 fn asset_bytes(f: &mut Frame, key: &str) -> Option<Vec<u8>> {
     f.load_asset(key).map(|b| b.to_vec())
 }
@@ -324,9 +282,8 @@ fn load_assets(demo: &mut Demo, f: &mut Frame) {
     set_img!("logo/lockup.png", set_nav_logo_lockup);
     set_img!("logo/lockup-dark.png", set_nav_logo_lockup_dark);
 
-    // The sun icon's light/dark asset roles are inverted on purpose — see
-    // `proteus_demo::screens::theme`'s module doc. The keys here match the
-    // M12 native shell's own mapping.
+    // The sun icon's light and dark assets are swapped on purpose; see
+    // `proteus_demo::screens::theme`.
     set_img!("icons/sun-idle-dark.png", set_theme_sun_icon);
     set_img!("icons/sun-selected.png", set_theme_sun_icon_dark);
     set_img!("icons/moon-idle.png", set_theme_moon_icon);

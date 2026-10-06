@@ -1,49 +1,24 @@
-//! Text ECS components for M4 — single-line SDF text rendering.
-//!
-//! ## Data flow
+//! Text: a single line of text drawn on an entity.
 //!
 //! ```text
-//! Text { content, size_px }          ← developer declares on an entity
-//!         │
-//!         │ (shell detects Text without BakedText, calls FontAtlas::rasterize_text)
+//! Text { content, size_px }      declared on an entity
+//!         │  the renderer finds Text without BakedText
 //!         ▼
-//! FontAtlas::rasterize_text → RasterizedGlyphs (CPU pixels, no atlas placement)
-//!         │
-//!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
-//!         │  then QuadPipeline::write_to_main_atlas to upload the pixels — M11)
+//! FontAtlas::rasterize_text      the glyphs, as pixels
+//!         │  added to the main atlas
 //!         ▼
-//! BakedText { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the entity
+//! BakedText + TextureRef         where the text is in the atlas
 //!         │
-//!         │ (render loop uses these UVs in QuadInstance; TextureRef ref-counts the
-//!         │  region against this entity's lifetime — see crate::texture_ref)
 //!         ▼
-//! GPU shader samples main_atlas sub-region → tinted text pixel
+//! drawn as a quad over the entity's background
 //! ```
 //!
-//! ## Color
+//! Glyphs are rasterized white, with their coverage in the alpha channel, and
+//! drawn in `Text::color`.
 //!
-//! Text pixels are rasterized as white (R=G=B=255) with glyph coverage in the
-//! alpha channel. The entity's `QuadState::color` field tints the text in the
-//! shader, so the same baked texture can appear in any color without re-baking.
-//!
-//! ## Transitions
-//!
-//! A text-bearing entity is treated identically to any other textured quad. The
-//! transition system lerps `QuadState` (position, size, color, corner_radius)
-//! while the baked text texture stays in the atlas. This means text can shrink,
-//! grow, move, and fade exactly like any other component — no special-casing.
-//!
-//! ## Composition (M10)
-//!
-//! `Text` is a standalone leaf entity with its own identity and `QuadState` —
-//! it does not need to live on the same entity as the container it labels.
-//! The M5 shortcut (a single entity carrying both a container `QuadState` and
-//! a `Text`/label) is gone: a labeled button is now a `Quad` parent entity
-//! with a `Text` child (`ChildOf`), the child's `QuadState` declared relative
-//! to the parent. Nothing here changed structurally to make that possible —
-//! `Text`/`BakedText` only ever needed `content`/`size_px`/`color` and a
-//! `QuadState` on the *same* entity as themselves, which is exactly as true
-//! for a child entity as it was for the old single-entity shortcut.
+//! During a transition, the text moves and scales with the entity like any
+//! other texture. A label is usually a child entity of the component it
+//! labels, positioned relative to it.
 
 use bevy_ecs::prelude::*;
 use glam::Vec4;
@@ -52,43 +27,30 @@ use glam::Vec4;
 // Text component
 // ---------------------------------------------------------------------------
 
-/// Declares that an entity should display a single line of text.
+/// A single line of text to draw on an entity.
 ///
-/// When this component is present on an entity that does not yet have a
-/// [`BakedText`] component, the shell's text-bake step rasterizes the
-/// string, uploads it to `main_atlas`, and inserts [`BakedText`] with the
-/// resulting UV coordinates.
-///
-/// Re-baking on content or size change is not yet implemented (M4 Phase 1).
-/// The baked texture is permanent for the entity's lifetime.
+/// The renderer rasterizes it into the main atlas and adds a [`BakedText`].
+/// Changing `content` or `size_px` afterwards has no effect until the
+/// `BakedText` is removed.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Text {
-    /// The string to render. Supports all glyphs present in the embedded font.
+    /// The text. Any character the font has can be used.
     pub content: String,
-    /// Font size in pixels. Valid range: 1.0 – 512.0.
-    /// Sizes outside 12–48 px may render with reduced quality on some hardware.
+    /// Font size in pixels.
     pub size_px: f32,
-    /// RGBA color of the rendered glyphs.
-    ///
-    /// Defaults to opaque white (`Vec4::ONE`), which reads well on any colored
-    /// background. Set to a dark value for light backgrounds, or to any accent
-    /// color to match your design.
-    ///
-    /// The alpha channel is multiplied by the entity's whole-component opacity
-    /// in the shader, so partially-transparent text is supported.
+    /// The text's color, RGBA. Defaults to opaque white. Its alpha is
+    /// multiplied by the entity's opacity.
     pub color: Vec4,
-    /// Extra tracking inserted between glyphs, in pixels. `0.0` (the
-    /// default) is normal glyph-to-glyph advance with no extra gap; negative
-    /// values tighten it. See [`FontAtlas::rasterize_text_tracked`] — this is
-    /// the only reason that method exists rather than just `rasterize_text`.
+    /// Extra space between characters, in pixels. `0.0`, the default, is the
+    /// font's normal spacing; negative values tighten it. See
+    /// [`FontAtlas::rasterize_text_tracked`].
     ///
     /// [`FontAtlas::rasterize_text_tracked`]: proteus_render::FontAtlas::rasterize_text_tracked
     pub letter_spacing_px: f32,
 }
 
 impl Text {
-    /// Convenience constructor. Glyph color defaults to opaque white; letter
-    /// spacing defaults to `0.0` (no extra tracking).
+    /// Creates text in opaque white with normal letter spacing.
     pub fn new(content: impl Into<String>, size_px: f32) -> Self {
         Self {
             content: content.into(),
@@ -98,22 +60,24 @@ impl Text {
         }
     }
 
-    /// Override the glyph color. Builder-style so it chains with `Text::new`.
+    /// Sets the text's color.
     ///
-    /// ```rust,ignore
-    /// Text::new("Hello", 22.0).with_color(Vec4::new(0.1, 0.1, 0.1, 1.0))
+    /// ```
+    /// # use glam::Vec4;
+    /// # use proteus_ui::Text;
+    /// let label = Text::new("Hello", 22.0).with_color(Vec4::new(0.1, 0.1, 0.1, 1.0));
     /// ```
     pub fn with_color(mut self, color: Vec4) -> Self {
         self.color = color;
         self
     }
 
-    /// Override letter spacing (extra tracking between glyphs, in pixels).
-    /// Builder-style so it chains with `Text::new`/`with_color`.
+    /// Sets the extra space between characters, in pixels.
     ///
-    /// ```rust,ignore
-    /// // Brand Spec: "letter-spacing 0.06em" — 0.06 * size_px.
-    /// Text::new("PROTEUS", 90.0).with_letter_spacing(90.0 * 0.06)
+    /// ```
+    /// # use proteus_ui::Text;
+    /// // Letter spacing of 0.06em is 0.06 times the size.
+    /// let title = Text::new("PROTEUS", 90.0).with_letter_spacing(90.0 * 0.06);
     /// ```
     pub fn with_letter_spacing(mut self, letter_spacing_px: f32) -> Self {
         self.letter_spacing_px = letter_spacing_px;
@@ -125,30 +89,23 @@ impl Text {
 // BakedText component
 // ---------------------------------------------------------------------------
 
-/// Written by the shell after a [`Text`] entity's string has been rasterized
-/// and uploaded to the GPU `main_atlas`.
+/// Where an entity's [`Text`] is in the main atlas, added once the text is
+/// baked.
 ///
-/// The render loop reads `uv_offset` and `uv_scale` to point the entity's
-/// [`QuadInstance`] at the correct atlas sub-region, and `pixel_size` to size
-/// the text overlay quad to the glyph run's actual footprint rather than
-/// stretching it to fill the parent entity's full geometry.
+/// The text is drawn as its own [`QuadInstance`] at `pixel_size`, centered on
+/// the entity, rather than stretched to the entity's size.
 ///
 /// [`QuadInstance`]: proteus_render::QuadInstance
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct BakedText {
-    /// Normalised UV origin within `main_atlas` (top-left corner of the text region).
-    /// Range: [0, 1] × [0, 1].
+    /// Texture coordinates of the text's top-left corner in the atlas.
     pub uv_offset: [f32; 2],
-    /// Normalised UV extent of the text region.
-    /// `uv_offset + uv_scale` gives the bottom-right UV corner.
+    /// The text's size in texture coordinates; `uv_offset + uv_scale` is its
+    /// bottom-right corner.
     pub uv_scale: [f32; 2],
-    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — see
-    /// `proteus_ui::image::BakedImage::page`'s doc for why this exists.
+    /// The main-atlas page the text is on.
     pub page: u32,
-    /// The baked glyph run's actual size in pixels (`BakedRegion::width`/`height`).
-    /// The text overlay instance uses this as its quad size — centered on the
-    /// parent entity — instead of the parent's own size, so text renders at
-    /// its natural footprint rather than stretched to fill the component.
+    /// The text's size in pixels, which is the size it is drawn at.
     pub pixel_size: [f32; 2],
 }
 

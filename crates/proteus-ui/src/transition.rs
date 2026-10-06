@@ -1,10 +1,13 @@
-//! Transition system — the lerp engine at the heart of Proteus.
+//! 1→1 transitions: moving an entity's geometry from one `QuadState` to
+//! another over time.
 //!
-//! Three systems run in sequence each frame:
+//! Three systems run in order each tick:
 //!
-//! 1. [`transition_setup_system`]    — converts `TransitionRequest` → `ActiveTransition`
-//! 2. [`transition_tick_system`]     — advances `t`, lerps `QuadState`
-//! 3. [`transition_complete_system`] — detects `t = 1.0`, fires event, cleans up
+//! 1. [`transition_setup_system`] turns a `TransitionRequest` into an
+//!    `ActiveTransition`;
+//! 2. [`transition_tick_system`] advances it and interpolates the `QuadState`;
+//! 3. [`transition_complete_system`] finishes the ones that reached the end
+//!    and records them in [`CompletedTransitions`].
 
 use bevy_ecs::prelude::*;
 
@@ -16,8 +19,8 @@ use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual};
 
 /// A function mapping normalized time `t ∈ [0,1]` to an eased `t ∈ [0,1]`.
 ///
-/// A plain function pointer keeps `TransitionConfig: Copy` with no heap
-/// allocation. For custom easing that captures state, wrap in a newtype.
+/// A plain function pointer keeps `TransitionConfig` `Copy`, with no
+/// allocation, so an easing curve can't capture state.
 pub type EasingFn = fn(f32) -> f32;
 
 /// t unchanged — constant velocity.
@@ -56,11 +59,17 @@ pub fn ease_out_cubic(t: f32) -> f32 {
 
 /// Call-site configuration for one transition.
 ///
-/// Passed inside `TransitionRequest`. The same config applies to all lerped
-/// fields for a 1→1 transition; per-child configs are used in 1→N (M3).
+/// Part of a `TransitionRequest`. It applies to every field of the geometry;
+/// splits and merges can give each piece its own.
 #[derive(Copy, Clone, Debug)]
 pub struct TransitionConfig {
-    /// Total wall-clock duration of the interpolation in seconds.
+    // DOC-REVIEW: accurate today; step 5 makes 0 instant and drops the panic,
+    // and this doc changes with it.
+    /// How long the transition takes, in seconds. Must be positive.
+    ///
+    /// Zero, a negative value or NaN is a mistake. In debug builds the
+    /// transition panics when it starts; in release builds it completes on
+    /// the next tick, as if instant.
     pub duration: f32,
     /// Seconds to wait before t starts advancing. Useful for staggered animations.
     pub delay: f32,
@@ -98,12 +107,18 @@ pub struct ActiveTransition {
     /// Config (duration, easing) for this transition.
     pub config: TransitionConfig,
     /// Set to `true` by `transition_tick_system` when `raw_t >= 1.0`.
-    /// Read by `transition_complete_system` the same frame.
+    /// Read by `transition_complete_system` the same tick.
     /// Exposed `pub` so integration tests can inspect and seed this flag.
     pub is_complete: bool,
 }
 
 impl ActiveTransition {
+    /// Starts a transition from `from` to `to`.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, if `config.duration` isn't positive. Release builds
+    /// treat such a duration as almost instant.
     pub fn new(from: QuadState, to: QuadState, config: TransitionConfig) -> Self {
         debug_assert!(
             config.duration > 0.0,
@@ -134,30 +149,26 @@ impl ActiveTransition {
 // TransitionComplete event
 // ---------------------------------------------------------------------------
 
-/// Single-frame message bag: entities whose transitions completed this frame.
+/// The entities whose transitions finished this tick.
 ///
-/// `transition_complete_system` clears this at the start of each frame and then
-/// appends one entry per entity that reached `t = 1.0`. The shell (or a
-/// downstream system) reads and drains the list after calling `world.update()`.
+/// `transition_complete_system` clears it each tick, then adds each entity
+/// that reached `t = 1.0`. Read it after `ProteusWorld::update`.
 #[derive(Resource, Default)]
 pub struct CompletedTransitions {
-    /// Entities whose transition finished this frame. 1→1 completions come
-    /// from [`transition_complete_system`]; group completions
-    /// (1→N, N→1) come from `topology::group_transition_complete_system` and
-    /// name the *coordinator* — the source for 1→N, the destination for N→1
-    /// — never the virtual entities, which are machinery.
+    /// The entities. For a split or merge, it is the entity coordinating it,
+    /// the source or the destination, never its virtual pieces.
     pub entities: Vec<Entity>,
 }
 
 impl CompletedTransitions {
-    /// Take all completed entities, leaving the internal list empty.
+    /// Takes this tick's completed entities, leaving the list empty, so the
+    /// same completion can't be handled twice.
     ///
-    /// Prefer this over reading `.entities` directly: `drain()` makes it
-    /// impossible to accidentally process the same completions twice.
-    ///
-    /// ```rust,ignore
-    /// for entity in world.resource_mut::<CompletedTransitions>().drain() {
-    ///     // react to entity's transition finishing
+    /// ```
+    /// # use proteus_ui::{CompletedTransitions, ProteusWorld};
+    /// # let mut world = ProteusWorld::new();
+    /// for entity in world.world.resource_mut::<CompletedTransitions>().drain() {
+    ///     // React to `entity`'s transition finishing.
     /// }
     /// ```
     pub fn drain(&mut self) -> Vec<Entity> {
@@ -169,11 +180,11 @@ impl CompletedTransitions {
 // FrameTime resource
 // ---------------------------------------------------------------------------
 
-/// Injected by the shell at the top of each frame with the actual wall-clock delta.
-///
-/// Systems read this instead of an OS clock so tests can supply controlled deltas.
+/// This tick's time step, set by `ProteusWorld::update`. Systems read it,
+/// rather than a clock, so tests can control time.
 #[derive(Resource, Default)]
 pub struct FrameTime {
+    /// Seconds since the previous tick.
     pub delta_secs: f32,
 }
 
@@ -187,30 +198,20 @@ pub struct FrameTime {
 /// `ActiveTransition`, **moves the entity to the from-state**, sets
 /// `Lifecycle::Transitioning`, and removes the request.
 ///
-/// ## Why the from-state is applied here and not left to the first tick
+/// ## Why the entity moves to the start at once
 ///
-/// A declared `from_state` means "this morph visually originates somewhere
-/// other than where the entity currently sits" — how a signal-driven 1→1 makes
-/// the destination appear to come from the source, and how
-/// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) fans N targets out of one
-/// source. Nothing used to write it to the entity; the entity only arrived at
-/// `from` as a side effect of `transition_tick_system`'s first *lerping* tick
-/// computing `lerp(from, to, ~0)`. Two consequences, both fixed by applying it
-/// at setup:
+/// A `from_state` makes a transition start somewhere other than where the
+/// entity is: a signal's `to` starts from its `from`, and a
+/// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) split starts
+/// every target from the source. The entity is moved there immediately, not on
+/// the first tick of the transition, because:
 ///
-/// - **During a `delay`,** the tick system deliberately doesn't lerp at all, so
-///   the entity stayed at its pre-transition position for the whole delay and
-///   then jumped to `from`. For a staggered `PerTarget` split that inverts the
-///   intended effect: every target sits visible at its *final* position for the
-///   length of its stagger, then snaps back to the source to animate out.
-/// - **Even at zero delay,** `ActiveTransition` is inserted through `Commands`,
-///   so the tick system doesn't observe it until the next frame — leaving
-///   exactly one rendered frame at the stale position. Where the destination
-///   entity rests at its final geometry, that frame is a flash of the end state
-///   before the animation starts.
+/// - **during a `delay`,** nothing moves, so the entity would sit at its old
+///   position, often its final one, and then jump back to the start;
+/// - **even without a delay,** the transition is only picked up a tick later,
+///   so the entity would show at its old position for one frame.
 ///
-/// With `from_state: None` the origin *is* the current state, so this write is a
-/// no-op — which is every transition the reference demo creates.
+/// With no `from_state`, the start is where the entity already is.
 pub fn transition_setup_system(
     mut commands: Commands,
     // `&Lifecycle` is intentionally excluded: any entity with a TransitionRequest
@@ -277,14 +278,14 @@ pub fn transition_tick_system(
     }
 }
 
-/// Detects completed transitions, records them in `CompletedTransitions`, and cleans up.
+/// Finishes completed transitions and records them in `CompletedTransitions`.
 ///
 /// Runs after `transition_tick_system` in the schedule. Entities whose
 /// `ActiveTransition.is_complete` flag is set get the component removed and
 /// their `Lifecycle` restored to `Idle`.
 ///
 /// Clears `CompletedTransitions` at the top of each call so the resource always
-/// holds exactly this frame's completions.
+/// holds exactly this tick's completions.
 pub fn transition_complete_system(
     mut commands: Commands,
     // Exclude Virtual entities — their completions are handled by

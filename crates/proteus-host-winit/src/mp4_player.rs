@@ -1,27 +1,16 @@
-//! Reference "bring your own player" example: decodes an `.mp4` file by
-//! shelling out to `ffmpeg`/`ffprobe` on a background thread, delivering
-//! RGBA frames through a [`proteus_runtime::VideoStream`] impl (M13.4 step
-//! 4a — moved here from `proteus-shell-native`'s own former copy of this
-//! file now that video is a real `HostServices` seam instead of a
-//! shell-side shim).
+//! A reference video player for the native host, showing how to bring your
+//! own. It decodes an MP4 file by running `ffmpeg` on a background thread, and
+//! delivers RGBA frames through a [`proteus_runtime::VideoStream`].
 //!
-//! `proteus-render`/`proteus-ui`/`proteus-runtime` know nothing about MP4,
-//! ffmpeg, or any codec — they only see [`VideoStream`], a small trait with
-//! one non-blocking `poll_frame`. Swapping in a different decoder or a
-//! hardware path means writing a different [`HostServices::open_video`]
-//! implementation with this same shape — spawn a thread (or task), decode,
-//! deliver frames — not touching the framework.
+//! Proteus doesn't play video. It shows the frames a player hands it, and
+//! knows nothing about MP4 or `ffmpeg`. Any other player, such as a hardware
+//! decoder, plugs in the same way: start it in
+//! [`HostServices::open_video`], and return its frames as a [`VideoStream`].
 //!
-//! Decoding, container demuxing, B-frame reordering, and real-time pacing
-//! are all delegated to `ffmpeg` itself (`-re` reads the input at its native
-//! frame rate) rather than reimplemented here — it's a known-correct,
-//! extremely battle-tested decoder, which sidesteps an entire class of bugs
-//! (reordering edge cases, chroma conversion, GOP-boundary quirks) a
-//! from-scratch decoder would need to get right. Requires `ffmpeg` and
-//! `ffprobe` on `PATH`.
+//! `ffmpeg` does all the decoding and plays at the file's own frame rate
+//! (`-re`). It and `ffprobe` must be on `PATH`.
 //!
-//! Audio is not decoded; this is video-only playback, matching what the
-//! reference demo's video screen needs.
+//! Audio is not decoded: this player shows video only.
 //!
 //! [`HostServices::open_video`]: proteus_runtime::HostServices::open_video
 
@@ -35,15 +24,15 @@ use std::thread::JoinHandle;
 
 use proteus_runtime::{VideoFrame, VideoStream};
 
-/// Coded dimensions of an mp4 file's video stream.
+/// The size of an MP4 file's video, in pixels.
 #[derive(Copy, Clone, Debug)]
 struct VideoDimensions {
     width: u32,
     height: u32,
 }
 
-/// Reads `path`'s video stream dimensions via `ffprobe` — container metadata
-/// only, no frame data decoded.
+/// Reads the size of `path`'s video with `ffprobe`, without decoding any
+/// frames.
 fn probe(path: &Path) -> Result<VideoDimensions, String> {
     let output = Command::new("ffprobe")
         .args([
@@ -81,15 +70,13 @@ fn probe(path: &Path) -> Result<VideoDimensions, String> {
     Ok(VideoDimensions { width, height })
 }
 
-/// A running `.mp4` decode — the [`VideoStream`] this module hands back
-/// from [`open`].
+/// An MP4 file being decoded, returned by [`open`].
 pub struct Mp4Stream {
     stop_flag: Arc<AtomicBool>,
     child: Arc<Mutex<Option<Child>>>,
     join_handle: Option<JoinHandle<()>>,
-    /// `Option` purely so [`VideoStream::stop`] can drop the receiver *before*
-    /// joining the decode thread — see that method's own doc for the deadlock
-    /// this avoids. Always `Some` until then.
+    // An `Option` only so that `stop` can drop the receiver before joining the
+    // decode thread; see `stop`.
     rx: Option<Receiver<Vec<u8>>>,
     width: u32,
     height: u32,
@@ -97,10 +84,8 @@ pub struct Mp4Stream {
 
 impl VideoStream for Mp4Stream {
     fn poll_frame(&mut self) -> Option<VideoFrame> {
-        // Drain to the latest frame — if more than one arrived since the
-        // last call (e.g. the render loop fell behind the decoder for a
-        // tick), everything but the freshest is discarded. Mirrors
-        // `QuadPipeline::consume_video_frame`'s identical pre-M13.4 policy.
+        // Keep only the newest frame: if the render loop fell behind, older
+        // frames are dropped.
         let mut latest: Option<Vec<u8>> = None;
         let mut drained = 0u32;
         let rx = self.rx.as_ref()?;
@@ -121,30 +106,18 @@ impl VideoStream for Mp4Stream {
         })
     }
 
-    /// Kills the `ffmpeg` child immediately (rather than waiting for it to
-    /// notice the stop flag between frames) and blocks until the decode
-    /// thread exits.
+    /// Kills `ffmpeg` and waits for the decode thread to exit.
     ///
-    /// ## Why the receiver is dropped before the join
-    ///
-    /// The frame channel is a `sync_channel(2)`, so the decode thread *blocks*
-    /// in `tx.send` whenever two frames are already queued — deliberate
-    /// backpressure, and the normal state any time the app stops polling for a
-    /// moment (a tab in the background, a long frame, or simply the couple of
-    /// frames between the last `poll_video` and this call).
-    ///
-    /// Killing `ffmpeg` does not release a thread already parked in `send`:
-    /// that wakes on the *receiver*, not on the child process. Joining while
-    /// the receiver is still alive therefore blocks forever, on whichever
-    /// thread called `stop` — the render thread. Dropping the receiver first
-    /// makes the pending `send` return `Err`, which `decode_once` treats as
-    /// "receiver dropped — pipeline is gone" and exits.
+    /// The receiver is dropped first. The frame channel holds two frames, so
+    /// the decode thread is usually waiting in `send`, and killing `ffmpeg`
+    /// doesn't wake it: only dropping the receiver does. Joining first would
+    /// block the calling thread, the render thread, forever.
     fn stop(mut self: Box<Self>) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }
-        // Order matters — see above. Must happen before the join.
+        // Before the join; see this method's doc.
         drop(self.rx.take());
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
@@ -152,11 +125,9 @@ impl VideoStream for Mp4Stream {
     }
 }
 
-/// Probe `path` and, if that succeeds, spawn a background thread decoding it
-/// via `ffmpeg` — looping back to the start at end-of-file; playback only
-/// stops when [`VideoStream::stop`] is called. `None` (logged) if `ffprobe`
-/// fails, matching [`HostServices::open_video`](proteus_runtime::HostServices::open_video)'s
-/// own "couldn't even start" convention.
+/// Starts decoding `path` on a background thread. Playback loops until
+/// [`VideoStream::stop`] is called. Returns `None`, and logs why, if `ffprobe`
+/// can't read the file.
 pub fn open(path: PathBuf) -> Option<Mp4Stream> {
     let dims = match probe(&path) {
         Ok(dims) => dims,
@@ -166,9 +137,8 @@ pub fn open(path: PathBuf) -> Option<Mp4Stream> {
         }
     };
 
-    // Bounded to 2 frames: one frame of lookahead; `send` blocks when the
-    // decode loop is ahead, providing natural backpressure — same shape
-    // `QuadPipeline::VideoFrameSender` used before this seam existed.
+    // Two frames: one frame of lookahead. `send` blocks when the decoder is
+    // ahead, which paces it.
     let (tx, rx) = sync_channel(2);
     let stop_flag = Arc::new(AtomicBool::new(false));
     let child_slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
@@ -190,8 +160,8 @@ pub fn open(path: PathBuf) -> Option<Mp4Stream> {
     })
 }
 
-/// Replays `path` from the start each time `ffmpeg` reaches end-of-file,
-/// until `stop` is set or a hard error occurs (logged, then the thread exits).
+/// Plays `path` from the start each time `ffmpeg` reaches the end, until `stop`
+/// is set or an error occurs, which is logged.
 fn decode_loop(
     path: &Path,
     tx: &SyncSender<Vec<u8>>,
@@ -208,9 +178,9 @@ fn decode_loop(
     }
 }
 
-/// Runs one `ffmpeg` decode pass over `path` from start to end (or until
-/// `stop` is set / the receiver is dropped), sending one RGBA frame per
-/// `width`×`height`×4-byte chunk read from its stdout.
+/// Decodes `path` once, from start to end, sending a frame for every
+/// `width * height * 4` bytes `ffmpeg` writes. Stops early if `stop` is set or
+/// the receiver is dropped.
 fn decode_once(
     path: &Path,
     tx: &SyncSender<Vec<u8>>,
@@ -233,9 +203,8 @@ fn decode_once(
         .map_err(|e| format!("spawn ffmpeg: {e} (is it installed and on PATH?)"))?;
 
     let mut stdout = child.stdout.take().ok_or("ffmpeg: no stdout pipe")?;
-    // Drain stderr on its own thread so ffmpeg never blocks trying to write
-    // warnings into a pipe nobody's reading; logged (at debug) only if
-    // decode_once exits abnormally, to avoid spamming a normal run.
+    // Read stderr on its own thread, or ffmpeg blocks when the pipe fills. It
+    // is only logged if decoding fails.
     let stderr_thread = child.stderr.take().map(|mut s| {
         std::thread::spawn(move || {
             let mut buf = String::new();
@@ -265,8 +234,8 @@ fn decode_once(
         }
     };
 
-    // Reap the child (it may already have exited on its own at EOF) so it
-    // doesn't linger as a zombie process.
+    // Wait for the process, which may already have exited, so it doesn't
+    // linger as a zombie.
     if let Some(mut child) = child_slot.lock().unwrap().take() {
         let _ = child.wait();
     }
@@ -292,27 +261,18 @@ mod tests {
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::Duration;
 
-    /// `stop()` must return even when the decode thread is parked in
-    /// `SyncSender::send` — the normal state whenever the app stops polling for
-    /// a moment, since the channel is a `sync_channel(2)` on purpose.
-    ///
-    /// Killing `ffmpeg` doesn't release a thread blocked on `send` (it wakes on
-    /// the receiver, not the child), so joining while the receiver is still
-    /// alive blocked forever — on the render thread, which is where `stop` is
-    /// called from. This reproduces that with a stand-in producer instead of a
-    /// real decode, so it needs no `ffmpeg` and runs everywhere.
-    ///
-    /// Asserted under a timeout because the failure mode is a *hang*: without
-    /// the fix this test would otherwise never finish rather than fail.
+    // `stop` must return even when the decode thread is waiting in `send`,
+    // which is usual whenever the app stops polling for a moment. Uses a
+    // stand-in producer, so it needs no `ffmpeg`. Checked with a timeout,
+    // because the failure is a hang rather than an error.
     #[test]
     fn stop_returns_even_when_the_decode_thread_is_blocked_on_a_full_channel() {
         let (tx, rx) = sync_channel::<Vec<u8>>(2);
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        // Stands in for `decode_loop`: pushes frames as fast as it can and
-        // exits when the receiver goes away, exactly as `decode_once` does on
-        // a `send` error. With a 2-slot channel and nobody draining, it is
-        // parked in `send` almost immediately.
+        // Stands in for the decode thread: sends frames as fast as it can and
+        // exits when the receiver is dropped. With nothing reading, it is soon
+        // waiting in `send`.
         let join_handle = std::thread::spawn(move || while tx.send(vec![0u8; 16]).is_ok() {});
 
         // Let it fill the channel and block.

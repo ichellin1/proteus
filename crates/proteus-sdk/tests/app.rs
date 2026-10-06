@@ -1,7 +1,6 @@
-//! Integration tests for `proteus-sdk`'s public API — a small button → list
-//! app, built only against this crate's own surface (no direct `proteus-ui`
-//! calls, except where noted for GPU-backed texture setup, which nothing in
-//! this crate's public API can do yet — see `Proteus::world_mut`'s doc).
+// Integration tests for `proteus-sdk`'s public API, written against this
+// crate's own surface. The exceptions use `proteus-ui` or `proteus-render`
+// directly to set up GPU resources, which the public API can't do.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -84,7 +83,7 @@ fn remove_child_with_destroy_despawns_it() {
 }
 
 // ---------------------------------------------------------------------------
-// text() / image() / border() / glow() / drop_shadow() — M12.5 Step 0
+// text() / image() / border() / glow() / drop_shadow()
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -196,10 +195,13 @@ fn on_click_does_not_fire_for_a_miss() {
 #[test]
 fn non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps() {
     let mut app = Proteus::new();
-    // A full-viewport-like backdrop, spawned first — the worst case for hit
-    // testing's "last hit wins, matches draw order" tie-break, since a
-    // plain (interactive) version of this would otherwise win over
-    // anything spawned earlier that it happens to overlap.
+    // check accuracy. This test no longer tests anything: the
+    // backdrop is spawned before the button, and hit-testing picks the
+    // component drawn on top, which is the later one, so the button wins
+    // with or without `non_interactive()`. Spawn the backdrop after the
+    // button (step 5 test fix), then this comment becomes: "A full-window
+    // backdrop drawn over the button. Without `non_interactive()` it would
+    // take the click."
     let _backdrop = app.component(
         ComponentSpec::new(QuadState {
             size: Vec2::new(2000.0, 2000.0),
@@ -279,18 +281,14 @@ fn signal_set_drives_to_toward_its_declared_geometry_and_hides_from() {
 
 #[test]
 fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() {
-    // M7 deferred this exact combination to M12 and nothing pinned it since.
-    // It is the case `callback.rs`'s take-call-put-back dispatch exists for:
-    // the handler runs while the callback registry is lifted out of
-    // `Proteus`, and `signal.set` re-enters that same `Proteus`.
+    // A handler that calls `signal.set` re-enters the `Proteus` that is
+    // dispatching it, the case `callback.rs`'s take-call-put-back dispatch
+    // exists for.
     //
-    // It works — but the transition starts on the *next* tick, because
-    // `tick` runs the whole schedule and only then dispatches callbacks, so
-    // the `TransitionRequest` the handler queues arrives after
-    // `transition_setup_system` has already run for this frame. That one
-    // frame of latency is invisible at 60fps and is what this pins; the
-    // reference demo never exposed it, since every `on_click` there only
-    // sets a flag the next `advance` reads.
+    // The transition starts on the next tick, not this one: `tick` runs the
+    // whole update before dispatching callbacks, so the request the handler
+    // queues arrives after this tick's transition setup has run. The one-tick
+    // delay is deliberate, and this test pins it.
     let mut app = Proteus::new();
     let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
@@ -338,9 +336,9 @@ fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() 
 
 #[test]
 fn signal_set_reveals_to_so_a_round_trip_works() {
-    // Phase A's button -> list -> button round trip. Dispatch used to hide
-    // `from` without ever showing `to`, so the return leg animated an
-    // invisible entity and the whole component was simply gone.
+    // A button -> list -> button round trip. The return leg only works because
+    // dispatch shows `to` as well as hiding `from`; without that, the button
+    // would transition while invisible and never reappear.
     let mut app = Proteus::new();
     let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let list = app.component(ComponentSpec::new(quad_at(300.0, 0.0)).visible(false));
@@ -356,7 +354,7 @@ fn signal_set_reveals_to_so_a_round_trip_works() {
     );
     assert!(!app.get(button).unwrap().visible, "button is the exit");
 
-    // Back: list -> button. This is the leg that was impossible.
+    // Back: list -> button.
     signal.set(&mut app, button, list, cfg(0.1), false);
     app.tick(1.0);
     assert!(
@@ -402,9 +400,8 @@ fn set_visible_on_a_destroyed_handle_is_an_error_not_a_panic() {
 
 #[test]
 fn opacity_cascades_to_descendants_through_the_sdk() {
-    // The cascade itself is M10's and tested in proteus-ui; this pins that
-    // it is reachable and observable from the SDK, which it wasn't before —
-    // `Opacity` could only be inserted through `world_mut()`.
+    // The opacity cascade itself is tested in proteus-ui; this checks that it
+    // can be set and read through the SDK.
     let mut app = Proteus::new();
     let child = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).opacity(0.6));
     let parent = app.component(
@@ -455,9 +452,8 @@ fn set_opacity_clamps_and_defaults_to_one() {
 
 #[test]
 fn fully_transparent_still_hit_tests_but_hidden_does_not() {
-    // Opacity is a paint multiplier; visibility is an ECS flag. They do not
-    // interact, and this is the observable consequence someone will trip
-    // over: an entity faded to nothing still swallows clicks.
+    // Opacity only affects drawing, so a component faded to nothing still
+    // receives clicks. Deliberate, and easy to trip over.
     let mut app = Proteus::new();
     let transparent = app.component(ComponentSpec::new(quad_at(100.0, 100.0)).opacity(0.0));
 
@@ -473,11 +469,9 @@ fn fully_transparent_still_hit_tests_but_hidden_does_not() {
         "opacity 0.0 must not remove the entity from hit-testing"
     );
 
-    // Hiding it does — from the *next* tick. `hit_test_system` runs at the
-    // start of the schedule and reads the `EffectiveVisibility` the cascade
-    // wrote at the end of the previous one, so input is resolved against
-    // what was last painted. Pinned from both sides so the ordering can't
-    // change silently.
+    // Hiding it does stop clicks, from the next tick: input is matched against
+    // what was last drawn. Checked on both ticks so the ordering can't change
+    // unnoticed.
     clicked.set(false);
     transparent.set_visible(&mut app, false).unwrap();
     app.pointer_pressed();
@@ -542,7 +536,7 @@ fn signal_on_dropped_fires_with_already_transitioning_reason() {
         *dropped_reason_clone.borrow_mut() = Some(dropped.reason);
     });
 
-    // Long-duration transition so `to` is still Transitioning next frame.
+    // Long-duration transition so `to` is still Transitioning next tick.
     signal.set(&mut app, to, from1, cfg(10.0), false);
     app.tick(0.1);
 
@@ -592,8 +586,8 @@ fn bake_is_a_graceful_noop_without_gpu_resources() {
     app.tick(0.0);
     app.tick(0.0);
 
-    // Should not panic, and the entity should still exist and be queryable —
-    // matches bake_system's own documented no-GPU contract.
+    // Without a GPU nothing is baked, but the component must still exist and
+    // be readable.
     assert!(app.get(handle).is_some());
 }
 
@@ -610,7 +604,7 @@ fn hover_style_resolves_and_applies() {
         ..Default::default()
     }));
 
-    // Baseline frame (not yet hovered).
+    // Baseline tick (not yet hovered).
     app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
     app.tick(1.0);
 
@@ -627,8 +621,8 @@ fn hover_style_resolves_and_applies() {
 // free_resources() — GPU-backed, skipped gracefully with no adapter
 // ---------------------------------------------------------------------------
 
-/// Mirrors `crates/proteus-ui/tests/static_bake.rs`'s `make_device` helper —
-/// same skip-with-a-warning-if-no-adapter convention.
+// Creates a headless GPU device, or returns `None` if this machine has no
+// adapter. Tests that need a GPU skip with a warning in that case.
 async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
@@ -665,8 +659,8 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     Some((device, queue))
 }
 
-/// A `Proteus` with the GPU resources `Renderer::new` would install, or
-/// `None` when this machine has no adapter.
+// A `Proteus` with the GPU resources a host would install, or `None` when
+// this machine has no adapter.
 fn gpu_app() -> Option<Proteus> {
     use proteus_render::{AtlasConfig, GpuContext, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
 
@@ -686,8 +680,9 @@ fn gpu_app() -> Option<Proteus> {
     Some(app)
 }
 
-/// Skips with a message unless `REQUIRE_GPU` is set, in which case it panics
-/// — CI always has lavapipe, so a miss there is a broken driver install.
+// Skips with a message, unless `REQUIRE_GPU` is set, in which case it panics.
+// CI always has a software GPU (lavapipe), so a missing adapter there means a
+// broken driver install.
 macro_rules! gpu_app_or_skip {
     () => {
         match gpu_app() {
@@ -861,7 +856,7 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
 }
 
 // ---------------------------------------------------------------------------
-// copy_baked_image_from() (M12.5 Step 8)
+// copy_baked_image_from()
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -900,7 +895,7 @@ fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destina
 }
 
 // ---------------------------------------------------------------------------
-// center_crop_to_square() (M12.5 Step 8 follow-up)
+// center_crop_to_square()
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -959,7 +954,7 @@ fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_
 }
 
 // ---------------------------------------------------------------------------
-// set_interactive() (M12.5.5 — theme toggle)
+// set_interactive()
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1001,10 +996,10 @@ fn set_interactive_toggles_whether_clicks_land() {
 }
 
 // ---------------------------------------------------------------------------
-// set_disabled / transitioning config — A-03
+// set_disabled() / transitioning config
 // ---------------------------------------------------------------------------
 
-/// Registers a click counter and drives one click at `pos`.
+// Registers a click counter and drives one click at `pos`.
 fn click_at(app: &mut Proteus, pos: Vec2) {
     app.pointer_moved(Some(pos));
     app.pointer_pressed();
@@ -1062,12 +1057,10 @@ fn start_disabled_spawns_in_the_disabled_state() {
     assert!(app.get(bare).unwrap().disabled);
     assert!(app.get(styled).unwrap().disabled);
 
-    // `state` is style resolution, not the marker. Two ways it differs from
-    // `disabled`, both pinned here because both will surprise someone:
-    // it stays `Default` for a component that declared no styles, and it
-    // lands a tick late even for one that did, since
-    // `interaction_style_system` writes `InteractionState` through deferred
-    // commands. `disabled` reads the marker and is true immediately.
+    // `state` is the interaction style applied, not whether the component is
+    // disabled. It differs from `disabled` in two ways, both pinned here: it
+    // stays `Default` for a component with no styles, and it updates a tick
+    // late even for one with styles. `disabled` is true immediately.
     assert_eq!(
         app.get(styled).unwrap().state,
         proteus_sdk::InteractionStateKind::Default,
@@ -1104,7 +1097,7 @@ fn allow_input_lets_a_transitioning_component_still_be_clicked() {
     let h2 = hits.clone();
     allowed.on_click(&mut app, move |_| h2.set((h2.get().0, true)));
 
-    // Put both mid-morph with a long duration.
+    // Put both mid-transition with a long duration.
     let _ = blocked.animate_to(&mut app, quad_at(100.0, 100.0), cfg(10.0));
     let _ = allowed.animate_to(&mut app, quad_at(400.0, 100.0), cfg(10.0));
     app.tick(0.1);
@@ -1158,7 +1151,7 @@ fn set_disabled_on_a_destroyed_handle_is_an_error_not_a_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// on_transition_complete — A-02
+// on_transition_complete()
 // ---------------------------------------------------------------------------
 
 fn completion_counter(
@@ -1245,10 +1238,9 @@ fn on_transition_complete_fires_once_on_the_destination_of_a_merge() {
 fn a_per_target_split_completes_on_its_targets_not_its_source() {
     use proteus_sdk::SplitStrategy;
 
-    // PerTarget is N independent 1->1s with no virtuals, so the source has
-    // nothing of its own to finish — it hides and goes Idle in the same
-    // tick. Asymmetric with Slice by definition; pinned so the doc on
-    // `on_transition_complete` can't quietly become wrong.
+    // PerTarget runs one independent 1->1 transition per target, so the
+    // source has no transition of its own: it is hidden in the same tick and
+    // never reports. Pinned so `on_transition_complete`'s doc stays right.
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let target1 = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
@@ -1265,10 +1257,8 @@ fn a_per_target_split_completes_on_its_targets_not_its_source() {
         SplitStrategy::PerTarget,
     );
 
-    // PerTarget needs two ticks where Slice needs one: `one_to_n_setup_system`
-    // inserts each target's `TransitionRequest` through deferred commands,
-    // and `transition_setup_system` shares its schedule set, so the request
-    // isn't picked up until the following tick.
+    // PerTarget needs two ticks where Slice needs one: each target's
+    // transition request is created a tick after the split is set up.
     app.tick(1.0);
     assert_eq!(target1_count.get(), 0, "not converted to a transition yet");
     app.tick(1.0);
@@ -1283,16 +1273,15 @@ fn a_per_target_split_completes_on_its_targets_not_its_source() {
 }
 
 // ---------------------------------------------------------------------------
-// split_to_with_behavior / merge_from_with_behavior — A-09
+// split_to_with_behavior() / merge_from_with_behavior()
 // ---------------------------------------------------------------------------
 
 #[test]
 fn split_to_with_behavior_staggers_each_target() {
     use proteus_sdk::SplitStrategy;
 
-    // Phase A's childBehavior iterator, finally reachable from the SDK.
-    // Delay by index, so after 0.15s target 0 has finished its 0.1s morph
-    // and target 2 (delayed 0.2s) has not started.
+    // Delay by index, so after 0.15s target 0 has finished its 0.1s
+    // transition and target 2 (delayed 0.2s) has not started.
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let targets: Vec<_> = (0..3)
@@ -1313,8 +1302,8 @@ fn split_to_with_behavior_staggers_each_target() {
         )
         .unwrap();
 
-    // Tick 1 converts the deferred TransitionRequests (see the PerTarget
-    // timing note); tick 2 advances 0.15s into them.
+    // Tick 1 creates the targets' transitions (see the PerTarget timing
+    // note); tick 2 advances 0.15s into them.
     app.tick(0.0);
     app.tick(0.15);
 
@@ -1333,7 +1322,7 @@ fn split_to_with_behavior_falls_back_to_the_shared_config() {
     use proteus_sdk::SplitStrategy;
 
     // A behavior that returns the same config for every index must behave
-    // exactly like plain split_to — the eager resolution introduces nothing.
+    // exactly like plain split_to.
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let targets: Vec<_> = (0..3)
@@ -1381,8 +1370,8 @@ fn merge_from_with_behavior_staggers_each_source() {
     )
     .unwrap();
 
-    // The group can't complete until its slowest member does — source 2 is
-    // delayed 0.2s on top of a 0.1s morph.
+    // The group can't complete until its slowest member does: source 2 is
+    // delayed 0.2s on top of a 0.1s transition.
     app.tick(0.15);
     assert_eq!(count.get(), 0, "still waiting on the staggered tail");
     app.tick(1.0);
@@ -1411,7 +1400,7 @@ fn with_behavior_on_a_destroyed_handle_is_an_error_not_a_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// split_to() / merge_from() — group transitions (M12.5 Step 2)
+// split_to() / merge_from(): group transitions
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1444,10 +1433,10 @@ fn split_to_per_target_hides_source_and_settles_targets_to_their_declared_geomet
         "source must be hidden once the 1\u{2192}N transition starts"
     );
 
-    // Prove the target actually *moves*, not just that it ends up where it
-    // was declared. A target sits at its declared geometry from spawn, so
-    // asserting only the end state can't tell a completed transition from
-    // one that never ran — which is what this test did before.
+    // Check that the target moves, not just that it ends where it was
+    // declared: a target sits at its declared geometry from the start, so
+    // the end state alone can't tell a completed transition from one that
+    // never ran.
     app.tick(0.05);
     let mid = app.get(target1).unwrap();
     assert!(
@@ -1512,10 +1501,9 @@ fn set_declared_geometry_updates_what_a_later_split_to_settles_targets_to() {
 
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
-    // Spawned at one geometry (e.g. a placeholder size before its label has
-    // baked), then redeclared to a different one before ever being used as
-    // a transition target — mirrors a grid cell whose real size is only
-    // known after baking.
+    // Created at one geometry, then given a new declared geometry before it
+    // is used as a transition target, like a grid cell whose real size is
+    // only known once its label has baked.
     let target = app.component(ComponentSpec::new(quad_at(50.0, 50.0)));
     let real_geometry = QuadState {
         color: Vec4::new(0.0, 1.0, 1.0, 1.0),
@@ -1537,9 +1525,8 @@ fn split_to_with_states_uses_the_given_state_not_declared_geometry() {
 
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
-    // A target whose own declared geometry (if `split_to` resolved it the
-    // normal way) would be totally different from the explicit state passed
-    // here — proves the explicit state actually wins.
+    // The target's own declared geometry is very different from the state
+    // passed here, which shows the explicit state wins.
     let target = app.component(ComponentSpec::new(quad_at(999.0, 999.0)));
     let explicit_state = QuadState {
         color: Vec4::new(0.0, 1.0, 0.0, 1.0),
@@ -1552,12 +1539,9 @@ fn split_to_with_states_uses_the_given_state_not_declared_geometry() {
         cfg(0.1),
         SplitStrategy::PerTarget,
     );
-    // Two ticks: the first turns the just-inserted `OneToNRequest` into a
-    // `TransitionRequest` (`one_to_n_setup_system` and `transition_setup_
-    // system` share `ProteusSet::TransitionSetup`, so a request created
-    // this frame isn't picked up as an `ActiveTransition` until the next);
-    // the second settles it (`cfg(0.1)`'s duration is well under this
-    // tick's `dt`).
+    // Two ticks: the first sets up the split, which creates the target's
+    // transition for the next tick; the second finishes it, since
+    // `cfg(0.1)`'s duration is well under this tick's `dt`.
     app.tick(1.0);
     app.tick(1.0);
 
@@ -1571,12 +1555,10 @@ fn split_to_with_states_is_safe_when_the_source_is_also_one_of_the_targets() {
     use proteus_sdk::SplitStrategy;
 
     let mut app = Proteus::new();
-    // The self-referential case `split_to_with_states`'s own doc describes:
-    // a shape splitting back into a group that includes its own slot.
-    // `source`'s *current* geometry (the screen-sized shape here) must
-    // survive untouched until the group-transition setup system captures it
-    // as the "from" snapshot on the next tick — this call must not stomp it
-    // the way `set_declared_geometry` would.
+    // A component that is also one of its own split targets. Its current
+    // geometry (here, screen-sized) must be left alone until the split
+    // captures it as the starting geometry on the next tick; this call must
+    // not move it the way `set_declared_geometry` would.
     let source = app.component(ComponentSpec::new(quad_at(500.0, 500.0)));
     let sibling = app.component(ComponentSpec::new(quad_at(999.0, 999.0)));
     let own_slot_state = QuadState {
@@ -1598,11 +1580,11 @@ fn split_to_with_states_is_safe_when_the_source_is_also_one_of_the_targets() {
         cfg(0.1),
         SplitStrategy::PerTarget,
     );
-    // Source geometry must be untouched immediately after the call — the
-    // request has only been inserted, not processed yet.
+    // Source geometry must be untouched immediately after the call; the
+    // split hasn't been set up yet.
     assert_eq!(app.get(source).unwrap().geometry.position, before.position);
 
-    // Two ticks — see the sibling test's comment for why.
+    // Two ticks; see the test above for why.
     app.tick(1.0);
     app.tick(1.0);
 
@@ -1714,11 +1696,11 @@ fn set_video_crossfade_is_a_noop_before_start_video_or_after_stop_video() {
     let mut app = Proteus::new();
     let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
 
-    // Never started — nothing to update, and nothing should be created.
+    // Never started: nothing to update, and nothing should be created.
     let _ = tile.set_video_crossfade(&mut app, 0.5);
     assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
 
-    // Started, then stopped — same graceful no-op.
+    // Started, then stopped: likewise nothing to do.
     let _ = tile.start_video(&mut app);
     let _ = tile.stop_video(&mut app);
     let _ = tile.set_video_crossfade(&mut app, 0.5);
@@ -1729,16 +1711,9 @@ fn set_video_crossfade_is_a_noop_before_start_video_or_after_stop_video() {
 // Stale handles report, they don't panic
 // ---------------------------------------------------------------------------
 
-/// Every mutating `Handle` method used to reach `World::entity_mut`, which
-/// **panics** on a despawned entity — while the docs on `Handle::from_entity`,
-/// on `proteus-sdk-web`'s `Handle::from_id`, and on the TS `handleFromId`
-/// all promised a stale handle would quietly do nothing. On wasm that panic
-/// aborts the module: the canvas freezes and only a page reload recovers it.
-///
-/// Each call below is made on a handle whose entity was just destroyed. The
-/// test asserts the whole sequence completes — reaching the end at all is the
-/// point, since the old behavior was to abort on the first one — and that each
-/// reports `EntityNotFound` rather than a silent success.
+// Every `Handle` method called on a destroyed component must report
+// `EntityNotFound`, not panic. A panic in the web build stops the whole page.
+// Reaching the end of this test is itself the check that nothing panicked.
 #[test]
 fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
     let mut app = Proteus::new();
@@ -1836,14 +1811,14 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
         "a second destroy is reported rather than passing for a successful one"
     );
 
-    // The world is still usable afterwards — a reported error left nothing
+    // The app is still usable afterwards: a reported error leaves nothing
     // half-applied.
     assert!(app.get(other).is_some());
     assert!(app.get(handle).is_none());
 }
 
-/// A dead handle passed *into* a call on a live one is reported distinctly, so
-/// a caller can tell "my handle died" from "the handle I was handed died".
+// A destroyed component passed into a call on a live one is reported as
+// `OtherEntityNotFound`, so a caller can tell which of the two is gone.
 #[test]
 fn a_dead_handle_passed_into_a_live_one_reports_other_entity_not_found() {
     let mut app = Proteus::new();
@@ -1888,9 +1863,9 @@ fn a_dead_handle_passed_into_a_live_one_reports_other_entity_not_found() {
     assert!(app.get(live).is_some());
 }
 
-/// "Nothing to do" is not an error. A live component with no baked image yet
-/// reports `Ok(false)` — callers poll on exactly this while an image loads, and
-/// turning it into an `Err` would make a routine state look like a failure.
+// "Nothing to do" is not an error. A live component with no baked image yet
+// reports `Ok(false)`: callers check for this while an image loads, and an
+// `Err` would make a routine state look like a failure.
 #[test]
 fn nothing_to_do_is_ok_false_not_an_error() {
     let mut app = Proteus::new();
@@ -1906,9 +1881,8 @@ fn nothing_to_do_is_ok_false_not_an_error() {
     assert_eq!(a.set_video_crossfade(&mut app, 0.5), Ok(false));
 }
 
-/// `component()`'s declarative `children` is the same contract as
-/// `Handle::add_child`: a dead child is skipped, not a panic. The surviving
-/// children still attach.
+// A child in `component()`'s spec that no longer exists is skipped rather
+// than causing a panic, and the other children still attach.
 #[test]
 fn component_skips_a_dead_child_instead_of_panicking() {
     let mut app = Proteus::new();
@@ -1932,18 +1906,13 @@ fn component_skips_a_dead_child_instead_of_panicking() {
 }
 
 // ---------------------------------------------------------------------------
-// set_declared_geometry keeps interaction styling in sync (audit C-11)
+// set_declared_geometry keeps interaction styles in sync
 // ---------------------------------------------------------------------------
 
-/// `interaction_style_system` resolves hover/pressed/focused overrides against
-/// its *own* snapshot of the rest state, captured the first frame it saw the
-/// entity — it can't read `DeclaredGeometry` (private to `proteus-sdk`). So
-/// `set_declared_geometry` has to update that snapshot too, or returning to
-/// `Default` snaps the component back to its spawn geometry.
-///
-/// Exactly the case the method exists for: a component whose real resting
-/// layout is only known after spawn — e.g. a cell sized from its own baked
-/// label — is precisely the one that would snap.
+// Interaction styles resolve against their own copy of the declared geometry.
+// `set_declared_geometry` must update it too, or a component snaps back to
+// its original geometry when the pointer leaves it: exactly the component
+// whose layout is only known after creation, which the method exists for.
 #[test]
 fn set_declared_geometry_updates_what_hover_returns_to() {
     let spawn = quad_at(0.0, 0.0);
@@ -1953,10 +1922,11 @@ fn set_declared_geometry_updates_what_hover_returns_to() {
         ..Default::default()
     }));
 
-    // Frame 1 captures the declared baseline.
+    // Tick 1 captures the declared geometry.
     app.tick(0.016);
 
-    // Rest layout is only now known — e.g. measured from baked content.
+    // The real layout is only now known, for example measured from baked
+    // content.
     let relaid_out = quad_at(500.0, 250.0);
     button
         .set_declared_geometry(&mut app, relaid_out.clone())

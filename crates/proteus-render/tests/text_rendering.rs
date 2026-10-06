@@ -1,14 +1,9 @@
-//! Integration tests for the M4 text rendering pipeline.
-//!
-//! These tests exercise `FontAtlas` end-to-end — rasterization and pixel buffer integrity —
-//! without requiring a GPU device. Atlas packing/placement (once part of `FontAtlas` itself) moved
-//! to `TextureRegistry`/`MainAtlasAllocator` in M11 — see `texture_registry.rs`'s and
-//! `main_atlas_allocator.rs`'s own unit tests for that coverage. GPU-dependent tests
-//! (write_to_main_atlas) live in `headless_render.rs`.
+// Tests of `FontAtlas`: rasterizing text and the resulting pixels, without a
+// GPU. Atlas placement is tested in `texture_registry.rs` and
+// `main_atlas_allocator.rs`, and uploading in `headless_render.rs`.
 
-// This is a separate crate root (integration tests compile independently
-// of the library) — see proteus_render::lib.rs's own doc for why
-// chunks_exact_to_as_chunks/unknown_lints are allowed here too.
+// A separate crate root from the library, so the lint allowance in lib.rs is
+// repeated here.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
 use proteus_render::{FontAtlas, DEFAULT_MAIN_ATLAS_SIZE, EMBEDDED_FONT_BYTES};
@@ -17,7 +12,7 @@ use proteus_render::{FontAtlas, DEFAULT_MAIN_ATLAS_SIZE, EMBEDDED_FONT_BYTES};
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Create a `FontAtlas` backed by the embedded Inter Bold font.
+// Create a `FontAtlas` backed by the embedded Inter Bold font.
 fn atlas() -> FontAtlas {
     FontAtlas::with_embedded_font()
 }
@@ -147,7 +142,7 @@ fn pixel_buffer_has_visible_coverage() {
 }
 
 // ---------------------------------------------------------------------------
-// Sizes 12 – 48 px (M4 DoD requirement)
+// Sizes from 12 to 48 pixels
 // ---------------------------------------------------------------------------
 
 #[test]

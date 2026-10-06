@@ -1,4 +1,4 @@
-//! [`run`] — the Rust → web front door.
+//! [`run`]: runs a Rust [`App`] on a canvas.
 
 use proteus_runtime::wgpu;
 use proteus_runtime::{App, Engine, HostServices, ProteusConfig, Viewport};
@@ -7,16 +7,19 @@ use wasm_bindgen::{JsCast, JsValue};
 use crate::surface::WebSurface;
 use crate::{FrameDriver, WebLoop};
 
-/// Run `app` on the `<canvas>` element with the given `id`, using `services`
-/// for asset fetching (typically a [`crate::PreloadedHostServices`] you
-/// built with [`crate::PreloadedHostServices::fetch`] before calling this —
-/// `App::setup` runs synchronously inside `Engine::new`, so any asset it
-/// needs must already be in hand).
+/// Runs `app` on the `<canvas>` element with the given `id`, loading assets
+/// through `services`.
 ///
-/// Returns once the canvas/GPU/`Engine` are set up and the first
-/// `requestAnimationFrame` is queued — like native's `run`, this does not
-/// block; the browser's own event loop drives every frame after it returns,
-/// and there is nothing left for the caller to hold.
+/// `services` is usually a [`crate::PreloadedHostServices`] made with
+/// [`crate::PreloadedHostServices::fetch`], since `App::setup` runs before the
+/// first frame and its assets must already be downloaded.
+///
+/// Returns once the app is set up and its first frame is scheduled; the
+/// browser runs every frame after that.
+///
+/// # Errors
+///
+/// Returns an error if the canvas isn't found or the GPU can't be set up.
 pub async fn run<A: App + 'static, S: HostServices + 'static>(
     mut app: A,
     canvas_id: &str,

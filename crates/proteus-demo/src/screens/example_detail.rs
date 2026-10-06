@@ -174,8 +174,8 @@ impl ExampleDetail {
     /// `Visibility` toggle rather than a `ChildOf` cascade. Excludes
     /// `stress.warning_text`, which `Demo::advance_stress_warning_visibility`
     /// governs continuously on its own finer-grained condition (only when
-    /// idle, no test running) rather than the enter/exit timing every other
-    /// entity here follows.
+    /// idle, no test running) rather than the enter/exit timing all the other
+    /// entities here follow.
     pub fn content_handles(&self, idx: usize) -> Vec<Handle> {
         let mut handles = vec![self.headings[idx]];
         match idx {
@@ -522,10 +522,10 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     };
 
     // --- Stress Tests (category 3) ---
-    // Same "no fill ever, border/glow only, violet label" Design System
-    // treatment as `screens::home`/`screens::examples_home`'s buttons, down
-    // to the same constants. Hover registration lives in `Demo::new`,
-    // theme-color blend in `Demo::advance_theme`.
+    // Styled like `screens::home`'s and `screens::examples_home`'s buttons
+    // (a transparent fill with a violet border, glow and label), with the
+    // same constants. Hover is registered in `Demo::new`, and the theme
+    // colors are blended in `Demo::advance_theme`.
     let stress_button = |app: &mut Proteus, label: &str| -> (Handle, Handle) {
         let button = app.component(
             ComponentSpec::new(QuadState {
@@ -884,8 +884,7 @@ fn layout_stress(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
 /// Convert a fully-saturated, full-value HSV color (`hue_deg` in degrees,
 /// wrapped to `[0, 360)`; s=1, v=1 fixed) to RGB — standard six-sector
 /// conversion. Used only by `advance_continuous_animation`'s rainbow hue
-/// cycle, which has no other place in this demo to live given every other
-/// color is a fixed design token.
+/// cycle; all the other colors in the demo are fixed design tokens.
 pub(crate) fn hsv_to_rgb(hue_deg: f32) -> Vec3 {
     let h = hue_deg.rem_euclid(360.0) / 60.0;
     let x = 1.0 - (h % 2.0 - 1.0).abs();

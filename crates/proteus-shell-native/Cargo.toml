@@ -1,6 +1,6 @@
 [package]
 name = "proteus-shell-native"
-description = "Layer 3: native windowing shell (winit + wgpu)"
+description = "Runs the Proteus reference demo in a desktop window."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,11 +12,8 @@ name = "proteus"
 path = "src/main.rs"
 
 [dependencies]
-# M13.4 step 4a: this crate collapsed to a one-line `main()` — window/GPU
-# setup, the frame loop, pointer/resize handling, and now video (`.mp4` via
-# ffmpeg, moved into proteus-host-winit's own mp4_player module) all live in
-# proteus_host_winit::run. All app/UI logic lives in proteus-demo (built
-# once, also linked by proteus-shell-web).
+# Everything but the settings lives elsewhere: the window, GPU, frame loop
+# and input in proteus-host-winit, and the demo itself in proteus-demo.
 proteus-demo = { path = "../proteus-demo" }
 proteus-runtime = { path = "../proteus-runtime" }
 proteus-host-winit = { path = "../proteus-host-winit" }

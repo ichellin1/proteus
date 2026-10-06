@@ -1,46 +1,31 @@
-//! Static component baking — M10.5, freeing wired to the real registry in M11.
+//! Baking a component: drawing it and its children into one texture,
+//! permanently. Reduces complexity of composit components that do not have dynamic children.
 //!
-//! `Baked` collapses a composite (a `Quad` parent + its children) into a
-//! single permanent textured quad: the subtree is rendered once into
-//! `main_atlas`, the child entities are despawned, and the parent becomes a
-//! plain leaf quad pointed at the baked region — "indistinguishable from any
-//! other component," per the original design in `PLANNING.md`.
+//! An entity marked [`Baked`] is rendered once, with all its descendants, into
+//! the main atlas. The children are destroyed, and the entity becomes a plain
+//! quad showing the bake, like any other component with an image.
 //!
 //! ## Data flow
 //!
 //! ```text
-//! Baked                              ← developer declares on the composite's root entity
-//!         │
-//!         │ (bake_system detects Baked without BakedComposite)
+//! Baked                          on the entity to bake
+//!         │  bake_system finds Baked without BakedComposite
 //!         ▼
-//! gather_bake_instances → Vec<QuadInstance>   (crate::topology — recursive subtree capture,
-//!         │                                     the same logic the Slice-transition crossfade uses)
-//!         │
-//!         │ TextureRegistry::register_static + QuadPipeline::bake_instances_to_main_atlas
+//! gather_bake_instances          the entity and its descendants, as quads
+//!         │  drawn into a new main-atlas region
 //!         ▼
-//! BakedComposite { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the root entity
-//!         │
-//!         │ children despawned; root's own Border/Glow/DropShadow removed and
-//!         │ QuadState color/corner_radius neutralized (the bake already captured them as pixels)
+//! BakedComposite + TextureRef    where the bake is in the atlas
+//!         │  children destroyed; the entity's own color, corner radius
+//!         │  and effects removed, since the bake includes them
 //!         ▼
-//! collect_instances renders the root as a plain textured quad, same as BakedImage
+//! drawn as a plain quad showing the bake
 //! ```
 //!
-//! ## Why this is a real ECS system, not a shell method like `bake_pending_text`
+//! This is an ECS system, unlike text and image baking, because walking the
+//! entity's descendants needs queries.
 //!
-//! `gather_bake_instances`/the queries below need real ECS `Query` access to walk an arbitrary-
-//! depth subtree — naturally available inside a system, awkward from a shell method. `main_atlas`
-//! allocation itself goes through `QuadPipeline::texture_registry` (M11's `TextureRegistry`), which
-//! `bake_system` reaches the same way it reaches `GpuContext`/`QuadPipeline` — no `FontAtlas`
-//! involvement needed here at all: composite baking renders pixels directly via
-//! `bake_instances_to_main_atlas`, it never had text/image bytes to rasterize or decode.
-//!
-//! ## Freeing (M11)
-//!
-//! `TextureRef`, inserted alongside `BakedComposite` below, ref-counts this region against the
-//! entity's lifetime via `ComponentHooks` — despawning the entity (or replacing/removing
-//! `TextureRef`) decrements the registry's ref count, making the region a reclaim candidate. See
-//! `crate::texture_ref` for the full mechanism.
+//! The `TextureRef` releases the region when the entity is destroyed; see
+//! `crate::texture_ref`.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
@@ -59,34 +44,26 @@ use crate::topology::{gather_bake_instances, BakeVisualsQuery};
 // Baked / BakedComposite
 // ---------------------------------------------------------------------------
 
-/// Declares that an entity's subtree should be permanently baked into a
-/// single textured quad.
+/// Marks an entity to be baked, with its descendants, into one texture,
+/// permanently.
 ///
-/// When this component is present on an entity that does not yet have a
-/// [`BakedComposite`], `bake_system` renders the entity and every descendant
-/// into `main_atlas`, despawns the children, and inserts [`BakedComposite`].
-/// `Baked` itself is left on the entity afterward — it stays the marker of
-/// "this entity is a baked composite," the same way `Text` stays present
-/// alongside `BakedText` once baked.
+/// `bake_system` renders it into the main atlas, destroys the children, and
+/// adds a [`BakedComposite`]. `Baked` stays on the entity afterwards, as
+/// `Text` stays alongside `BakedText`.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Baked;
 
-/// Written by `bake_system` once an entity's [`Baked`] subtree has been
-/// rendered into `main_atlas`.
-///
-/// Same shape as [`crate::BakedImage`]/[`crate::BakedText`] — the render path
-/// (`collect.rs`) reads `uv_offset`/`uv_scale` to point the entity's
-/// `QuadInstance` at the baked region, exactly like any other textured quad.
+/// Where a baked entity's image is in the main atlas, added once it has been
+/// baked. Drawn like a [`crate::BakedImage`].
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct BakedComposite {
-    /// Normalised UV origin within `main_atlas`.
+    /// Texture coordinates of the bake's top-left corner in the atlas.
     pub uv_offset: [f32; 2],
-    /// Normalised UV extent within `main_atlas`.
+    /// The bake's size in texture coordinates.
     pub uv_scale: [f32; 2],
-    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — see
-    /// `proteus_ui::image::BakedImage::page`'s doc for why this exists.
+    /// The main-atlas page the bake is on.
     pub page: u32,
-    /// The baked region's size in pixels.
+    /// The bake's size in pixels.
     pub pixel_size: [f32; 2],
 }
 
@@ -94,11 +71,8 @@ pub struct BakedComposite {
 // bake_system
 // ---------------------------------------------------------------------------
 
-/// Read-only queries `bake_system` needs beyond the `Baked`-matching query
-/// itself — bundled via `#[derive(SystemParam)]` to keep the system's own
-/// argument count reasonable (bevy systems commonly need many queries/
-/// resources; grouping the read-only ones is the idiomatic way to do that
-/// without tripping `clippy::too_many_arguments`).
+/// The read-only queries `bake_system` needs, grouped to keep its argument
+/// list short.
 #[derive(SystemParam)]
 pub struct BakeQueries<'w, 's> {
     quad_states: Query<'w, 's, &'static QuadState>,
@@ -107,20 +81,15 @@ pub struct BakeQueries<'w, 's> {
     visuals: BakeVisualsQuery<'w, 's>,
 }
 
-/// Query filter matching `bake_system`'s targets: entities with a declared
-/// [`Baked`] intent that haven't been baked yet.
+/// The entities `bake_system` bakes: marked [`Baked`], not yet baked.
 type PendingBakeQuery<'w, 's> =
     Query<'w, 's, (Entity, &'static QuadState), (With<Baked>, Without<BakedComposite>)>;
 
-/// Replaces `stub_bake_system`. Runs every frame in
+/// Bakes each entity marked [`Baked`] that isn't baked yet. Runs in
 /// [`crate::schedule::ProteusSet::Bake`].
 ///
-/// Matches `(With<Baked>, Without<BakedComposite>)` rather than
-/// `Added<Baked>` so a bake that fails one frame (e.g. `main_atlas` full, or
-/// `GpuContext`/`QuadPipeline`/`FontAtlas` not yet available) is simply
-/// retried the next frame — the same graceful-degradation shape
-/// `bake_pending_text`/`bake_pending_images` already use, rather than a
-/// one-shot trigger that could silently never fire again.
+/// A bake that can't happen, because the atlas is full or the GPU isn't set up
+/// yet, is tried again the next tick.
 pub fn bake_system(
     mut commands: Commands,
     query: PendingBakeQuery,
@@ -192,12 +161,9 @@ pub fn bake_system(
             TextureRef(texture_id),
         ));
 
-        // The bake above already captured this entity's own fill/border/glow/
-        // shadow as pixels in the texture — leaving them live would render
-        // them a second time on top of the baked result. Neutralize to a
-        // plain white pass-through quad, same fix already used for the
-        // Slice-transition crossfade in topology.rs (see its `BakedTexture`
-        // handling): the baked pixels carry the real shape and color now.
+        // The bake already includes this entity's color, border, glow and
+        // shadow, so remove them, or they would be drawn a second time. The
+        // entity becomes a plain white quad showing the bake.
         let mut neutralized = local_qs.clone();
         neutralized.color = Vec4::ONE;
         neutralized.corner_radius = 0.0;
@@ -208,10 +174,8 @@ pub fn bake_system(
             .remove::<Glow>()
             .remove::<DropShadow>();
 
-        // Despawn direct children — bevy_ecs's ChildOf/Children relationship
-        // cascades this recursively, so descendants-of-descendants are
-        // cleaned up for free (proven by M10's despawning_parent_despawns_child
-        // test).
+        // Destroy the direct children; bevy_ecs destroys their descendants
+        // with them.
         if let Ok(children) = children_q.get(entity) {
             for child in children.iter() {
                 commands.entity(child).despawn();

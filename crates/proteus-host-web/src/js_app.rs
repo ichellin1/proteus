@@ -1,10 +1,7 @@
-//! [`mount`] — the TS → web front door.
+//! [`mount`]: runs a TypeScript app on a canvas.
 //!
-//! Unlike [`crate::run`] this never touches `HostServices` — a JS `setup`
-//! function receives a [`ProteusApp`] and has no `Frame`/`load_asset` to call
-//! (that seam is Rust-`App`-specific); a JS app fetches/attaches its own
-//! assets however it likes. Generalising asset injection for JS apps is
-//! M13.4, not this.
+//! Unlike [`crate::run`], this provides no `HostServices`: a JavaScript app
+//! fetches its own assets, with `fetch` and `ProteusApp.loadTexture`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,14 +14,16 @@ use wasm_bindgen::prelude::*;
 use crate::surface::WebSurface;
 use crate::{FrameDriver, WebLoop};
 
-/// Mount a TS-authored app on the `<canvas>` element with the given `id`.
+/// Runs a JavaScript app on the `<canvas>` element with the given `id`.
 ///
-/// Calls `setup(app)` once, synchronously, before the first frame is queued.
-/// Calls `update(dtSeconds)` every frame after, if provided. `app` (the same
-/// [`ProteusApp`] `setup` received) stays valid for the app's whole
-/// lifetime — a JS app that wants access to it in `update` should capture it
-/// from `setup`'s own closure rather than expect it passed again; see
-/// `ts/src/index.ts`'s `mount()` wrapper.
+/// Calls `setup(app)` once, before the first frame, then `update(dtSeconds)`
+/// every frame if it is given. To use the app in `update`, keep the one
+/// passed to `setup`. `config` is a `ProteusConfigDto` object, or `null`.
+///
+/// # Errors
+///
+/// Throws if the canvas isn't found, the GPU can't be set up, or `config`
+/// is invalid.
 #[wasm_bindgen]
 pub async fn mount(
     canvas_id: String,
@@ -44,9 +43,8 @@ pub async fn mount(
         .dyn_into::<web_sys::HtmlCanvasElement>()
         .map_err(|_| JsValue::from_str("element is not a canvas"))?;
 
-    // Partial overrides on top of `ProteusConfig::web()` — see
-    // `config_dto`. Absent/null is the preset unchanged, which is what the
-    // TS wrapper sends when a caller passes no config at all.
+    // Overrides on top of `ProteusConfig::web()`. `null` or `undefined`
+    // keeps the web settings unchanged.
     let config = if config.is_null() || config.is_undefined() {
         ProteusConfig::web()
     } else {
@@ -59,9 +57,8 @@ pub async fn mount(
     let viewport = surface.viewport();
     let surface_format = surface.surface_format();
 
-    // `Renderer::new` asserts these and would abort the wasm module on a
-    // bad value. A TS caller's config is input, not a programmer error, so
-    // it comes back as a JS exception naming the offending field instead.
+    // `Renderer::new` panics on invalid settings, which would stop the wasm
+    // module, so check them here and throw an error naming the field.
     proteus_runtime::validate_atlas_config(surface.device(), &config.memory.main_atlas)
         .map_err(|e| JsValue::from_str(&e))?;
     proteus_runtime::validate_render_config(
@@ -81,10 +78,8 @@ pub async fn mount(
         config,
     );
 
-    // A fresh JS-owned handle onto the same shared `Proteus` — `proteus`
-    // itself stays with the driver for the render loop. See
-    // `proteus_sdk_web`'s module doc for why this is sound (Rc<RefCell<_>>,
-    // not a bare `Proteus`).
+    // JavaScript gets its own handle to the shared `Proteus`; the driver keeps
+    // one for the frame loop.
     let js_app = ProteusApp::from_shared(proteus.clone());
     setup.call1(&JsValue::NULL, &JsValue::from(js_app))?;
 
@@ -104,11 +99,10 @@ struct JsDriver {
 }
 
 impl FrameDriver for JsDriver {
-    /// Mirrors `Engine::frame`'s exact sequence — see that type's module
-    /// doc — just with a JS function standing in for `App::update`. Each
-    /// `borrow_mut()` is a short-lived temporary, dropped before `update` is
-    /// invoked: holding one across the call would double-borrow the
-    /// `RefCell` the moment `update` calls back into any `ProteusApp` method.
+    /// Runs one frame in the same order as `Engine::frame`, calling the
+    /// JavaScript `update` in place of `App::update`. The `Proteus` borrow is
+    /// released before `update` runs, since `update` may call back into the
+    /// app.
     fn frame(&mut self, dt_secs: f32, target: &wgpu::TextureView) {
         self.proteus.borrow_mut().tick(dt_secs);
 

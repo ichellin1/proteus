@@ -1,6 +1,6 @@
-//! Integration tests for the M12.2 interaction system: `hit_test_system`'s
-//! press/release/drag/focus additions and gating, plus
-//! `interaction_style_system`'s per-state style resolution.
+// Tests of interaction: `hit_test_system`'s press, release, drag and focus
+// events and what excludes an entity from them, and
+// `interaction_style_system`'s styles.
 
 use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
@@ -14,7 +14,7 @@ use proteus_ui::{
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// A 100 × 100 center-anchored quad at (`x`, `y`).
+// A 100 × 100 center-anchored quad at (`x`, `y`).
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
         position: Vec3::new(x, y, 0.0),
@@ -27,13 +27,13 @@ fn quad_at(x: f32, y: f32) -> QuadState {
     }
 }
 
-/// `dt` big enough to run any interaction-style mini-transition
-/// (`STYLE_TRANSITION_CONFIG`'s 0.15s duration) to completion within a single
-/// `update()` call — `auto_insert_apply_deferred` (bevy_ecs's default) makes
-/// the whole TransitionRequest → ActiveTransition → tick-to-completion →
-/// Lifecycle::Idle cycle happen in one frame when `dt` comfortably exceeds
-/// the transition's duration, so tests can assert on fully-settled state
-/// between steps instead of a mid-flight snapshot.
+// `dt` big enough to run any interaction-style mini-transition
+// (`STYLE_TRANSITION_CONFIG`'s 0.15s duration) to completion within a single
+// `update()` call — `auto_insert_apply_deferred` (bevy_ecs's default) makes
+// the whole TransitionRequest → ActiveTransition → tick-to-completion →
+// Lifecycle::Idle cycle happen in one tick when `dt` comfortably exceeds
+// the transition's duration, so tests can assert on fully-settled state
+// between steps instead of a mid-flight snapshot.
 const SETTLE_DT: f32 = 1.0;
 
 fn press_at(world: &mut ProteusWorld, pos: Vec2) {
@@ -410,9 +410,10 @@ fn pressed_takes_precedence_over_hover() {
         ))
         .id();
 
-    move_to(&mut world, Vec2::new(900.0, 900.0)); // baseline
-                                                  // Pressing also implies hovering (pointer is over the entity), but
-                                                  // Pressed must win the precedence.
+    // Baseline.
+    move_to(&mut world, Vec2::new(900.0, 900.0));
+    // Pressing also means hovering, since the pointer is over the entity, but
+    // Pressed must win.
     press_at(&mut world, Vec2::new(100.0, 100.0));
 
     let state = world.world.get::<InteractionState>(e).unwrap();

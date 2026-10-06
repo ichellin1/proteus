@@ -1,22 +1,26 @@
-//! Static image decoding (M9.7) — PNG/JPEG bytes → RGBA8 pixels.
+//! Decoding PNG and JPEG images into RGBA pixels.
 //!
-//! Decoded pixels are handed to [`crate::TextureRegistry::register_static`] (M11) for `main_atlas`
-//! placement, then uploaded via [`crate::QuadPipeline::write_to_main_atlas`] — the same two-step
-//! flow rasterized text goes through.
-//!
-//! Pure Rust (the `image` crate's `png`/`jpeg` decoders have no system
-//! dependency), so this works unmodified on both native and wasm32.
+//! The pixels are then placed in the main atlas with
+//! [`crate::TextureRegistry::register_static`] and uploaded with
+//! [`crate::QuadPipeline::write_to_main_atlas`], as text is. The decoders are
+//! pure Rust, so this works natively and in wasm.
 
-/// Decoded RGBA8 image, ready to register via [`crate::TextureRegistry::register_static`].
+/// A decoded image, ready to place with [`crate::TextureRegistry::register_static`].
 pub struct DecodedImage {
+    /// Width in pixels.
     pub width: u32,
+    /// Height in pixels.
     pub height: u32,
-    /// Length is `width * height * 4`.
+    /// RGBA pixels, `width * height * 4` bytes, not premultiplied.
     pub rgba_pixels: Vec<u8>,
 }
 
-/// Decode PNG or JPEG bytes into RGBA8 pixels. The format is sniffed from the
-/// data itself, not a file extension.
+/// Decodes a PNG or JPEG image into RGBA pixels. The format is detected from
+/// the data.
+///
+/// # Errors
+///
+/// If the bytes aren't a PNG or JPEG image the decoder can read.
 pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, String> {
     let img = image::load_from_memory(bytes).map_err(|e| format!("decode_image: {e}"))?;
     let rgba = img.to_rgba8();
@@ -28,18 +32,13 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, String> {
     })
 }
 
-/// Premultiplies RGB by alpha in place, in a straight-alpha RGBA8 buffer
-/// (`len` a multiple of 4). `main_atlas` is stored premultiplied (see
-/// `unpremultiply`'s doc comment in `quad.wgsl`) so hardware bilinear
-/// filtering interpolates correctly at partial-alpha texels — filtering
-/// straight alpha linearly blends whatever "don't care" RGB a source image
-/// happened to store at fully-transparent pixels, which produces dark or
-/// light fringing depending on that value. Called by
-/// [`crate::QuadPipeline::write_to_main_atlas`] on every upload, so callers
-/// (glyph rasterization, decoded images) hand it straight alpha as produced.
-/// A no-op wherever alpha is 0 or 255 — i.e. every image before
-/// per-pixel-transparent PNGs existed (opaque photos, `main_atlas`'s white
-/// sentinel).
+/// Multiplies each pixel's red, green and blue by its alpha, in place. `rgba`
+/// is straight-alpha RGBA, a multiple of 4 bytes long.
+///
+/// The main atlas is stored premultiplied so that bilinear filtering is
+/// correct where alpha changes; see `unpremultiply` in `quad.wgsl`.
+/// [`crate::QuadPipeline::write_to_main_atlas`] calls it on every upload, so
+/// callers pass straight alpha. Pixels with alpha 0 or 255 are unchanged.
 pub fn premultiply_alpha(rgba: &mut [u8]) {
     debug_assert_eq!(
         rgba.len() % 4,
@@ -57,16 +56,12 @@ pub fn premultiply_alpha(rgba: &mut [u8]) {
     }
 }
 
-/// Downscale `image` (aspect-preserved) so neither dimension exceeds
-/// `max_side`. A no-op if it already fits.
+/// Scales `image` down, keeping its shape, so neither side exceeds `max_side`.
+/// Does nothing if it already fits.
 ///
-/// Real photos routinely arrive far larger than anything sensible to pack
-/// whole into `main_atlas` (2048×2048, shared with baked text) — a
-/// 2000×3000px source, for instance, cannot fit at all in that height, and
-/// even a source under 2048px in both dimensions can still starve the
-/// registry's remaining space for everything else it needs to hold. Call this
-/// on every [`decode_image`] result before
-/// [`crate::TextureRegistry::register_static`].
+/// Photos are often much larger than they will be drawn, and a large image can
+/// fill the atlas page, or not fit at all. Call it on each [`decode_image`]
+/// result before [`crate::TextureRegistry::register_static`].
 pub fn resize_to_fit(image: DecodedImage, max_side: u32) -> DecodedImage {
     if image.width <= max_side && image.height <= max_side {
         return image;
@@ -99,8 +94,7 @@ pub fn resize_to_fit(image: DecodedImage, max_side: u32) -> DecodedImage {
 mod tests {
     use super::*;
 
-    /// A 2×2 red PNG, base64-decoded at test time — small enough to inline,
-    /// avoids needing a fixture file on disk.
+    // A 2×2 red PNG, inline, so the tests need no fixture file.
     fn tiny_red_png() -> Vec<u8> {
         // Generated with the `image` crate itself (see the test below that
         // round-trips through `image::save_buffer`), not hand-authored bytes.
@@ -192,11 +186,9 @@ mod tests {
 
     #[test]
     fn premultiply_alpha_zeroes_rgb_at_zero_alpha_regardless_of_source_color() {
-        // This is the whole point: a source PNG can store *any* "don't care"
-        // RGB at a fully-transparent pixel (black, white, anything) — after
-        // premultiplying, it's always (0,0,0,0), so hardware bilinear
-        // filtering against a neighboring opaque texel can't fringe dark or
-        // light depending on what that don't-care value happened to be.
+        // A PNG can store any color at a fully transparent pixel. After
+        // premultiplying it is always (0, 0, 0, 0), so filtering next to an
+        // opaque pixel doesn't pick up that color.
         let mut black_transparent = [0u8, 0, 0, 0];
         let mut white_transparent = [255u8, 255, 255, 0];
         premultiply_alpha(&mut black_transparent);

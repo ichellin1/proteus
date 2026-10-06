@@ -34,8 +34,8 @@ fn violet() -> Vec4 {
 pub struct Theme {
     pub sun: Handle,
     /// Overlay child — see the module doc for why this is the *light*-art
-    /// layer despite the `_dark` naming convention every other pair here
-    /// follows.
+    /// layer despite the `_dark` naming convention all the other pairs here
+    /// follow.
     pub sun_dark: Handle,
     pub moon: Handle,
     pub moon_dark: Handle,
