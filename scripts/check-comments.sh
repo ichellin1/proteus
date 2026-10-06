@@ -23,20 +23,33 @@ rules=(
   'audit ID|-E|\b[ACKXDTR]-[0-9]{2}\b'
   'audit reference|-iE|\baudit(ed|s)?\b'
   'date|-E|\b20[0-9]{2}-[0-9]{2}(-[0-9]{2})?\b'
-  'external document|-E|\b[A-Z][A-Z_]+\.md\b|\bPLANNING\b|\bROADMAP\b|\bPhase [A-E]\b'
+  'external document|-E|\b[A-Z][A-Z_]+\.md\b|\bPLANNING\b|\bROADMAP\b|\bPhase [A-E]\b|\bBrand [Ss]pec\b|\bDesign[- ]System\b'
   'say "transition", not "morph"|-iE|\bmorph'
   'say "all the other" or "any other", not "every other"|-iE|\bevery other\b'
 )
 
-files=$(find "$@" -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.wgsl' \) \
+files=$(find "$@" -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.wgsl' \
+  -o -name 'Cargo.toml' -o -name 'package.json' \) \
   -not -path '*/node_modules/*' -not -path '*/target/*' -not -path '*/dist/*' \
   -not -path '*/pkg/*' -not -path '*/pkg-host/*' -not -name '*.d.ts' | sort)
 
 found=0
 for file in $files; do
   # Print "LINE:comment text" for every comment on a line, dropping the code before it.
+  # In manifests, the comments are `#` lines and the description shown on
+  # crates.io or npm.
   comments=$(awk '
     /check-comments: allow/ { next }
+    FILENAME ~ /Cargo\.toml$/ {
+      if ($0 ~ /^[ \t]*description[ \t]*=/) { print NR ":" $0; next }
+      i = index($0, "#")
+      if (i > 0) { print NR ":" substr($0, i + 1) }
+      next
+    }
+    FILENAME ~ /package\.json$/ {
+      if ($0 ~ /"description"[ \t]*:/) { print NR ":" $0 }
+      next
+    }
     {
       i = index($0, "//")
       if (i > 0) { text = substr($0, i + 2); sub(/^[\/!]+/, "", text); print NR ":" text; next }
