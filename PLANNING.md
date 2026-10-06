@@ -2839,8 +2839,8 @@ pub trait App {
     /// body goes.
     fn setup(&mut self, f: &mut Frame);
 
-    /// Optional per-frame application logic, before Proteus::tick runs the
-    /// schedule. Most apps wire everything with signals/callbacks in setup()
+    /// Optional per-frame application logic, after Proteus::tick has run the
+    /// schedule and its callbacks. Most apps wire everything with signals/callbacks in setup()
     /// and never implement this. proteus-demo's ~20 `advance_*` steps land
     /// here.
     fn update(&mut self, f: &mut Frame, dt: f32) { let _ = (f, dt); }
@@ -4250,6 +4250,12 @@ test that fails without it.
 - [ ] C-15 — a baked component with its own text draws that text twice.
 - [ ] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
 - [ ] C-18 — native fetches have no timeout, so a hung request pins a thread.
+- [ ] The web host delivers a cancelled fetch if it finished before `cancel_fetch` was called:
+  `PreloadedHostServices` checks for cancellation only when a fetch finishes, so a result
+  already queued is still returned by the next `poll_fetches`, and its ID stays in the
+  `cancelled` set for good. `cancel_fetch` drops any queued result with that ID, so the
+  documented contract holds ("after this call, `poll_fetches` never returns its result"). With
+  a test, then remove the `DOC-REVIEW` note on `HostServices::cancel_fetch`.
 - [ ] C-14 — confirm A-01 fixed it and a test covers it, then close.
 - [ ] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
 - [ ] T-04 — tests for the `desktop()` and `constrained()` config presets and for
@@ -4280,6 +4286,11 @@ test that fails without it.
   emitted. Tested both ways (a disabled component over a clickable one absorbs the click; a
   non-interactive one passes it through). Update the Rust and TypeScript docs of all four
   methods and `input.rs`'s module doc to state the difference.
+- [ ] Mark `InteractionStateKind` `#[non_exhaustive]`. Apps read it through `ComponentData.state`,
+  and keyboard navigation (V2) will likely add a keyboard-focus state, which would otherwise
+  break any app that matches on all five. Matches inside `proteus-ui` stay exhaustive. The
+  TypeScript `InteractionState` union can't be marked, so its doc says more states may be added
+  and an exhaustive `switch` should keep a default case.
 - [ ] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
   disabled style animates through an ordinary `TransitionRequest` (`interaction_style_system`),
   and its completion is recorded like any other, so a component with a hover style reports a
@@ -4288,6 +4299,42 @@ test that fails without it.
   a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
   a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
   TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
+- [ ] Rename signals to transition channels, in Rust and TypeScript, so "signal" is free for
+  reactive state later (Post-Release). A Proteus signal is only a named channel for 1→1
+  transitions, while front-end developers expect a signal to be reactive state. Public:
+  `SignalHandle` → `TransitionChannel` (and TypeScript's), `Proteus::signal` / `app.signal()` →
+  `transition_channel` / `transitionChannel`, `SignalId` → `TransitionChannelId`,
+  `DropReason::SignalNotFound` → `ChannelNotFound` (TypeScript `"signalNotFound"` →
+  `"channelNotFound"`). Internal, to match: the `signal` module, `SignalRegistry`,
+  `OwnedSignals`, `PendingSignalSet(s)`, `DroppedSignals`, `create_signal` / `destroy_signal`,
+  `signal_dispatch_system` and the `SignalDispatch` schedule stage, the web bridge's
+  `signalSet` / `signalDestroy`, and test names. Docs (including CONTRIBUTING, whose TypeScript
+  rule names `signal`), the demo and `examples/gallery` updated to match.
+- [ ] Name split and merge layouts by their arrangement, and add the missing vertical one, in Rust
+  and TypeScript. Today `Horizontal`/`Slice` are strips side by side (each strip is a vertical
+  column, so the name reads either way), and a vertical stack exists only as
+  `Grid { cols: 1, rows: n }`, which developers won't find.
+  - `MergeLayout`: `Horizontal` → `Row`; new `Column` (strips stacked top to bottom); `Grid`
+    stays. TypeScript: `"horizontal"` → `"row"`, new `"column"`.
+  - `SplitStrategy`: `Slice` → `Row`; new `Column`; `GridSlice` → `Grid`; `PerTarget` stays.
+    TypeScript: `"slice"` → `"row"`, new `"column"`, `"gridSlice"` → `"grid"`.
+  - Helpers: `horizontal_slices` → `row_slices`, with a `column_slices` to match.
+  - B-16: a `Grid` with fewer cells than pieces is an error. Today pieces are paired with cells
+    by `zip`, so in a merge an extra source vanishes instead of moving, and in a split an extra
+    target just appears at the end, silently. `split_to` and `merge_from` return an error
+    naming the piece and cell counts (the `HandleError` variant is decided at the step), and
+    the `Grid` docs say so. Tests for both.
+  - Docs, the demo and `examples/gallery` updated to match.
+- [ ] Rename `TransitioningConfig` to `TransitionInteractionConfig`, in Rust and TypeScript. It
+  differs from `TransitionConfig` by three letters but decides something unrelated: whether a
+  component accepts input while it transitions. "Interaction" leaves room for navigation and
+  other input controls. Derived names: `ComponentSpec::transition_interaction`,
+  `Handle::set_transition_interaction`, TypeScript's `transitionInteraction` spec field and
+  `setTransitionInteraction`, and `InputConfig`'s `transition_interaction_allow_pointer` /
+  `_allow_navigation`. The field `allow_input`, which only ever meant pointer input, becomes
+  `allow_pointer` (TypeScript `allowPointer`), so each kind of input gets its own field
+  alongside `allow_navigation` as more are supported, and developers choose per kind. Docs,
+  tests and the demo updated to match.
 - [ ] Drop `remove_child`'s `destroy` flag, in Rust and TypeScript. `destroy: true` does exactly
   what `Handle::destroy` does, and a bare `true` or `false` at the call site hides whether the
   child is kept or destroyed, which is easy to miss in review. `remove_child(child)` only
@@ -4319,11 +4366,154 @@ test that fails without it.
   reclaimed and reused, and the component then draws another texture's pixels. The demo avoids it
   only by putting text on child components. Fix: one reference per texture kind, not per
   component. Test: a component with text and an image, then allocation pressure, keeps both.
+- [ ] `non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps` (`proteus-sdk`
+  tests) no longer tests anything: the backdrop is created before the button, so the button is
+  drawn on top and wins the click with or without `non_interactive()`. Create the backdrop after
+  the button, check the test fails without `non_interactive()` (confirmed: it does), and replace
+  its comment with "A full-window backdrop drawn over the button. Without `non_interactive()` it
+  would take the click."
 - [ ] `SignalHandle::set` on a destroyed signal is silent: the request is dropped with
   `SignalNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
   would have heard it. A `Handle` method on a destroyed component logs a warning; make `set` do
   the same, checking at call time that the signal exists. Rust and TypeScript, with a test, and
   `SignalHandle::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
+- [ ] A font that can't be parsed doesn't crash the app. Today `FontAtlas::new` panics on bytes
+  that aren't a valid TTF or OTF font, so a bad `ProteusConfig.text.default_font` (downloaded, or
+  a user's file) crashes the app at startup. Three layers:
+  - `FontAtlas::new` returns a `Result` instead of panicking.
+  - The app can handle the error: the font is parsed when the config is built (for example
+    `FontSource::from_bytes(bytes)` returning a `Result`), so the failure surfaces in the app's
+    own code.
+  - As a failsafe, a font that still fails in `Renderer::new` is logged as an error, and the
+    embedded font is used instead.
+
+  TypeScript apps can choose a font too: the config object gets a font setting, and `mount`
+  throws a clear error for a font that can't be parsed, as it does for invalid atlas settings.
+  Tested in both languages.
+- [ ] A component's opacity fades its border, drop shadow and glow too. Today `quad.wgsl`
+  multiplies `in.opacity` into the fill's alpha only, so `set_opacity(0.0)`, or a fading parent,
+  leaves the border, shadow and glow at full strength (confirmed on the GPU: at opacity 0 the
+  fill vanished, the border and glow didn't change). Multiply the border's and the shadow's
+  alpha by `in.opacity` too. GPU tests: a bordered, a shadowed and a glowing quad each draw
+  nothing at opacity 0, and half strength at 0.5. Then remove the **Known issue** paragraph in
+  `effects.rs`.
+- [ ] After that fix, clean up the demo's hand-written fades. It never calls `set_opacity`;
+  wherever it fades something with a border or glow, it writes the alpha of the fill, the
+  border, the glow and the label separately. Replace those with `set_opacity`, which also fades
+  children such as labels: `advance_gallery_button_fade` (fetch button and its label),
+  `advance_video_crossfade` (the two idle tiles) and the matching restore in
+  `advance_pending_tile_reset`, and `advance_nav_icons`. Keep the fades that are effects in
+  their own right: the hover glow ramp in `advance_hovers`, and the theme and overlay
+  crossfades between two images. Update the comments that describe the workaround, and check
+  the demo looks the same (visual check by the human).
+- [ ] Textures larger than an atlas page. Text is one line with no length limit, so it can be
+  wider than a page ("PROTEUS" at the documented maximum, 512 px, is 2406 px; pages are 2048).
+  Today such a request evicts every unreferenced texture trying to fit (50 of 50 in a test),
+  then fails; the text bake skips it with no log and retries every frame, so the text never
+  appears and the atlas cache is wiped each time. Oversized images and `.bake()` components
+  hit the same eviction, with a warning every frame. Fix:
+  - `TextureRegistry::register_static` rejects a request larger than a page at once, with a
+    warning, before evicting anything.
+  - Text wider (or taller) than a page is clipped to the page, with a warning naming the
+    component, the text's size and the limit. The clipped text is drawn at its normal size.
+  - Images larger than a page are scaled down to fit it (`resize_to_fit`), with a warning
+    naming the component, the image's size and the limit.
+  - A `.bake()` component larger than a page isn't baked, with a warning naming the component,
+    its size and the limit; it is drawn normally, unbaked.
+  - None of these is retried every frame, and each warning is logged once.
+  - Developer-chosen behavior (fit, clip, tile and so on) is a Post-Release item; V1 has these
+    fixed defaults.
+  - Docs state what happens, in plain terms: `Text`, the `text` module doc,
+    `ComponentSpec::text`, TypeScript's `text` spec field; `Image`, `ComponentSpec::image` and
+    TypeScript's `image` spec field; `ComponentSpec::bake` and TypeScript's `bake`; and the
+    `image_max_side` and `AtlasConfig::page_size` docs. Fix the `texture_registry.rs` module
+    doc's claim that a failed registration is logged (W-44).
+  - Tests: an oversized request evicts nothing; too-wide text bakes clipped to the page width;
+    an oversized image is scaled to fit; an oversized `.bake()` component is drawn unbaked.
+- [ ] Bake at the display's resolution. Nothing that draws into a texture reads the scale factor:
+  text is rasterized at `size_px` logical pixels, and baked components (`.bake()`) and split and
+  merge snapshots get atlas regions of their logical size. On a 2× display each texel covers
+  2×2 screen pixels, so text and baked content are slightly soft next to native text (confirmed
+  on a Retina display). Fix:
+  - Rasterize text at `size_px × scale_factor`, and size component and transition bakes the
+    same way; keep drawing them at their logical size, so layout doesn't change.
+  - When the scale factor changes (a window moved to another display), bake text and
+    components again.
+  - It costs up to 4× the atlas space for that content on a 2× display, which matters most on
+    the web's 2048-pixel pages. Whether a config setting caps the bake scale for memory-tight
+    apps is decided at the step.
+  - Test: on a scale-2 viewport, a text bake's pixel size is twice its logical size, and it is
+    drawn at its logical size.
+- [ ] One text rasterizer: rename `FontAtlas::rasterize_text_tracked` to `rasterize_text` and
+  remove the old `rasterize_text`, which only tests call (the renderer's text bake already uses
+  the tracked version). Tests pass `0.0` for letter spacing. The V2 text work will likely
+  deprecate this interface, so this leaves one function to deprecate rather than two.
+- [ ] K-26: the default easing is `ease_in_out_quad` in Rust but `"linear"` in TypeScript, so the
+  same app animates differently in each. Make TypeScript's default match Rust's (`dto.rs`'s
+  `default_easing` and the TypeScript `TransitionConfig.easing` doc), and state the default in
+  both languages' docs. With a test.
+- [ ] A transition's `duration` of 0 means instant, and no duration panics. Today
+  `ActiveTransition::new` debug-asserts `duration > 0.0`, so 0 (a natural "snap there", or the
+  first step of a stagger) panics in debug builds, and release builds clamp it to 0.1 ms. New
+  rule: 0 completes on the next tick with no warning; a negative or NaN duration logs a warning
+  and is treated as 0. Never a panic. Update `TransitionConfig::duration`'s doc and
+  TypeScript's to "0 means instant; a negative or NaN duration logs a warning and is treated as
+  0", remove `ActiveTransition::new`'s `# Panics` section, and update the test that relies on
+  the clamp. Tests: 0, a negative value and NaN each complete on the next tick, without a panic.
+- [ ] Catch an atlas or instance-buffer setting that doesn't fit the host before the app runs.
+  Natively, the limits checked are the ones `proteus-host-winit` requests (`Limits::default()`),
+  so a config fails the same way on every machine; weaker hardware that can't provide them
+  already fails earlier, with a `GpuError`. On the web it depends on the browser:
+  `proteus-host-web` requests WebGL2's limits, which a WebGL2 device reports exactly, but a
+  WebGPU device raises any requested limit below WebGPU's default to the default (a 2048
+  request reports 8192). So today a config such as `desktop()` works in a WebGPU browser and
+  fails in a WebGL2 one. The web host checks against WebGL2's limits instead of the device's,
+  so a config behaves the same in every browser (proposed; confirmed at the step).
+  - **A check that needs no GPU:** `ProteusConfig::check(&wgpu::Limits)` returning a structured
+    `ConfigError` (the setting, its value, the limit, and how to fix it: a smaller value or the
+    `web()` / `constrained()` presets). An app can call it in its own tests against its host's
+    limits. Both hosts run it before creating the device: TypeScript's `mount` switches to it
+    and still throws, and the Rust `run`s report it clearly. `validate_atlas_config` and
+    `validate_render_config` are replaced or built on it (decided at the step). The panic in
+    `Renderer::new` stays as a backstop, with the same message, and is documented in the
+    `# Panics` sections of `Renderer::new`, `Engine::new` and both hosts' `run`.
+  - **Preset tests:** `web()` fits WebGL2's limits; `desktop()` and `constrained()` fit
+    `Limits::default()`. Done together with T-04.
+  - **Docs:** each host states which limits it requests, and `ProteusConfig`'s docs say which
+    presets fit which host.
+- [ ] The demo owns its own settings and asset list; the shells pass in only what is
+  per-platform. Today both shells carry identical copies of the demo's `CLEAR_COLOR` and
+  `IMAGE_MAX_SIDE`, and the web shell's `asset_keys()` is a hand-kept copy of every image
+  `DemoApp` loads, which silently breaks if the two drift. `proteus-demo` exposes its config
+  (for example `DemoApp::config(base) -> ProteusConfig`, applied over each platform's preset)
+  and its asset keys, which `load_assets` and the web shell's preload both read. The shells
+  keep only the asset directory or URL, the video keys, and the window title and size. Done
+  with the video item below, which also changes both shells.
+- [ ] Video: restore "bring your own player", and mark video experimental for V1. Proteus shows
+  video frames; it doesn't play video. An app brings its own player (on the web, usually the
+  browser's `<video>` element) and hands Proteus the frames. M13.4 lost this: it moved an
+  `ffmpeg` player into `proteus-host-winit` and an HLS player into `proteus-host-web`, deleted the
+  browser-player example, and left a TypeScript app no way to show video at all. For V1:
+  - **Frame upload API**, in Rust and TypeScript: create a video texture, upload frames to it,
+    show it on components, and release it. The renderer already has the pieces
+    (`QuadPipeline::init_video`, `upload_video_frame`). Whether TypeScript also gets
+    `uploadFrom(videoElement)`, and whether it copies on the GPU, is decided at the step.
+  - **Move the players out of the hosts** into example code, so the hosts ship no player. The
+    `ffmpeg` player becomes the native example; the web example uses the browser's `<video>`
+    element. The demo gets its video from them. What happens to `HostServices::open_video`,
+    `VideoStream` and `Frame::play_video` once the hosts have no player (kept as the Rust
+    integration point, or replaced by the frame upload API) is decided at the step.
+  - **`proteus_host_winit::run_with_services`**, so a native app can supply its own
+    `HostServices`, as `proteus_host_web::run` already allows.
+  - **`examples/video`** (TypeScript): a browser `<video>` element driven by
+    `requestVideoFrameCallback`, pushing frames into a component. Linked from the docs.
+  - **One video texture at a time.** The renderer has one, and nothing stops a second video from
+    being started while one plays: both then write to it, and stopping the first shrinks it to
+    1×1, so the second goes black. Make starting a second video stop or refuse the first
+    (decided at the step), with a test.
+  - **Docs:** the README and every video item state the tenet, and mark video **Experimental**,
+    as `SplitStrategy::PerTarget` is. They say plainly what V1 supports: one video at a time,
+    frames supplied by the app.
 
 #### Step 6 — Documentation
 
@@ -4336,6 +4526,11 @@ is deployed to GitHub Pages alongside the demo.
   interaction; text, images and video; configuration; hosts and platforms.
 - [ ] Short how-to pages for common tasks (chaining transitions, staggering a group, loading an
   image, custom easing, …).
+- [ ] A how-to on using a platform feature Proteus doesn't provide, such as the clipboard or a
+  file picker: use it directly from the app, and for one that differs by platform, define the
+  app's own trait with an implementation per platform, passed in where the app is created (as
+  `DemoApp::new` takes each platform's video keys). Linked from the `HostServices` docs and the
+  hosts and platforms guide.
 - [ ] API reference builds in CI and deploys to GitHub Pages.
 - [ ] `GETTING_STARTED.md`'s build-from-source content moves into `CONTRIBUTING.md` (R-05).
 - [ ] Every code snippet in the guides compiles or type-checks in CI.
@@ -4405,6 +4600,15 @@ One version for every crate and the npm package. Library crates publish to crate
   component model and per-frame order, rendering (one instanced draw, atlases, baking),
   transitions and the three topologies, input, texture lifetime, the app/host contract, and a
   short list of key design decisions with a paragraph each.
+- [ ] The rendering section explains why, not just what: each frame, every visible component's
+  data is collected and copied to the GPU in one go, then drawn with one draw call; one draw
+  call means one pipeline, so one shader (`quad.wgsl`) handles every feature, each switched on
+  or off by the instance's data. Trade-offs: all 16 vertex attribute slots are in use, so new
+  per-component data must be packed into existing fields. Another pipeline is possible (bakes
+  already use a second one, `atlas_pipeline`) but costs a draw call per run of consecutive
+  components that use it, and needs an atlas version so bakes and transitions can capture
+  those components. It suits features on their own layer better than ones mixed through the
+  scene.
 - [ ] Every claim in it checked against the code.
 - [ ] This file, the V1 `ROADMAP.md` and the audit move to `docs/archive/`, each with a line at the
   top saying it is archived and where to look instead. D-16 (the missing link to the original
@@ -4483,6 +4687,11 @@ not V1.**
   it changes, like CSS `object-fit: cover`. During a transition from a square tile to a wide
   view, the crop would widen with it. Needs the crop recomputed from the in-progress size each
   frame, so it is a rendering feature rather than an SDK one; builds on M14's `ImageCrop`.
+- Let developers choose what happens to content larger than an atlas page, per image, text or
+  baked component: scale to fit, clip, or tile it across several atlas regions so it's shown
+  in full at full resolution (which very large images and long text need). V1's fixed
+  defaults (step 5): images scale to fit, text is clipped, a baked component is drawn unbaked,
+  each with a warning. Related to image fit, above.
 - Masking: shape a component's content with a mask (a shape, or another image's alpha). Its own
   method, separate from `crop_image`, so a crop and a mask can be used together: the crop picks
   which part of the image to show, and the mask shapes it.
@@ -4490,12 +4699,30 @@ not V1.**
   it already knows, but two cases happen as side effects: destroying a parent destroys its
   children, and destroying a component destroys the signals it owns. An app holding those handles
   is never told.
+- Signals: reactive state that notifies its observers when its value changes, the observer
+  pattern front-end developers know from SolidJS, Preact, Angular and Leptos. The name is free
+  for this once M14 renames today's 1→1 transition signals to transition channels (step 5).
+- A video handle with playback controls (play, pause, seek, loop, mute, volume, duration,
+  position, an "ended" event), designed around "bring your own player". Proteus doesn't play
+  video, so the handle drives the app's player rather than containing one. The design work is an
+  interface that most players can sit behind: on the web, `<video>`, hls.js, Shaka and video.js;
+  natively, `ffmpeg`, GStreamer and platform decoders. Also: several videos at once, each with its
+  own texture; frames copied from a `<video>` element straight to the GPU
+  (`copy_external_image_to_texture`) instead of read back through a canvas; and live video during
+  group transitions (M9.6).
 - Real runs of the native host on Linux and Windows. V1 tests both in CI but has only been run
   by hand on macOS (M14 step 9).
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
 - Custom shader authoring experience (formal support for developer-written WGSL)
+- Split `quad.wgsl` into parts. `fs_main` is about 170 lines doing the shadow, the shape's edge,
+  sampling from three atlases, the crossfade, tint, border and compositing in one function.
+  Break it into named functions (for example `sample_atlas`, `shadow_alpha`, `apply_border`,
+  `composite`), and consider composing the shader from separate files (WGSL has no `#include`;
+  a crate such as `naga_oil`, or joining files at build time). Do it before custom shader
+  authoring, which needs pieces a developer can reuse. The output must stay identical: the
+  `headless_render` pixel tests are the check.
 - Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
 - Transition `direction` and `stagger` — superseded by the `childBehavior` iterator pattern. Developers implement these as iterator functions rather than framework primitives. No separate post-V1 work needed.
 - XR shell (WebXR / OpenXR) — seam designed in M13.7
