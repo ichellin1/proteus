@@ -4198,7 +4198,7 @@ one file.
 - [x] `scripts/check-comments.sh` fails on milestone references, audit IDs, dates, references to
   external documents, and "morph" in comments. Baseline across the tree: 548.
 
-#### Step 3 — Comment cleanup
+#### Step 3 — Comment cleanup *(done)*
 
 One commit per crate, in the order developers read them: `proteus-sdk`, `proteus-sdk-web`
 (Rust and TypeScript), `proteus-runtime`, `proteus-ui`, `proteus-render`, `proteus-gpu`,
@@ -4210,20 +4210,28 @@ comments; 411 `///` lines in test files; about 30 open audit findings about stal
 `proteus-render` (27), `proteus-sdk-web` (22), `proteus-sdk` (13), `proteus-gpu` (8),
 `proteus-host-winit` (1) and `proteus-host-web` (1).
 
-- [ ] `check-comments.sh` passes on every crate's `src/` and `tests/`, and runs in CI.
-- [ ] `missing_docs` is enforced in CI, with no warnings, on every library crate: `proteus-gpu`,
+- [x] `check-comments.sh` passes on every crate's `src/` and `tests/`, and runs in CI. It also
+  checks `Cargo.toml` and `package.json` comments and descriptions.
+- [x] `missing_docs` is enforced in CI, with no warnings, on every library crate: `proteus-gpu`,
   `-render`, `-ui`, `-sdk`, `-runtime`, `-host-winit`, `-host-web`, `-sdk-web`. `proteus-demo`
   and the shells are exempt; they still get the style cleanup.
-- [ ] `proteus-sdk` and `proteus-runtime` open with a crate-level doc whose example compiles as a
+- [x] `proteus-sdk` and `proteus-runtime` open with a crate-level doc whose example compiles as a
   doctest.
-- [ ] `typedoc` reports no undocumented TypeScript export.
-- [ ] K-01…K-30 closed, along with T-07 (stale test tables), T-08 and T-09 (tests that can't
+- [x] `typedoc` reports no undocumented TypeScript export (`npm run check-docs`, also in CI).
+- [x] K-01…K-30 closed, along with T-07 (stale test tables), T-08 and T-09 (tests that can't
   fail), and three defects found while planning: the stray copy of another method's doc on
   `Handle::set_declared_geometry`, `Handle::id` claiming `Disabled` isn't exposed, and a
   duplicated doc block in `ts/src/types.ts`, and `ProteusConfig`'s `lazy_load` doc saying it
   isn't wired when the text and image bake reads it.
-- [ ] Only comments change; tests and clippy stay green. A bug a comment exposes is fixed in its
+- [x] Only comments change; tests and clippy stay green. A bug a comment exposes is fixed in its
   own `fix:` commit.
+
+Outcome: committed as one `docs:` commit with a short `test:`, `ci:` and `docs(planning):`
+commit, rather than one per crate, to keep the changelog brief. Besides comments, it turned on
+`missing_docs`, removed an unused `Resource` impl on `FontAtlas`, renamed two `QuadPipeline`
+fields, exported three TypeScript callback types, and fixed T-08 and T-09. The bugs and API
+problems the review found are step 5 items, not fixed here.
+
 
 #### Step 4 — Custom easing (A-07)
 
