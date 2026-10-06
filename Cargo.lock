@@ -2237,6 +2237,7 @@ dependencies = [
  "proteus-ui",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "slotmap",
  "wasm-bindgen",
  "wasm-bindgen-futures",

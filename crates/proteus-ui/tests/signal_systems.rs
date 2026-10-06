@@ -60,7 +60,7 @@ fn cfg() -> TransitionConfig {
     TransitionConfig {
         duration: 0.3,
         delay: 0.0,
-        easing: proteus_ui::linear,
+        easing: proteus_ui::Easing::Linear,
     }
 }
 

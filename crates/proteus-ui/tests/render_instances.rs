@@ -11,10 +11,10 @@ use proteus_render::{
     unpack_atlas_page, QuadPipeline, TransitionAtlasAllocator, ATLAS_SELECTOR_MAIN,
 };
 use proteus_ui::{
-    collect_instances, linear, spawn_order::register_spawn_order_hooks,
-    transition::TransitionConfig, ActiveTransition, BakedImage, BakedText, BakedTexture, Border,
-    DropShadow, Glow, Interactable, ProteusWorld, QuadState, Text, TransitionRequest,
-    VideoCrossfade, VideoPlayer, Visibility,
+    collect_instances, spawn_order::register_spawn_order_hooks, transition::TransitionConfig,
+    ActiveTransition, BakedImage, BakedText, BakedTexture, Border, DropShadow, Easing, Glow,
+    Interactable, ProteusWorld, QuadState, Text, TransitionRequest, VideoCrossfade, VideoPlayer,
+    Visibility,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ fn linear_1s() -> TransitionConfig {
     TransitionConfig {
         duration: 1.0,
         delay: 0.0,
-        easing: linear,
+        easing: Easing::Linear,
     }
 }
 
@@ -830,7 +830,7 @@ fn baked_texture_crossfade_t_tracks_active_transition_progress() {
         TransitionConfig {
             duration: 1.0,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         },
     );
 
@@ -860,7 +860,7 @@ fn baked_texture_crossfade_t_is_near_zero_during_delay() {
         TransitionConfig {
             duration: 1.0,
             delay: 5.0,
-            easing: linear,
+            easing: Easing::Linear,
         },
     );
     active.delay_remaining = 5.0; // still fully within the delay window

@@ -4233,19 +4233,35 @@ fields, exported three TypeScript callback types, and fixed T-08 and T-09. The b
 problems the review found are step 5 items, not fixed here.
 
 
-#### Step 4 — Custom easing (A-07)
+#### Step 4 — Custom easing (A-07) *(done)*
 
 Today a Rust caller can already pass any `fn(f32) -> f32` through `TransitionConfig.easing`, but
 the type isn't re-exported from `proteus-sdk` and nothing documents it. TypeScript accepts only
 the five built-in names. `ProteusConfig.transitions.custom_easings` is declared and never read.
 
-- [ ] Design chosen at the start of the step. Options: cubic-bézier control points (plain data,
-  familiar from CSS), named JavaScript functions registered once, or a JS function called every
-  frame.
-- [ ] A TypeScript caller can use an easing curve that isn't built in.
-- [ ] A Rust caller can do the same through `proteus-sdk` alone.
-- [ ] `custom_easings` is either wired up or removed.
-- [ ] Tested, and documented with an example in both languages.
+Decided: easing is plain data, computed in Rust, so it costs nothing extra each tick and never
+calls into JavaScript during an update. Cubic-bézier control points are the custom curve: the
+same numbers as CSS `cubic-bezier()`, so they can be copied from CSS or any easing tool. They
+can overshoot ("back" easing) but can't bounce; bounce and elastic can be added later as
+built-in presets. JavaScript easing functions are not supported: each would be a call from
+WebAssembly into JavaScript per transition per tick, made mid-update, where calling back into
+Proteus panics.
+
+- [x] Design chosen at the start of the step (above).
+- [x] Rust: an `Easing` type replaces the function pointer in `TransitionConfig.easing`, with
+  the five built-ins as variants, `CubicBezier { x1, y1, x2, y2 }`, and `Custom(fn(f32) -> f32)`
+  for Rust code. `#[non_exhaustive]`, since presets such as bounce will be added. `Copy`, so
+  `TransitionConfig` stays `Copy`. Re-exported from `proteus-sdk`.
+- [x] A TypeScript caller can use an easing curve that isn't built in:
+  `easing: { cubicBezier: [x1, y1, x2, y2] }`, alongside the built-in names.
+- [x] A Rust caller can do the same through `proteus-sdk` alone.
+- [x] An unknown easing name is an error at the call, not a silent `linear` (B-17).
+- [x] TypeScript's default easing matches Rust's, `easeInOutQuad` (K-26, moved here from step 5),
+  and both document it.
+- [x] Overshoot is safe: a curve whose value goes past 0 or 1 doesn't make sizes or corner radii
+  negative, or colors leave `0`–`1`.
+- [x] `custom_easings` removed: once curves are data, a named registry isn't needed.
+- [x] Tested, and documented with an example in both languages.
 
 #### Step 5 — Fixes
 
@@ -4456,10 +4472,6 @@ test that fails without it.
   remove the old `rasterize_text`, which only tests call (the renderer's text bake already uses
   the tracked version). Tests pass `0.0` for letter spacing. The V2 text work will likely
   deprecate this interface, so this leaves one function to deprecate rather than two.
-- [ ] K-26: the default easing is `ease_in_out_quad` in Rust but `"linear"` in TypeScript, so the
-  same app animates differently in each. Make TypeScript's default match Rust's (`dto.rs`'s
-  `default_easing` and the TypeScript `TransitionConfig.easing` doc), and state the default in
-  both languages' docs. With a test.
 - [ ] A transition's `duration` of 0 means instant, and no duration panics. Today
   `ActiveTransition::new` debug-asserts `duration > 0.0`, so 0 (a natural "snap there", or the
   first step of a stagger) panics in debug builds, and release builds clamp it to 0.1 ms. New

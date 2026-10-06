@@ -289,7 +289,9 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
                 } else {
                     (active.elapsed / active.config.duration).min(1.0)
                 };
-                (active.config.easing)(raw_t).max(0.0001)
+                // Clamped: an overshooting curve would otherwise fade past
+                // the end image.
+                active.config.easing.apply(raw_t).clamp(0.0001, 1.0)
             })
             .unwrap_or(1.0); // no active transition — show the to-side fully
     }
@@ -317,7 +319,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
                 } else {
                     (active.elapsed / active.config.duration).min(1.0)
                 };
-                let eased_t = (active.config.easing)(raw_t);
+                let eased_t = active.config.easing.apply(raw_t).clamp(0.0, 1.0);
                 text_inst.opacity *= 1.0 - eased_t;
             }
         }

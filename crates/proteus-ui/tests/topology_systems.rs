@@ -12,7 +12,7 @@ use proteus_ui::{
         NToOneRequest, OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
     },
     transition::{
-        linear, transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
+        transition_tick_system, ActiveTransition, CompletedTransitions, Easing, FrameTime,
         TransitionConfig,
     },
     QuadState,
@@ -56,7 +56,7 @@ fn default_cfg() -> TransitionConfig {
     TransitionConfig {
         duration: 0.5,
         delay: 0.0,
-        easing: linear,
+        easing: Easing::Linear,
     }
 }
 
@@ -219,7 +219,7 @@ fn per_target_1_to_n_child_configs_override_the_default() {
         TransitionConfig {
             duration: 0.1 + idx as f32 * 0.1,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         }
     }
 
@@ -512,7 +512,7 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
             default_config: TransitionConfig {
                 duration: 1.0,
                 delay: 0.0,
-                easing: linear,
+                easing: Easing::Linear,
             },
             child_configs: None,
             strategy: SplitStrategy::Slice,
@@ -751,7 +751,7 @@ fn round_trip_button_list_button() {
         default_config: TransitionConfig {
             duration: 0.3,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         },
         child_configs: None,
         strategy: SplitStrategy::Slice,
@@ -818,7 +818,7 @@ fn round_trip_button_list_button() {
         default_config: TransitionConfig {
             duration: 0.3,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         },
         child_configs: None,
         layout: MergeLayout::Horizontal,
@@ -882,7 +882,7 @@ fn slice_child_configs_set_per_virtual_duration() {
         TransitionConfig {
             duration: 0.1 * (idx + 1) as f32, // 0.1, 0.2, 0.3
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         }
     }
 

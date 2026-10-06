@@ -311,13 +311,51 @@ export interface TransitioningConfig {
   allowNavigation?: boolean;
 }
 
-/** A built-in easing curve: how a transition speeds up and slows down. ({@link TransitionConfig}) */
+/**
+ * A built-in easing curve: how a transition speeds up and slows down.
+ *
+ * - `"linear"`: constant speed.
+ * - `"easeInQuad"`: starts slowly, then speeds up.
+ * - `"easeOutQuad"`: starts quickly, then slows to a stop.
+ * - `"easeInOutQuad"`: starts slowly, speeds up, then slows to a stop. The
+ *   default.
+ * - `"easeOutCubic"`: like `"easeOutQuad"`, with a stronger slowdown at the end.
+ */
 export type EasingName =
   | "linear"
   | "easeInQuad"
   | "easeOutQuad"
   | "easeInOutQuad"
   | "easeOutCubic";
+
+/**
+ * How a transition speeds up and slows down: a built-in curve's name, or a
+ * cubic Bézier curve.
+ *
+ * `{ cubicBezier: [x1, y1, x2, y2] }` takes the same four numbers as CSS's
+ * `cubic-bezier()`, so a curve can be copied from CSS or any easing tool. `x1`
+ * and `x2` are clamped to `0`–`1`; `y1` and `y2` may go outside it, for a curve
+ * that overshoots its target and settles back. Sizes and corner radii never go
+ * below zero, and colors stay within `0`–`1`.
+ *
+ * An unknown name, or a malformed `cubicBezier`, throws when the transition is
+ * requested.
+ *
+ * @example
+ * ```ts
+ * // Overshoots slightly, then settles: CSS's "back out" curve.
+ * handle.animateTo(target, {
+ *   duration: 0.4,
+ *   easing: { cubicBezier: [0.34, 1.56, 0.64, 1] },
+ * });
+ * ```
+ */
+export type Easing =
+  | EasingName
+  | {
+      /** The control points, as in CSS's `cubic-bezier(x1, y1, x2, y2)`. */
+      cubicBezier: [number, number, number, number];
+    };
 
 /** How a transition is timed. */
 export interface TransitionConfig {
@@ -331,8 +369,8 @@ export interface TransitionConfig {
   duration: number;
   /** Seconds to wait before the transition starts. Default `0`. */
   delay?: number;
-  /** Easing curve function for the transition. ({@link EasingName}).  Default `"linear"`. */
-  easing?: EasingName;
+  /** How the transition speeds up and slows down. Default `"easeInOutQuad"`. */
+  easing?: Easing;
 }
 
 /**

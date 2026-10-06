@@ -58,8 +58,8 @@ use std::rc::Rc;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    ease_in_out_quad, ease_out_quad, Border, ComponentSpec, Glow, Handle, Image, MergeLayout,
-    Proteus, QuadState, SplitStrategy, Text, TextureHandle, TransitionConfig,
+    Border, ComponentSpec, Easing, Glow, Handle, Image, MergeLayout, Proteus, QuadState,
+    SplitStrategy, Text, TextureHandle, TransitionConfig,
 };
 
 use screens::{
@@ -158,7 +158,7 @@ fn group_transition_config() -> TransitionConfig {
     TransitionConfig {
         duration: 0.4,
         delay: 0.0,
-        easing: ease_in_out_quad,
+        easing: Easing::EaseInOutQuad,
     }
 }
 
@@ -170,7 +170,7 @@ fn gallery_group_transition_config() -> TransitionConfig {
     TransitionConfig {
         duration: 0.6,
         delay: 0.0,
-        easing: ease_in_out_quad,
+        easing: Easing::EaseInOutQuad,
     }
 }
 
@@ -1177,7 +1177,7 @@ impl Demo {
         };
         self.intro_elapsed = (self.intro_elapsed + fade_dt).min(splash::INTRO_DURATION_SECS);
         let raw_t = self.intro_elapsed / splash::INTRO_DURATION_SECS;
-        let alpha = ease_out_quad(raw_t);
+        let alpha = Easing::EaseOutQuad.apply(raw_t);
         self.intro_slide_offset = splash::INTRO_SLIDE_DISTANCE_PX * (1.0 - alpha);
 
         if let Some(mut qs) = proteus
@@ -2426,7 +2426,7 @@ impl Demo {
         let config = TransitionConfig {
             duration: example_detail::BURST_SPAWN_ITEM_DURATION,
             delay: 0.0,
-            easing: ease_in_out_quad,
+            easing: Easing::EaseInOutQuad,
         };
         for entity in entities {
             let idle = proteus.get(entity).is_some_and(|d| d.transition.is_none());
@@ -2753,7 +2753,7 @@ impl Demo {
     /// Ramps the currently-playing tile's `VideoCrossfade.video_t` from
     /// `0.0` (box-cover poster art) to `1.0` (live video) in lockstep with
     /// `start_tiles_to_screen`'s own geometry transition — eased the same way
-    /// (`ease_in_out_quad`, matching `group_transition_config()`'s own
+    /// (`Easing::EaseInOutQuad`, matching `group_transition_config()`'s own
     /// choice, since `TransitionData` doesn't expose which easing fn is
     /// actually driving it), so both read as one motion instead of two
     /// separate effects. Once the transition settles (`proteus.get(tile)
@@ -2809,12 +2809,15 @@ impl Demo {
             .get(tile)
             .and_then(|d| d.transition)
             .map(|t| t.progress);
-        let _ = tile.set_video_crossfade(proteus, raw_t.map(ease_in_out_quad).unwrap_or(1.0));
+        let _ = tile.set_video_crossfade(
+            proteus,
+            raw_t.map(|t| Easing::EaseInOutQuad.apply(t)).unwrap_or(1.0),
+        );
 
         let Some(raw_t) = raw_t else {
             return;
         };
-        let eased_t = ease_in_out_quad(raw_t);
+        let eased_t = Easing::EaseInOutQuad.apply(raw_t);
 
         if !self.video_first_frame_shown {
             if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
@@ -2823,7 +2826,7 @@ impl Demo {
         }
 
         let fade_t = (raw_t * 2.0).min(1.0);
-        let fade_alpha = 1.0 - ease_out_quad(fade_t);
+        let fade_alpha = 1.0 - Easing::EaseOutQuad.apply(fade_t);
         for (i, &other) in self.video_tiles.tiles.iter().enumerate() {
             if i == idx {
                 continue;

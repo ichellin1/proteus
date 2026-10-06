@@ -41,15 +41,23 @@ impl QuadState {
     ///
     /// Rotation is interpolated directly, not by the shortest way round, so a
     /// change of more than half a turn goes the long way.
+    ///
+    /// A `t` outside `0`–`1`, from an easing curve that overshoots,
+    /// extrapolates, but sizes, corner radii and scale don't go below zero and
+    /// colors stay within `0`–`1`.
     pub fn lerp(&self, other: &Self, t: f32) -> Self {
+        // `t` can go past 0 or 1 with an easing curve that overshoots. Keep
+        // the result drawable: no negative sizes, corner radii or scale, and
+        // colors within 0..=1.
         Self {
             position: self.position.lerp(other.position, t),
-            size: self.size.lerp(other.size, t),
+            size: self.size.lerp(other.size, t).max(Vec2::ZERO),
             rotation: self.rotation + (other.rotation - self.rotation) * t,
-            scale: self.scale + (other.scale - self.scale) * t,
+            scale: (self.scale + (other.scale - self.scale) * t).max(0.0),
             anchor: self.anchor.lerp(other.anchor, t),
-            color: self.color.lerp(other.color, t),
-            corner_radius: self.corner_radius + (other.corner_radius - self.corner_radius) * t,
+            color: self.color.lerp(other.color, t).clamp(Vec4::ZERO, Vec4::ONE),
+            corner_radius: (self.corner_radius + (other.corner_radius - self.corner_radius) * t)
+                .max(0.0),
         }
     }
 }
