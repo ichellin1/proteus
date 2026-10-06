@@ -8,7 +8,7 @@ use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, EffectiveOpacity, EffectiveVisibility,
+    collect_instances, transition::TransitionConfig, Easing, EffectiveOpacity, EffectiveVisibility,
     Interactable, InteractionEvents, Opacity, PointerInput, ProteusWorld, QuadState,
     TransitionRequest, Visibility,
 };
@@ -259,7 +259,7 @@ fn child_transitions_independently_of_parent() {
     let cfg = TransitionConfig {
         duration: 1.0,
         delay: 0.0,
-        easing: linear,
+        easing: Easing::Linear,
     };
 
     world.world.entity_mut(parent).insert(TransitionRequest {

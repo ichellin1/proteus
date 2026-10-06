@@ -35,7 +35,7 @@ use glam::{Vec2, Vec3, Vec4};
 
 use crate::component::{Disabled, Lifecycle, TransitionRequest};
 use crate::input::{FocusState, HoveredEntity, PressedEntity};
-use crate::transition::{ease_out_quad, TransitionConfig};
+use crate::transition::{Easing, TransitionConfig};
 use crate::QuadState;
 
 // ---------------------------------------------------------------------------
@@ -140,7 +140,7 @@ pub struct InteractionState {
 const STYLE_TRANSITION_CONFIG: TransitionConfig = TransitionConfig {
     duration: 0.15,
     delay: 0.0,
-    easing: ease_out_quad,
+    easing: Easing::EaseOutQuad,
 };
 
 /// The entities [`interaction_style_system`] considers: every entity with an

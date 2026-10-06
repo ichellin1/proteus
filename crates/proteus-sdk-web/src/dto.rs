@@ -12,8 +12,8 @@
 use serde::{Deserialize, Serialize};
 
 use proteus_sdk::{
-    ComponentData, ComponentSpec, DropReason, InteractionStateKind, QuadState, StyleOverride,
-    TransitionConfig, TransitionData, TransitionDropped,
+    ComponentData, ComponentSpec, DropReason, Easing, InteractionStateKind, QuadState,
+    StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
 
@@ -393,28 +393,79 @@ pub struct TransitionConfigDto {
     pub duration: f32,
     #[serde(default)]
     pub delay: f32,
-    #[serde(default = "default_easing")]
-    pub easing: String,
-}
-
-fn default_easing() -> String {
-    "linear".to_string()
+    /// Defaults to `easeInOutQuad`, as in Rust.
+    #[serde(default)]
+    pub easing: EasingDto,
 }
 
 impl From<&TransitionConfigDto> for TransitionConfig {
     fn from(d: &TransitionConfigDto) -> Self {
-        let easing = match d.easing.as_str() {
-            "easeInQuad" => proteus_sdk::ease_in_quad,
-            "easeOutQuad" => proteus_sdk::ease_out_quad,
-            "easeInOutQuad" => proteus_sdk::ease_in_out_quad,
-            "easeOutCubic" => proteus_sdk::ease_out_cubic,
-            _ => proteus_sdk::linear,
-        };
         Self {
             duration: d.duration,
             delay: d.delay,
-            easing,
+            easing: d.easing.0,
         }
+    }
+}
+
+/// The built-in easing names TypeScript accepts, in TypeScript's spelling.
+const EASING_NAMES: &[&str] = &[
+    "linear",
+    "easeInQuad",
+    "easeOutQuad",
+    "easeInOutQuad",
+    "easeOutCubic",
+];
+
+/// An easing from JavaScript: a built-in name such as `"easeOutCubic"`, or
+/// `{ cubicBezier: [x1, y1, x2, y2] }`. Anything else is an error that names
+/// the bad value, so a mistyped name fails the call instead of quietly
+/// becoming a different curve.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EasingDto(pub Easing);
+
+impl<'de> Deserialize<'de> for EasingDto {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EasingVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EasingVisitor {
+            type Value = EasingDto;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an easing name or { cubicBezier: [x1, y1, x2, y2] }")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<EasingDto, E> {
+                let easing = match name {
+                    "linear" => Easing::Linear,
+                    "easeInQuad" => Easing::EaseInQuad,
+                    "easeOutQuad" => Easing::EaseOutQuad,
+                    "easeInOutQuad" => Easing::EaseInOutQuad,
+                    "easeOutCubic" => Easing::EaseOutCubic,
+                    _ => return Err(E::unknown_variant(name, EASING_NAMES)),
+                };
+                Ok(EasingDto(easing))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<EasingDto, A::Error> {
+                let mut points: Option<[f32; 4]> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "cubicBezier" {
+                        points = Some(map.next_value()?);
+                    } else {
+                        return Err(serde::de::Error::unknown_field(&key, &["cubicBezier"]));
+                    }
+                }
+                let [x1, y1, x2, y2] =
+                    points.ok_or_else(|| serde::de::Error::missing_field("cubicBezier"))?;
+                Ok(EasingDto(Easing::CubicBezier { x1, y1, x2, y2 }))
+            }
+        }
+
+        deserializer.deserialize_any(EasingVisitor)
     }
 }
 
@@ -603,5 +654,52 @@ impl TextureStateDto {
             width,
             height,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(json: &str) -> Result<TransitionConfig, serde_json::Error> {
+        serde_json::from_str::<TransitionConfigDto>(json).map(|d| (&d).into())
+    }
+
+    #[test]
+    fn the_default_easing_matches_rust() {
+        let c = config(r#"{"duration": 0.3}"#).unwrap();
+        assert!(matches!(c.easing, Easing::EaseInOutQuad));
+    }
+
+    #[test]
+    fn built_in_names_map_to_their_easing() {
+        let c = config(r#"{"duration": 0.3, "easing": "easeOutCubic"}"#).unwrap();
+        assert!(matches!(c.easing, Easing::EaseOutCubic));
+    }
+
+    #[test]
+    fn a_cubic_bezier_is_read_in_order() {
+        let c = config(r#"{"duration": 0.3, "easing": {"cubicBezier": [0.1, 0.2, 0.3, 0.4]}}"#)
+            .unwrap();
+        match c.easing {
+            Easing::CubicBezier { x1, y1, x2, y2 } => {
+                assert_eq!([x1, y1, x2, y2], [0.1, 0.2, 0.3, 0.4])
+            }
+            other => panic!("expected a cubic Bézier, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_name_is_an_error_naming_it() {
+        let err = config(r#"{"duration": 0.3, "easing": "easeOutQuart"}"#).unwrap_err();
+        assert!(err.to_string().contains("easeOutQuart"), "{err}");
+    }
+
+    #[test]
+    fn a_malformed_bezier_is_an_error() {
+        assert!(config(r#"{"duration": 0.3, "easing": {"cubicBezier": [0.1, 0.2]}}"#).is_err());
+        assert!(
+            config(r#"{"duration": 0.3, "easing": {"bezier": [0.1, 0.2, 0.3, 0.4]}}"#).is_err()
+        );
     }
 }

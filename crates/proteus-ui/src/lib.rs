@@ -70,8 +70,5 @@ pub use topology::{
     ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
     OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
 };
-pub use transition::{
-    ease_in_out_quad, ease_in_quad, ease_out_cubic, ease_out_quad, linear, ActiveTransition,
-    CompletedTransitions, EasingFn, FrameTime, TransitionConfig,
-};
+pub use transition::{ActiveTransition, CompletedTransitions, Easing, FrameTime, TransitionConfig};
 pub use video::{VideoCrossfade, VideoPlayer};

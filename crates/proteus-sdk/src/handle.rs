@@ -225,7 +225,7 @@ impl Handle {
     ///
     /// ```
     /// use glam::Vec3;
-    /// use proteus_sdk::{ease_out_cubic, ComponentSpec, Proteus, QuadState, TransitionConfig};
+    /// use proteus_sdk::{ComponentSpec, Easing, Proteus, QuadState, TransitionConfig};
     ///
     /// let mut app = Proteus::new();
     /// let card = app.component(ComponentSpec::new(QuadState::default()));
@@ -237,7 +237,7 @@ impl Handle {
     /// let config = TransitionConfig {
     ///     duration: 0.3,
     ///     delay: 0.0,
-    ///     easing: ease_out_cubic,
+    ///     easing: Easing::EaseOutCubic,
     /// };
     /// card.animate_to(&mut app, moved.clone(), config)?;
     ///
@@ -660,7 +660,7 @@ impl Handle {
     ///     |i, _total| TransitionConfig {
     ///         duration: 0.4,
     ///         delay: i as f32 * 0.08,
-    ///         easing: ease_out_cubic,
+    ///         easing: Easing::EaseOutCubic,
     ///     },
     /// )?;
     /// # Ok::<(), HandleError>(())

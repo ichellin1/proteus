@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use proteus_render::AtlasConfig;
-use proteus_ui::{ease_out_quad, EasingFn, TransitionConfig};
+use proteus_ui::{Easing, TransitionConfig};
 
 // ---------------------------------------------------------------------------
 // ProteusConfig
@@ -289,9 +289,6 @@ pub struct TransitionDefaults {
     pub interaction_style: TransitionConfig,
     /// The default transition config.
     pub default_config: TransitionConfig,
-    /// Easing curves registered by name, so that TypeScript can refer to a
-    /// custom curve. Not read yet.
-    pub custom_easings: Vec<(String, EasingFn)>,
 }
 
 impl Default for TransitionDefaults {
@@ -300,10 +297,9 @@ impl Default for TransitionDefaults {
             interaction_style: TransitionConfig {
                 duration: 0.15,
                 delay: 0.0,
-                easing: ease_out_quad,
+                easing: Easing::EaseOutQuad,
             },
             default_config: TransitionConfig::default(),
-            custom_easings: Vec::new(),
         }
     }
 }

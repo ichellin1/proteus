@@ -6,9 +6,8 @@ use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
     component::{Lifecycle, QuadState, TransitionRequest},
     transition::{
-        ease_in_quad, linear, transition_complete_system, transition_setup_system,
-        transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
-        TransitionConfig,
+        transition_complete_system, transition_setup_system, transition_tick_system,
+        ActiveTransition, CompletedTransitions, Easing, FrameTime, TransitionConfig,
     },
 };
 
@@ -44,7 +43,7 @@ fn config(duration: f32) -> TransitionConfig {
     TransitionConfig {
         duration,
         delay: 0.0,
-        easing: linear,
+        easing: Easing::Linear,
     }
 }
 
@@ -176,12 +175,12 @@ fn tick_lerps_quad_state_proportionally() {
 
 #[test]
 fn tick_easing_changes_lerp_output() {
-    // Same setup twice, different easing. At t=0.5, ease_in_quad gives 0.25
+    // Same setup twice, different easing. At t=0.5, EaseInQuad gives 0.25
     // so the lerped position.x should be 0.25 * 200 = 50, not 100.
     let cfg = TransitionConfig {
         duration: 1.0,
         delay: 0.0,
-        easing: ease_in_quad,
+        easing: Easing::EaseInQuad,
     };
 
     let mut world = make_world();
@@ -209,7 +208,7 @@ fn tick_with_delay_burns_delay_before_advancing_elapsed() {
     let cfg = TransitionConfig {
         duration: 1.0,
         delay: 0.5,
-        easing: linear,
+        easing: Easing::Linear,
     };
     let mut world = make_world();
     let entity = world
@@ -561,7 +560,7 @@ fn a_delayed_transition_sits_at_its_from_state_for_the_whole_delay() {
     let cfg = TransitionConfig {
         duration: 1.0,
         delay: 0.5,
-        easing: linear,
+        easing: Easing::Linear,
     };
     let mut world = make_world();
 

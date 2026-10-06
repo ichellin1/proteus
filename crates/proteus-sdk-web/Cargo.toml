@@ -24,3 +24,7 @@ wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
+# Tests deserialize DTOs from JSON, the shape JavaScript sends.
+serde_json = { workspace = true }

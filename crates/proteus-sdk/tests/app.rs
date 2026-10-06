@@ -24,7 +24,7 @@ fn cfg(duration: f32) -> TransitionConfig {
     TransitionConfig {
         duration,
         delay: 0.0,
-        easing: proteus_sdk::linear,
+        easing: proteus_sdk::Easing::Linear,
     }
 }
 
@@ -1297,7 +1297,7 @@ fn split_to_with_behavior_staggers_each_target() {
             |i, _total| TransitionConfig {
                 duration: 0.1,
                 delay: i as f32 * 0.1,
-                easing: proteus_sdk::linear,
+                easing: proteus_sdk::Easing::Linear,
             },
         )
         .unwrap();
@@ -1365,7 +1365,7 @@ fn merge_from_with_behavior_staggers_each_source() {
         |i, _total| TransitionConfig {
             duration: 0.1,
             delay: i as f32 * 0.1,
-            easing: proteus_sdk::linear,
+            easing: proteus_sdk::Easing::Linear,
         },
     )
     .unwrap();
