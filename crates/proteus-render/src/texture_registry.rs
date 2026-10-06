@@ -978,6 +978,13 @@ mod tests {
         }
         // The pool's page count never grew to accommodate this — it's still exactly 2.
         assert_eq!(reg.page_count(), 2);
+        // And what's resident never exceeds what two 128-pixel pages can hold:
+        // 16 tiles of 32 × 32 each, fewer on page 0, which reserves its origin.
+        assert!(
+            reg.resident_static_count() <= 32,
+            "resident set should stay bounded by the pool, got {}",
+            reg.resident_static_count()
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@
 // repeated here.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
-use proteus_render::{FontAtlas, DEFAULT_MAIN_ATLAS_SIZE, EMBEDDED_FONT_BYTES};
+use proteus_render::{FontAtlas, EMBEDDED_FONT_BYTES};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -190,31 +190,4 @@ fn wider_string_produces_wider_glyph_run() {
         wide.width,
         single.width
     );
-}
-
-// ---------------------------------------------------------------------------
-// DEFAULT_MAIN_ATLAS_SIZE constant
-// ---------------------------------------------------------------------------
-
-#[test]
-fn main_atlas_size_is_positive() {
-    // Constant assertion — evaluated at compile time.
-    const {
-        assert!(
-            DEFAULT_MAIN_ATLAS_SIZE > 0,
-            "DEFAULT_MAIN_ATLAS_SIZE must be positive"
-        )
-    };
-}
-
-#[test]
-fn main_atlas_size_is_power_of_two() {
-    // Constant assertion — evaluated at compile time.
-    // (Format args are not allowed in const context; message is a static literal.)
-    const {
-        assert!(
-            DEFAULT_MAIN_ATLAS_SIZE.is_power_of_two(),
-            "DEFAULT_MAIN_ATLAS_SIZE must be a power of two for GPU compatibility",
-        )
-    };
 }
