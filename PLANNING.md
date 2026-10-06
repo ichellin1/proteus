@@ -4268,61 +4268,12 @@ Proteus panics.
 Bugs an app author could hit, and test gaps a reviewer would ask about. Each fix comes with a
 test that fails without it.
 
-- [ ] C-10 — a texture from `load_texture` / `bake_texture` can be evicted before it is attached.
-- [ ] C-12 — dispatching a pointer event from inside the web `update` callback panics.
-- [ ] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
-- [ ] C-15 — a baked component with its own text draws that text twice.
-- [ ] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
-- [ ] C-18 — native fetches have no timeout, so a hung request pins a thread.
-- [ ] The web host delivers a cancelled fetch if it finished before `cancel_fetch` was called:
-  `PreloadedHostServices` checks for cancellation only when a fetch finishes, so a result
-  already queued is still returned by the next `poll_fetches`, and its ID stays in the
-  `cancelled` set for good. `cancel_fetch` drops any queued result with that ID, so the
-  documented contract holds ("after this call, `poll_fetches` never returns its result"). With
-  a test, then remove the `DOC-REVIEW` note on `HostServices::cancel_fetch`.
-- [ ] C-14 — confirm A-01 fixed it and a test covers it, then close.
-- [ ] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
-- [ ] T-04 — tests for the `desktop()` and `constrained()` config presets and for
-  `validate_render_config`.
-- [ ] An `on_dropped` handler that destroys its own signal leaves that signal's handlers
-  registered: `fire_dropped` puts them back without checking that the signal still exists, and
-  they fire again if the stale handle is used. Give it the same check `fire` has, with a test.
-- [ ] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
-  existing handlers for the same event. Keep registration order, or document the order.
-- [ ] Replace `Handle::center_crop_to_square` (and TypeScript `centerCropToSquare`) with a
-  general `crop_image(ImageCrop)`. `center_crop_to_square` compounds when called twice, because
-  it crops the current crop window, and a crop can't be undone. `ImageCrop` always crops from the
-  full image. Variants: `None` (whole image), `CenteredSquare`, `Aspect { ratio, anchor }` (the
-  largest region with that width-to-height ratio, placed by `anchor`) and `Rect` (an explicit
-  region in fractions of the image). No other presets, and not `#[non_exhaustive]`: a new
-  variant needs a real, recurring use that `Aspect` or `Rect` can't express well. Both callers
-  (the demo's gallery tiles and `examples/gallery`) move to it.
-- [ ] Make disabled and non-interactive genuinely different. Today both drop the component from
-  hit-testing, so both are click-through and differ only in that disabled has a look. Decided:
-  - **Non-interactive** (`set_interactive(false)`, `non_interactive()`): the component is not
-    there for input. It has no look of its own, and input goes to whatever is behind it. For
-    things that are never controls, such as backgrounds and labels.
-  - **Disabled** (`set_disabled`, `start_disabled`): the component is there but inert. It still
-    blocks input from reaching what is behind it, fires no events, and shows its disabled style.
-    For a control that is temporarily unavailable, as a disabled control behaves on the web.
+Split into 5a–5e, each finished, reviewed and committed before the next.
 
-  In `hit_test_system`, a disabled component can be the topmost hit, and then no events are
-  emitted. Tested both ways (a disabled component over a clickable one absorbs the click; a
-  non-interactive one passes it through). Update the Rust and TypeScript docs of all four
-  methods and `input.rs`'s module doc to state the difference.
-- [ ] Mark `InteractionStateKind` `#[non_exhaustive]`. Apps read it through `ComponentData.state`,
-  and keyboard navigation (V2) will likely add a keyboard-focus state, which would otherwise
-  break any app that matches on all five. Matches inside `proteus-ui` stay exhaustive. The
-  TypeScript `InteractionState` union can't be marked, so its doc says more states may be added
-  and an exhaustive `switch` should keep a default case.
-- [ ] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
-  disabled style animates through an ordinary `TransitionRequest` (`interaction_style_system`),
-  and its completion is recorded like any other, so a component with a hover style reports a
-  "completed transition" every time the pointer moves onto or off it. A once-only completion
-  helper, like `examples/gallery`'s `afterTransition`, attached to such a component would run on
-  a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
-  a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
-  TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
+##### Step 5a — API renames and shape
+
+Breaking but mostly mechanical, so it goes first: every later fix then uses the final names.
+
 - [ ] Rename signals to transition channels, in Rust and TypeScript, so "signal" is free for
   reactive state later (Post-Release). A Proteus signal is only a named channel for 1→1
   transitions, while front-end developers expect a signal to be reactive state. Public:
@@ -4359,6 +4310,11 @@ test that fails without it.
   `allow_pointer` (TypeScript `allowPointer`), so each kind of input gets its own field
   alongside `allow_navigation` as more are supported, and developers choose per kind. Docs,
   tests and the demo updated to match.
+- [ ] Mark `InteractionStateKind` `#[non_exhaustive]`. Apps read it through `ComponentData.state`,
+  and keyboard navigation (V2) will likely add a keyboard-focus state, which would otherwise
+  break any app that matches on all five. Matches inside `proteus-ui` stay exhaustive. The
+  TypeScript `InteractionState` union can't be marked, so its doc says more states may be added
+  and an exhaustive `switch` should keep a default case.
 - [ ] Drop `remove_child`'s `destroy` flag, in Rust and TypeScript. `destroy: true` does exactly
   what `Handle::destroy` does, and a bare `true` or `false` at the call site hides whether the
   child is kept or destroyed, which is easy to miss in review. `remove_child(child)` only
@@ -4370,50 +4326,63 @@ test that fails without it.
   `list_b` and reports success. Fail instead when `child` has a different parent or none,
   probably with a new `HandleError` variant (decided at the step). Rust and TypeScript, with a
   test. Do it together with dropping the `destroy` flag, since both change the same method.
-- [ ] `free_resources` doesn't stay freed for text or images, and is the only way to change a
-  component's text. It removes a component's baked result and its texture references, but leaves
-  the `Text` or `Image` in place, so the host bakes it again on the next frame and takes new
-  atlas space. The demo relies on this to update a label (`proteus-demo`, `lib.rs` around line
-  2659: edit `Text` through `world_mut()`, then `free_resources`). Also check what it does to a
-  component made with `.bake()`, which keeps its bake flag after its children were destroyed by
-  the first bake. Likely fix: `set_text` / `set_image` to replace content (the host bakes the
-  new version), and a `free_resources` that removes the content too, so nothing is re-baked. In
-  Rust and TypeScript, with tests, and the demo moved off `world_mut()`. Update the docs, which
-  must also say that releasing references doesn't free atlas space immediately: a texture with
-  no references becomes available for reuse, the atlas reclaims it when it needs room, and
-  `eternal` textures are never reclaimed.
-- [ ] A component keeps only one texture reference, so a second texture can be reclaimed while
-  it is still drawn. Baked text, an image and baked content (`.bake()`) each insert the same
-  `TextureRef` (`proteus-runtime/src/bake.rs` for text and images, `proteus-ui/src/bake.rs` for
-  baked content), and `Handle::set_texture` inserts it too. On a component with both text and an
-  image, the atlas treats one of the two as unreferenced; under memory pressure it can be
-  reclaimed and reused, and the component then draws another texture's pixels. The demo avoids it
-  only by putting text on child components. Fix: one reference per texture kind, not per
-  component. Test: a component with text and an image, then allocation pressure, keeps both.
+- [ ] Replace `Handle::center_crop_to_square` (and TypeScript `centerCropToSquare`) with a
+  general `crop_image(ImageCrop)`. `center_crop_to_square` compounds when called twice, because
+  it crops the current crop window, and a crop can't be undone. `ImageCrop` always crops from the
+  full image. Variants: `None` (whole image), `CenteredSquare`, `Aspect { ratio, anchor }` (the
+  largest region with that width-to-height ratio, placed by `anchor`) and `Rect` (an explicit
+  region in fractions of the image). No other presets, and not `#[non_exhaustive]`: a new
+  variant needs a real, recurring use that `Aspect` or `Rect` can't express well. Both callers
+  (the demo's gallery tiles and `examples/gallery`) move to it.
+- [ ] One text rasterizer: rename `FontAtlas::rasterize_text_tracked` to `rasterize_text` and
+  remove the old `rasterize_text`, which only tests call (the renderer's text bake already uses
+  the tracked version). Tests pass `0.0` for letter spacing. The V2 text work will likely
+  deprecate this interface, so this leaves one function to deprecate rather than two.
+
+##### Step 5b — Input and events
+
+- [ ] Make disabled and non-interactive genuinely different. Today both drop the component from
+  hit-testing, so both are click-through and differ only in that disabled has a look. Decided:
+  - **Non-interactive** (`set_interactive(false)`, `non_interactive()`): the component is not
+    there for input. It has no look of its own, and input goes to whatever is behind it. For
+    things that are never controls, such as backgrounds and labels.
+  - **Disabled** (`set_disabled`, `start_disabled`): the component is there but inert. It still
+    blocks input from reaching what is behind it, fires no events, and shows its disabled style.
+    For a control that is temporarily unavailable, as a disabled control behaves on the web.
+
+  In `hit_test_system`, a disabled component can be the topmost hit, and then no events are
+  emitted. Tested both ways (a disabled component over a clickable one absorbs the click; a
+  non-interactive one passes it through). Update the Rust and TypeScript docs of all four
+  methods and `input.rs`'s module doc to state the difference.
 - [ ] `non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps` (`proteus-sdk`
   tests) no longer tests anything: the backdrop is created before the button, so the button is
   drawn on top and wins the click with or without `non_interactive()`. Create the backdrop after
   the button, check the test fails without `non_interactive()` (confirmed: it does), and replace
   its comment with "A full-window backdrop drawn over the button. Without `non_interactive()` it
   would take the click."
+- [ ] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
+  disabled style animates through an ordinary `TransitionRequest` (`interaction_style_system`),
+  and its completion is recorded like any other, so a component with a hover style reports a
+  "completed transition" every time the pointer moves onto or off it. A once-only completion
+  helper, like `examples/gallery`'s `afterTransition`, attached to such a component would run on
+  a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
+  a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
+  TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
+- [ ] An `on_dropped` handler that destroys its own signal leaves that signal's handlers
+  registered: `fire_dropped` puts them back without checking that the signal still exists, and
+  they fire again if the stale handle is used. Give it the same check `fire` has, with a test.
+- [ ] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
+  existing handlers for the same event. Keep registration order, or document the order.
 - [ ] `SignalHandle::set` on a destroyed signal is silent: the request is dropped with
   `SignalNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
   would have heard it. A `Handle` method on a destroyed component logs a warning; make `set` do
   the same, checking at call time that the signal exists. Rust and TypeScript, with a test, and
   `SignalHandle::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
-- [ ] A font that can't be parsed doesn't crash the app. Today `FontAtlas::new` panics on bytes
-  that aren't a valid TTF or OTF font, so a bad `ProteusConfig.text.default_font` (downloaded, or
-  a user's file) crashes the app at startup. Three layers:
-  - `FontAtlas::new` returns a `Result` instead of panicking.
-  - The app can handle the error: the font is parsed when the config is built (for example
-    `FontSource::from_bytes(bytes)` returning a `Result`), so the failure surfaces in the app's
-    own code.
-  - As a failsafe, a font that still fails in `Renderer::new` is logged as an error, and the
-    embedded font is used instead.
+- [ ] C-12 — dispatching a pointer event from inside the web `update` callback panics.
+- [ ] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
 
-  TypeScript apps can choose a font too: the config object gets a font setting, and `mount`
-  throws a clear error for a font that can't be parsed, as it does for invalid atlas settings.
-  Tested in both languages.
+##### Step 5c — Rendering and textures
+
 - [ ] A component's opacity fades its border, drop shadow and glow too. Today `quad.wgsl`
   multiplies `in.opacity` into the fill's alpha only, so `set_opacity(0.0)`, or a fading parent,
   leaves the border, shadow and glow at full strength (confirmed on the GPU: at opacity 0 the
@@ -4454,32 +4423,46 @@ test that fails without it.
     doc's claim that a failed registration is logged (W-44).
   - Tests: an oversized request evicts nothing; too-wide text bakes clipped to the page width;
     an oversized image is scaled to fit; an oversized `.bake()` component is drawn unbaked.
-- [ ] Bake at the display's resolution. Nothing that draws into a texture reads the scale factor:
-  text is rasterized at `size_px` logical pixels, and baked components (`.bake()`) and split and
-  merge snapshots get atlas regions of their logical size. On a 2× display each texel covers
-  2×2 screen pixels, so text and baked content are slightly soft next to native text (confirmed
-  on a Retina display). Fix:
-  - Rasterize text at `size_px × scale_factor`, and size component and transition bakes the
-    same way; keep drawing them at their logical size, so layout doesn't change.
-  - When the scale factor changes (a window moved to another display), bake text and
-    components again.
-  - It costs up to 4× the atlas space for that content on a 2× display, which matters most on
-    the web's 2048-pixel pages. Whether a config setting caps the bake scale for memory-tight
-    apps is decided at the step.
-  - Test: on a scale-2 viewport, a text bake's pixel size is twice its logical size, and it is
-    drawn at its logical size.
-- [ ] One text rasterizer: rename `FontAtlas::rasterize_text_tracked` to `rasterize_text` and
-  remove the old `rasterize_text`, which only tests call (the renderer's text bake already uses
-  the tracked version). Tests pass `0.0` for letter spacing. The V2 text work will likely
-  deprecate this interface, so this leaves one function to deprecate rather than two.
-- [ ] A transition's `duration` of 0 means instant, and no duration panics. Today
-  `ActiveTransition::new` debug-asserts `duration > 0.0`, so 0 (a natural "snap there", or the
-  first step of a stagger) panics in debug builds, and release builds clamp it to 0.1 ms. New
-  rule: 0 completes on the next tick with no warning; a negative or NaN duration logs a warning
-  and is treated as 0. Never a panic. Update `TransitionConfig::duration`'s doc and
-  TypeScript's to "0 means instant; a negative or NaN duration logs a warning and is treated as
-  0", remove `ActiveTransition::new`'s `# Panics` section, and update the test that relies on
-  the clamp. Tests: 0, a negative value and NaN each complete on the next tick, without a panic.
+- [ ] A component keeps only one texture reference, so a second texture can be reclaimed while
+  it is still drawn. Baked text, an image and baked content (`.bake()`) each insert the same
+  `TextureRef` (`proteus-runtime/src/bake.rs` for text and images, `proteus-ui/src/bake.rs` for
+  baked content), and `Handle::set_texture` inserts it too. On a component with both text and an
+  image, the atlas treats one of the two as unreferenced; under memory pressure it can be
+  reclaimed and reused, and the component then draws another texture's pixels. The demo avoids it
+  only by putting text on child components. Fix: one reference per texture kind, not per
+  component. Test: a component with text and an image, then allocation pressure, keeps both.
+- [ ] `free_resources` doesn't stay freed for text or images, and is the only way to change a
+  component's text. It removes a component's baked result and its texture references, but leaves
+  the `Text` or `Image` in place, so the host bakes it again on the next frame and takes new
+  atlas space. The demo relies on this to update a label (`proteus-demo`, `lib.rs` around line
+  2659: edit `Text` through `world_mut()`, then `free_resources`). Also check what it does to a
+  component made with `.bake()`, which keeps its bake flag after its children were destroyed by
+  the first bake. Likely fix: `set_text` / `set_image` to replace content (the host bakes the
+  new version), and a `free_resources` that removes the content too, so nothing is re-baked. In
+  Rust and TypeScript, with tests, and the demo moved off `world_mut()`. Update the docs, which
+  must also say that releasing references doesn't free atlas space immediately: a texture with
+  no references becomes available for reuse, the atlas reclaims it when it needs room, and
+  `eternal` textures are never reclaimed.
+- [ ] C-10 — a texture from `load_texture` / `bake_texture` can be evicted before it is attached.
+- [ ] C-15 — a baked component with its own text draws that text twice.
+- [ ] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
+- [ ] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
+
+##### Step 5d — Config, loading and robustness
+
+- [ ] A font that can't be parsed doesn't crash the app. Today `FontAtlas::new` panics on bytes
+  that aren't a valid TTF or OTF font, so a bad `ProteusConfig.text.default_font` (downloaded, or
+  a user's file) crashes the app at startup. Three layers:
+  - `FontAtlas::new` returns a `Result` instead of panicking.
+  - The app can handle the error: the font is parsed when the config is built (for example
+    `FontSource::from_bytes(bytes)` returning a `Result`), so the failure surfaces in the app's
+    own code.
+  - As a failsafe, a font that still fails in `Renderer::new` is logged as an error, and the
+    embedded font is used instead.
+
+  TypeScript apps can choose a font too: the config object gets a font setting, and `mount`
+  throws a clear error for a font that can't be parsed, as it does for invalid atlas settings.
+  Tested in both languages.
 - [ ] Catch an atlas or instance-buffer setting that doesn't fit the host before the app runs.
   Natively, the limits checked are the ones `proteus-host-winit` requests (`Limits::default()`),
   so a config fails the same way on every machine; weaker hardware that can't provide them
@@ -4501,6 +4484,29 @@ test that fails without it.
     `Limits::default()`. Done together with T-04.
   - **Docs:** each host states which limits it requests, and `ProteusConfig`'s docs say which
     presets fit which host.
+- [ ] T-04 — tests for the `desktop()` and `constrained()` config presets and for
+  `validate_render_config`.
+- [ ] A transition's `duration` of 0 means instant, and no duration panics. Today
+  `ActiveTransition::new` debug-asserts `duration > 0.0`, so 0 (a natural "snap there", or the
+  first step of a stagger) panics in debug builds, and release builds clamp it to 0.1 ms. New
+  rule: 0 completes on the next tick with no warning; a negative or NaN duration logs a warning
+  and is treated as 0. Never a panic. Update `TransitionConfig::duration`'s doc and
+  TypeScript's to "0 means instant; a negative or NaN duration logs a warning and is treated as
+  0", remove `ActiveTransition::new`'s `# Panics` section, and update the test that relies on
+  the clamp. Tests: 0, a negative value and NaN each complete on the next tick, without a panic.
+- [ ] C-18 — native fetches have no timeout, so a hung request pins a thread.
+- [ ] The web host delivers a cancelled fetch if it finished before `cancel_fetch` was called:
+  `PreloadedHostServices` checks for cancellation only when a fetch finishes, so a result
+  already queued is still returned by the next `poll_fetches`, and its ID stays in the
+  `cancelled` set for good. `cancel_fetch` drops any queued result with that ID, so the
+  documented contract holds ("after this call, `poll_fetches` never returns its result"). With
+  a test, then remove the `DOC-REVIEW` note on `HostServices::cancel_fetch`.
+- [ ] C-14 — confirm A-01 fixed it and a test covers it, then close.
+
+##### Step 5e — Video, demo and shells
+
+Last, since it changes both shells and the demo.
+
 - [ ] The demo owns its own settings and asset list; the shells pass in only what is
   per-platform. Today both shells carry identical copies of the demo's `CLEAR_COLOR` and
   `IMAGE_MAX_SIDE`, and the web shell's `asset_keys()` is a hand-kept copy of every image
@@ -4719,6 +4725,20 @@ not V1.**
   it already knows, but two cases happen as side effects: destroying a parent destroys its
   children, and destroying a component destroys the signals it owns. An app holding those handles
   is never told.
+- Bake at the display's resolution (moved from M14 step 5). Nothing that draws into a texture reads the scale factor:
+  text is rasterized at `size_px` logical pixels, and baked components (`.bake()`) and split and
+  merge snapshots get atlas regions of their logical size. On a 2× display each texel covers
+  2×2 screen pixels, so text and baked content are slightly soft next to native text (confirmed
+  on a Retina display). Fix:
+  - Rasterize text at `size_px × scale_factor`, and size component and transition bakes the
+    same way; keep drawing them at their logical size, so layout doesn't change.
+  - When the scale factor changes (a window moved to another display), bake text and
+    components again.
+  - It costs up to 4× the atlas space for that content on a 2× display, which matters most on
+    the web's 2048-pixel pages. Whether a config setting caps the bake scale for memory-tight
+    apps is decided at the step.
+  - Test: on a scale-2 viewport, a text bake's pixel size is twice its logical size, and it is
+    drawn at its logical size.
 - Signals: reactive state that notifies its observers when its value changes, the observer
   pattern front-end developers know from SolidJS, Preact, Angular and Leptos. The name is free
   for this once M14 renames today's 1→1 transition signals to transition channels (step 5).
