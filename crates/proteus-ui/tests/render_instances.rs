@@ -484,12 +484,7 @@ fn video_player_with_glow_has_atlas_page_and_glow_params() {
 // the two components' UVs point at different atlases.
 #[test]
 fn video_player_takes_priority_over_baked_image() {
-    let baked_image = BakedImage {
-        uv_offset: [0.4, 0.5],
-        uv_scale: [0.2, 0.3],
-        page: 0,
-        pixel_size: [400.0, 600.0],
-    };
+    let baked_image = BakedImage::new([0.4, 0.5], [0.2, 0.3], 0, [400.0, 600.0]);
 
     let mut world = World::new();
     world.spawn((sky_blue_button(), baked_image, VideoPlayer));
@@ -518,12 +513,7 @@ fn video_player_takes_priority_over_baked_image() {
 // ---------------------------------------------------------------------------
 
 fn crossfade_baked_image() -> BakedImage {
-    BakedImage {
-        uv_offset: [0.4, 0.5],
-        uv_scale: [0.2, 0.3],
-        page: 0,
-        pixel_size: [400.0, 600.0],
-    }
+    BakedImage::new([0.4, 0.5], [0.2, 0.3], 0, [400.0, 600.0])
 }
 
 // `video_t = 0.0` shows the base image fully — same UV/atlas_page as if
@@ -911,12 +901,7 @@ fn baked_texture_not_on_text_overlay() {
 // ---------------------------------------------------------------------------
 
 fn baked_image() -> BakedImage {
-    BakedImage {
-        uv_offset: [0.4, 0.5],
-        uv_scale: [0.2, 0.3],
-        page: 0,
-        pixel_size: [400.0, 600.0],
-    }
+    BakedImage::new([0.4, 0.5], [0.2, 0.3], 0, [400.0, 600.0])
 }
 
 // `BakedImage` routes to the background instance's UV, staying on
@@ -941,12 +926,7 @@ fn baked_image_on_a_nonzero_page_packs_the_page_into_atlas_page() {
     let mut world = World::new();
     world.spawn((
         sky_blue_button(),
-        BakedImage {
-            uv_offset: [0.4, 0.5],
-            uv_scale: [0.2, 0.3],
-            page: 3,
-            pixel_size: [400.0, 600.0],
-        },
+        BakedImage::new([0.4, 0.5], [0.2, 0.3], 3, [400.0, 600.0]),
     ));
 
     let instances = collect_instances(&mut world);

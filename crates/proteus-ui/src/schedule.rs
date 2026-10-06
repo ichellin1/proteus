@@ -8,7 +8,7 @@
 //! input                hit-test the pointer and record input events
 //! interaction_style    start style transitions for hover, press, focus and disabled
 //! navigation           keyboard focus movement (placeholder, does nothing yet)
-//! signal_dispatch      turn signal requests into transition requests
+//! channel_dispatch      turn channel requests into transition requests
 //! transition_setup     start requested transitions, including splits and merges
 //! transition_tick      advance transitions and interpolate geometry
 //! transition_complete  finish transitions that have reached the end
@@ -25,12 +25,12 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ApplyDeferred;
 
 use crate::bake::bake_system;
+use crate::channel::{self, channel_dispatch_system, register_channel_hooks};
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{
     hit_test_system, FocusState, HoveredEntity, InteractionEvents, PointerInput, PressedEntity,
 };
 use crate::interaction::interaction_style_system;
-use crate::signal::{self, register_signal_hooks, signal_dispatch_system};
 use crate::spawn_order::register_spawn_order_hooks;
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
@@ -61,8 +61,8 @@ pub enum ProteusSet {
     InteractionStyle,
     /// Keyboard focus movement. A placeholder that does nothing yet.
     Navigation,
-    /// Turn pending `signal::set` calls into `TransitionRequest` components.
-    SignalDispatch,
+    /// Turn pending `channel::set` calls into `TransitionRequest` components.
+    ChannelDispatch,
     /// Convert `TransitionRequest` components into `ActiveTransition`.
     TransitionSetup,
     /// Advance `t`, lerp `QuadState`.
@@ -168,15 +168,15 @@ impl ProteusWorld {
         // A default, replaced with the configured size when a renderer is
         // created.
         world.init_resource::<TransitionAtlasSize>();
-        signal::init_resources(&mut world);
+        channel::init_resources(&mut world);
 
         // Component hooks must be registered before any entity has the
         // component, or bevy_ecs panics, so register them all here:
         // `TextureRef` reference counting, removing a component's owned
-        // signals when it is destroyed, stamping `SpawnOrder`, and returning
+        // channels when it is destroyed, stamping `SpawnOrder`, and returning
         // transition-atlas space when its owner goes away.
         register_texture_ref_hooks(&mut world);
-        register_signal_hooks(&mut world);
+        register_channel_hooks(&mut world);
         register_spawn_order_hooks(&mut world);
         register_transition_alloc_hooks(&mut world);
 
@@ -231,7 +231,7 @@ pub fn build_schedule() -> Schedule {
             ProteusSet::Input,
             ProteusSet::InteractionStyle,
             ProteusSet::Navigation,
-            ProteusSet::SignalDispatch,
+            ProteusSet::ChannelDispatch,
             ProteusSet::TransitionSetup,
             ProteusSet::TransitionTick,
             ProteusSet::TransitionComplete,
@@ -257,7 +257,7 @@ pub fn build_schedule() -> Schedule {
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     schedule.add_systems(interaction_style_system.in_set(ProteusSet::InteractionStyle));
     schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
-    schedule.add_systems(signal_dispatch_system.in_set(ProteusSet::SignalDispatch));
+    schedule.add_systems(channel_dispatch_system.in_set(ProteusSet::ChannelDispatch));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
 
     // bake_system writes through Commands, so BakeFlush applies them before

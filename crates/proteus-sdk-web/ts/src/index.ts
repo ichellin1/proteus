@@ -3,7 +3,7 @@
  * between them.
  *
  * Start with {@link mount}, which runs an app on a `<canvas>`. Each handle
- * ({@link Handle}, {@link SignalHandle}, {@link TextureHandle}) keeps a
+ * ({@link Handle}, {@link TransitionChannel}, {@link TextureHandle}) keeps a
  * reference to the {@link ProteusApp} it came from, so its methods are called
  * directly: `button.onClick(() => ...)`.
  *
@@ -13,11 +13,12 @@
 import {
   Handle as WasmHandle,
   ProteusApp as WasmApp,
-  SignalHandle as WasmSignalHandle,
+  TransitionChannel as WasmTransitionChannel,
   TextureHandle as WasmTextureHandle,
 } from "../pkg/proteus_sdk_web.js";
 
 import type {
+  ImageCrop,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
@@ -26,7 +27,7 @@ import type {
   SplitStrategy,
   TextureRequest,
   TextureState,
-  TransitioningConfig,
+  TransitionInteractionConfig,
   TransitionConfig,
   TransitionDropped,
   Vec2,
@@ -43,7 +44,7 @@ export type PlainCallback = () => void;
  * frame, in world units (x right, y up).
  */
 export type DragCallback = (delta: { x: number; y: number }) => void;
-/** {@link SignalHandle.onDropped}'s callback: the request that couldn't run, and why. */
+/** {@link TransitionChannel.onDropped}'s callback: the request that couldn't run, and why. */
 export type DroppedCallback = (dropped: TransitionDropped) => void;
 
 // ---------------------------------------------------------------------------
@@ -94,9 +95,9 @@ export class Handle {
    * Every transition reports its completion once, on one component:
    *
    * - {@link Handle.animateTo}: this component.
-   * - {@link SignalHandle.set}: the `to` component.
+   * - {@link TransitionChannel.set}: the `to` component.
    * - {@link Handle.splitTo} or {@link Handle.splitToWithStates} with
-   *   `"slice"` or `"gridSlice"`: the source, once every target has arrived.
+   *   `"row"`, `"column"` or `"grid"`: the source, once every target has arrived.
    * - {@link Handle.splitTo} or {@link Handle.splitToWithStates} with
    *   `"perTarget"`: each target, separately. The source has no transition of
    *   its own; it is hidden as soon as the split starts.
@@ -166,22 +167,24 @@ export class Handle {
   }
 
   /**
-   * Removes `child` from this component.
+   * Detaches `child` from this component. The child is kept, as a top-level
+   * component; to destroy it instead, call {@link Handle.destroy} on it.
    *
-   * If `destroy` is `true`, the child is also destroyed, exactly as by
-   * {@link Handle.destroy}. Otherwise it is kept as a top-level component. Its
-   * geometry is then no longer relative to this component, so it moves on
-   * screen unless you update its geometry as well.
+   * A detached child may move on screen: its geometry was relative to this
+   * component, and is now relative to the world.
+   *
+   * Throws if either component no longer exists, or if `child` isn't a child
+   * of this component.
    */
-  removeChild(child: Handle, destroy = false): void {
-    this.app.wasmApp.removeChild(this.wasmHandle, child.wasmHandle, destroy);
+  removeChild(child: Handle): void {
+    this.app.wasmApp.removeChild(this.wasmHandle, child.wasmHandle);
   }
 
   /**
    * Splits this component into `targets`: a 1→N transition.
    *
    * Each target ends at its own declared geometry. This component is hidden
-   * as soon as the split starts. With `"slice"` and `"gridSlice"`, slices of
+   * as soon as the split starts. With `"row"`, `"column"` and `"grid"`, slices of
    * this component move into place and the targets appear when they arrive;
    * with `"perTarget"`, the targets themselves move. The transition starts on
    * the next tick.
@@ -240,7 +243,7 @@ export class Handle {
 
   /**
    * Destroys this component and its children, along with their callbacks and
-   * the signals they own.
+   * the channels they own.
    *
    * @throws if it was already destroyed. Safe to ignore, but reported so that
    * destroying twice is visible.
@@ -305,7 +308,7 @@ export class Handle {
   /**
    * Transitions this component from its current geometry to `to`.
    *
-   * Unlike {@link SignalHandle.set}, only this component is involved, which
+   * Unlike {@link TransitionChannel.set}, only this component is involved, which
    * makes this a good fit for moving a component around repeatedly. Calling
    * it during a transition starts a new one from wherever the component is.
    * The transition starts on the next tick.
@@ -336,7 +339,7 @@ export class Handle {
   /**
    * The size in pixels of this component's baked image, or `undefined` if the
    * image hasn't been baked yet or the component has none. This is the full
-   * image size, even after {@link Handle.centerCropToSquare}.
+   * image size, even after {@link Handle.cropImage}.
    */
   bakedImageSize(): Vec2 | undefined {
     return this.app.wasmApp.bakedImageSize(this.wasmHandle) as
@@ -361,14 +364,24 @@ export class Handle {
   }
 
   /**
-   * Crops this component's baked image to a centered square. Returns `false`
-   * if it has no baked image yet.
+   * Shows only the part of this component's image that `crop` selects: for
+   * example `{ kind: "centeredSquare" }` to fill a square grid tile with an
+   * image of any shape.
    *
-   * Use it to fill square cells, such as grid tiles, with images of any shape.
-   * Only the visible region of the texture changes; no pixels are copied.
+   * The crop is always measured from the whole image, so calling it again
+   * replaces the crop rather than cropping the crop, and `{ kind: "none" }`
+   * shows the whole image again. Only the visible region changes: no pixels
+   * are copied. Returns `false`, and changes nothing, if the image hasn't been
+   * baked yet. Throws if `crop` isn't a valid {@link ImageCrop}.
+   *
+   * @example
+   * ```ts
+   * // A 16:9 view of the image, kept to its top edge.
+   * tile.cropImage({ kind: "aspect", ratio: 16 / 9, anchor: { x: 0.5, y: 0 } });
+   * ```
    */
-  centerCropToSquare(): boolean {
-    return this.app.wasmApp.centerCropToSquare(this.wasmHandle);
+  cropImage(crop: ImageCrop): boolean {
+    return this.app.wasmApp.cropImage(this.wasmHandle, crop);
   }
 
   /**
@@ -392,7 +405,7 @@ export class Handle {
    * Shows or hides this component and its children.
    *
    * A hidden component is neither drawn nor hit-tested.
-   * {@link SignalHandle.set} already hides the component it transitions from
+   * {@link TransitionChannel.set} already hides the component it transitions from
    * and shows the one it transitions to; use this for everything else.
    *
    * A hidden component stops being drawn on the next frame and stops receiving
@@ -432,8 +445,8 @@ export class Handle {
    * `undefined` restores the default, where a transitioning component ignores
    * input.
    */
-  setTransitioningConfig(config: TransitioningConfig | undefined): void {
-    this.app.wasmApp.setTransitioningConfig(this.wasmHandle, config ?? null);
+  setTransitionInteractionConfig(config: TransitionInteractionConfig | undefined): void {
+    this.app.wasmApp.setTransitionInteractionConfig(this.wasmHandle, config ?? null);
   }
 
   /**
@@ -451,19 +464,19 @@ export class Handle {
 }
 
 // ---------------------------------------------------------------------------
-// SignalHandle
+// TransitionChannel
 // ---------------------------------------------------------------------------
 
 /**
- * A signal, which transitions one component into another: see
- * {@link SignalHandle.set}.
+ * A transition channel, which transitions one component into another: see
+ * {@link TransitionChannel.set}.
  */
-export class SignalHandle {
-  /** Prefer {@link ProteusApp.signal} over calling this directly. */
+export class TransitionChannel {
+  /** Prefer {@link ProteusApp.transitionChannel} over calling this directly. */
   constructor(
     private readonly app: ProteusApp,
     /** @internal */
-    public readonly wasmHandle: WasmSignalHandle,
+    public readonly wasmHandle: WasmTransitionChannel,
   ) {}
 
   /**
@@ -474,11 +487,11 @@ export class SignalHandle {
    * the request is dropped unless `interruptible` is set; then a new
    * transition starts from wherever `to` is. The transition starts on the
    * next tick. A request that can't run is reported to
-   * {@link SignalHandle.onDropped}.
+   * {@link TransitionChannel.onDropped}.
    *
    * @example
    * ```ts
-   * const open = app.signal();
+   * const open = app.transitionChannel();
    * button.onClick(() => open.set(panel, button, { duration: 0.4 }));
    * ```
    */
@@ -488,7 +501,7 @@ export class SignalHandle {
     config: TransitionConfig,
     interruptible = false,
   ): void {
-    this.app.wasmApp.signalSet(
+    this.app.wasmApp.channelSet(
       this.wasmHandle,
       to.wasmHandle,
       from.wasmHandle,
@@ -498,16 +511,16 @@ export class SignalHandle {
   }
 
   /**
-   * Calls `cb` with the reason each time a {@link SignalHandle.set} request on
-   * this signal can't run. See {@link DropReason}.
+   * Calls `cb` with the reason each time a {@link TransitionChannel.set} request on
+   * this channel can't run. See {@link DropReason}.
    */
   onDropped(cb: DroppedCallback): void {
     this.app.wasmApp.onDropped(this.wasmHandle, cb);
   }
 
-  /** Destroys this signal and its `onDropped` handlers. Later `set` calls do nothing. */
+  /** Destroys this channel and its `onDropped` handlers. Later `set` calls do nothing. */
   destroy(): void {
-    this.app.wasmApp.signalDestroy(this.wasmHandle);
+    this.app.wasmApp.channelDestroy(this.wasmHandle);
   }
 }
 
@@ -549,7 +562,7 @@ export class TextureHandle {
 // ---------------------------------------------------------------------------
 
 /**
- * An app's components, signals and callbacks.
+ * An app's components, channels and callbacks.
  *
  * {@link mount} creates one and passes it to your `setup` function; that is the
  * usual way to get one. `new ProteusApp()` creates a standalone app that draws
@@ -585,14 +598,14 @@ export class ProteusApp {
   }
 
   /**
-   * Creates a signal, which transitions one component into another with
-   * {@link SignalHandle.set}. If `owner` is given, the signal is destroyed
-   * along with it.
+   * Creates a transition channel, which transitions one component into
+   * another with {@link TransitionChannel.set}. If `owner` is given, the
+   * channel is destroyed along with it.
    */
-  signal(owner?: Handle): SignalHandle {
+  transitionChannel(owner?: Handle): TransitionChannel {
     // The bridge takes the owner's ID rather than its handle object, which
     // it would otherwise consume.
-    return new SignalHandle(this, this.wasmApp.signal(owner?.id()));
+    return new TransitionChannel(this, this.wasmApp.transitionChannel(owner?.id()));
   }
 
   /** Returns a {@link TextureHandle} for a texture ID. The same as {@link ProteusApp.textureFromId}. */

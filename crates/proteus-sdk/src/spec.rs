@@ -1,7 +1,7 @@
 //! [`ComponentSpec`], the builder passed to [`Proteus::component`](crate::Proteus::component).
 
 use proteus_ui::{
-    Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text, TransitioningConfig,
+    Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text, TransitionInteractionConfig,
 };
 
 use crate::handle::Handle;
@@ -54,7 +54,7 @@ pub struct ComponentSpec {
     pub(crate) visible: bool,
     pub(crate) opacity: Option<f32>,
     pub(crate) start_disabled: bool,
-    pub(crate) transitioning: Option<TransitioningConfig>,
+    pub(crate) transition_interaction: Option<TransitionInteractionConfig>,
 }
 
 impl Default for ComponentSpec {
@@ -77,7 +77,7 @@ impl Default for ComponentSpec {
             visible: true,
             opacity: None,
             start_disabled: false,
-            transitioning: None,
+            transition_interaction: None,
         }
     }
 }
@@ -126,15 +126,15 @@ impl ComponentSpec {
     /// Without this, a transitioning component ignores input.
     /// `allow_navigation` is not read yet; it is reserved for keyboard
     /// navigation.
-    pub fn transitioning(mut self, config: TransitioningConfig) -> Self {
-        self.transitioning = Some(config);
+    pub fn transition_interaction(mut self, config: TransitionInteractionConfig) -> Self {
+        self.transition_interaction = Some(config);
         self
     }
 
     /// Sets whether the component starts visible. Defaults to `true`.
     ///
     /// A hidden component is neither drawn nor hit-tested. A transition into
-    /// it through [`SignalHandle::set`](crate::SignalHandle::set) reveals it, so a component that
+    /// it through [`TransitionChannel::set`](crate::TransitionChannel::set) reveals it, so a component that
     /// should first appear through a transition can start hidden.
     pub fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;

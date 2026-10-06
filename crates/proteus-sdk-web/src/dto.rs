@@ -284,7 +284,7 @@ pub struct ComponentSpecDto {
     #[serde(default)]
     pub start_disabled: bool,
     #[serde(default)]
-    pub transitioning: Option<TransitioningConfigDto>,
+    pub transition_interaction: Option<TransitionInteractionConfigDto>,
 }
 
 /// `{ maxSide?, eternal? }`: how to add a texture to the atlas.
@@ -311,17 +311,17 @@ impl From<&TextureRequestDto> for proteus_sdk::TextureRequest {
 /// navigation.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TransitioningConfigDto {
+pub struct TransitionInteractionConfigDto {
     #[serde(default)]
-    pub allow_input: bool,
+    pub allow_pointer: bool,
     #[serde(default)]
     pub allow_navigation: bool,
 }
 
-impl From<&TransitioningConfigDto> for proteus_ui::TransitioningConfig {
-    fn from(d: &TransitioningConfigDto) -> Self {
+impl From<&TransitionInteractionConfigDto> for proteus_ui::TransitionInteractionConfig {
+    fn from(d: &TransitionInteractionConfigDto) -> Self {
         Self {
-            allow_input: d.allow_input,
+            allow_pointer: d.allow_pointer,
             allow_navigation: d.allow_navigation,
         }
     }
@@ -376,8 +376,8 @@ impl ComponentSpecDto {
         if self.start_disabled {
             spec = spec.start_disabled();
         }
-        if let Some(transitioning) = &self.transitioning {
-            spec = spec.transitioning(transitioning.into());
+        if let Some(interaction) = &self.transition_interaction {
+            spec = spec.transition_interaction(interaction.into());
         }
         (spec, self.children)
     }
@@ -470,61 +470,100 @@ impl<'de> Deserialize<'de> for EasingDto {
 }
 
 // ---------------------------------------------------------------------------
-// SplitStrategy / MergeLayout
+// ImageCrop
 // ---------------------------------------------------------------------------
 
-/// `{ kind, cols?, rows? }`, where `kind` is `"perTarget"`, `"slice"` or
-/// `"gridSlice"`, and `cols` and `rows` apply to `"gridSlice"` only. An
-/// unknown `kind` falls back to `"slice"` with a warning, not to the
-/// experimental `"perTarget"`.
+/// `{ kind: "none" | "centeredSquare" }`, `{ kind: "aspect", ratio, anchor? }`
+/// (the anchor defaults to the center) or `{ kind: "rect", x, y, width, height }`.
+/// An unknown `kind`, or a missing field, is an error that names it.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SplitStrategyDto {
-    pub kind: String,
-    #[serde(default)]
-    pub cols: usize,
-    #[serde(default)]
-    pub rows: usize,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ImageCropDto {
+    None,
+    CenteredSquare,
+    Aspect {
+        ratio: f32,
+        #[serde(default)]
+        anchor: Option<Vec2Dto>,
+    },
+    Rect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
 }
 
-impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
-    fn from(d: &SplitStrategyDto) -> Self {
-        match d.kind.as_str() {
-            "slice" => proteus_ui::SplitStrategy::Slice,
-            "gridSlice" => proteus_ui::SplitStrategy::GridSlice {
-                cols: d.cols.max(1),
-                rows: d.rows.max(1),
+impl From<&ImageCropDto> for proteus_sdk::ImageCrop {
+    fn from(d: &ImageCropDto) -> Self {
+        match d {
+            ImageCropDto::None => proteus_sdk::ImageCrop::None,
+            ImageCropDto::CenteredSquare => proteus_sdk::ImageCrop::CenteredSquare,
+            ImageCropDto::Aspect { ratio, anchor } => proteus_sdk::ImageCrop::Aspect {
+                ratio: *ratio,
+                anchor: anchor
+                    .map(|a| glam::Vec2::new(a.x, a.y))
+                    .unwrap_or(glam::Vec2::splat(0.5)),
             },
-            "perTarget" => proteus_ui::SplitStrategy::PerTarget,
-            other => {
-                log::warn!("unknown splitTo strategy {other:?} — falling back to \"slice\"");
-                proteus_ui::SplitStrategy::Slice
-            }
+            ImageCropDto::Rect {
+                x,
+                y,
+                width,
+                height,
+            } => proteus_sdk::ImageCrop::Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
         }
     }
 }
 
-/// `{ kind, cols?, rows? }`, where `kind` is `"horizontal"` or `"grid"`, and
-/// `cols` and `rows` apply to `"grid"` only. An unknown `kind` falls back to
-/// `"horizontal"`.
+// ---------------------------------------------------------------------------
+// SplitStrategy / MergeLayout
+// ---------------------------------------------------------------------------
+
+/// `{ kind: "perTarget" | "row" | "column" }` or
+/// `{ kind: "grid", cols, rows }`. An unknown `kind`, or a grid without `cols`
+/// and `rows`, is an error that names the problem.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeLayoutDto {
-    pub kind: String,
-    #[serde(default)]
-    pub cols: usize,
-    #[serde(default)]
-    pub rows: usize,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SplitStrategyDto {
+    PerTarget,
+    Row,
+    Column,
+    Grid { cols: usize, rows: usize },
+}
+
+impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
+    fn from(d: &SplitStrategyDto) -> Self {
+        match *d {
+            SplitStrategyDto::PerTarget => proteus_ui::SplitStrategy::PerTarget,
+            SplitStrategyDto::Row => proteus_ui::SplitStrategy::Row,
+            SplitStrategyDto::Column => proteus_ui::SplitStrategy::Column,
+            SplitStrategyDto::Grid { cols, rows } => proteus_ui::SplitStrategy::Grid { cols, rows },
+        }
+    }
+}
+
+/// `{ kind: "row" | "column" }` or `{ kind: "grid", cols, rows }`. An unknown
+/// `kind`, or a grid without `cols` and `rows`, is an error that names the
+/// problem.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MergeLayoutDto {
+    Row,
+    Column,
+    Grid { cols: usize, rows: usize },
 }
 
 impl From<&MergeLayoutDto> for proteus_ui::MergeLayout {
     fn from(d: &MergeLayoutDto) -> Self {
-        match d.kind.as_str() {
-            "grid" => proteus_ui::MergeLayout::Grid {
-                cols: d.cols.max(1),
-                rows: d.rows.max(1),
-            },
-            _ => proteus_ui::MergeLayout::Horizontal,
+        match *d {
+            MergeLayoutDto::Row => proteus_ui::MergeLayout::Row,
+            MergeLayoutDto::Column => proteus_ui::MergeLayout::Column,
+            MergeLayoutDto::Grid { cols, rows } => proteus_ui::MergeLayout::Grid { cols, rows },
         }
     }
 }
@@ -571,6 +610,9 @@ fn interaction_state_str(state: InteractionStateKind) -> &'static str {
         InteractionStateKind::Pressed => "pressed",
         InteractionStateKind::Focused => "focused",
         InteractionStateKind::Disabled => "disabled",
+        // A state added to `proteus-ui` must be added here and to TypeScript's
+        // `InteractionState`; until then it reads as the default style.
+        _ => "default",
     }
 }
 
@@ -600,7 +642,7 @@ impl From<&TransitionData> for TransitionDataDto {
 }
 
 // ---------------------------------------------------------------------------
-// TransitionDropped (SignalHandle::on_dropped payload)
+// TransitionDropped (TransitionChannel::on_dropped payload)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -613,7 +655,7 @@ pub struct TransitionDroppedDto {
 
 fn drop_reason_str(reason: DropReason) -> &'static str {
     match reason {
-        DropReason::SignalNotFound => "signalNotFound",
+        DropReason::ChannelNotFound => "channelNotFound",
         DropReason::EntityNotFound => "entityNotFound",
         DropReason::AlreadyTransitioning => "alreadyTransitioning",
         DropReason::EntityNotVisible => "entityNotVisible",
@@ -693,6 +735,41 @@ mod tests {
     fn an_unknown_name_is_an_error_naming_it() {
         let err = config(r#"{"duration": 0.3, "easing": "easeOutQuart"}"#).unwrap_err();
         assert!(err.to_string().contains("easeOutQuart"), "{err}");
+    }
+
+    #[test]
+    fn layouts_parse_by_kind() {
+        let row: SplitStrategyDto = serde_json::from_str(r#"{"kind": "row"}"#).unwrap();
+        assert!(matches!((&row).into(), proteus_ui::SplitStrategy::Row));
+        let grid: MergeLayoutDto =
+            serde_json::from_str(r#"{"kind": "grid", "cols": 3, "rows": 2}"#).unwrap();
+        assert!(matches!(
+            (&grid).into(),
+            proteus_ui::MergeLayout::Grid { cols: 3, rows: 2 }
+        ));
+    }
+
+    #[test]
+    fn an_unknown_layout_kind_or_a_grid_without_dimensions_is_an_error() {
+        let err = serde_json::from_str::<SplitStrategyDto>(r#"{"kind": "slice"}"#).unwrap_err();
+        assert!(err.to_string().contains("slice"), "{err}");
+        assert!(serde_json::from_str::<MergeLayoutDto>(r#"{"kind": "horizontal"}"#).is_err());
+        assert!(serde_json::from_str::<MergeLayoutDto>(r#"{"kind": "grid"}"#).is_err());
+    }
+
+    #[test]
+    fn image_crops_parse_by_kind_and_aspect_defaults_to_centered() {
+        let crop: ImageCropDto =
+            serde_json::from_str(r#"{"kind": "aspect", "ratio": 2.0}"#).unwrap();
+        match (&crop).into() {
+            proteus_sdk::ImageCrop::Aspect { ratio, anchor } => {
+                assert_eq!(ratio, 2.0);
+                assert_eq!(anchor, glam::Vec2::splat(0.5));
+            }
+            other => panic!("expected an aspect crop, got {other:?}"),
+        }
+        assert!(serde_json::from_str::<ImageCropDto>(r#"{"kind": "square"}"#).is_err());
+        assert!(serde_json::from_str::<ImageCropDto>(r#"{"kind": "rect", "x": 0.1}"#).is_err());
     }
 
     #[test]

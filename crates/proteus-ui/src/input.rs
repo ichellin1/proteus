@@ -23,14 +23,14 @@
 //! moved under a parent created later.
 //!
 //! Virtual, hidden and `Disabled` entities, and transitioning entities without
-//! `TransitioningConfig::allow_input`, are never hit: they receive no events
+//! `TransitionInteractionConfig::allow_pointer`, are never hit: they receive no events
 //! and don't block the components behind them.
 
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 
-use crate::component::{Disabled, Lifecycle, TransitioningConfig, Virtual};
+use crate::component::{Disabled, Lifecycle, TransitionInteractionConfig, Virtual};
 use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
 use crate::spawn_order::SpawnOrder;
 use crate::{QuadState, Visibility};
@@ -185,7 +185,7 @@ pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
 // ---------------------------------------------------------------------------
 
 /// The entities [`hit_test_system`] considers: every interactable entity that
-/// isn't virtual. `Lifecycle`, `TransitioningConfig` and `Disabled` are
+/// isn't virtual. `Lifecycle`, `TransitionInteractionConfig` and `Disabled` are
 /// optional; an entity without them is never excluded by them.
 type HitTestQuery<'w, 's> = Query<
     'w,
@@ -196,7 +196,7 @@ type HitTestQuery<'w, 's> = Query<
         Option<&'static Visibility>,
         Option<&'static EffectiveVisibility>,
         Option<&'static Lifecycle>,
-        Option<&'static TransitioningConfig>,
+        Option<&'static TransitionInteractionConfig>,
         Has<Disabled>,
         Option<&'static SpawnOrder>,
     ),
@@ -258,8 +258,8 @@ pub fn hit_test_system(
             continue;
         }
         let transitioning = matches!(lifecycle, Some(Lifecycle::Transitioning));
-        let allow_input = transitioning_config.is_some_and(|c| c.allow_input);
-        if transitioning && !allow_input {
+        let allow_pointer = transitioning_config.is_some_and(|c| c.allow_pointer);
+        if transitioning && !allow_pointer {
             continue;
         }
         let world_qs = resolve_world_position_query(e, qs, &quad_states, &parents);

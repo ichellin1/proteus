@@ -1,8 +1,8 @@
 //! The app-authoring API for Proteus: create components, connect them, and
 //! transition between them.
 //!
-//! [`Proteus`] holds an app's components, signals and callbacks. The handles it
-//! returns ([`Handle`], [`SignalHandle`], [`TextureHandle`]) are small `Copy` IDs,
+//! [`Proteus`] holds an app's components, channels and callbacks. The handles it
+//! returns ([`Handle`], [`TransitionChannel`], [`TextureHandle`]) are small `Copy` IDs,
 //! and their methods take the `Proteus` they came from:
 //!
 //! ```
@@ -24,7 +24,7 @@
 //! );
 //!
 //! // Clicking the button transitions it into the panel.
-//! let open = app.signal(None);
+//! let open = app.transition_channel(None);
 //! button.on_click(&mut app, move |app| {
 //!     open.set(app, panel, button, TransitionConfig::default(), false);
 //! });
@@ -40,7 +40,7 @@
 //! | Call | What it does |
 //! |---|---|
 //! | [`Proteus::component`] | Creates a component from a [`ComponentSpec`] |
-//! | [`Proteus::signal`], [`SignalHandle::set`] | Transitions one component into another (1→1) |
+//! | [`Proteus::transition_channel`], [`TransitionChannel::set`] | Transitions one component into another (1→1) |
 //! | [`Handle::split_to`], [`Handle::merge_from`] | Transitions one component into many (1→N), or many into one (N→1) |
 //! | [`Handle::animate_to`] | Transitions a component to new geometry |
 //! | [`Proteus::get`] | Reads a component's current state |
@@ -60,13 +60,13 @@ mod spec;
 
 pub use app::Proteus;
 pub use data::{ComponentData, TransitionData};
-pub use handle::{Handle, HandleError, SignalHandle, TextureHandle, TextureRequest};
+pub use handle::{Handle, HandleError, TextureHandle, TextureRequest, TransitionChannel};
 pub use spec::ComponentSpec;
 
 // The value types this API takes and returns, so an app needs no direct
 // `proteus-ui` dependency.
 pub use proteus_ui::{
-    Border, DropReason, DropShadow, Easing, Glow, Image, InteractionStateKind, MergeLayout,
-    Opacity, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionDropped,
-    TransitioningConfig, Visibility,
+    Border, DropReason, DropShadow, Easing, Glow, Image, ImageCrop, InteractionStateKind,
+    MergeLayout, Opacity, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
+    TransitionDropped, TransitionInteractionConfig, Visibility,
 };

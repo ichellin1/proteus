@@ -11,10 +11,10 @@
 //!
 //! `wasm-bindgen` invalidates a JavaScript object once it is passed by value
 //! into Rust, even for a `Copy` type. So every method takes `&Handle`,
-//! `&SignalHandle` and `&TextureHandle`, which leaves the caller's object usable.
-//! The exceptions are `destroy` and `signalDestroy`, which consume the handle,
+//! `&TransitionChannel` and `&TextureHandle`, which leaves the caller's object usable.
+//! The exceptions are `destroy` and `channelDestroy`, which consume the handle,
 //! as their `proteus-sdk` counterparts do. Lists of handles, and the optional
-//! owner of a signal, cross as IDs instead, since `wasm-bindgen` can't take
+//! owner of a channel, cross as IDs instead, since `wasm-bindgen` can't take
 //! references to them.
 //!
 //! ## Shared ownership
@@ -41,7 +41,9 @@ use proteus_sdk as sdk;
 mod dto;
 mod handle;
 
-pub use handle::{Handle, JsSignalHandle as SignalHandle, JsTextureHandle as TextureHandle};
+pub use handle::{
+    Handle, JsTextureHandle as TextureHandle, JsTransitionChannel as TransitionChannel,
+};
 
 use dto::{
     ComponentDataDto, ComponentSpecDto, MergeLayoutDto, QuadStateDto, SplitStrategyDto,
@@ -190,21 +192,22 @@ impl ProteusApp {
         Ok(Handle(self.0.borrow_mut().component(spec)))
     }
 
-    /// Calls [`Proteus::signal`](sdk::Proteus::signal). `owner` is a handle ID,
-    /// since `wasm-bindgen` can't take an optional reference.
-    #[wasm_bindgen]
-    pub fn signal(&mut self, owner: Option<f64>) -> SignalHandle {
+    /// Calls [`Proteus::transition_channel`](sdk::Proteus::transition_channel).
+    /// `owner` is a handle ID, since `wasm-bindgen` can't take an optional
+    /// reference.
+    #[wasm_bindgen(js_name = transitionChannel)]
+    pub fn transition_channel(&mut self, owner: Option<f64>) -> TransitionChannel {
         let owner = owner.map(|bits| {
             sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64))
         });
-        SignalHandle(self.0.borrow_mut().signal(owner))
+        TransitionChannel(self.0.borrow_mut().transition_channel(owner))
     }
 
-    /// Calls [`SignalHandle::set`](sdk::SignalHandle::set).
-    #[wasm_bindgen(js_name = signalSet)]
-    pub fn signal_set(
+    /// Calls [`TransitionChannel::set`](sdk::TransitionChannel::set).
+    #[wasm_bindgen(js_name = channelSet)]
+    pub fn channel_set(
         &mut self,
-        signal: &SignalHandle,
+        channel: &TransitionChannel,
         to: &Handle,
         from: &Handle,
         config: JsValue,
@@ -212,7 +215,7 @@ impl ProteusApp {
     ) -> Result<(), JsValue> {
         let dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
-        signal.0.set(
+        channel.0.set(
             &mut self.0.borrow_mut(),
             to.0,
             from.0,
@@ -222,11 +225,11 @@ impl ProteusApp {
         Ok(())
     }
 
-    /// Calls [`SignalHandle::destroy`](sdk::SignalHandle::destroy). Consumes
-    /// `signal`: the JavaScript object can't be used afterwards.
-    #[wasm_bindgen(js_name = signalDestroy)]
-    pub fn signal_destroy(&mut self, signal: SignalHandle) {
-        signal.0.destroy(&mut self.0.borrow_mut());
+    /// Calls [`TransitionChannel::destroy`](sdk::TransitionChannel::destroy). Consumes
+    /// `channel`: the JavaScript object can't be used afterwards.
+    #[wasm_bindgen(js_name = channelDestroy)]
+    pub fn channel_destroy(&mut self, channel: TransitionChannel) {
+        channel.0.destroy(&mut self.0.borrow_mut());
     }
 
     /// Calls [`Handle::split_to`](sdk::Handle::split_to). The targets cross
@@ -385,10 +388,10 @@ impl ProteusApp {
             .map_err(handle_err)
     }
 
-    /// Calls [`SignalHandle::on_dropped`](sdk::SignalHandle::on_dropped).
+    /// Calls [`TransitionChannel::on_dropped`](sdk::TransitionChannel::on_dropped).
     #[wasm_bindgen(js_name = onDropped)]
-    pub fn on_dropped(&mut self, signal: &SignalHandle, cb: js_sys::Function) {
-        signal
+    pub fn on_dropped(&mut self, channel: &TransitionChannel, cb: js_sys::Function) {
+        channel
             .0
             .on_dropped(&mut self.0.borrow_mut(), wrap_dropped(cb));
     }
@@ -536,15 +539,10 @@ impl ProteusApp {
 
     /// Calls [`Handle::remove_child`](sdk::Handle::remove_child).
     #[wasm_bindgen(js_name = removeChild)]
-    pub fn remove_child(
-        &mut self,
-        parent: &Handle,
-        child: &Handle,
-        destroy: bool,
-    ) -> Result<(), JsValue> {
+    pub fn remove_child(&mut self, parent: &Handle, child: &Handle) -> Result<(), JsValue> {
         parent
             .0
-            .remove_child(&mut self.0.borrow_mut(), child.0, destroy)
+            .remove_child(&mut self.0.borrow_mut(), child.0)
             .map_err(handle_err)
     }
 
@@ -645,12 +643,15 @@ impl ProteusApp {
             .map_err(handle_err)
     }
 
-    /// Calls [`Handle::center_crop_to_square`](sdk::Handle::center_crop_to_square).
-    #[wasm_bindgen(js_name = centerCropToSquare)]
-    pub fn center_crop_to_square(&mut self, handle: &Handle) -> Result<bool, JsValue> {
+    /// Calls [`Handle::crop_image`](sdk::Handle::crop_image). Throws if
+    /// `crop` isn't a valid `ImageCrop`.
+    #[wasm_bindgen(js_name = cropImage)]
+    pub fn crop_image(&mut self, handle: &Handle, crop: JsValue) -> Result<bool, JsValue> {
+        let dto: dto::ImageCropDto = serde_wasm_bindgen::from_value(crop)
+            .map_err(|e| JsValue::from_str(&format!("invalid ImageCrop: {e}")))?;
         handle
             .0
-            .center_crop_to_square(&mut self.0.borrow_mut())
+            .crop_image(&mut self.0.borrow_mut(), (&dto).into())
             .map_err(handle_err)
     }
 
@@ -714,10 +715,10 @@ impl ProteusApp {
             .map_err(handle_err)
     }
 
-    /// Calls [`Handle::set_transitioning_config`](sdk::Handle::set_transitioning_config).
+    /// Calls [`Handle::set_transition_interaction`](sdk::Handle::set_transition_interaction).
     /// `null` or `undefined` restores the default.
-    #[wasm_bindgen(js_name = setTransitioningConfig)]
-    pub fn set_transitioning_config(
+    #[wasm_bindgen(js_name = setTransitionInteractionConfig)]
+    pub fn set_transition_interaction(
         &mut self,
         handle: &Handle,
         config: JsValue,
@@ -725,13 +726,15 @@ impl ProteusApp {
         let parsed = if config.is_null() || config.is_undefined() {
             None
         } else {
-            let dto: dto::TransitioningConfigDto = serde_wasm_bindgen::from_value(config)
-                .map_err(|e| JsValue::from_str(&format!("invalid TransitioningConfig: {e}")))?;
+            let dto: dto::TransitionInteractionConfigDto = serde_wasm_bindgen::from_value(config)
+                .map_err(|e| {
+                JsValue::from_str(&format!("invalid TransitionInteractionConfig: {e}"))
+            })?;
             Some((&dto).into())
         };
         handle
             .0
-            .set_transitioning_config(&mut self.0.borrow_mut(), parsed)
+            .set_transition_interaction(&mut self.0.borrow_mut(), parsed)
             .map_err(handle_err)
     }
 

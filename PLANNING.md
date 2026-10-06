@@ -4274,7 +4274,7 @@ Split into 5a–5e, each finished, reviewed and committed before the next.
 
 Breaking but mostly mechanical, so it goes first: every later fix then uses the final names.
 
-- [ ] Rename signals to transition channels, in Rust and TypeScript, so "signal" is free for
+- [x] Rename signals to transition channels, in Rust and TypeScript, so "signal" is free for
   reactive state later (Post-Release). A Proteus signal is only a named channel for 1→1
   transitions, while front-end developers expect a signal to be reactive state. Public:
   `SignalHandle` → `TransitionChannel` (and TypeScript's), `Proteus::signal` / `app.signal()` →
@@ -4285,7 +4285,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   `signal_dispatch_system` and the `SignalDispatch` schedule stage, the web bridge's
   `signalSet` / `signalDestroy`, and test names. Docs (including CONTRIBUTING, whose TypeScript
   rule names `signal`), the demo and `examples/gallery` updated to match.
-- [ ] Name split and merge layouts by their arrangement, and add the missing vertical one, in Rust
+- [x] Name split and merge layouts by their arrangement, and add the missing vertical one, in Rust
   and TypeScript. Today `Horizontal`/`Slice` are strips side by side (each strip is a vertical
   column, so the name reads either way), and a vertical stack exists only as
   `Grid { cols: 1, rows: n }`, which developers won't find.
@@ -4300,7 +4300,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
     naming the piece and cell counts (the `HandleError` variant is decided at the step), and
     the `Grid` docs say so. Tests for both.
   - Docs, the demo and `examples/gallery` updated to match.
-- [ ] Rename `TransitioningConfig` to `TransitionInteractionConfig`, in Rust and TypeScript. It
+- [x] Rename `TransitioningConfig` to `TransitionInteractionConfig`, in Rust and TypeScript. It
   differs from `TransitionConfig` by three letters but decides something unrelated: whether a
   component accepts input while it transitions. "Interaction" leaves room for navigation and
   other input controls. Derived names: `ComponentSpec::transition_interaction`,
@@ -4310,23 +4310,23 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   `allow_pointer` (TypeScript `allowPointer`), so each kind of input gets its own field
   alongside `allow_navigation` as more are supported, and developers choose per kind. Docs,
   tests and the demo updated to match.
-- [ ] Mark `InteractionStateKind` `#[non_exhaustive]`. Apps read it through `ComponentData.state`,
+- [x] Mark `InteractionStateKind` `#[non_exhaustive]`. Apps read it through `ComponentData.state`,
   and keyboard navigation (V2) will likely add a keyboard-focus state, which would otherwise
   break any app that matches on all five. Matches inside `proteus-ui` stay exhaustive. The
   TypeScript `InteractionState` union can't be marked, so its doc says more states may be added
   and an exhaustive `switch` should keep a default case.
-- [ ] Drop `remove_child`'s `destroy` flag, in Rust and TypeScript. `destroy: true` does exactly
+- [x] Drop `remove_child`'s `destroy` flag, in Rust and TypeScript. `destroy: true` does exactly
   what `Handle::destroy` does, and a bare `true` or `false` at the call site hides whether the
   child is kept or destroyed, which is easy to miss in review. `remove_child(child)` only
   detaches and keeps the child; destroying it is `child.destroy()`. Update the tests that pass the
   flag, and the doc (which also notes that a detached child moves on screen, because its geometry
   is no longer relative to the parent).
-- [ ] `remove_child` doesn't check that `child` belongs to `self`: it removes the child's parent
+- [x] `remove_child` doesn't check that `child` belongs to `self`: it removes the child's parent
   link wherever it points, so `list_a.remove_child(item_of_list_b)` detaches the item from
   `list_b` and reports success. Fail instead when `child` has a different parent or none,
   probably with a new `HandleError` variant (decided at the step). Rust and TypeScript, with a
   test. Do it together with dropping the `destroy` flag, since both change the same method.
-- [ ] Replace `Handle::center_crop_to_square` (and TypeScript `centerCropToSquare`) with a
+- [x] Replace `Handle::center_crop_to_square` (and TypeScript `centerCropToSquare`) with a
   general `crop_image(ImageCrop)`. `center_crop_to_square` compounds when called twice, because
   it crops the current crop window, and a crop can't be undone. `ImageCrop` always crops from the
   full image. Variants: `None` (whole image), `CenteredSquare`, `Aspect { ratio, anchor }` (the
@@ -4334,7 +4334,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   region in fractions of the image). No other presets, and not `#[non_exhaustive]`: a new
   variant needs a real, recurring use that `Aspect` or `Rect` can't express well. Both callers
   (the demo's gallery tiles and `examples/gallery`) move to it.
-- [ ] One text rasterizer: rename `FontAtlas::rasterize_text_tracked` to `rasterize_text` and
+- [x] One text rasterizer: rename `FontAtlas::rasterize_text_tracked` to `rasterize_text` and
   remove the old `rasterize_text`, which only tests call (the renderer's text bake already uses
   the tracked version). Tests pass `0.0` for letter spacing. The V2 text work will likely
   deprecate this interface, so this leaves one function to deprecate rather than two.
@@ -4368,16 +4368,16 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
   a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
   TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
-- [ ] An `on_dropped` handler that destroys its own signal leaves that signal's handlers
-  registered: `fire_dropped` puts them back without checking that the signal still exists, and
+- [ ] An `on_dropped` handler that destroys its own channel leaves that channel's handlers
+  registered: `fire_dropped` puts them back without checking that the channel still exists, and
   they fire again if the stale handle is used. Give it the same check `fire` has, with a test.
 - [ ] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
   existing handlers for the same event. Keep registration order, or document the order.
-- [ ] `SignalHandle::set` on a destroyed signal is silent: the request is dropped with
-  `SignalNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
+- [ ] `TransitionChannel::set` on a destroyed channel is silent: the request is dropped with
+  `ChannelNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
   would have heard it. A `Handle` method on a destroyed component logs a warning; make `set` do
-  the same, checking at call time that the signal exists. Rust and TypeScript, with a test, and
-  `SignalHandle::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
+  the same, checking at call time that the channel exists. Rust and TypeScript, with a test, and
+  `TransitionChannel::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
 - [ ] C-12 — dispatching a pointer event from inside the web `update` callback panics.
 - [ ] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
 
@@ -4721,10 +4721,10 @@ not V1.**
 - Masking: shape a component's content with a mask (a shape, or another image's alpha). Its own
   method, separate from `crop_image`, so a crop and a mask can be used together: the crop picks
   which part of the image to show, and the mask shapes it.
-- An `on_destroy` callback for components and signals. Most destruction is started by the app, so
-  it already knows, but two cases happen as side effects: destroying a parent destroys its
-  children, and destroying a component destroys the signals it owns. An app holding those handles
-  is never told.
+- An `on_destroy` callback for components and transition channels. Most destruction is started
+  by the app, so it already knows, but two cases happen as side effects: destroying a parent
+  destroys its children, and destroying a component destroys the channels it owns. An app holding
+  those handles is never told.
 - Bake at the display's resolution (moved from M14 step 5). Nothing that draws into a texture reads the scale factor:
   text is rasterized at `size_px` logical pixels, and baked components (`.bake()`) and split and
   merge snapshots get atlas regions of their logical size. On a 2× display each texel covers

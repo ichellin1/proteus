@@ -162,7 +162,7 @@ fn bake_system_bakes_quad_and_text_composite() {
     // Bake the child's text as the renderer does, so the component bake
     // includes real glyphs: rasterize, then register in the atlas.
     let glyphs = font_atlas
-        .rasterize_text("Hi", 16.0)
+        .rasterize_text("Hi", 16.0, 0.0)
         .expect("text rasterize should succeed in a fresh font atlas");
     let text_texture_id = pw
         .world

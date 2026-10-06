@@ -299,7 +299,7 @@ pub struct FrameTime {
 /// ## Why the entity moves to the start at once
 ///
 /// A `from_state` makes a transition start somewhere other than where the
-/// entity is: a signal's `to` starts from its `from`, and a
+/// entity is: a channel's `to` starts from its `from`, and a
 /// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) split starts
 /// every target from the source. The entity is moved there immediately, not on
 /// the first tick of the transition, because:

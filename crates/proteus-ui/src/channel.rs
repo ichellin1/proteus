@@ -1,13 +1,14 @@
-//! Signals: 1→1 transitions from one entity into another.
+//! Transition channels: named channels for 1→1 transitions from one entity
+//! into another.
 //!
 //! ```text
-//! signal::set(world, id, to, from, target, config, interruptible)
-//!         │  queues a PendingSignalSet; the world isn't changed yet
+//! channel::set(world, id, to, from, target, config, interruptible)
+//!         │  queues a PendingChannelSet; the world isn't changed yet
 //!         ▼
-//! PendingSignalSets
-//!         │  signal_dispatch_system, next tick, just before transition setup
+//! PendingChannelSets
+//!         │  channel_dispatch_system, next tick, just before transition setup
 //!         ▼
-//! valid?  ── no ──► DroppedSignals
+//! valid?  ── no ──► DroppedRequests
 //!         │ yes
 //!         ▼
 //! a TransitionRequest on `to`, which transition_setup_system starts
@@ -16,10 +17,10 @@
 //! At this level the caller passes `target`, the geometry `to` ends at.
 //! `proteus-sdk` looks it up from the component's declared geometry.
 //!
-//! A signal with an owner entity is destroyed when the owner is, through the
-//! [`OwnedSignals`] hook. A signal without one lasts until [`destroy_signal`].
+//! A channel with an owner entity is destroyed when the owner is, through the
+//! [`OwnedChannels`] hook. A channel without one lasts until [`destroy_channel`].
 //!
-//! Every request that can't run is recorded in [`DroppedSignals`].
+//! Every request that can't run is recorded in [`DroppedRequests`].
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::world::World;
@@ -29,73 +30,73 @@ use crate::component::{Lifecycle, QuadState, TransitionRequest, Visibility};
 use crate::transition::TransitionConfig;
 
 new_key_type! {
-    /// Opaque handle to a registered signal.
-    pub struct SignalId;
+    /// Opaque handle to a registered channel.
+    pub struct TransitionChannelId;
 }
 
 // ---------------------------------------------------------------------------
-// SignalRegistry
+// ChannelRegistry
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
-struct SignalEntry {
+struct ChannelEntry {
     owner: Option<Entity>,
 }
 
-/// Every signal that exists. A resource of [`crate::schedule::ProteusWorld`].
+/// Every channel that exists. A resource of [`crate::schedule::ProteusWorld`].
 #[derive(Resource, Default)]
-pub struct SignalRegistry {
-    signals: SlotMap<SignalId, SignalEntry>,
+pub struct ChannelRegistry {
+    channels: SlotMap<TransitionChannelId, ChannelEntry>,
 }
 
-impl SignalRegistry {
-    /// Adds a signal. Use [`create_signal`] instead, which also records the
-    /// owner's [`OwnedSignals`].
-    pub fn create(&mut self, owner: Option<Entity>) -> SignalId {
-        self.signals.insert(SignalEntry { owner })
+impl ChannelRegistry {
+    /// Adds a channel. Use [`create_channel`] instead, which also records the
+    /// owner's [`OwnedChannels`].
+    pub fn create(&mut self, owner: Option<Entity>) -> TransitionChannelId {
+        self.channels.insert(ChannelEntry { owner })
     }
 
-    /// Removes a signal. Later [`set`] calls on it are dropped with
-    /// [`DropReason::SignalNotFound`].
-    pub fn destroy(&mut self, id: SignalId) {
-        self.signals.remove(id);
+    /// Removes a channel. Later [`set`] calls on it are dropped with
+    /// [`DropReason::ChannelNotFound`].
+    pub fn destroy(&mut self, id: TransitionChannelId) {
+        self.channels.remove(id);
     }
 
-    /// Whether the signal `id` exists.
-    pub fn exists(&self, id: SignalId) -> bool {
-        self.signals.contains_key(id)
+    /// Whether the channel `id` exists.
+    pub fn exists(&self, id: TransitionChannelId) -> bool {
+        self.channels.contains_key(id)
     }
 
-    /// The entity that owns the signal `id`, if any.
-    pub fn owner(&self, id: SignalId) -> Option<Entity> {
-        self.signals.get(id).and_then(|s| s.owner)
+    /// The entity that owns the channel `id`, if any.
+    pub fn owner(&self, id: TransitionChannelId) -> Option<Entity> {
+        self.channels.get(id).and_then(|s| s.owner)
     }
 }
 
 // ---------------------------------------------------------------------------
-// OwnedSignals: destroying an entity's signals with it
+// OwnedChannels: destroying an entity's channels with it
 // ---------------------------------------------------------------------------
 
-/// The signals an entity owns, which are destroyed with it.
+/// The channels an entity owns, which are destroyed with it.
 ///
-/// [`create_signal`] adds it to the owner. Its removal hook, from
-/// [`register_signal_hooks`], destroys every signal listed, and runs both when
+/// [`create_channel`] adds it to the owner. Its removal hook, from
+/// [`register_channel_hooks`], destroys every channel listed, and runs both when
 /// the component is removed and when the entity is destroyed.
 #[derive(Component, Debug, Clone, Default)]
-pub struct OwnedSignals(pub Vec<SignalId>);
+pub struct OwnedChannels(pub Vec<TransitionChannelId>);
 
-/// Registers the hook that destroys an entity's owned signals. Call once,
-/// before any `OwnedSignals` exists, since `bevy_ecs` panics otherwise.
+/// Registers the hook that destroys an entity's owned channels. Call once,
+/// before any `OwnedChannels` exists, since `bevy_ecs` panics otherwise.
 /// `ProteusWorld::new` does this.
-pub fn register_signal_hooks(world: &mut World) {
+pub fn register_channel_hooks(world: &mut World) {
     world
-        .register_component_hooks::<OwnedSignals>()
+        .register_component_hooks::<OwnedChannels>()
         .on_remove(|mut world, ctx| {
-            let Some(owned) = world.get::<OwnedSignals>(ctx.entity) else {
+            let Some(owned) = world.get::<OwnedChannels>(ctx.entity) else {
                 return;
             };
             let ids = owned.0.clone();
-            if let Some(mut registry) = world.get_resource_mut::<SignalRegistry>() {
+            if let Some(mut registry) = world.get_resource_mut::<ChannelRegistry>() {
                 for id in ids {
                     registry.destroy(id);
                 }
@@ -103,14 +104,14 @@ pub fn register_signal_hooks(world: &mut World) {
         });
 }
 
-/// Creates a signal. If `owner` is given, the signal is destroyed along with
-/// that entity; otherwise it lasts until [`destroy_signal`].
-pub fn create_signal(world: &mut World, owner: Option<Entity>) -> SignalId {
-    let id = world.resource_mut::<SignalRegistry>().create(owner);
+/// Creates a transition channel. If `owner` is given, the channel is destroyed along with
+/// that entity; otherwise it lasts until [`destroy_channel`].
+pub fn create_channel(world: &mut World, owner: Option<Entity>) -> TransitionChannelId {
+    let id = world.resource_mut::<ChannelRegistry>().create(owner);
     if let Some(owner) = owner {
         world
             .entity_mut(owner)
-            .entry::<OwnedSignals>()
+            .entry::<OwnedChannels>()
             .or_default()
             .into_mut()
             .0
@@ -119,30 +120,30 @@ pub fn create_signal(world: &mut World, owner: Option<Entity>) -> SignalId {
     id
 }
 
-/// Destroys a signal. Later [`set`] calls on it are dropped with
-/// [`DropReason::SignalNotFound`].
-pub fn destroy_signal(world: &mut World, id: SignalId) {
-    world.resource_mut::<SignalRegistry>().destroy(id);
+/// Destroys a channel. Later [`set`] calls on it are dropped with
+/// [`DropReason::ChannelNotFound`].
+pub fn destroy_channel(world: &mut World, id: TransitionChannelId) {
+    world.resource_mut::<ChannelRegistry>().destroy(id);
 }
 
 /// Adds this module's resources to `world`. Called once, from
 /// `ProteusWorld::new`.
 pub(crate) fn init_resources(world: &mut World) {
-    world.init_resource::<SignalRegistry>();
-    world.init_resource::<PendingSignalSets>();
-    world.init_resource::<DroppedSignals>();
+    world.init_resource::<ChannelRegistry>();
+    world.init_resource::<PendingChannelSets>();
+    world.init_resource::<DroppedRequests>();
 }
 
 // ---------------------------------------------------------------------------
 // set()
 // ---------------------------------------------------------------------------
 
-/// One queued [`set`] call, which [`signal_dispatch_system`] applies on the
+/// One queued [`set`] call, which [`channel_dispatch_system`] applies on the
 /// next tick. Public because that system is; create it with [`set`].
 #[derive(Debug, Clone)]
-pub struct PendingSignalSet {
-    /// The signal.
-    pub signal: SignalId,
+pub struct PendingChannelSet {
+    /// The channel.
+    pub channel: TransitionChannelId,
     /// The entity to transition into.
     pub to: Entity,
     /// The entity to transition from.
@@ -155,21 +156,21 @@ pub struct PendingSignalSet {
     pub interruptible: bool,
 }
 
-/// The queued [`set`] calls, applied by [`signal_dispatch_system`] each tick.
+/// The queued [`set`] calls, applied by [`channel_dispatch_system`] each tick.
 #[derive(Resource, Default)]
-pub struct PendingSignalSets(Vec<PendingSignalSet>);
+pub struct PendingChannelSets(Vec<PendingChannelSet>);
 
 /// Requests a transition of `to` into `target`, starting from `from`'s current
 /// geometry.
 ///
-/// This only queues the request; [`signal_dispatch_system`] applies it on the
+/// This only queues the request; [`channel_dispatch_system`] applies it on the
 /// next tick. From code running inside a system, which has no `&mut World`,
 /// queue a closure that calls this with
 /// [`crate::schedule::CommandQueue::push`].
 #[allow(clippy::too_many_arguments)]
 pub fn set(
     world: &mut World,
-    signal: SignalId,
+    channel: TransitionChannelId,
     to: Entity,
     from: Entity,
     target: QuadState,
@@ -177,10 +178,10 @@ pub fn set(
     interruptible: bool,
 ) {
     world
-        .resource_mut::<PendingSignalSets>()
+        .resource_mut::<PendingChannelSets>()
         .0
-        .push(PendingSignalSet {
-            signal,
+        .push(PendingChannelSet {
+            channel,
             to,
             from,
             target,
@@ -196,8 +197,8 @@ pub fn set(
 /// Why a [`set`] request couldn't run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropReason {
-    /// The signal doesn't exist: it was destroyed, or never created.
-    SignalNotFound,
+    /// The channel doesn't exist: it was destroyed, or never created.
+    ChannelNotFound,
     /// `to` or `from` has been destroyed.
     EntityNotFound,
     /// `to` is already transitioning, and the request wasn't `interruptible`.
@@ -209,8 +210,8 @@ pub enum DropReason {
 /// A [`set`] request that couldn't run.
 #[derive(Debug, Clone)]
 pub struct TransitionDropped {
-    /// The signal.
-    pub signal: SignalId,
+    /// The channel.
+    pub channel: TransitionChannelId,
     /// The request's `to` entity.
     pub to: Entity,
     /// The request's `from` entity.
@@ -219,14 +220,14 @@ pub struct TransitionDropped {
     pub reason: DropReason,
 }
 
-/// The requests dropped this tick, recorded by [`signal_dispatch_system`].
+/// The requests dropped this tick, recorded by [`channel_dispatch_system`].
 #[derive(Resource, Default)]
-pub struct DroppedSignals {
+pub struct DroppedRequests {
     /// The dropped requests.
     pub entries: Vec<TransitionDropped>,
 }
 
-impl DroppedSignals {
+impl DroppedRequests {
     /// Takes this tick's dropped requests, leaving the list empty.
     pub fn drain(&mut self) -> Vec<TransitionDropped> {
         std::mem::take(&mut self.entries)
@@ -234,12 +235,12 @@ impl DroppedSignals {
 }
 
 // ---------------------------------------------------------------------------
-// signal_dispatch_system
+// channel_dispatch_system
 // ---------------------------------------------------------------------------
 
 /// Applies the queued [`set`] calls: each valid one becomes a
 /// [`TransitionRequest`] on `to`, and each invalid one is recorded in
-/// [`DroppedSignals`]. Runs just before
+/// [`DroppedRequests`]. Runs just before
 /// [`crate::transition::transition_setup_system`].
 ///
 /// A valid request hides `from` and shows `to`: `to` takes over from `from`'s
@@ -248,11 +249,11 @@ impl DroppedSignals {
 /// A request on a `to` that is already transitioning, with `interruptible`,
 /// starts again from wherever `to` is. Otherwise the transition starts from
 /// `from`'s current geometry.
-pub fn signal_dispatch_system(
+pub fn channel_dispatch_system(
     mut commands: Commands,
-    registry: Res<SignalRegistry>,
-    mut pending: ResMut<PendingSignalSets>,
-    mut dropped: ResMut<DroppedSignals>,
+    registry: Res<ChannelRegistry>,
+    mut pending: ResMut<PendingChannelSets>,
+    mut dropped: ResMut<DroppedRequests>,
     lifecycles: Query<&Lifecycle>,
     quad_states: Query<&QuadState>,
     visibilities: Query<Option<&Visibility>>,
@@ -263,7 +264,7 @@ pub fn signal_dispatch_system(
         macro_rules! drop_with {
             ($reason:expr) => {{
                 dropped.entries.push(TransitionDropped {
-                    signal: req.signal,
+                    channel: req.channel,
                     to: req.to,
                     from: req.from,
                     reason: $reason,
@@ -272,8 +273,8 @@ pub fn signal_dispatch_system(
             }};
         }
 
-        if !registry.exists(req.signal) {
-            drop_with!(DropReason::SignalNotFound);
+        if !registry.exists(req.channel) {
+            drop_with!(DropReason::ChannelNotFound);
         }
 
         let Ok(from_state) = quad_states.get(req.from) else {

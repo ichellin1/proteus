@@ -1,17 +1,17 @@
-// Tests of signals: `SignalRegistry`, `signal::set` and
-// `signal_dispatch_system`, dropped requests, and
+// Tests of channels: `ChannelRegistry`, `channel::set` and
+// `channel_dispatch_system`, dropped requests, and
 // `CommandQueue`/`flush_commands_system`.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
+    channel::{
+        channel_dispatch_system, create_channel, destroy_channel, register_channel_hooks, set,
+        ChannelRegistry, DropReason, DroppedRequests, PendingChannelSets,
+    },
     component::{Lifecycle, TransitionRequest, Visibility},
     flush_commands_system,
     schedule::CommandQueue,
-    signal::{
-        create_signal, destroy_signal, register_signal_hooks, set, signal_dispatch_system,
-        DropReason, DroppedSignals, PendingSignalSets, SignalRegistry,
-    },
     transition::TransitionConfig,
     QuadState,
 };
@@ -22,13 +22,13 @@ use proteus_ui::{
 
 fn make_world() -> World {
     let mut world = World::new();
-    world.init_resource::<SignalRegistry>();
-    world.init_resource::<PendingSignalSets>();
-    world.init_resource::<DroppedSignals>();
+    world.init_resource::<ChannelRegistry>();
+    world.init_resource::<PendingChannelSets>();
+    world.init_resource::<DroppedRequests>();
     world.init_resource::<CommandQueue>();
-    // Must run before any OwnedSignals component can exist in an archetype —
+    // Must run before any OwnedChannels component can exist in an archetype —
     // same requirement as ProteusWorld::new()'s own call.
-    register_signal_hooks(&mut world);
+    register_channel_hooks(&mut world);
     world
 }
 
@@ -71,73 +71,73 @@ fn run<M>(world: &mut World, system: impl IntoSystem<(), (), M> + 'static) {
 }
 
 // ---------------------------------------------------------------------------
-// SignalRegistry / create_signal / destroy_signal
+// ChannelRegistry / create_channel / destroy_channel
 // ---------------------------------------------------------------------------
 
 #[test]
-fn create_signal_registers_it() {
+fn create_channel_registers_it() {
     let mut world = make_world();
-    let id = create_signal(&mut world, None);
-    assert!(world.resource::<SignalRegistry>().exists(id));
-    assert_eq!(world.resource::<SignalRegistry>().owner(id), None);
+    let id = create_channel(&mut world, None);
+    assert!(world.resource::<ChannelRegistry>().exists(id));
+    assert_eq!(world.resource::<ChannelRegistry>().owner(id), None);
 }
 
 #[test]
-fn destroy_signal_removes_it() {
+fn destroy_channel_removes_it() {
     let mut world = make_world();
-    let id = create_signal(&mut world, None);
-    destroy_signal(&mut world, id);
-    assert!(!world.resource::<SignalRegistry>().exists(id));
+    let id = create_channel(&mut world, None);
+    destroy_channel(&mut world, id);
+    assert!(!world.resource::<ChannelRegistry>().exists(id));
 }
 
 #[test]
-fn owned_signal_records_owner() {
+fn owned_channel_records_owner() {
     let mut world = make_world();
     let owner = world.spawn_empty().id();
-    let id = create_signal(&mut world, Some(owner));
-    assert_eq!(world.resource::<SignalRegistry>().owner(id), Some(owner));
+    let id = create_channel(&mut world, Some(owner));
+    assert_eq!(world.resource::<ChannelRegistry>().owner(id), Some(owner));
 }
 
 #[test]
-fn owned_signal_destroyed_when_owner_despawned() {
+fn owned_channel_destroyed_when_owner_despawned() {
     let mut world = make_world();
     let owner = world.spawn_empty().id();
-    let id = create_signal(&mut world, Some(owner));
-    assert!(world.resource::<SignalRegistry>().exists(id));
+    let id = create_channel(&mut world, Some(owner));
+    assert!(world.resource::<ChannelRegistry>().exists(id));
 
     world.despawn(owner);
 
     assert!(
-        !world.resource::<SignalRegistry>().exists(id),
-        "despawning the owner must destroy its owned signal"
+        !world.resource::<ChannelRegistry>().exists(id),
+        "despawning the owner must destroy its owned channel"
     );
 }
 
 #[test]
-fn owned_signal_destroys_only_its_own_signals() {
+fn owned_channel_destroys_only_its_own_channels() {
     let mut world = make_world();
     let owner_a = world.spawn_empty().id();
     let owner_b = world.spawn_empty().id();
-    let id_a = create_signal(&mut world, Some(owner_a));
-    let id_b = create_signal(&mut world, Some(owner_b));
+    let id_a = create_channel(&mut world, Some(owner_a));
+    let id_b = create_channel(&mut world, Some(owner_b));
 
     world.despawn(owner_a);
 
-    assert!(!world.resource::<SignalRegistry>().exists(id_a));
+    assert!(!world.resource::<ChannelRegistry>().exists(id_a));
     assert!(
-        world.resource::<SignalRegistry>().exists(id_b),
-        "despawning owner_a must not touch owner_b's signal"
+        world.resource::<ChannelRegistry>().exists(id_b),
+        "despawning owner_a must not touch owner_b's channel"
     );
 }
 
 // ---------------------------------------------------------------------------
-// signal::set + signal_dispatch_system — happy path
+// channel::set + channel_dispatch_system — happy path
 // ---------------------------------------------------------------------------
 
 #[test]
 fn fresh_dispatch_inserts_transition_request_from_source_state() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
@@ -145,8 +145,8 @@ fn fresh_dispatch_inserts_transition_request_from_source_state() {
         .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
 
-    set(&mut world, signal, to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
     world.flush();
 
     let req = world
@@ -160,7 +160,7 @@ fn fresh_dispatch_inserts_transition_request_from_source_state() {
     assert_eq!(from_state.color, red().color);
 
     assert!(
-        world.resource::<DroppedSignals>().entries.is_empty(),
+        world.resource::<DroppedRequests>().entries.is_empty(),
         "a valid request must not be dropped"
     );
 }
@@ -168,7 +168,7 @@ fn fresh_dispatch_inserts_transition_request_from_source_state() {
 #[test]
 fn dispatch_hides_the_from_entity() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
@@ -176,8 +176,8 @@ fn dispatch_hides_the_from_entity() {
         .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
 
-    set(&mut world, signal, to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
     world.flush();
 
     assert!(
@@ -187,14 +187,14 @@ fn dispatch_hides_the_from_entity() {
 }
 
 // ---------------------------------------------------------------------------
-// signal::set + signal_dispatch_system — drop cases
+// channel::set + channel_dispatch_system — drop cases
 // ---------------------------------------------------------------------------
 
 #[test]
-fn dispatch_drops_when_signal_not_found() {
+fn dispatch_drops_when_channel_not_found() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
-    destroy_signal(&mut world, signal); // now stale
+    let channel = create_channel(&mut world, None);
+    destroy_channel(&mut world, channel); // now stale
     let to = world
         .spawn((blue(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
@@ -202,30 +202,30 @@ fn dispatch_drops_when_signal_not_found() {
         .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
 
-    set(&mut world, signal, to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
     world.flush();
 
     assert!(world.get::<TransitionRequest>(to).is_none());
-    let drops = &world.resource::<DroppedSignals>().entries;
+    let drops = &world.resource::<DroppedRequests>().entries;
     assert_eq!(drops.len(), 1);
-    assert_eq!(drops[0].reason, DropReason::SignalNotFound);
+    assert_eq!(drops[0].reason, DropReason::ChannelNotFound);
 }
 
 #[test]
 fn dispatch_drops_when_to_entity_not_found() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let stale_to = world.spawn_empty().id();
     world.despawn(stale_to);
     let from = world
         .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
 
-    set(&mut world, signal, stale_to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, stale_to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
 
-    let drops = &world.resource::<DroppedSignals>().entries;
+    let drops = &world.resource::<DroppedRequests>().entries;
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].reason, DropReason::EntityNotFound);
 }
@@ -233,17 +233,17 @@ fn dispatch_drops_when_to_entity_not_found() {
 #[test]
 fn dispatch_drops_when_from_entity_not_found() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
     let stale_from = world.spawn_empty().id();
     world.despawn(stale_from);
 
-    set(&mut world, signal, to, stale_from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, stale_from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
 
-    let drops = &world.resource::<DroppedSignals>().entries;
+    let drops = &world.resource::<DroppedRequests>().entries;
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].reason, DropReason::EntityNotFound);
 }
@@ -251,7 +251,7 @@ fn dispatch_drops_when_from_entity_not_found() {
 #[test]
 fn dispatch_drops_when_from_not_visible() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
@@ -259,12 +259,12 @@ fn dispatch_drops_when_from_not_visible() {
         .spawn((red(), Lifecycle::Idle, Visibility::HIDDEN))
         .id();
 
-    set(&mut world, signal, to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
     world.flush();
 
     assert!(world.get::<TransitionRequest>(to).is_none());
-    let drops = &world.resource::<DroppedSignals>().entries;
+    let drops = &world.resource::<DroppedRequests>().entries;
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].reason, DropReason::EntityNotVisible);
 }
@@ -272,7 +272,7 @@ fn dispatch_drops_when_from_not_visible() {
 #[test]
 fn dispatch_drops_when_already_transitioning_and_not_interruptible() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Transitioning, Visibility::VISIBLE))
         .id();
@@ -280,12 +280,12 @@ fn dispatch_drops_when_already_transitioning_and_not_interruptible() {
         .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
 
-    set(&mut world, signal, to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
     world.flush();
 
     assert!(world.get::<TransitionRequest>(to).is_none());
-    let drops = &world.resource::<DroppedSignals>().entries;
+    let drops = &world.resource::<DroppedRequests>().entries;
     assert_eq!(drops.len(), 1);
     assert_eq!(drops[0].reason, DropReason::AlreadyTransitioning);
 }
@@ -293,7 +293,7 @@ fn dispatch_drops_when_already_transitioning_and_not_interruptible() {
 #[test]
 fn dispatch_interrupts_when_already_transitioning_and_interruptible() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Transitioning, Visibility::VISIBLE))
         .id();
@@ -301,8 +301,8 @@ fn dispatch_interrupts_when_already_transitioning_and_interruptible() {
         .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
         .id();
 
-    set(&mut world, signal, to, from, blue(), cfg(), true);
-    run(&mut world, signal_dispatch_system);
+    set(&mut world, channel, to, from, blue(), cfg(), true);
+    run(&mut world, channel_dispatch_system);
     world.flush();
 
     let req = world
@@ -313,13 +313,13 @@ fn dispatch_interrupts_when_already_transitioning_and_interruptible() {
         "retarget must leave from_state=None so transition_setup_system snapshots \
          to's own current mid-flight QuadState, not from's"
     );
-    assert!(world.resource::<DroppedSignals>().entries.is_empty());
+    assert!(world.resource::<DroppedRequests>().entries.is_empty());
 }
 
 #[test]
-fn dropped_signals_clears_previous_frame_results() {
+fn dropped_requests_clears_previous_frame_results() {
     let mut world = make_world();
-    let signal = create_signal(&mut world, None);
+    let channel = create_channel(&mut world, None);
     let to = world
         .spawn((blue(), Lifecycle::Transitioning, Visibility::VISIBLE))
         .id();
@@ -328,13 +328,13 @@ fn dropped_signals_clears_previous_frame_results() {
         .id();
 
     // Frame 1: dropped (already transitioning, not interruptible).
-    set(&mut world, signal, to, from, blue(), cfg(), false);
-    run(&mut world, signal_dispatch_system);
-    assert_eq!(world.resource::<DroppedSignals>().entries.len(), 1);
+    set(&mut world, channel, to, from, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
+    assert_eq!(world.resource::<DroppedRequests>().entries.len(), 1);
 
     // Frame 2: nothing queued — stale drop from frame 1 must not linger.
-    run(&mut world, signal_dispatch_system);
-    assert!(world.resource::<DroppedSignals>().entries.is_empty());
+    run(&mut world, channel_dispatch_system);
+    assert!(world.resource::<DroppedRequests>().entries.is_empty());
 }
 
 // ---------------------------------------------------------------------------

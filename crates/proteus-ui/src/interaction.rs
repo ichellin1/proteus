@@ -43,7 +43,11 @@ use crate::QuadState;
 // ---------------------------------------------------------------------------
 
 /// Which interaction style applies to a component.
+///
+/// More states may be added, such as one for keyboard focus, so a `match` on
+/// it outside this crate needs a `_` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum InteractionStateKind {
     /// No style: the declared geometry.
     #[default]

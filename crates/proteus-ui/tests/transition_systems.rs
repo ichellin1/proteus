@@ -550,7 +550,7 @@ fn retargeting_midtransition_starts_from_current_state() {
 // A transition with a `from_state` must move the entity there as soon as it is
 // set up, and keep it there through any `delay`.
 //
-// A signal uses `from_state` so that `to` starts from `from`'s geometry, and a
+// A channel uses `from_state` so that `to` starts from `from`'s geometry, and a
 // `PerTarget` split so that every target starts from the source. If the entity
 // only moved on the first tick of the transition, it would sit at its old
 // position, usually its final one, through the delay, then jump back to the
@@ -613,7 +613,7 @@ fn a_delayed_transition_sits_at_its_from_state_for_the_whole_delay() {
 // Without a delay: the tick a transition is set up must already draw `from`,
 // not the entity's old position. The transition is only picked up the tick
 // after it is set up, so otherwise the entity shows where it was for one frame:
-// for a signal's `to` entity, a flash of the end state before it moves.
+// for a channel's `to` entity, a flash of the end state before it moves.
 #[test]
 fn a_transition_renders_its_from_state_on_the_frame_it_is_set_up() {
     let mut world = make_world();
@@ -642,7 +642,7 @@ fn a_transition_renders_its_from_state_on_the_frame_it_is_set_up() {
 // The no-op half of the contract: with `from_state: None` the origin *is* the
 // entity's current state, so setup must leave it exactly where it is. Most
 // transitions take this path: `animate_to`, interaction styles, and the
-// Slice/GridSlice group paths.
+// Row/Column/Grid group paths.
 #[test]
 fn setup_without_a_from_state_leaves_the_entity_where_it_is() {
     let mut world = make_world();

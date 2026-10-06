@@ -95,7 +95,7 @@ pub enum Lifecycle {
 }
 
 // ---------------------------------------------------------------------------
-// TransitionRequest — signals intent to start a transition
+// TransitionRequest — a request to start a transition
 // ---------------------------------------------------------------------------
 
 /// Added to an entity to request a transition to a new `QuadState`.
@@ -108,7 +108,7 @@ pub struct TransitionRequest {
     pub to: QuadState,
     /// How the transition is timed.
     pub config: crate::transition::TransitionConfig,
-    /// Where to start, if not the entity's current geometry. A signal uses it
+    /// Where to start, if not the entity's current geometry. A channel uses it
     /// so that the `to` entity starts from the `from` entity's geometry.
     pub from_state: Option<QuadState>,
 }
@@ -142,7 +142,7 @@ impl Default for Visibility {
 }
 
 // ---------------------------------------------------------------------------
-// Disabled / TransitioningConfig: when an entity accepts input
+// Disabled / TransitionInteractionConfig: when an entity accepts input
 // ---------------------------------------------------------------------------
 
 /// Marks an entity as disabled: drawn, but ignoring input.
@@ -155,12 +155,12 @@ pub struct Disabled;
 
 /// Whether an entity accepts input while it is transitioning.
 ///
-/// Without this, or with `allow_input: false`, a transitioning entity is left
+/// Without this, or with `allow_pointer: false`, a transitioning entity is left
 /// out of hit-testing.
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct TransitioningConfig {
+pub struct TransitionInteractionConfig {
     /// Accept pointer input during a transition. Defaults to `false`.
-    pub allow_input: bool,
+    pub allow_pointer: bool,
     /// Not read yet; reserved for keyboard navigation. Defaults to `false`.
     pub allow_navigation: bool,
 }

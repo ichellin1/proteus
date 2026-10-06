@@ -58,7 +58,7 @@ use std::rc::Rc;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    Border, ComponentSpec, Easing, Glow, Handle, Image, MergeLayout, Proteus, QuadState,
+    Border, ComponentSpec, Easing, Glow, Handle, Image, ImageCrop, MergeLayout, Proteus, QuadState,
     SplitStrategy, Text, TextureHandle, TransitionConfig,
 };
 
@@ -1226,7 +1226,7 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Slice,
+            SplitStrategy::Row,
         );
         self.queue_reveal(
             self.home.nav_labels.to_vec(),
@@ -1297,7 +1297,7 @@ impl Demo {
         }
     }
 
-    /// 3 simultaneous 1→2 `GridSlice` splits, one per nav button — the
+    /// 3 simultaneous 1→2 `Grid` splits, one per nav button — the
     /// reverse of `start_examples_to_home`.
     fn start_home_to_examples(&mut self, proteus: &mut Proteus) {
         for col in 0..3 {
@@ -1310,7 +1310,7 @@ impl Demo {
                 proteus,
                 &targets,
                 group_transition_config(),
-                SplitStrategy::GridSlice { cols: 1, rows: 2 },
+                SplitStrategy::Grid { cols: 1, rows: 2 },
             );
         }
         self.queue_reveal(
@@ -1339,7 +1339,7 @@ impl Demo {
         self.state = AppState::Home;
     }
 
-    /// 3 independent single-target `Slice` splits, one per nav button — a
+    /// 3 independent single-target `Row` splits, one per nav button — a
     /// degenerate 1→1 crossfade dressed up as a trivial split (button `i`
     /// goes straight to tile `i`, not a fan-out). The only edge out of
     /// `Home`'s "Videos" button.
@@ -1359,7 +1359,7 @@ impl Demo {
                 proteus,
                 &[(target, state)],
                 group_transition_config(),
-                SplitStrategy::Slice,
+                SplitStrategy::Row,
             );
         }
         self.state = AppState::VideoTiles;
@@ -1376,7 +1376,7 @@ impl Demo {
                 proteus,
                 &[target],
                 group_transition_config(),
-                SplitStrategy::Slice,
+                SplitStrategy::Row,
             );
         }
         self.state = AppState::Home;
@@ -1408,7 +1408,7 @@ impl Demo {
         self.state = AppState::VideoScreen(idx);
     }
 
-    /// One 1→3 `Slice` split — the clicked (screen-sized) tile fans back
+    /// One 1→3 `Row` split — the clicked (screen-sized) tile fans back
     /// out to all 3 grid slots, including its own.
     ///
     /// Uses `split_to_with_states`, not plain `split_to` — `tile` (the
@@ -1447,7 +1447,7 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Slice,
+            SplitStrategy::Row,
         );
         // See `PendingTileReset`'s doc for why this can't happen
         // synchronously here.
@@ -1455,7 +1455,7 @@ impl Demo {
         self.state = AppState::VideoTiles;
     }
 
-    /// One 1→3 `Slice` split straight to the nav buttons, skipping
+    /// One 1→3 `Row` split straight to the nav buttons, skipping
     /// `VideoTiles`' grid entirely — the `VideoScreen`-to-`Home` escape
     /// hatch, same shape as `start_detail_to_home`. The other two tiles
     /// never participate in this split (only the playing one does), so —
@@ -1477,7 +1477,7 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Slice,
+            SplitStrategy::Row,
         );
         // `tile` isn't a target of *this* split (only `home.nav_buttons`
         // are), so nothing reveals it here to expose its still-screen-sized
@@ -1552,12 +1552,12 @@ impl Demo {
             proteus,
             &sources,
             group_transition_config(),
-            MergeLayout::Horizontal,
+            MergeLayout::Row,
         );
         self.state = AppState::Loading;
     }
 
-    /// One 1→3 `Slice` split back to the nav buttons — the error escape
+    /// One 1→3 `Row` split back to the nav buttons — the error escape
     /// hatch (clicking home while `Loading`, fetching or erroring) as well
     /// as the ordinary "Loading" → "Home" back-navigation.
     fn start_loading_to_home(&mut self, proteus: &mut Proteus) {
@@ -1566,18 +1566,18 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Slice,
+            SplitStrategy::Row,
         );
         let _ = self.loading.error_text.set_visible(proteus, false);
         self.state = AppState::Home;
     }
 
-    /// One 1→`gallery::TILE_COUNT` `GridSlice` split — `loading.logo` fans
+    /// One 1→`gallery::TILE_COUNT` `Grid` split — `loading.logo` fans
     /// out into the grid once every tile's current-generation image has
-    /// arrived (`advance_gallery_fetch`). `GridSlice` rather than flat
-    /// `Slice` (unlike `Home`↔`Loading`'s single-target merge/split) so each
+    /// arrived (`advance_gallery_fetch`). `Grid` rather than
+    /// `Row` (unlike `Home`↔`Loading`'s single-target merge/split) so each
     /// tile radiates from its own quadrant instead of zigzagging across one
-    /// shared axis — see `proteus_ui::SplitStrategy::GridSlice`'s doc.
+    /// shared axis — see `proteus_ui::SplitStrategy::Grid`'s doc.
     /// `gallery.fetch_button`/`.fetch_button_label` aren't split targets
     /// (only the 12 tiles are) — their own fade-in is `Demo::advance_
     /// gallery_button_fade`'s job, not queued here at all: it derives
@@ -1590,7 +1590,7 @@ impl Demo {
             proteus,
             &targets,
             gallery_group_transition_config(),
-            SplitStrategy::GridSlice {
+            SplitStrategy::Grid {
                 cols: gallery::COLS,
                 rows: gallery::ROWS,
             },
@@ -1752,7 +1752,7 @@ impl Demo {
         self.state = AppState::GalleryImage(idx);
     }
 
-    /// One 1→`gallery::TILE_COUNT` `GridSlice` split — the reverse of
+    /// One 1→`gallery::TILE_COUNT` `Grid` split — the reverse of
     /// `start_gallery_to_image`, triggered by clicking `gallery.enlarged`
     /// itself or `nav::Nav::back`. Cancels the hires fetch unconditionally
     /// (see `pending_gallery_hires_cancel`'s doc), whether or not one had
@@ -1766,7 +1766,7 @@ impl Demo {
             proteus,
             &targets,
             gallery_group_transition_config(),
-            SplitStrategy::GridSlice {
+            SplitStrategy::Grid {
                 cols: gallery::COLS,
                 rows: gallery::ROWS,
             },
@@ -1777,7 +1777,7 @@ impl Demo {
         self.state = AppState::Gallery;
     }
 
-    /// One 1→3 `Slice` split straight to the nav buttons — the
+    /// One 1→3 `Row` split straight to the nav buttons — the
     /// `GalleryImage`-to-`Home` escape hatch, skipping `Gallery`'s grid
     /// entirely, same shape as `start_detail_to_home`/`start_screen_to_home`.
     /// The 12 real tiles were never revealed in the first place (they're
@@ -1793,7 +1793,7 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Slice,
+            SplitStrategy::Row,
         );
         self.state = AppState::Home;
     }
@@ -1832,7 +1832,7 @@ impl Demo {
         self.state = AppState::ExampleDetail(idx);
     }
 
-    /// One 1→6 `GridSlice` split — the reverse of `start_examples_to_detail`.
+    /// One 1→6 `Grid` split — the reverse of `start_examples_to_detail`.
     fn start_detail_to_examples(&mut self, proteus: &mut Proteus) {
         let buttons = self.examples_home.buttons;
         let targets: Vec<Handle> = (0..2)
@@ -1842,14 +1842,14 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::GridSlice { cols: 3, rows: 2 },
+            SplitStrategy::Grid { cols: 3, rows: 2 },
         );
         self.cancel_stress_test(proteus);
         self.hide_active_example_content(proteus);
         self.state = AppState::ExamplesHome;
     }
 
-    /// One 1→3 `Slice` split straight to the nav buttons — the
+    /// One 1→3 `Row` split straight to the nav buttons — the
     /// `ExampleDetail`-to-`Home` escape hatch, skipping `ExamplesHome`'s
     /// grid entirely.
     fn start_detail_to_home(&mut self, proteus: &mut Proteus) {
@@ -1858,7 +1858,7 @@ impl Demo {
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Slice,
+            SplitStrategy::Row,
         );
         self.cancel_stress_test(proteus);
         self.hide_active_example_content(proteus);
@@ -1989,7 +1989,7 @@ impl Demo {
     /// `splash.button`, wrapping through `logo_frames` every
     /// `splash::LOGO_FRAME_DURATION` seconds. Stops once Splash has handed
     /// off to Home: the button is either mid-transition (its current frame gets
-    /// baked into the Slice transition's snapshot, same as any other texture
+    /// baked into the split's snapshot, same as any other texture
     /// content) or already hidden, so there's nothing left to animate.
     fn advance_logo_animation(&mut self, proteus: &mut Proteus, dt: f32) {
         if self.logo_frames.is_empty() || self.state != AppState::Splash {
@@ -2028,7 +2028,7 @@ impl Demo {
     /// the `set_gallery_tile_image` call. Once it has: stashes the
     /// still-uncropped frame onto `gallery.tile_full[idx]`
     /// (`Handle::copy_baked_image_from`), *then* center-crops the tile's
-    /// own copy to a square in place (`Handle::center_crop_to_square`) —
+    /// own copy to a square in place (`Handle::crop_image`) —
     /// in that order, since the crop mutates the tile's `BakedImage`
     /// in place and would otherwise poison what gets stashed. Called every
     /// tick, before `advance_gallery_fetch` — so by the moment that
@@ -2047,7 +2047,7 @@ impl Demo {
                 continue;
             }
             let _ = self.gallery.tile_full[idx].copy_baked_image_from(proteus, tile);
-            let _ = tile.center_crop_to_square(proteus);
+            let _ = tile.crop_image(proteus, ImageCrop::CenteredSquare);
             self.pending_gallery_tile_crop[idx] = false;
         }
     }
@@ -3210,7 +3210,7 @@ impl Demo {
         }
 
         // `gallery`'s 12 tiles + `enlarged` — real tiles stay hidden/static
-        // during a `Loading`↔`Gallery` `GridSlice` transition (only the
+        // during a `Loading`↔`Gallery` `Grid` transition (only the
         // virtuals animate), so it's always safe to reassert corner radius
         // unconditionally here, no "actively transitioning" guard needed (unlike
         // `video_tiles.tiles` above).
@@ -3762,7 +3762,7 @@ mod tests {
     // deliberately not a single instance round-tripping through all six:
     // repeatedly re-declaring several `examples_home.buttons`' geometry
     // (needed headlessly, since `examples_home::layout` never resolves
-    // without real text baking) before a *second* `GridSlice` split
+    // without real text baking) before a *second* `Grid` split
     // surfaced a separate, not-yet-root-caused issue where
     // `reveal_on_complete` never fires for that second split — reproduced
     // only in the no-GPU fallback path (`one_to_n_setup_system`'s
@@ -3991,12 +3991,7 @@ mod tests {
         demo.app
             .world_mut()
             .entity_mut(tile.id())
-            .insert(BakedImage {
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                page: 0,
-                pixel_size: [400.0, 600.0],
-            });
+            .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [400.0, 600.0]));
         if let Some(mut qs) = demo.app.world_mut().get_mut::<QuadState>(tile.id()) {
             qs.color = Vec4::ONE;
         }
@@ -4036,12 +4031,7 @@ mod tests {
             demo.app
                 .world_mut()
                 .entity_mut(tile.id())
-                .insert(BakedImage {
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    page: 0,
-                    pixel_size: [400.0, 600.0],
-                });
+                .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [400.0, 600.0]));
             if let Some(mut qs) = demo.app.world_mut().get_mut::<QuadState>(tile.id()) {
                 qs.color = Vec4::ONE;
             }
@@ -4108,12 +4098,7 @@ mod tests {
         demo.app
             .world_mut()
             .entity_mut(tile.id())
-            .insert(BakedImage {
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                page: 0,
-                pixel_size: [400.0, 600.0],
-            });
+            .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [400.0, 600.0]));
         if let Some(mut qs) = demo.app.world_mut().get_mut::<QuadState>(tile.id()) {
             qs.color = Vec4::ONE;
         }
@@ -5044,12 +5029,7 @@ mod tests {
         demo.set_gallery_tile_image(0, vec![0u8; 4], Vec2::new(2.0, 3.0));
         // Simulate the renderer's bake pass landing a real (uncropped, 2:3)
         // image on the tile — real baking needs GPU, unavailable here.
-        let uncropped = BakedImage {
-            uv_offset: [0.0, 0.0],
-            uv_scale: [1.0, 1.0],
-            page: 0,
-            pixel_size: [200.0, 300.0],
-        };
+        let uncropped = BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [200.0, 300.0]);
         demo.app
             .world_mut()
             .entity_mut(tile.id())
@@ -5161,12 +5141,7 @@ mod tests {
         demo.app
             .world_mut()
             .entity_mut(overlay.id())
-            .insert(BakedImage {
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                page: 0,
-                pixel_size: [800.0, 600.0],
-            });
+            .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [800.0, 600.0]));
 
         demo.tick(GALLERY_HIRES_CROSSFADE_DURATION_SECS / 2.0);
         assert!(
@@ -5215,12 +5190,7 @@ mod tests {
         demo.app
             .world_mut()
             .entity_mut(overlay.id())
-            .insert(BakedImage {
-                uv_offset: [0.0, 0.0],
-                uv_scale: [1.0, 1.0],
-                page: 0,
-                pixel_size: [800.0, 500.0],
-            });
+            .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [800.0, 500.0]));
 
         demo.tick(0.001);
 

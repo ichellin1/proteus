@@ -1,11 +1,11 @@
-//! [`Proteus`], holds an app's components, signals and callbacks.
+//! [`Proteus`], holds an app's components, channels and callbacks.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::Component;
 use glam::Vec2;
 
 use proteus_ui::{
-    create_signal, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
+    create_channel, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
     InteractionDef, ProteusWorld, QuadState, Visibility,
 };
 
@@ -15,7 +15,7 @@ use proteus_render::{
 
 use crate::callback::{self, CallbackRegistry};
 use crate::data::{ComponentData, TransitionData};
-use crate::handle::{Handle, SignalHandle, TextureHandle, TextureRequest};
+use crate::handle::{Handle, TextureHandle, TextureRequest, TransitionChannel};
 use crate::spec::ComponentSpec;
 
 /// A component's declared geometry. It is stored separately from the
@@ -23,12 +23,12 @@ use crate::spec::ComponentSpec;
 #[derive(Component, Debug, Clone)]
 pub(crate) struct DeclaredGeometry(pub QuadState);
 
-/// An app's components, signals and callbacks.
+/// An app's components, channels and callbacks.
 ///
 /// An app normally uses a single instance of `Proteus`; on a host, the host
 /// creates it and passes it to the app each frame. Separate instances are
 /// independent, and a handle only works with the `Proteus` that created it.
-/// Handle methods that read or change a component, signal or texture take
+/// Handle methods that read or change a component, channel or texture take
 /// the `Proteus` as an argument.
 pub struct Proteus {
     pub(crate) world: ProteusWorld,
@@ -99,8 +99,8 @@ impl Proteus {
                 .insert(proteus_ui::Disabled);
         }
 
-        if let Some(transitioning) = spec.transitioning {
-            self.world.world.entity_mut(entity).insert(transitioning);
+        if let Some(interaction) = spec.transition_interaction {
+            self.world.world.entity_mut(entity).insert(interaction);
         }
 
         if let Some(opacity) = spec.opacity {
@@ -144,12 +144,12 @@ impl Proteus {
         Handle(entity)
     }
 
-    /// Creates a signal, which transitions one component into another with
-    /// [`SignalHandle::set`].
+    /// Creates a transition channel, which transitions one component into
+    /// another with [`TransitionChannel::set`].
     ///
-    /// If `owner` is given, the signal is destroyed along with it.
-    pub fn signal(&mut self, owner: Option<Handle>) -> SignalHandle {
-        SignalHandle(create_signal(&mut self.world.world, owner.map(|h| h.0)))
+    /// If `owner` is given, the channel is destroyed along with it.
+    pub fn transition_channel(&mut self, owner: Option<Handle>) -> TransitionChannel {
+        TransitionChannel(create_channel(&mut self.world.world, owner.map(|h| h.0)))
     }
 
     /// Wraps the ID of a texture that is already in the atlas.
@@ -357,7 +357,7 @@ impl Proteus {
         let dropped = self
             .world
             .world
-            .resource_mut::<proteus_ui::DroppedSignals>()
+            .resource_mut::<proteus_ui::DroppedRequests>()
             .drain();
         for d in dropped {
             callback::fire_dropped(self, d);
@@ -495,27 +495,27 @@ mod tests {
         );
     }
 
-    // Destroying a signal drops its `on_dropped` handlers, and so does
+    // Destroying a channel drops its `on_dropped` handlers, and so does
     // destroying the component that owns it.
     #[test]
-    fn destroying_signals_and_their_owners_forgets_dropped_handlers() {
+    fn destroying_channels_and_their_owners_forgets_dropped_handlers() {
         let mut app = Proteus::new();
 
-        let unowned = app.signal(None);
+        let unowned = app.transition_channel(None);
         unowned.on_dropped(&mut app, |_, _| {});
         assert_eq!(app.callback_count(), 1);
         unowned.destroy(&mut app);
-        assert_eq!(app.callback_count(), 0, "explicit signal destroy");
+        assert_eq!(app.callback_count(), 0, "explicit channel destroy");
 
         let owner = app.component(ComponentSpec::new(QuadState::default()));
-        let owned = app.signal(Some(owner));
+        let owned = app.transition_channel(Some(owner));
         owned.on_dropped(&mut app, |_, _| {});
         assert_eq!(app.callback_count(), 1);
         owner.destroy(&mut app).unwrap();
         assert_eq!(
             app.callback_count(),
             0,
-            "an owned signal's handlers go when its owner does"
+            "an owned channel's handlers go when its owner does"
         );
     }
 }

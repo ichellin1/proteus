@@ -1,5 +1,5 @@
-//! [`Handle`], [`SignalHandle`] and [`TextureHandle`]: the IDs of components,
-//! signals and textures.
+//! [`Handle`], [`TransitionChannel`] and [`TextureHandle`]: the IDs of components,
+//! channels and textures.
 //!
 //! A handle holds no state. Its methods take the [`Proteus`] it came from,
 //! which holds everything: `button.on_click(&mut app, |app| { ... })`.
@@ -11,10 +11,10 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    BakedComposite, BakedImage, BakedText, Disabled, GroupSource, GroupTarget, Interactable,
-    MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SignalId, SplitStrategy,
-    TextureRef, TransitionConfig, TransitionRequest, TransitioningConfig, VideoCrossfade,
-    VideoPlayer, Visibility,
+    BakedComposite, BakedImage, BakedText, Disabled, GroupSource, GroupTarget, ImageCrop,
+    Interactable, MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy,
+    TextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
+    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -30,7 +30,10 @@ use crate::Proteus;
 /// Methods that return this error also log it, so the failure is visible even
 /// if the result is ignored. Using a handle after its component is destroyed
 /// never panics.
+///
+/// More variants may be added, so a `match` on it needs a `_` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HandleError {
     /// This handle's component no longer exists: it was destroyed, directly
     /// or along with its parent.
@@ -38,14 +41,31 @@ pub enum HandleError {
     /// Another component the call needs no longer exists: a child, the
     /// source of an image, or a component in a split or merge.
     OtherEntityNotFound,
+    /// The component passed to [`Handle::remove_child`] isn't a child of this
+    /// one: it has a different parent, or none.
+    NotAChild,
+    /// A split or merge's grid has fewer cells than there are pieces, so some
+    /// pieces would have nowhere to go.
+    GridTooSmall {
+        /// The number of targets (split) or sources (merge).
+        pieces: usize,
+        /// `cols × rows`.
+        cells: usize,
+    },
 }
 
 impl std::fmt::Display for HandleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EntityNotFound => f.write_str("handle refers to a dead entity"),
+            Self::EntityNotFound => {
+                f.write_str("the component this handle refers to no longer exists")
+            }
             Self::OtherEntityNotFound => {
-                f.write_str("a handle passed to this call refers to a dead entity")
+                f.write_str("a component passed to this call no longer exists")
+            }
+            Self::NotAChild => f.write_str("the component isn't a child of this one"),
+            Self::GridTooSmall { pieces, cells } => {
+                write!(f, "the grid has {cells} cells for {pieces} pieces")
             }
         }
     }
@@ -108,6 +128,29 @@ fn check_all_alive(
     Ok(())
 }
 
+/// Fails with [`HandleError::GridTooSmall`], logging it, if `strategy` cuts a
+/// grid with fewer cells than `pieces`. `op` names the `Handle` method.
+fn check_split_grid(strategy: &SplitStrategy, pieces: usize, op: &str) -> Result<(), HandleError> {
+    match strategy.grid(pieces) {
+        Some((cols, rows)) => check_grid(cols * rows, pieces, op),
+        None => Ok(()),
+    }
+}
+
+/// [`check_split_grid`] for a merge's `layout`.
+fn check_merge_grid(layout: &MergeLayout, pieces: usize, op: &str) -> Result<(), HandleError> {
+    let (cols, rows) = layout.grid(pieces);
+    check_grid(cols * rows, pieces, op)
+}
+
+fn check_grid(cells: usize, pieces: usize, op: &str) -> Result<(), HandleError> {
+    if cells >= pieces {
+        return Ok(());
+    }
+    log::warn!("Handle::{op}: the grid has {cells} cells for {pieces} pieces — call ignored");
+    Err(HandleError::GridTooSmall { pieces, cells })
+}
+
 /// Returns every entity in `root`'s subtree, `root` included.
 fn subtree(app: &Proteus, root: Entity) -> Vec<Entity> {
     let mut out = vec![root];
@@ -122,19 +165,19 @@ fn subtree(app: &Proteus, root: Entity) -> Vec<Entity> {
 }
 
 /// Forgets the callbacks of every entity in `root`'s subtree, and the
-/// `on_dropped` handlers of the signals they own. Call just before despawning:
-/// despawning a subtree destroys its owned signals but not their handlers,
+/// `on_dropped` handlers of the channels they own. Call just before despawning:
+/// despawning a subtree destroys its owned channels but not their handlers,
 /// which this crate keeps separately.
 fn forget_subtree(app: &mut Proteus, root: Entity) {
     for entity in subtree(app, root) {
         let owned = app
             .world
             .world
-            .get::<proteus_ui::OwnedSignals>(entity)
+            .get::<proteus_ui::OwnedChannels>(entity)
             .map(|s| s.0.clone())
             .unwrap_or_default();
-        for signal in owned {
-            app.callbacks.forget_signal(signal);
+        for channel in owned {
+            app.callbacks.forget_channel(channel);
         }
         app.callbacks.forget_entity(entity);
     }
@@ -214,7 +257,7 @@ impl Handle {
 
     /// Transitions this component from its current geometry to `to`.
     ///
-    /// Unlike [`SignalHandle::set`], only this component is involved, which
+    /// Unlike [`TransitionChannel::set`], only this component is involved, which
     /// makes this a good fit for moving a component around repeatedly. Calling
     /// it during a transition starts a new one from wherever the component is.
     /// The transition starts on the next tick.
@@ -342,8 +385,7 @@ impl Handle {
     /// The size in pixels of this component's baked image, or `None` if the
     /// image hasn't been baked yet or the component has none.
     ///
-    /// This is the image's full size, even after
-    /// [`Handle::center_crop_to_square`].
+    /// This is the image's full size, even after [`Handle::crop_image`].
     pub fn baked_image_size(&self, app: &Proteus) -> Option<Vec2> {
         app.world
             .world
@@ -388,42 +430,43 @@ impl Handle {
         Ok(true)
     }
 
-    /// Crops this component's baked image to a centered square.
+    /// Shows only the part of this component's image that `crop` selects:
+    /// for example [`ImageCrop::CenteredSquare`] to fill a square grid tile
+    /// with an image of any shape.
     ///
-    /// Only the visible region of the texture changes; no pixels are copied
-    /// and no atlas space is used. Use it to fill square cells, such as grid
-    /// tiles, with images of any shape. To keep an uncropped view as well,
-    /// use [`Handle::copy_baked_image_from`] on another component first.
+    /// The crop is always measured from the whole image, so calling it again
+    /// replaces the crop rather than cropping the crop, and
+    /// [`ImageCrop::None`] shows the whole image again. Only the visible
+    /// region changes: no pixels are copied and no atlas space is used. To
+    /// keep an uncropped view as well, use [`Handle::copy_baked_image_from`]
+    /// on another component.
     ///
-    /// Returns `Ok(false)` if the component has no baked image yet.
+    /// Returns `Ok(false)`, and changes nothing, if the image hasn't been
+    /// baked yet; call it again once it has.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use proteus_sdk::*;
+    /// # let mut app = Proteus::new();
+    /// # let tile = app.component(ComponentSpec::new(QuadState::default()));
+    /// // A 16:9 view of the image, kept to its top edge.
+    /// tile.crop_image(
+    ///     &mut app,
+    ///     ImageCrop::Aspect { ratio: 16.0 / 9.0, anchor: glam::Vec2::new(0.5, 0.0) },
+    /// )?;
+    /// # Ok::<(), HandleError>(())
+    /// ```
     ///
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists.
-    pub fn center_crop_to_square(&self, app: &mut Proteus) -> Result<bool, HandleError> {
-        check_alive(app, self.0, "center_crop_to_square")?;
-        // handle if nothing has baked.
-        let Some(baked) = app.world.world.get::<BakedImage>(self.0).cloned() else {
+    pub fn crop_image(&self, app: &mut Proteus, crop: ImageCrop) -> Result<bool, HandleError> {
+        let mut entity = entity_mut(app, self.0, "crop_image")?;
+        let Some(mut baked) = entity.get_mut::<BakedImage>() else {
             return Ok(false);
         };
-        let (pw, ph) = (baked.pixel_size[0], baked.pixel_size[1]);
-        let mut uv_offset = baked.uv_offset;
-        let mut uv_scale = baked.uv_scale;
-        if pw > ph {
-            let frac = ph / pw;
-            uv_offset[0] += uv_scale[0] * (1.0 - frac) / 2.0;
-            uv_scale[0] *= frac;
-        } else if ph > pw {
-            let frac = pw / ph;
-            uv_offset[1] += uv_scale[1] * (1.0 - frac) / 2.0;
-            uv_scale[1] *= frac;
-        }
-        entity_mut(app, self.0, "center_crop_to_square")?.insert(BakedImage {
-            uv_offset,
-            uv_scale,
-            page: baked.page,
-            pixel_size: baked.pixel_size,
-        });
+        baked.crop(crop);
         Ok(true)
     }
 
@@ -455,7 +498,7 @@ impl Handle {
     /// Shows or hides this component and its children.
     ///
     /// A hidden component is neither drawn nor hit-tested.
-    /// [`SignalHandle::set`] already hides the component it transitions from
+    /// [`TransitionChannel::set`] already hides the component it transitions from
     /// and shows the one it transitions to; use this for everything else.
     ///
     /// A hidden component stops being drawn on the next frame and stops
@@ -492,20 +535,20 @@ impl Handle {
 
     /// Sets whether this component accepts input while transitioning. `None`
     /// restores the default, where a transitioning component ignores input.
-    /// See [`ComponentSpec::transitioning`](crate::ComponentSpec::transitioning).
+    /// See [`ComponentSpec::transition_interaction`](crate::ComponentSpec::transition_interaction).
     ///
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists.
-    pub fn set_transitioning_config(
+    pub fn set_transition_interaction(
         &self,
         app: &mut Proteus,
-        config: Option<TransitioningConfig>,
+        config: Option<TransitionInteractionConfig>,
     ) -> Result<(), HandleError> {
-        let mut entity = entity_mut(app, self.0, "set_transitioning_config")?;
+        let mut entity = entity_mut(app, self.0, "set_transition_interaction")?;
         match config {
             Some(cfg) => entity.insert(cfg),
-            None => entity.remove::<TransitioningConfig>(),
+            None => entity.remove::<TransitionInteractionConfig>(),
         };
         Ok(())
     }
@@ -575,9 +618,9 @@ impl Handle {
     /// on one component:
     ///
     /// - [`Handle::animate_to`]: this component.
-    /// - [`SignalHandle::set`]: the `to` component.
-    /// - [`Handle::split_to`] and its variants, with [`SplitStrategy::Slice`]
-    ///   or [`SplitStrategy::GridSlice`]: the source, once every target has
+    /// - [`TransitionChannel::set`]: the `to` component.
+    /// - [`Handle::split_to`] and its variants, with [`SplitStrategy::Row`]
+    ///   or [`SplitStrategy::Grid`]: the source, once every target has
     ///   arrived.
     /// - [`Handle::split_to`] and its variants, with
     ///   [`SplitStrategy::PerTarget`]: each target, separately. The source has
@@ -603,8 +646,8 @@ impl Handle {
     /// Splits this component into `targets`: a 1→N transition.
     ///
     /// Each target ends at its own declared geometry. This component is
-    /// hidden as soon as the split starts. With [`SplitStrategy::Slice`] and
-    /// [`SplitStrategy::GridSlice`], slices of this component move into place
+    /// hidden as soon as the split starts. With [`SplitStrategy::Row`] and
+    /// [`SplitStrategy::Grid`], slices of this component move into place
     /// and the targets appear when they arrive. With
     /// [`SplitStrategy::PerTarget`], the targets themselves move. The
     /// transition starts on the next tick.
@@ -612,8 +655,9 @@ impl Handle {
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists,
-    /// [`HandleError::OtherEntityNotFound`] if a target doesn't. Nothing
-    /// starts in either case.
+    /// [`HandleError::OtherEntityNotFound`] if a target doesn't, and
+    /// [`HandleError::GridTooSmall`] if `strategy` is a grid with fewer cells
+    /// than there are targets. Nothing starts in any of these cases.
     pub fn split_to(
         &self,
         app: &mut Proteus,
@@ -623,6 +667,7 @@ impl Handle {
     ) -> Result<(), HandleError> {
         check_alive(app, self.0, "split_to")?;
         check_all_alive(app, targets.iter().map(|h| h.0), "split_to", "target")?;
+        check_split_grid(&strategy, targets.len(), "split_to")?;
         let group_targets = targets
             .iter()
             .map(|h| GroupTarget {
@@ -656,7 +701,7 @@ impl Handle {
     ///     &mut app,
     ///     &targets,
     ///     TransitionConfig::default(),
-    ///     SplitStrategy::Slice,
+    ///     SplitStrategy::Row,
     ///     |i, _total| TransitionConfig {
     ///         duration: 0.4,
     ///         delay: i as f32 * 0.08,
@@ -684,6 +729,7 @@ impl Handle {
             "split_to_with_behavior",
             "target",
         )?;
+        check_split_grid(&strategy, targets.len(), "split_to_with_behavior")?;
         let total = targets.len();
         let child_configs = (0..total).map(|i| child_behavior(i, total)).collect();
         let group_targets = targets
@@ -728,6 +774,7 @@ impl Handle {
             "split_to_with_states",
             "target",
         )?;
+        check_split_grid(&strategy, targets.len(), "split_to_with_states")?;
         let group_targets = targets
             .iter()
             .map(|(h, state)| GroupTarget {
@@ -769,6 +816,7 @@ impl Handle {
             "merge_from_with_behavior",
             "source",
         )?;
+        check_merge_grid(&layout, sources.len(), "merge_from_with_behavior")?;
         let total = sources.len();
         let child_configs = (0..total).map(|i| child_behavior(i, total)).collect();
         let group_sources = sources
@@ -796,8 +844,9 @@ impl Handle {
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists,
-    /// [`HandleError::OtherEntityNotFound`] if a source doesn't. Nothing
-    /// starts in either case.
+    /// [`HandleError::OtherEntityNotFound`] if a source doesn't, and
+    /// [`HandleError::GridTooSmall`] if `layout` is a grid with fewer cells
+    /// than there are sources. Nothing starts in any of these cases.
     pub fn merge_from(
         &self,
         app: &mut Proteus,
@@ -807,6 +856,7 @@ impl Handle {
     ) -> Result<(), HandleError> {
         check_alive(app, self.0, "merge_from")?;
         check_all_alive(app, sources.iter().map(|h| h.0), "merge_from", "source")?;
+        check_merge_grid(&layout, sources.len(), "merge_from")?;
         let group_sources = sources
             .iter()
             .map(|h| GroupSource {
@@ -836,11 +886,12 @@ impl Handle {
         Ok(())
     }
 
-    /// Removes `child` from this component.
+    /// Detaches `child` from this component. The child is kept, as a
+    /// top-level component; to destroy it instead, call [`Handle::destroy`] on
+    /// it.
     ///
-    /// If `destroy` is `true`, the child is also destroyed, exactly as by
-    /// [`Handle::destroy`]. If it is `false`, the child is kept as a top-level
-    /// component. Its geometry is then no longer relative to this component.
+    /// A detached child may move on screen: its geometry was relative to this
+    /// component, and is now relative to the world.
     ///
     /// # Examples
     ///
@@ -850,8 +901,7 @@ impl Handle {
     /// let item = app.component(ComponentSpec::new(QuadState::default()));
     /// let list = app.component(ComponentSpec::new(QuadState::default()).child(item));
     ///
-    /// // Take the item out of the list, but keep it.
-    /// list.remove_child(&mut app, item, false)?;
+    /// list.remove_child(&mut app, item)?;
     /// assert!(app.get(list).unwrap().children.is_empty());
     /// assert!(app.get(item).is_some());
     /// # Ok::<(), HandleError>(())
@@ -860,43 +910,32 @@ impl Handle {
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists,
-    /// [`HandleError::OtherEntityNotFound`] if `child` doesn't.
-    pub fn remove_child(
-        &self,
-        app: &mut Proteus,
-        child: Handle,
-        destroy: bool,
-    ) -> Result<(), HandleError> {
-        // Checked although `self` isn't used below, so that this and
-        // `add_child` log a missing parent consistantly.
+    /// [`HandleError::OtherEntityNotFound`] if `child` doesn't, and
+    /// [`HandleError::NotAChild`] if `child` isn't a child of this component.
+    pub fn remove_child(&self, app: &mut Proteus, child: Handle) -> Result<(), HandleError> {
         check_alive(app, self.0, "remove_child")?;
-        if destroy {
-            forget_subtree(app, child.0);
-            // `World::despawn` doesn't panic; it returns whether the entity
-            // existed.
-            return if app.world.world.despawn(child.0) {
-                Ok(())
-            } else {
-                log::warn!(
-                    "Handle::remove_child: child entity {:?} is no longer alive — call ignored",
-                    child.0
-                );
-                Err(HandleError::OtherEntityNotFound)
-            };
+        let mut child_entity = other_entity_mut(app, child.0, "remove_child", "child")?;
+        if child_entity.get::<ChildOf>().map(|c| c.parent()) != Some(self.0) {
+            log::warn!(
+                "Handle::remove_child: entity {:?} isn't a child of {:?} — call ignored",
+                child.0,
+                self.0
+            );
+            return Err(HandleError::NotAChild);
         }
-        other_entity_mut(app, child.0, "remove_child", "child")?.remove::<ChildOf>();
+        child_entity.remove::<ChildOf>();
         Ok(())
     }
 
     /// Destroys this component and its children, along with their callbacks
-    /// and the signals they own.
+    /// and the channels they own.
     ///
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if it was already destroyed. Safe to
     /// ignore, but reported so that destroying twice is visible.
     pub fn destroy(self, app: &mut Proteus) -> Result<(), HandleError> {
-        // Do this before the despawn, while `Children` and `OwnedSignals` can still be
+        // Do this before the despawn, while `Children` and `OwnedChannels` can still be
         // read.
         forget_subtree(app, self.0);
         // `World::despawn` doesn't panic; it returns whether the entity existed.
@@ -961,12 +1000,12 @@ impl Handle {
             return Ok(false);
         };
         entity_mut(app, self.0, "set_texture")?.insert((
-            BakedImage {
-                uv_offset: uv.uv_offset,
-                uv_scale: uv.uv_scale,
-                page: uv.page,
-                pixel_size: [width as f32, height as f32],
-            },
+            BakedImage::new(
+                uv.uv_offset,
+                uv.uv_scale,
+                uv.page,
+                [width as f32, height as f32],
+            ),
             TextureRef(texture.0),
         ));
         Ok(true)
@@ -974,17 +1013,17 @@ impl Handle {
 }
 
 // ---------------------------------------------------------------------------
-// SignalHandle
+// TransitionChannel
 // ---------------------------------------------------------------------------
 
-/// The ID of a signal, which transitions one component into another. See
-/// [`SignalHandle::set`].
+/// The ID of a transition channel, which transitions one component into
+/// another. See [`TransitionChannel::set`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SignalHandle(pub(crate) SignalId);
+pub struct TransitionChannel(pub(crate) TransitionChannelId);
 
-impl SignalHandle {
-    /// The underlying signal ID.
-    pub fn id(&self) -> SignalId {
+impl TransitionChannel {
+    /// The underlying channel ID.
+    pub fn id(&self) -> TransitionChannelId {
         self.0
     }
 
@@ -996,7 +1035,7 @@ impl SignalHandle {
     /// then a new transition starts from wherever `to` is. The transition
     /// starts on the next tick.
     ///
-    /// A request that can't run is reported to [`SignalHandle::on_dropped`].
+    /// A request that can't run is reported to [`TransitionChannel::on_dropped`].
     pub fn set(
         &self,
         app: &mut Proteus,
@@ -1012,7 +1051,7 @@ impl SignalHandle {
             .map(|d| d.0.clone())
             .or_else(|| app.world.world.get::<proteus_ui::QuadState>(to.0).cloned())
             .unwrap_or_default();
-        proteus_ui::set_signal(
+        proteus_ui::set_channel(
             &mut app.world.world,
             self.0,
             to.0,
@@ -1023,8 +1062,8 @@ impl SignalHandle {
         );
     }
 
-    /// Calls `cb` with the reason each time a [`SignalHandle::set`] request
-    /// on this signal can't run. See [`DropReason`](crate::DropReason).
+    /// Calls `cb` with the reason each time a [`TransitionChannel::set`] request
+    /// on this channel can't run. See [`DropReason`](crate::DropReason).
     pub fn on_dropped(
         &self,
         app: &mut Proteus,
@@ -1033,11 +1072,11 @@ impl SignalHandle {
         app.callbacks.register_dropped(self.0, Box::new(cb));
     }
 
-    /// Destroys this signal and its `on_dropped` handlers. Later
-    /// [`SignalHandle::set`] calls do nothing.
+    /// Destroys this channel and its `on_dropped` handlers. Later
+    /// [`TransitionChannel::set`] calls do nothing.
     pub fn destroy(self, app: &mut Proteus) {
-        app.callbacks.forget_signal(self.0);
-        proteus_ui::destroy_signal(&mut app.world.world, self.0);
+        app.callbacks.forget_channel(self.0);
+        proteus_ui::destroy_channel(&mut app.world.world, self.0);
     }
 }
 

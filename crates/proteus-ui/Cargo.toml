@@ -15,7 +15,7 @@ serde = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-# SignalId, like proteus-render's TextureId, is a slotmap key.
+# TransitionChannelId, like proteus-render's TextureId, is a slotmap key.
 slotmap = { workspace = true }
 
 [dev-dependencies]

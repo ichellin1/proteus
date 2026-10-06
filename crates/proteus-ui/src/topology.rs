@@ -120,32 +120,51 @@ pub enum SplitStrategy {
     /// Each target shows its own content throughout; it starts where the
     /// source was, but doesn't look like it. There are no virtual entities and
     /// no GPU work. Use it when you design each target yourself. When the
-    /// pieces should look like parts of the source, use
-    /// [`SplitStrategy::Slice`].
+    /// pieces should look like parts of the source, use one of the other
+    /// strategies.
     ///
     /// Completion is reported on each target, since the source has no
     /// transition of its own. See `Handle::on_transition_complete`.
     PerTarget,
 
-    /// The source is cut into N strips, side by side, and each strip
-    /// transitions to one target. The source and its children are baked into
-    /// one image, so the strips look like pieces of it. The targets are hidden
-    /// until every strip arrives.
-    Slice,
+    /// The source is cut into strips side by side, left to right, and strip
+    /// `i` transitions to target `i`. The source and its children are baked
+    /// into one image, so the strips look like pieces of it. The targets are
+    /// hidden until every strip arrives.
+    Row,
 
-    /// Like `Slice`, but the source is cut into a grid of `cols` by `rows`,
-    /// filled row by row from the top-left: target 0 gets the top-left cell.
+    /// Like [`SplitStrategy::Row`], but the strips are stacked top to bottom.
+    Column,
+
+    /// Like [`SplitStrategy::Row`], but the source is cut into a grid of
+    /// `cols` by `rows`, filled row by row from the top-left: target 0 gets
+    /// the top-left cell.
     ///
     /// Use it when the targets are themselves laid out in a grid, such as a
     /// photo gallery. Each piece then starts from the part of the source in
     /// the same row and column as its target, so the pieces spread outward
-    /// rather than crossing each other.
-    GridSlice {
+    /// rather than crossing each other. The grid must have a cell for every
+    /// target: `Handle::split_to` returns an error if `cols × rows` is
+    /// smaller than the number of targets.
+    Grid {
         /// Columns in the grid.
         cols: usize,
         /// Rows in the grid.
         rows: usize,
     },
+}
+
+impl SplitStrategy {
+    /// The grid this strategy cuts `n` pieces from, as `(cols, rows)`. `None`
+    /// for [`SplitStrategy::PerTarget`], which doesn't cut the source.
+    pub fn grid(&self, n: usize) -> Option<(usize, usize)> {
+        match *self {
+            SplitStrategy::PerTarget => None,
+            SplitStrategy::Row => Some((n, 1)),
+            SplitStrategy::Column => Some((1, n)),
+            SplitStrategy::Grid { cols, rows } => Some((cols, rows)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,17 +226,34 @@ pub struct NToOneRequest {
 #[derive(Debug, Clone, Copy)]
 pub enum MergeLayout {
     /// Strips side by side, left to right: source `i` moves to strip `i`.
-    Horizontal,
+    Row,
+
+    /// Strips stacked top to bottom: source `i` moves to strip `i`.
+    Column,
 
     /// A grid of `cols` by `rows`, filled row by row from the top-left, like
-    /// [`SplitStrategy::GridSlice`]. Use it when the sources are laid out in a
-    /// grid, so each moves toward the matching cell.
+    /// [`SplitStrategy::Grid`]. Use it when the sources are laid out in a
+    /// grid, so each moves toward the matching cell. The grid must have a
+    /// cell for every source: `Handle::merge_from` returns an error if
+    /// `cols × rows` is smaller than the number of sources.
     Grid {
         /// Columns in the grid.
         cols: usize,
         /// Rows in the grid.
         rows: usize,
     },
+}
+
+impl MergeLayout {
+    /// The grid this layout divides the destination into for `n` sources, as
+    /// `(cols, rows)`.
+    pub fn grid(&self, n: usize) -> (usize, usize) {
+        match *self {
+            MergeLayout::Row => (n, 1),
+            MergeLayout::Column => (1, n),
+            MergeLayout::Grid { cols, rows } => (cols, rows),
+        }
+    }
 }
 
 /// One source of a merge.
@@ -260,11 +296,8 @@ pub struct PartOfGroup(pub Entity);
 // Slice geometry helpers
 // ---------------------------------------------------------------------------
 
-/// Divides `source` into `n` equal strips, side by side from left to right.
-///
-/// Each strip has the full height of the source and `source.width / n` width.
-/// Strips are centered along the same Y axis as the source. The anchor,
-/// rotation, scale, and color are inherited unchanged.
+/// Divides `source` into `n` equal strips, side by side from left to right:
+/// a grid of `n` columns and one row. See [`grid_slices`].
 ///
 /// # Panics
 /// Panics if `n == 0`.
@@ -274,33 +307,26 @@ pub struct PartOfGroup(pub Entity);
 /// - Strip 0: 100×100 at (-100, 0)
 /// - Strip 1: 100×100 at (  0, 0)
 /// - Strip 2: 100×100 at ( 100, 0)
-pub fn horizontal_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
-    assert!(n > 0, "horizontal_slices: n must be > 0");
-    let slice_w = source.size.x / n as f32;
-    let leftmost_center = source.position.x - source.size.x * 0.5 + slice_w * 0.5;
-    // Clamp the corner radius to the slice's half-size. A round source's
-    // radius is half its width, far larger than a narrow slice's, and would
-    // shrink the slice's rounded rectangle to a sliver.
-    let corner_radius = source
-        .corner_radius
-        .min(slice_w * 0.5)
-        .min(source.size.y * 0.5);
-    (0..n)
-        .map(|i| {
-            let x = leftmost_center + slice_w * i as f32;
-            QuadState {
-                position: glam::Vec3::new(x, source.position.y, source.position.z),
-                size: glam::Vec2::new(slice_w, source.size.y),
-                corner_radius,
-                ..source.clone()
-            }
-        })
-        .collect()
+pub fn row_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
+    grid_slices(source, n, 1)
+}
+
+/// Divides `source` into `n` equal strips, stacked from top to bottom: a grid
+/// of one column and `n` rows. See [`grid_slices`].
+///
+/// # Panics
+/// Panics if `n == 0`.
+pub fn column_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
+    grid_slices(source, 1, n)
 }
 
 /// Divides `source` into an equal grid of `cols` by `rows`, row by row: cell
-/// `row * cols + col`, with row 0 at the top. Used by
-/// [`SplitStrategy::GridSlice`] and [`MergeLayout::Grid`].
+/// `row * cols + col`, with row 0 at the top. Used by every split strategy
+/// except [`SplitStrategy::PerTarget`], and by every merge layout.
+///
+/// Each cell's corner radius is clamped to half its size. A round source's
+/// radius is half its width, far larger than a narrow cell's, and would shrink
+/// the cell's rounded rectangle to a sliver.
 ///
 /// # Panics
 /// Panics if `cols == 0` or `rows == 0`.
@@ -426,28 +452,8 @@ fn region_uv(region: &TransitionRegion, atlas_size: f32) -> ([f32; 2], [f32; 2])
     )
 }
 
-/// Divides a baked region into `n` equal strips, left to right, in texture
-/// coordinates: the texture part of each of `horizontal_slices`' pieces.
-fn region_uv_slices(
-    region: &TransitionRegion,
-    n: usize,
-    atlas_size: f32,
-) -> Vec<([f32; 2], [f32; 2])> {
-    let atlas = atlas_size;
-    let slice_w = region.width as f32 / n as f32;
-    (0..n)
-        .map(|i| {
-            let x = region.x as f32 + slice_w * i as f32;
-            (
-                [x / atlas, region.y as f32 / atlas],
-                [slice_w / atlas, region.height as f32 / atlas],
-            )
-        })
-        .collect()
-}
-
 /// Divides a baked region into a grid of `cols` by `rows`, row by row, in
-/// texture coordinates: the texture part of each of `grid_slices`' pieces.
+/// texture coordinates: the texture part of each of [`grid_slices`]' pieces.
 /// Row 0 is the top of the bake, which is the top of the source, since baking
 /// doesn't flip the image.
 fn region_uv_grid_slices(
@@ -521,7 +527,7 @@ fn bake_one(
 /// With [`SplitStrategy::PerTarget`]: hides the source, and gives each target a
 /// [`TransitionRequest`] from the source's geometry to its own.
 ///
-/// With `Slice` or `GridSlice`: hides the source and the targets, creates one
+/// With `Row`, `Column` or `Grid`: hides the source and the targets, creates one
 /// [`Virtual`] piece per target, starting from its part of the source, and
 /// adds [`ActiveGroupTransition`] to the source. When GPU resources are
 /// present, it bakes the source once and each target once, and each piece
@@ -547,6 +553,17 @@ pub fn one_to_n_setup_system(
 
         if n == 0 {
             continue;
+        }
+        if let Some((cols, rows)) = request.strategy.grid(n) {
+            if cols * rows < n {
+                // `Handle::split_to` rejects this; a request made directly
+                // through the ECS is skipped, not started with pieces missing.
+                log::warn!(
+                    "split of {source_entity:?}: the grid has {} cells for {n} targets — skipped",
+                    cols * rows
+                );
+                continue;
+            }
         }
 
         // Hide the source: the targets replace it.
@@ -574,7 +591,8 @@ pub fn one_to_n_setup_system(
                 commands.entity(source_entity).insert(Lifecycle::Idle);
             }
 
-            SplitStrategy::Slice | SplitStrategy::GridSlice { .. } => {
+            SplitStrategy::Row | SplitStrategy::Column | SplitStrategy::Grid { .. } => {
+                let (cols, rows) = request.strategy.grid(n).expect("not PerTarget");
                 // Hide all target entities until the transition completes.
                 for target in &request.targets {
                     commands.entity(target.entity).insert(Visibility::HIDDEN);
@@ -600,12 +618,7 @@ pub fn one_to_n_setup_system(
                         source_state,
                     ) {
                         shared_alloc = Some(src_id);
-                        from_uv_slices = match request.strategy {
-                            SplitStrategy::GridSlice { cols, rows } => {
-                                region_uv_grid_slices(&src_region, cols, rows, atlas_size)
-                            }
-                            _ => region_uv_slices(&src_region, n, atlas_size),
-                        };
+                        from_uv_slices = region_uv_grid_slices(&src_region, cols, rows, atlas_size);
                         target_bakes = request
                             .targets
                             .iter()
@@ -639,12 +652,7 @@ pub fn one_to_n_setup_system(
                     .ok()
                     .and_then(|(_, _, _, b, _, _, _, _)| b.cloned());
 
-                let slices = match request.strategy {
-                    SplitStrategy::GridSlice { cols, rows } => {
-                        grid_slices(source_state, cols, rows)
-                    }
-                    _ => horizontal_slices(source_state, n),
-                };
+                let slices = grid_slices(source_state, cols, rows);
 
                 // One virtual piece per target.
                 for (i, (slice_state, target)) in
@@ -769,6 +777,16 @@ pub fn n_to_one_setup_system(
         if n == 0 {
             continue;
         }
+        let (cols, rows) = request.layout.grid(n);
+        if cols * rows < n {
+            // `Handle::merge_from` rejects this; a request made directly
+            // through the ECS is skipped, not started with sources missing.
+            log::warn!(
+                "merge into {dest_entity:?}: the grid has {} cells for {n} sources — skipped",
+                cols * rows
+            );
+            continue;
+        }
 
         // Hide the destination until the merge completes.
         commands
@@ -782,10 +800,7 @@ pub fn n_to_one_setup_system(
         }
 
         // The part of the destination each source moves to.
-        let target_slices = match request.layout {
-            MergeLayout::Grid { cols, rows } => grid_slices(dest_state, cols, rows),
-            MergeLayout::Horizontal => horizontal_slices(dest_state, n),
-        };
+        let target_slices = grid_slices(dest_state, cols, rows);
 
         // Bake the destination once, shared by every piece, and each source
         // once, as one_to_n_setup_system does.
@@ -804,12 +819,7 @@ pub fn n_to_one_setup_system(
                 dest_state,
             ) {
                 shared_alloc = Some(dest_id);
-                to_uv_slices = match request.layout {
-                    MergeLayout::Grid { cols, rows } => {
-                        region_uv_grid_slices(&dest_region, cols, rows, atlas_size)
-                    }
-                    MergeLayout::Horizontal => region_uv_slices(&dest_region, n, atlas_size),
-                };
+                to_uv_slices = region_uv_grid_slices(&dest_region, cols, rows, atlas_size);
                 source_bakes = request
                     .sources
                     .iter()
@@ -1024,15 +1034,30 @@ mod tests {
         }
     }
 
+    // A column is the row turned on its side: full-width strips, top to
+    // bottom, with strip 0 at the top (highest y).
     #[test]
-    fn horizontal_slices_count() {
-        let slices = horizontal_slices(&source(), 5);
+    fn column_slices_stack_full_width_strips_from_the_top() {
+        let slices = column_slices(&source(), 4);
+        assert_eq!(slices.len(), 4);
+        for s in &slices {
+            assert!((s.size.x - 300.0).abs() < 1e-4);
+            assert!((s.size.y - 25.0).abs() < 1e-4);
+            assert!(s.position.x.abs() < 1e-4);
+        }
+        assert!((slices[0].position.y - 37.5).abs() < 1e-4);
+        assert!((slices[3].position.y + 37.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn row_slices_count() {
+        let slices = row_slices(&source(), 5);
         assert_eq!(slices.len(), 5);
     }
 
     #[test]
-    fn horizontal_slices_width() {
-        let slices = horizontal_slices(&source(), 5);
+    fn row_slices_width() {
+        let slices = row_slices(&source(), 5);
         for s in &slices {
             assert!(
                 (s.size.x - 60.0).abs() < 1e-4,
@@ -1042,27 +1067,27 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_slices_height_preserved() {
-        let slices = horizontal_slices(&source(), 5);
+    fn row_slices_height_preserved() {
+        let slices = row_slices(&source(), 5);
         for s in &slices {
             assert!((s.size.y - 100.0).abs() < 1e-4);
         }
     }
 
     #[test]
-    fn horizontal_slices_positions_span_source() {
+    fn row_slices_positions_span_source() {
         // The leftmost slice center should be at x = -120 and rightmost at x = +120
         // for a 300px-wide source centered at 0.
-        let slices = horizontal_slices(&source(), 5);
+        let slices = row_slices(&source(), 5);
         let xs: Vec<f32> = slices.iter().map(|s| s.position.x).collect();
         assert!((xs[0] - (-120.0)).abs() < 1e-3, "leftmost x={}", xs[0]);
         assert!((xs[4] - 120.0).abs() < 1e-3, "rightmost x={}", xs[4]);
     }
 
     #[test]
-    fn horizontal_slices_no_gap_no_overlap() {
+    fn row_slices_no_gap_no_overlap() {
         // Adjacent slice centers should be exactly slice_width apart.
-        let slices = horizontal_slices(&source(), 5);
+        let slices = row_slices(&source(), 5);
         let slice_w = 300.0 / 5.0; // 60.0
         for i in 1..slices.len() {
             let gap = slices[i].position.x - slices[i - 1].position.x;
@@ -1080,12 +1105,7 @@ mod tests {
         let entity = world
             .spawn((
                 source(),
-                BakedImage {
-                    uv_offset: [0.4, 0.5],
-                    uv_scale: [0.2, 0.3],
-                    page: 0,
-                    pixel_size: [400.0, 600.0],
-                },
+                BakedImage::new([0.4, 0.5], [0.2, 0.3], 0, [400.0, 600.0]),
             ))
             .id();
 
@@ -1111,12 +1131,7 @@ mod tests {
         let entity = world
             .spawn((
                 source(),
-                BakedImage {
-                    uv_offset: [0.4, 0.5],
-                    uv_scale: [0.2, 0.3],
-                    page: 3,
-                    pixel_size: [400.0, 600.0],
-                },
+                BakedImage::new([0.4, 0.5], [0.2, 0.3], 3, [400.0, 600.0]),
             ))
             .id();
 
@@ -1162,12 +1177,7 @@ mod tests {
                     color: Vec4::new(0.0, 0.0, 1.0, 1.0),
                     ..Default::default()
                 },
-                BakedImage {
-                    uv_offset: [0.6, 0.6],
-                    uv_scale: [0.1, 0.1],
-                    page: 0,
-                    pixel_size: [10.0, 10.0],
-                },
+                BakedImage::new([0.6, 0.6], [0.1, 0.1], 0, [10.0, 10.0]),
                 ChildOf(child),
             ))
             .id();
@@ -1190,8 +1200,8 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_slices_preserves_color_and_radius() {
-        let slices = horizontal_slices(&source(), 3);
+    fn row_slices_preserves_color_and_radius() {
+        let slices = row_slices(&source(), 3);
         for s in &slices {
             assert_eq!(s.color, Vec4::new(1.0, 0.0, 0.0, 1.0));
             assert_eq!(s.corner_radius, 0.0);
@@ -1199,9 +1209,9 @@ mod tests {
     }
 
     // Slicing a round source must clamp each slice's corner radius; see
-    // `horizontal_slices`.
+    // `row_slices`.
     #[test]
-    fn horizontal_slices_clamps_corner_radius_to_slice_half_extents() {
+    fn row_slices_clamps_corner_radius_to_slice_half_extents() {
         let circle = QuadState {
             position: Vec3::new(0.0, 0.0, 0.5),
             size: Vec2::new(200.0, 200.0),
@@ -1211,7 +1221,7 @@ mod tests {
             color: Vec4::ONE,
             corner_radius: 100.0, // full circle: radius == half the width
         };
-        let slices = horizontal_slices(&circle, 3);
+        let slices = row_slices(&circle, 3);
         let slice_half_width = (200.0 / 3.0) / 2.0;
         for s in &slices {
             assert!(
