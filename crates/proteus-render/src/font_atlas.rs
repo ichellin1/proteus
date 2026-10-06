@@ -88,19 +88,14 @@ impl FontAtlas {
         Self::new(EMBEDDED_FONT_BYTES)
     }
 
-    /// Rasterizes `text` at `size_px` into an RGBA pixel buffer.
+    /// Rasterizes `text` at `size_px` into an RGBA pixel buffer, with
+    /// `letter_spacing_px` of extra space between glyphs (`0.0` for the font's
+    /// normal spacing). No space is added after the last glyph, so the result
+    /// has no trailing padding.
     ///
     /// Returns `None` if `text` draws no pixels (it's empty, or only
     /// whitespace), or if the font has no line height at `size_px`.
-    pub fn rasterize_text(&mut self, text: &str, size_px: f32) -> Option<RasterizedGlyphs> {
-        self.rasterize_text_tracked(text, size_px, 0.0)
-    }
-
-    /// Rasterizes `text` like [`rasterize_text`](Self::rasterize_text), with
-    /// `letter_spacing_px` of extra space between glyphs. No space is added
-    /// after the last glyph, so the result has no trailing padding. `0.0`
-    /// gives the same result as `rasterize_text`.
-    pub fn rasterize_text_tracked(
+    pub fn rasterize_text(
         &mut self,
         text: &str,
         size_px: f32,
@@ -254,7 +249,7 @@ mod tests {
     fn rasterize_text_returns_non_empty_pixels() {
         let mut fa = atlas();
         let glyphs = fa
-            .rasterize_text("Hello", 24.0)
+            .rasterize_text("Hello", 24.0, 0.0)
             .expect("rasterize_text returned None");
         assert!(!glyphs.rgba_pixels.is_empty());
         assert_eq!(
@@ -267,7 +262,7 @@ mod tests {
     fn rasterize_text_pixels_are_white_with_alpha() {
         let mut fa = atlas();
         let glyphs = fa
-            .rasterize_text("A", 48.0)
+            .rasterize_text("A", 48.0, 0.0)
             .expect("rasterize expected to succeed");
         // Every non-transparent pixel must have R=G=B=255.
         for chunk in glyphs.rgba_pixels.chunks_exact(4) {
@@ -284,7 +279,7 @@ mod tests {
     fn rasterize_text_has_some_opaque_pixels() {
         let mut fa = atlas();
         let glyphs = fa
-            .rasterize_text("X", 32.0)
+            .rasterize_text("X", 32.0, 0.0)
             .expect("rasterize should succeed");
         let has_visible = glyphs.rgba_pixels.chunks_exact(4).any(|c| c[3] > 0);
         assert!(
@@ -296,14 +291,14 @@ mod tests {
     #[test]
     fn rasterize_empty_text_returns_none() {
         let mut fa = atlas();
-        assert!(fa.rasterize_text("", 24.0).is_none());
+        assert!(fa.rasterize_text("", 24.0, 0.0).is_none());
     }
 
     #[test]
     fn rasterize_text_sizes_12_to_48_succeed() {
         let mut fa = atlas();
         for size in [12.0_f32, 16.0, 24.0, 32.0, 48.0] {
-            let r = fa.rasterize_text("Ag", size);
+            let r = fa.rasterize_text("Ag", size, 0.0);
             assert!(r.is_some(), "rasterize_text failed at {size}px");
             let r = r.unwrap();
             assert!(r.width > 0 && r.height > 0, "zero-size glyphs at {size}px");
@@ -311,20 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_text_tracked_zero_spacing_matches_rasterize_text() {
+    fn rasterize_text_zero_spacing_matches_rasterize_text() {
         let mut fa = atlas();
-        let tracked = fa.rasterize_text_tracked("PROTEUS", 40.0, 0.0).unwrap();
-        let plain = fa.rasterize_text("PROTEUS", 40.0).unwrap();
+        let tracked = fa.rasterize_text("PROTEUS", 40.0, 0.0).unwrap();
+        let plain = fa.rasterize_text("PROTEUS", 40.0, 0.0).unwrap();
         assert_eq!(tracked.width, plain.width);
         assert_eq!(tracked.height, plain.height);
         assert_eq!(tracked.rgba_pixels, plain.rgba_pixels);
     }
 
     #[test]
-    fn rasterize_text_tracked_wider_spacing_widens_bounding_box() {
+    fn rasterize_text_wider_spacing_widens_bounding_box() {
         let mut fa = atlas();
-        let tight = fa.rasterize_text_tracked("PROTEUS", 40.0, 0.0).unwrap();
-        let tracked = fa.rasterize_text_tracked("PROTEUS", 40.0, 10.0).unwrap();
+        let tight = fa.rasterize_text("PROTEUS", 40.0, 0.0).unwrap();
+        let tracked = fa.rasterize_text("PROTEUS", 40.0, 10.0).unwrap();
         // 7 glyphs → 6 gaps of ~10px extra.
         assert!(
             tracked.width > tight.width + 50,
@@ -339,10 +334,10 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_text_tracked_single_glyph_has_no_trailing_gap() {
+    fn rasterize_text_single_glyph_has_no_trailing_gap() {
         let mut fa = atlas();
-        let no_spacing = fa.rasterize_text_tracked("A", 40.0, 0.0).unwrap();
-        let with_spacing = fa.rasterize_text_tracked("A", 40.0, 20.0).unwrap();
+        let no_spacing = fa.rasterize_text("A", 40.0, 0.0).unwrap();
+        let with_spacing = fa.rasterize_text("A", 40.0, 20.0).unwrap();
         assert_eq!(
             no_spacing.width, with_spacing.width,
             "a single glyph has no gap to insert tracking into"

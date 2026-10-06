@@ -43,9 +43,9 @@ pub struct Text {
     pub color: Vec4,
     /// Extra space between characters, in pixels. `0.0`, the default, is the
     /// font's normal spacing; negative values tighten it. See
-    /// [`FontAtlas::rasterize_text_tracked`].
+    /// [`FontAtlas::rasterize_text`].
     ///
-    /// [`FontAtlas::rasterize_text_tracked`]: proteus_render::FontAtlas::rasterize_text_tracked
+    /// [`FontAtlas::rasterize_text`]: proteus_render::FontAtlas::rasterize_text
     pub letter_spacing_px: f32,
 }
 

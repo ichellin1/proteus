@@ -5,7 +5,7 @@
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    ComponentSpec, HandleError, Proteus, QuadState, StyleOverride, TransitionConfig,
+    ComponentSpec, HandleError, ImageCrop, Proteus, QuadState, StyleOverride, TransitionConfig,
 };
 
 fn quad_at(x: f32, y: f32) -> QuadState {
@@ -60,26 +60,41 @@ fn get_returns_none_after_destroy() {
 }
 
 #[test]
-fn remove_child_without_destroy_leaves_it_alive_as_a_root() {
+fn remove_child_leaves_it_alive_as_a_root() {
     let mut app = Proteus::new();
     let item = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let list = app.component(ComponentSpec::new(quad_at(200.0, 0.0)).child(item));
 
-    let _ = list.remove_child(&mut app, item, false);
+    list.remove_child(&mut app, item).unwrap();
 
     assert_eq!(app.get(list).unwrap().children.len(), 0);
     assert!(app.get(item).is_some(), "detached child must still exist");
 }
 
+// Removing another component's child must fail and leave it where it is.
+// Without the check, `list_a.remove_child(item_of_b)` would detach the item
+// from `list_b` and report success.
 #[test]
-fn remove_child_with_destroy_despawns_it() {
+fn remove_child_refuses_a_component_that_isnt_its_child() {
     let mut app = Proteus::new();
     let item = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
-    let list = app.component(ComponentSpec::new(quad_at(200.0, 0.0)).child(item));
+    let list_a = app.component(ComponentSpec::new(quad_at(-200.0, 0.0)));
+    let list_b = app.component(ComponentSpec::new(quad_at(200.0, 0.0)).child(item));
+    let loose = app.component(ComponentSpec::new(quad_at(0.0, 200.0)));
 
-    let _ = list.remove_child(&mut app, item, true);
-
-    assert!(app.get(item).is_none());
+    assert_eq!(
+        list_a.remove_child(&mut app, item),
+        Err(HandleError::NotAChild)
+    );
+    assert_eq!(
+        app.get(list_b).unwrap().children.len(),
+        1,
+        "item stays in list_b"
+    );
+    assert_eq!(
+        list_a.remove_child(&mut app, loose),
+        Err(HandleError::NotAChild)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -245,11 +260,11 @@ fn on_drag_reports_deltas_while_pressed() {
 }
 
 // ---------------------------------------------------------------------------
-// signal().set() — resolves target from the component()-declared geometry
+// transition_channel().set() — resolves target from the component()-declared geometry
 // ---------------------------------------------------------------------------
 
 #[test]
-fn signal_set_drives_to_toward_its_declared_geometry_and_hides_from() {
+fn channel_set_drives_to_toward_its_declared_geometry_and_hides_from() {
     let mut app = Proteus::new();
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let to_geometry = QuadState {
@@ -258,8 +273,8 @@ fn signal_set_drives_to_toward_its_declared_geometry_and_hides_from() {
     };
     let to = app.component(ComponentSpec::new(to_geometry.clone()));
 
-    let signal = app.signal(None);
-    signal.set(&mut app, to, from, cfg(0.1), false);
+    let channel = app.transition_channel(None);
+    channel.set(&mut app, to, from, cfg(0.1), false);
 
     // Big enough dt to run the transition to completion in one tick.
     app.tick(1.0);
@@ -280,8 +295,8 @@ fn signal_set_drives_to_toward_its_declared_geometry_and_hides_from() {
 }
 
 #[test]
-fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() {
-    // A handler that calls `signal.set` re-enters the `Proteus` that is
+fn channel_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() {
+    // A handler that calls `channel.set` re-enters the `Proteus` that is
     // dispatching it, the case `callback.rs`'s take-call-put-back dispatch
     // exists for.
     //
@@ -297,9 +312,9 @@ fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() 
         ..quad_at(300.0, 0.0)
     }));
 
-    let signal = app.signal(None);
+    let channel = app.transition_channel(None);
     button.on_click(&mut app, move |app| {
-        signal.set(app, to, from, cfg(10.0), false);
+        channel.set(app, to, from, cfg(10.0), false);
     });
 
     app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
@@ -322,7 +337,7 @@ fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() 
         .get(to)
         .expect("to should still exist")
         .transition
-        .expect("the click handler's signal.set should have started a transition by now");
+        .expect("the click handler's channel.set should have started a transition by now");
     assert!(
         transition.progress > 0.0 && transition.progress < 1.0,
         "10s transition should be mid-flight after a 1s tick, got {}",
@@ -335,7 +350,7 @@ fn signal_set_from_inside_an_on_click_handler_starts_the_transition_next_tick() 
 }
 
 #[test]
-fn signal_set_reveals_to_so_a_round_trip_works() {
+fn channel_set_reveals_to_so_a_round_trip_works() {
     // A button -> list -> button round trip. The return leg only works because
     // dispatch shows `to` as well as hiding `from`; without that, the button
     // would transition while invisible and never reappear.
@@ -343,10 +358,10 @@ fn signal_set_reveals_to_so_a_round_trip_works() {
     let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let list = app.component(ComponentSpec::new(quad_at(300.0, 0.0)).visible(false));
 
-    let signal = app.signal(None);
+    let channel = app.transition_channel(None);
 
     // Out: button -> list.
-    signal.set(&mut app, list, button, cfg(0.1), false);
+    channel.set(&mut app, list, button, cfg(0.1), false);
     app.tick(1.0);
     assert!(
         app.get(list).unwrap().visible,
@@ -355,7 +370,7 @@ fn signal_set_reveals_to_so_a_round_trip_works() {
     assert!(!app.get(button).unwrap().visible, "button is the exit");
 
     // Back: list -> button.
-    signal.set(&mut app, button, list, cfg(0.1), false);
+    channel.set(&mut app, button, list, cfg(0.1), false);
     app.tick(1.0);
     assert!(
         app.get(button).unwrap().visible,
@@ -505,8 +520,8 @@ fn get_reflects_transition_progress_mid_flight() {
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let to = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
 
-    let signal = app.signal(None);
-    signal.set(&mut app, to, from, cfg(10.0), false);
+    let channel = app.transition_channel(None);
+    channel.set(&mut app, to, from, cfg(10.0), false);
 
     // Small dt relative to the 10s duration — should still be mid-flight.
     app.tick(1.0);
@@ -518,7 +533,7 @@ fn get_reflects_transition_progress_mid_flight() {
 }
 
 #[test]
-fn signal_on_dropped_fires_with_already_transitioning_reason() {
+fn channel_on_dropped_fires_with_already_transitioning_reason() {
     let mut app = Proteus::new();
     let from1 = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     // A second, still-visible origin — the first `set()` call already hides
@@ -528,20 +543,20 @@ fn signal_on_dropped_fires_with_already_transitioning_reason() {
     let from2 = app.component(ComponentSpec::new(quad_at(-300.0, 0.0)));
     let to = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
 
-    let signal = app.signal(None);
+    let channel = app.transition_channel(None);
 
     let dropped_reason = std::rc::Rc::new(std::cell::RefCell::new(None));
     let dropped_reason_clone = dropped_reason.clone();
-    signal.on_dropped(&mut app, move |_app, dropped| {
+    channel.on_dropped(&mut app, move |_app, dropped| {
         *dropped_reason_clone.borrow_mut() = Some(dropped.reason);
     });
 
     // Long-duration transition so `to` is still Transitioning next tick.
-    signal.set(&mut app, to, from1, cfg(10.0), false);
+    channel.set(&mut app, to, from1, cfg(10.0), false);
     app.tick(0.1);
 
     // Fire again without interruptible — must be dropped.
-    signal.set(&mut app, to, from2, cfg(10.0), false);
+    channel.set(&mut app, to, from2, cfg(10.0), false);
     app.tick(0.1);
 
     assert_eq!(
@@ -551,26 +566,26 @@ fn signal_on_dropped_fires_with_already_transitioning_reason() {
 }
 
 #[test]
-fn signal_on_dropped_ignores_other_signals_drops() {
+fn channel_on_dropped_ignores_other_channels_drops() {
     let mut app = Proteus::new();
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let to = app.component(ComponentSpec::new(quad_at(300.0, 0.0)));
 
-    let noisy_signal = app.signal(None);
-    let quiet_signal = app.signal(None);
+    let noisy_channel = app.transition_channel(None);
+    let quiet_channel = app.transition_channel(None);
 
     let quiet_fired = std::rc::Rc::new(std::cell::Cell::new(false));
     let quiet_fired_clone = quiet_fired.clone();
-    quiet_signal.on_dropped(&mut app, move |_app, _dropped| quiet_fired_clone.set(true));
+    quiet_channel.on_dropped(&mut app, move |_app, _dropped| quiet_fired_clone.set(true));
 
-    noisy_signal.set(&mut app, to, from, cfg(10.0), false);
+    noisy_channel.set(&mut app, to, from, cfg(10.0), false);
     app.tick(0.1);
-    noisy_signal.set(&mut app, to, from, cfg(10.0), false); // drops on noisy_signal
+    noisy_channel.set(&mut app, to, from, cfg(10.0), false); // drops on noisy_channel
     app.tick(0.1);
 
     assert!(
         !quiet_fired.get(),
-        "quiet_signal's handler must not fire for noisy_signal's drop"
+        "quiet_channel's handler must not fire for noisy_channel's drop"
     );
 }
 
@@ -874,12 +889,7 @@ fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destina
     );
     assert!(app.world().get::<BakedImage>(dest.id()).is_none());
 
-    let baked = BakedImage {
-        uv_offset: [0.1, 0.2],
-        uv_scale: [0.3, 0.4],
-        page: 1,
-        pixel_size: [64.0, 32.0],
-    };
+    let baked = BakedImage::new([0.1, 0.2], [0.3, 0.4], 1, [64.0, 32.0]);
     app.world_mut()
         .entity_mut(source.id())
         .insert((baked.clone(), TextureRef(TextureId::default())));
@@ -895,29 +905,30 @@ fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destina
 }
 
 // ---------------------------------------------------------------------------
-// center_crop_to_square()
+// crop_image()
 // ---------------------------------------------------------------------------
 
 #[test]
-fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_size_alone() {
+fn a_centered_square_crop_narrows_the_longer_axis_and_leaves_pixel_size_alone() {
     use proteus_ui::BakedImage;
 
     let mut app = Proteus::new();
     let entity = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
 
     assert!(
-        !entity.center_crop_to_square(&mut app).unwrap(),
+        !entity
+            .crop_image(&mut app, ImageCrop::CenteredSquare)
+            .unwrap(),
         "no-op (false) with no BakedImage yet"
     );
 
     // Landscape (200x100, 2:1) — width should narrow to a centered half.
-    app.world_mut().entity_mut(entity.id()).insert(BakedImage {
-        uv_offset: [0.0, 0.0],
-        uv_scale: [1.0, 1.0],
-        page: 2,
-        pixel_size: [200.0, 100.0],
-    });
-    assert!(entity.center_crop_to_square(&mut app).unwrap());
+    app.world_mut()
+        .entity_mut(entity.id())
+        .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 2, [200.0, 100.0]));
+    assert!(entity
+        .crop_image(&mut app, ImageCrop::CenteredSquare)
+        .unwrap());
     let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
     assert_eq!(cropped.uv_scale, [0.5, 1.0]);
     assert_eq!(cropped.uv_offset, [0.25, 0.0]);
@@ -929,28 +940,84 @@ fn center_crop_to_square_narrows_the_longer_axis_symmetrically_and_leaves_pixel_
     );
 
     // Portrait (100x200, 1:2) — height should narrow the same way.
-    app.world_mut().entity_mut(entity.id()).insert(BakedImage {
-        uv_offset: [0.0, 0.0],
-        uv_scale: [1.0, 1.0],
-        page: 0,
-        pixel_size: [100.0, 200.0],
-    });
-    let _ = entity.center_crop_to_square(&mut app);
+    app.world_mut()
+        .entity_mut(entity.id())
+        .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [100.0, 200.0]));
+    let _ = entity.crop_image(&mut app, ImageCrop::CenteredSquare);
     let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
     assert_eq!(cropped.uv_scale, [1.0, 0.5]);
     assert_eq!(cropped.uv_offset, [0.0, 0.25]);
 
     // Square (100x100) — no-op on the UVs.
-    app.world_mut().entity_mut(entity.id()).insert(BakedImage {
-        uv_offset: [0.1, 0.2],
-        uv_scale: [0.5, 0.5],
-        page: 0,
-        pixel_size: [100.0, 100.0],
-    });
-    let _ = entity.center_crop_to_square(&mut app);
+    app.world_mut()
+        .entity_mut(entity.id())
+        .insert(BakedImage::new([0.1, 0.2], [0.5, 0.5], 0, [100.0, 100.0]));
+    let _ = entity.crop_image(&mut app, ImageCrop::CenteredSquare);
     let cropped = app.world().get::<BakedImage>(entity.id()).unwrap();
     assert_eq!(cropped.uv_scale, [0.5, 0.5]);
     assert_eq!(cropped.uv_offset, [0.1, 0.2]);
+}
+
+// Cropping must start from the whole image each time. Otherwise a second crop
+// crops the first: a 2:1 image would go to a centered half, then a quarter.
+#[test]
+fn cropping_again_replaces_the_crop_and_none_restores_the_whole_image() {
+    use proteus_ui::BakedImage;
+
+    let mut app = Proteus::new();
+    let entity = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    app.world_mut()
+        .entity_mut(entity.id())
+        .insert(BakedImage::new([0.0, 0.0], [1.0, 1.0], 0, [200.0, 100.0]));
+    let region = |app: &Proteus| {
+        let b = app.world().get::<BakedImage>(entity.id()).unwrap();
+        (b.uv_offset, b.uv_scale)
+    };
+
+    entity
+        .crop_image(&mut app, ImageCrop::CenteredSquare)
+        .unwrap();
+    entity
+        .crop_image(&mut app, ImageCrop::CenteredSquare)
+        .unwrap();
+    assert_eq!(region(&app), ([0.25, 0.0], [0.5, 1.0]), "not compounded");
+
+    entity.crop_image(&mut app, ImageCrop::None).unwrap();
+    assert_eq!(region(&app), ([0.0, 0.0], [1.0, 1.0]));
+}
+
+#[test]
+fn aspect_and_rect_crops_select_the_expected_region() {
+    use proteus_ui::BakedImage;
+
+    let mut app = Proteus::new();
+    let entity = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    // A 100×200 portrait image, at an offset in the atlas.
+    app.world_mut()
+        .entity_mut(entity.id())
+        .insert(BakedImage::new([0.2, 0.2], [0.4, 0.4], 0, [100.0, 200.0]));
+    let region = |app: &Proteus| {
+        let b = app.world().get::<BakedImage>(entity.id()).unwrap();
+        (b.uv_offset, b.uv_scale)
+    };
+
+    // 1:1 kept to the top: the top half of the image.
+    let top = ImageCrop::Aspect {
+        ratio: 1.0,
+        anchor: glam::Vec2::new(0.5, 0.0),
+    };
+    entity.crop_image(&mut app, top).unwrap();
+    assert_eq!(region(&app), ([0.2, 0.2], [0.4, 0.2]));
+
+    // The right half, given explicitly.
+    let right = ImageCrop::Rect {
+        x: 0.5,
+        y: 0.0,
+        width: 0.5,
+        height: 1.0,
+    };
+    entity.crop_image(&mut app, right).unwrap();
+    assert_eq!(region(&app), ([0.4, 0.2], [0.2, 0.4]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,17 +1146,19 @@ fn start_disabled_spawns_in_the_disabled_state() {
 }
 
 #[test]
-fn allow_input_lets_a_transitioning_component_still_be_clicked() {
-    use proteus_sdk::TransitioningConfig;
+fn allow_pointer_lets_a_transitioning_component_still_be_clicked() {
+    use proteus_sdk::TransitionInteractionConfig;
 
     let mut app = Proteus::new();
     let blocked = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
-    let allowed = app.component(ComponentSpec::new(quad_at(400.0, 100.0)).transitioning(
-        TransitioningConfig {
-            allow_input: true,
-            allow_navigation: false,
-        },
-    ));
+    let allowed = app.component(
+        ComponentSpec::new(quad_at(400.0, 100.0)).transition_interaction(
+            TransitionInteractionConfig {
+                allow_pointer: true,
+                allow_navigation: false,
+            },
+        ),
+    );
 
     let hits = std::rc::Rc::new(std::cell::Cell::new((false, false)));
     let h1 = hits.clone();
@@ -1108,26 +1177,28 @@ fn allow_input_lets_a_transitioning_component_still_be_clicked() {
     assert_eq!(
         hits.get(),
         (false, true),
-        "no interaction mid-morph by default; allow_input opts back in"
+        "no interaction mid-morph by default; allow_pointer opts back in"
     );
 }
 
 #[test]
-fn set_transitioning_config_none_restores_the_default() {
-    use proteus_sdk::TransitioningConfig;
+fn set_transition_interaction_none_restores_the_default() {
+    use proteus_sdk::TransitionInteractionConfig;
 
     let mut app = Proteus::new();
-    let handle = app.component(ComponentSpec::new(quad_at(100.0, 100.0)).transitioning(
-        TransitioningConfig {
-            allow_input: true,
-            allow_navigation: false,
-        },
-    ));
+    let handle = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0)).transition_interaction(
+            TransitionInteractionConfig {
+                allow_pointer: true,
+                allow_navigation: false,
+            },
+        ),
+    );
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
     let clone = clicked.clone();
     handle.on_click(&mut app, move |_| clone.set(true));
 
-    handle.set_transitioning_config(&mut app, None).unwrap();
+    handle.set_transition_interaction(&mut app, None).unwrap();
     let _ = handle.animate_to(&mut app, quad_at(100.0, 100.0), cfg(10.0));
     app.tick(0.1);
     click_at(&mut app, Vec2::new(100.0, 100.0));
@@ -1181,15 +1252,15 @@ fn on_transition_complete_fires_for_animate_to() {
 }
 
 #[test]
-fn on_transition_complete_fires_on_the_to_side_of_a_signal_set() {
+fn on_transition_complete_fires_on_the_to_side_of_a_channel_set() {
     let mut app = Proteus::new();
     let from = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let to = app.component(ComponentSpec::new(quad_at(300.0, 0.0)).visible(false));
     let to_count = completion_counter(&mut app, to);
     let from_count = completion_counter(&mut app, from);
 
-    let signal = app.signal(None);
-    signal.set(&mut app, to, from, cfg(0.1), false);
+    let channel = app.transition_channel(None);
+    channel.set(&mut app, to, from, cfg(0.1), false);
     app.tick(1.0);
 
     assert_eq!(to_count.get(), 1, "the morphing side completes");
@@ -1207,7 +1278,7 @@ fn on_transition_complete_fires_once_on_the_source_of_a_slice_split() {
         .collect();
     let count = completion_counter(&mut app, source);
 
-    let _ = source.split_to(&mut app, &targets, cfg(0.1), SplitStrategy::Slice);
+    let _ = source.split_to(&mut app, &targets, cfg(0.1), SplitStrategy::Row);
     app.tick(1.0);
 
     assert_eq!(
@@ -1228,7 +1299,7 @@ fn on_transition_complete_fires_once_on_the_destination_of_a_merge() {
     let dest = app.component(ComponentSpec::new(quad_at(500.0, 0.0)));
     let count = completion_counter(&mut app, dest);
 
-    let _ = dest.merge_from(&mut app, &sources, cfg(0.1), MergeLayout::Horizontal);
+    let _ = dest.merge_from(&mut app, &sources, cfg(0.1), MergeLayout::Row);
     app.tick(1.0);
 
     assert_eq!(count.get(), 1);
@@ -1361,7 +1432,7 @@ fn merge_from_with_behavior_staggers_each_source() {
         &mut app,
         &sources,
         cfg(0.1),
-        MergeLayout::Horizontal,
+        MergeLayout::Row,
         |i, _total| TransitionConfig {
             duration: 0.1,
             delay: i as f32 * 0.1,
@@ -1471,12 +1542,7 @@ fn merge_from_hides_sources_and_settles_destination_to_its_declared_geometry() {
     };
     let dest = app.component(ComponentSpec::new(dest_geometry.clone()));
 
-    let _ = dest.merge_from(
-        &mut app,
-        &[source1, source2],
-        cfg(0.1),
-        MergeLayout::Horizontal,
-    );
+    let _ = dest.merge_from(&mut app, &[source1, source2], cfg(0.1), MergeLayout::Row);
     app.tick(1.0);
 
     let source1_data = app.get(source1).unwrap();
@@ -1757,7 +1823,7 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
-        handle.center_crop_to_square(&mut app),
+        handle.crop_image(&mut app, ImageCrop::CenteredSquare),
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
@@ -1783,12 +1849,7 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
-        handle.merge_from(
-            &mut app,
-            &[other],
-            config,
-            proteus_sdk::MergeLayout::Horizontal
-        ),
+        handle.merge_from(&mut app, &[other], config, proteus_sdk::MergeLayout::Row),
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
@@ -1796,7 +1857,7 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
-        handle.remove_child(&mut app, other, false),
+        handle.remove_child(&mut app, other),
         Err(HandleError::EntityNotFound),
         "reported against the dead receiver, even though `other` is alive and \
          nothing below the check would have touched `self`"
@@ -1831,7 +1892,7 @@ fn a_dead_handle_passed_into_a_live_one_reports_other_entity_not_found() {
         Err(HandleError::OtherEntityNotFound)
     );
     assert_eq!(
-        live.remove_child(&mut app, dead, false),
+        live.remove_child(&mut app, dead),
         Err(HandleError::OtherEntityNotFound)
     );
     assert_eq!(
@@ -1850,12 +1911,7 @@ fn a_dead_handle_passed_into_a_live_one_reports_other_entity_not_found() {
          rather than half-running a split that can never complete"
     );
     assert_eq!(
-        live.merge_from(
-            &mut app,
-            &[dead],
-            cfg(0.2),
-            proteus_sdk::MergeLayout::Horizontal
-        ),
+        live.merge_from(&mut app, &[dead], cfg(0.2), proteus_sdk::MergeLayout::Row),
         Err(HandleError::OtherEntityNotFound)
     );
 
@@ -1872,7 +1928,7 @@ fn nothing_to_do_is_ok_false_not_an_error() {
     let a = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
     let b = app.component(ComponentSpec::new(quad_at(50.0, 0.0)));
 
-    assert_eq!(a.center_crop_to_square(&mut app), Ok(false));
+    assert_eq!(a.crop_image(&mut app, ImageCrop::CenteredSquare), Ok(false));
     assert_eq!(a.copy_baked_image_from(&mut app, b), Ok(false));
     // No GPU pipeline in a headless world, so there is no texture to show.
     let texture = app.texture(Default::default());
@@ -1950,5 +2006,67 @@ fn set_declared_geometry_updates_what_hover_returns_to() {
         (settled.scale - 1.0).abs() < 1e-5,
         "and the hover scale must be undone, got {}",
         settled.scale
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A grid too small for its pieces
+// ---------------------------------------------------------------------------
+
+// A grid with fewer cells than pieces must be refused up front. Otherwise the
+// extra pieces are silently dropped: in a split an extra target just appears
+// at the end, and in a merge an extra source vanishes instead of moving.
+#[test]
+fn split_to_refuses_a_grid_with_too_few_cells() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let targets: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 100.0, 200.0))))
+        .collect();
+
+    assert_eq!(
+        source.split_to(
+            &mut app,
+            &targets,
+            cfg(0.1),
+            SplitStrategy::Grid { cols: 2, rows: 1 }
+        ),
+        Err(HandleError::GridTooSmall {
+            pieces: 3,
+            cells: 2
+        })
+    );
+    app.tick(0.0);
+    assert!(app.get(source).unwrap().visible, "nothing started");
+}
+
+#[test]
+fn merge_from_refuses_a_grid_with_too_few_cells() {
+    use proteus_sdk::MergeLayout;
+
+    let mut app = Proteus::new();
+    let dest = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let sources: Vec<_> = (0..5)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 100.0, 200.0))))
+        .collect();
+
+    assert_eq!(
+        dest.merge_from(
+            &mut app,
+            &sources,
+            cfg(0.1),
+            MergeLayout::Grid { cols: 2, rows: 2 }
+        ),
+        Err(HandleError::GridTooSmall {
+            pieces: 5,
+            cells: 4
+        })
+    );
+    app.tick(0.0);
+    assert!(
+        sources.iter().all(|s| app.get(*s).unwrap().visible),
+        "nothing started"
     );
 }

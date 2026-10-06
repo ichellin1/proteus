@@ -93,7 +93,7 @@ pub(crate) fn bake_pending_text(
 
     for (entity, text) in pending {
         let Some(glyphs) =
-            font_atlas.rasterize_text_tracked(&text.content, text.size_px, text.letter_spacing_px)
+            font_atlas.rasterize_text(&text.content, text.size_px, text.letter_spacing_px)
         else {
             continue;
         };
@@ -200,12 +200,12 @@ pub(crate) fn bake_pending_images(
         };
 
         world.entity_mut(entity).insert((
-            BakedImage {
-                uv_offset: uv.uv_offset,
-                uv_scale: uv.uv_scale,
-                page: uv.page,
-                pixel_size: [decoded.width as f32, decoded.height as f32],
-            },
+            BakedImage::new(
+                uv.uv_offset,
+                uv.uv_scale,
+                uv.page,
+                [decoded.width as f32, decoded.height as f32],
+            ),
             TextureRef(texture_id),
         ));
     }

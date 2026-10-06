@@ -1,7 +1,7 @@
 //! Callback storage and dispatch.
 //!
 //! The `on_*` methods on [`Handle`](crate::Handle) and
-//! [`SignalHandle`](crate::SignalHandle) register closures here, and
+//! [`TransitionChannel`](crate::TransitionChannel) register closures here, and
 //! [`Proteus::tick`](crate::Proteus::tick) calls them after each update with
 //! the events that update produced.
 //!
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::Entity;
 use glam::Vec2;
 
-use proteus_ui::{SignalId, TransitionDropped};
+use proteus_ui::{TransitionChannelId, TransitionDropped};
 
 use crate::Proteus;
 
@@ -39,7 +39,7 @@ type DroppedCallback = Box<dyn FnMut(&mut Proteus, TransitionDropped)>;
 pub(crate) struct CallbackRegistry {
     handlers: HashMap<(Entity, EventKind), Vec<PlainCallback>>,
     drag_handlers: HashMap<Entity, Vec<DragCallback>>,
-    dropped_handlers: HashMap<SignalId, Vec<DroppedCallback>>,
+    dropped_handlers: HashMap<TransitionChannelId, Vec<DroppedCallback>>,
 }
 
 impl CallbackRegistry {
@@ -56,9 +56,9 @@ impl CallbackRegistry {
         self.drag_handlers.remove(&entity);
     }
 
-    /// Drops every `on_dropped` handler registered for `signal`.
-    pub(crate) fn forget_signal(&mut self, signal: SignalId) {
-        self.dropped_handlers.remove(&signal);
+    /// Drops every `on_dropped` handler registered for `channel`.
+    pub(crate) fn forget_channel(&mut self, channel: TransitionChannelId) {
+        self.dropped_handlers.remove(&channel);
     }
 
     /// The number of registered handlers of every kind. For tests: a leaked
@@ -74,8 +74,8 @@ impl CallbackRegistry {
         self.drag_handlers.entry(entity).or_default().push(cb);
     }
 
-    pub(crate) fn register_dropped(&mut self, signal: SignalId, cb: DroppedCallback) {
-        self.dropped_handlers.entry(signal).or_default().push(cb);
+    pub(crate) fn register_dropped(&mut self, channel: TransitionChannelId, cb: DroppedCallback) {
+        self.dropped_handlers.entry(channel).or_default().push(cb);
     }
 }
 
@@ -126,12 +126,12 @@ pub(crate) fn fire_drag(app: &mut Proteus, entity: Entity, delta: Vec2) {
     }
 }
 
-/// [`fire`] for [`SignalHandle::on_dropped`](crate::SignalHandle::on_dropped)
-/// handlers. These are registered per signal, and each receives the
+/// [`fire`] for [`TransitionChannel::on_dropped`](crate::TransitionChannel::on_dropped)
+/// handlers. These are registered per channel, and each receives the
 /// [`TransitionDropped`] describing the request that couldn't run and why.
 pub(crate) fn fire_dropped(app: &mut Proteus, dropped: TransitionDropped) {
-    let signal = dropped.signal;
-    let Some(mut cbs) = app.callbacks.dropped_handlers.remove(&signal) else {
+    let channel = dropped.channel;
+    let Some(mut cbs) = app.callbacks.dropped_handlers.remove(&channel) else {
         return;
     };
     for cb in &mut cbs {
@@ -139,7 +139,7 @@ pub(crate) fn fire_dropped(app: &mut Proteus, dropped: TransitionDropped) {
     }
     app.callbacks
         .dropped_handlers
-        .entry(signal)
+        .entry(channel)
         .or_default()
         .extend(cbs);
 }

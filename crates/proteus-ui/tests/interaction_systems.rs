@@ -4,7 +4,7 @@
 
 use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
-    component::{Disabled, Lifecycle, TransitioningConfig},
+    component::{Disabled, Lifecycle, TransitionInteractionConfig},
     input::{FocusState, InteractionEvents, PointerInput, PressedEntity},
     interaction::{InteractionDef, InteractionState, InteractionStateKind, StyleOverride},
     Interactable, ProteusWorld, QuadState, TransitionRequest,
@@ -219,7 +219,7 @@ fn clicking_empty_space_does_not_change_focus() {
 }
 
 // ---------------------------------------------------------------------------
-// gating: Disabled / TransitioningConfig
+// gating: Disabled / TransitionInteractionConfig
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -245,7 +245,7 @@ fn disabled_entity_is_not_hit_testable() {
 }
 
 #[test]
-fn transitioning_entity_without_allow_input_is_not_hit_testable() {
+fn transitioning_entity_without_allow_pointer_is_not_hit_testable() {
     let mut world = ProteusWorld::new();
     world.world.spawn((
         quad_at(100.0, 100.0),
@@ -263,7 +263,7 @@ fn transitioning_entity_without_allow_input_is_not_hit_testable() {
 }
 
 #[test]
-fn transitioning_entity_with_allow_input_is_hit_testable() {
+fn transitioning_entity_with_allow_pointer_is_hit_testable() {
     let mut world = ProteusWorld::new();
     let e = world
         .world
@@ -271,8 +271,8 @@ fn transitioning_entity_with_allow_input_is_hit_testable() {
             quad_at(100.0, 100.0),
             Interactable,
             Lifecycle::Transitioning,
-            TransitioningConfig {
-                allow_input: true,
+            TransitionInteractionConfig {
+                allow_pointer: true,
                 allow_navigation: false,
             },
         ))
@@ -497,7 +497,7 @@ fn interaction_style_system_does_not_touch_a_transitioning_entity() {
 
     move_to(&mut world, Vec2::new(900.0, 900.0)); // baseline: InteractionState inserted
 
-    // Force the entity into a big signal-driven transition.
+    // Force the entity into a big channel-driven transition.
     world.world.entity_mut(e).insert(Lifecycle::Transitioning);
 
     move_to(&mut world, Vec2::new(100.0, 100.0)); // would-be hover-in frame

@@ -2,7 +2,7 @@
  * Proteus TypeScript SDK example: an image gallery.
  *
  * A grid of photos fetched from picsum.photos. Clicking a tile transitions
- * it into a large "hero" view with `SignalHandle.set`; going back splits the
+ * it into a large "hero" view with `TransitionChannel.set`; going back splits the
  * hero into a fresh grid with `Handle.splitTo`.
  *
  * Techniques worth copying:
@@ -282,7 +282,7 @@ async function buildGrid(offset: number): Promise<GridSlot[]> {
 
     const handle = app.component({ geometry: geom(cx, cy, TILE, TILE), hover: { scale: 1.06 } });
     handle.setTexture(full);
-    handle.centerCropToSquare();
+    handle.cropImage({ kind: "centeredSquare" });
 
     return { handle, full, photo };
   });
@@ -311,8 +311,8 @@ async function showDetail(slot: GridSlot) {
   gridSlots = [];
 
   await enterDetail(slot.photo, slot.full, (heroHandle) => {
-    const sig = app.signal();
-    sig.set(heroHandle, slot.handle, TRANSITION);
+    const channel = app.transitionChannel();
+    channel.set(heroHandle, slot.handle, TRANSITION);
     // `set` reports completion on its `to` side — the hero — at which point
     // the tile it grew out of has finished being the exit and can go.
     afterTransition(heroHandle, () => slot.handle.destroy());
@@ -397,7 +397,7 @@ async function backToGrid() {
   heroSource.splitTo(
     slots.map((s) => s.handle),
     TRANSITION,
-    { kind: "gridSlice", cols: COLS, rows: ROWS },
+    { kind: "grid", cols: COLS, rows: ROWS },
   );
   // A slicing split reports completion once, on the *source*, when every
   // target has arrived — so the hero tidies itself up the moment the last

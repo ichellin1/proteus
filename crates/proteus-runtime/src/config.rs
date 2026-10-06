@@ -252,10 +252,10 @@ pub struct InputConfig {
     /// How long, in milliseconds, a newly focused component waits before it
     /// accepts input.
     pub focus_input_delay_ms: u32,
-    /// Default for `TransitioningConfig::allow_input`.
-    pub transitioning_allow_input: bool,
-    /// Default for `TransitioningConfig::allow_navigation`.
-    pub transitioning_allow_navigation: bool,
+    /// Default for `TransitionInteractionConfig::allow_pointer`.
+    pub transition_interaction_allow_pointer: bool,
+    /// Default for `TransitionInteractionConfig::allow_navigation`.
+    pub transition_interaction_allow_navigation: bool,
     /// Whether clicking a component also gives it focus. `false` keeps
     /// pointer and keyboard focus separate.
     pub click_moves_focus: bool,
@@ -268,8 +268,8 @@ impl Default for InputConfig {
     fn default() -> Self {
         Self {
             focus_input_delay_ms: 0,
-            transitioning_allow_input: false,
-            transitioning_allow_navigation: false,
+            transition_interaction_allow_pointer: false,
+            transition_interaction_allow_navigation: false,
             click_moves_focus: true,
             drag_threshold_px: 0.0,
         }
@@ -384,7 +384,7 @@ pub struct DebugConfig {
     /// Log [`ProteusConfig::estimated_gpu_bytes`] when the renderer starts.
     /// The checks that the settings fit the device always run.
     pub validate_config: bool,
-    /// Log dropped signal requests in release builds too; debug builds always
+    /// Log dropped channel requests in release builds too; debug builds always
     /// do. Not read yet.
     pub report_dropped_transitions: bool,
     /// Show frame rate, component count and atlas use on screen. Not read yet.

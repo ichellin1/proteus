@@ -65,7 +65,7 @@ catches the rest.
 
 - Every export gets TSDoc. Use `@param` when a parameter's name doesn't make its meaning
   obvious, and `@returns` / `@throws` where they apply. `mount`, `ProteusApp`, `component`
-  and `signal` each carry an `@example`.
+  and `transitionChannel` each carry an `@example`.
 - Write for someone who only knows TypeScript. Don't send them to Rust items ("see
   `proteus_ui::SplitStrategy`"); explain the behaviour where they are reading.
 

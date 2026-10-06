@@ -62,7 +62,7 @@ fn font_atlas_constructs_with_custom_bytes() {
 #[test]
 fn rasterize_ascii_string_succeeds() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("Hello, World!", 24.0);
+    let r = fa.rasterize_text("Hello, World!", 24.0, 0.0);
     assert!(
         r.is_some(),
         "rasterize_text returned None for a simple ASCII string"
@@ -73,7 +73,7 @@ fn rasterize_ascii_string_succeeds() {
 fn rasterize_empty_string_returns_none() {
     let mut fa = atlas();
     assert!(
-        fa.rasterize_text("", 24.0).is_none(),
+        fa.rasterize_text("", 24.0, 0.0).is_none(),
         "expected None for empty string"
     );
 }
@@ -81,7 +81,7 @@ fn rasterize_empty_string_returns_none() {
 #[test]
 fn rasterize_single_character_succeeds() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("A", 32.0);
+    let r = fa.rasterize_text("A", 32.0, 0.0);
     assert!(
         r.is_some(),
         "rasterize_text returned None for single character 'A'"
@@ -98,7 +98,7 @@ fn rasterize_single_character_succeeds() {
 #[test]
 fn pixel_buffer_length_matches_dimensions() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("Test", 20.0).unwrap();
+    let r = fa.rasterize_text("Test", 20.0, 0.0).unwrap();
     assert_eq!(
         r.rgba_pixels.len(),
         (r.width * r.height * 4) as usize,
@@ -109,7 +109,7 @@ fn pixel_buffer_length_matches_dimensions() {
 #[test]
 fn pixel_buffer_rgb_channels_are_white_where_alpha_nonzero() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("Xx", 32.0).unwrap();
+    let r = fa.rasterize_text("Xx", 32.0, 0.0).unwrap();
     for (i, chunk) in r.rgba_pixels.chunks_exact(4).enumerate() {
         let (r_ch, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
         if a > 0 {
@@ -133,7 +133,7 @@ fn pixel_buffer_rgb_channels_are_white_where_alpha_nonzero() {
 fn pixel_buffer_has_visible_coverage() {
     // At least some pixels must be non-transparent for any renderable character.
     let mut fa = atlas();
-    let r = fa.rasterize_text("Proteus", 24.0).unwrap();
+    let r = fa.rasterize_text("Proteus", 24.0, 0.0).unwrap();
     let has_visible = r.rgba_pixels.chunks_exact(4).any(|c| c[3] > 0);
     assert!(
         has_visible,
@@ -149,7 +149,7 @@ fn pixel_buffer_has_visible_coverage() {
 fn rasterize_succeeds_at_all_required_sizes() {
     let mut fa = atlas();
     for size_px in [12.0_f32, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0] {
-        let r = fa.rasterize_text("Ag", size_px);
+        let r = fa.rasterize_text("Ag", size_px, 0.0);
         assert!(r.is_some(), "rasterize_text returned None at {size_px}px");
         let r = r.unwrap();
         assert!(
@@ -162,8 +162,8 @@ fn rasterize_succeeds_at_all_required_sizes() {
 #[test]
 fn larger_size_produces_larger_glyphs() {
     let mut fa = atlas();
-    let small = fa.rasterize_text("A", 12.0).unwrap();
-    let large = fa.rasterize_text("A", 48.0).unwrap();
+    let small = fa.rasterize_text("A", 12.0, 0.0).unwrap();
+    let large = fa.rasterize_text("A", 48.0, 0.0).unwrap();
     // Larger font size must produce a taller (or equal) glyph run.
     assert!(
         large.height >= small.height,
@@ -182,8 +182,8 @@ fn larger_size_produces_larger_glyphs() {
 #[test]
 fn wider_string_produces_wider_glyph_run() {
     let mut fa = atlas();
-    let single = fa.rasterize_text("I", 24.0).unwrap();
-    let wide = fa.rasterize_text("WWWWWWWW", 24.0).unwrap();
+    let single = fa.rasterize_text("I", 24.0, 0.0).unwrap();
+    let wide = fa.rasterize_text("WWWWWWWW", 24.0, 0.0).unwrap();
     assert!(
         wide.width > single.width,
         "wide string width ({}) should be > single char width ({})",

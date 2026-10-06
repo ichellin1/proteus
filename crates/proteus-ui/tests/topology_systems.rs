@@ -7,9 +7,9 @@ use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
     component::{Lifecycle, TransitionRequest, Virtual, Visibility},
     topology::{
-        group_transition_complete_system, horizontal_slices, n_to_one_setup_system,
-        one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout,
-        NToOneRequest, OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
+        group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system, row_slices,
+        ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout, NToOneRequest, OneToNRequest,
+        PartOfGroup, SplitStrategy, TransitionAtlasSize,
     },
     transition::{
         transition_tick_system, ActiveTransition, CompletedTransitions, Easing, FrameTime,
@@ -86,13 +86,13 @@ fn spawn_targets(world: &mut World, n: usize) -> Vec<Entity> {
 }
 
 // ---------------------------------------------------------------------------
-// horizontal_slices unit-level sanity checks (quick smoke tests)
+// row_slices unit-level sanity checks (quick smoke tests)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn horizontal_slices_total_width_equals_source() {
+fn row_slices_total_width_equals_source() {
     let src = red();
-    let slices = horizontal_slices(&src, 5);
+    let slices = row_slices(&src, 5);
     let total_w: f32 = slices.iter().map(|s| s.size.x).sum();
     assert!((total_w - src.size.x).abs() < 1e-3);
 }
@@ -260,7 +260,7 @@ fn per_target_1_to_n_child_configs_override_the_default() {
 }
 
 // ---------------------------------------------------------------------------
-// OneToNRequest — Slice strategy
+// OneToNRequest — Row strategy
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -284,7 +284,7 @@ fn slice_1_to_n_creates_n_virtual_entities() {
             targets: group_targets,
             default_config: default_cfg(),
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -320,7 +320,7 @@ fn slice_1_to_n_hides_source_and_targets() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();
@@ -363,7 +363,7 @@ fn slice_1_to_n_source_has_active_group_transition() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();
@@ -406,7 +406,7 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
             targets: group_targets,
             default_config: default_cfg(),
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -422,7 +422,7 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
 }
 
 // ---------------------------------------------------------------------------
-// Slice group transition: tick → complete lifecycle
+// Row group transition: tick → complete lifecycle
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -446,7 +446,7 @@ fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();
@@ -515,7 +515,7 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
                 easing: Easing::Linear,
             },
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -555,7 +555,7 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
 }
 
 // ---------------------------------------------------------------------------
-// NToOneRequest — Slice strategy
+// NToOneRequest — Row layout
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -594,7 +594,7 @@ fn n_to_one_hides_sources_and_dest() {
                 sources,
                 default_config: default_cfg(),
                 child_configs: None,
-                layout: MergeLayout::Horizontal,
+                layout: MergeLayout::Row,
             },
         ))
         .id();
@@ -640,7 +640,7 @@ fn n_to_one_creates_n_virtual_entities() {
             sources,
             default_config: default_cfg(),
             child_configs: None,
-            layout: MergeLayout::Horizontal,
+            layout: MergeLayout::Row,
         },
     ));
 
@@ -677,7 +677,7 @@ fn n_to_one_complete_reveals_dest() {
                 sources,
                 default_config: default_cfg(),
                 child_configs: None,
-                layout: MergeLayout::Horizontal,
+                layout: MergeLayout::Row,
             },
         ))
         .id();
@@ -754,7 +754,7 @@ fn round_trip_button_list_button() {
             easing: Easing::Linear,
         },
         child_configs: None,
-        strategy: SplitStrategy::Slice,
+        strategy: SplitStrategy::Row,
     });
 
     run(&mut world, one_to_n_setup_system);
@@ -821,7 +821,7 @@ fn round_trip_button_list_button() {
             easing: Easing::Linear,
         },
         child_configs: None,
-        layout: MergeLayout::Horizontal,
+        layout: MergeLayout::Row,
     });
 
     run(&mut world, n_to_one_setup_system);
@@ -904,7 +904,7 @@ fn slice_child_configs_set_per_virtual_duration() {
             targets: group_targets,
             default_config: default_cfg(),
             child_configs: Some((0..n).map(|i| per_child(i, n)).collect()),
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -932,12 +932,12 @@ fn slice_child_configs_set_per_virtual_duration() {
 //
 // With no children to animate there is nothing to coordinate, so
 // `one_to_n_setup_system` should be a silent no-op with respect to virtual
-// entity creation (both PerTarget and Slice strategies).
+// entity creation (both the PerTarget and Row strategies).
 #[test]
 fn one_to_n_with_zero_targets_is_noop() {
     let mut world = make_world();
 
-    // Slice strategy — this is the path that spawns virtual entities.
+    // Row strategy — this is the path that spawns virtual entities.
     world.spawn((
         red(),
         Lifecycle::Idle,
@@ -945,7 +945,7 @@ fn one_to_n_with_zero_targets_is_noop() {
             targets: vec![], // empty — no children
             default_config: default_cfg(),
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -1011,7 +1011,7 @@ fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() 
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();

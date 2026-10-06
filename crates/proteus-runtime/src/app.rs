@@ -13,7 +13,7 @@ use proteus_sdk::TextureRequest;
 /// What [`App::setup`] and [`App::update`] are given: the app's [`Proteus`]
 /// state, the host's [`HostServices`], and the current [`Viewport`].
 pub struct Frame<'a> {
-    /// The app's components, signals and callbacks.
+    /// The app's components, channels and callbacks.
     pub proteus: &'a mut Proteus,
     /// Asset loading, fetching and video, provided by the host.
     pub services: &'a mut dyn HostServices,

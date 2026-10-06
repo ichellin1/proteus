@@ -15,8 +15,8 @@
 //! ```
 //!
 //! Unlike text, the image fills the entity at the entity's size: an entity
-//! with a different shape from its image stretches it. To crop instead, see
-//! `Handle::center_crop_to_square`.
+//! with a different shape from its image stretches it. To show part of it
+//! instead, see [`ImageCrop`] and `Handle::crop_image`.
 //!
 //! `QuadState::color` multiplies the image's colors, so use `Vec4::ONE` to show
 //! it unchanged.
@@ -83,6 +83,115 @@ pub struct BakedImage {
     /// The image's size in pixels, after any scaling down. The entity isn't
     /// resized to it.
     pub pixel_size: [f32; 2],
+    /// The whole image's `uv_offset`, before any crop. [`BakedImage::crop`]
+    /// always works from it, so cropping again replaces the crop.
+    pub full_uv_offset: [f32; 2],
+    /// The whole image's `uv_scale`, before any crop.
+    pub full_uv_scale: [f32; 2],
+}
+
+impl BakedImage {
+    /// A baked image showing all of its region of the atlas, uncropped.
+    pub fn new(uv_offset: [f32; 2], uv_scale: [f32; 2], page: u32, pixel_size: [f32; 2]) -> Self {
+        Self {
+            uv_offset,
+            uv_scale,
+            page,
+            pixel_size,
+            full_uv_offset: uv_offset,
+            full_uv_scale: uv_scale,
+        }
+    }
+
+    /// Shows only the part of the image `crop` selects. The crop is worked
+    /// out from the whole image, so a second call replaces the first rather
+    /// than cropping the crop, and [`ImageCrop::None`] shows all of it again.
+    pub fn crop(&mut self, crop: ImageCrop) {
+        let [x, y, w, h] = crop.region(self.pixel_size[0], self.pixel_size[1]);
+        self.uv_offset = [
+            self.full_uv_offset[0] + x * self.full_uv_scale[0],
+            self.full_uv_offset[1] + y * self.full_uv_scale[1],
+        ];
+        self.uv_scale = [w * self.full_uv_scale[0], h * self.full_uv_scale[1]];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ImageCrop
+// ---------------------------------------------------------------------------
+
+/// Which part of an image a component shows. Always measured from the whole
+/// image, so changing the crop never compounds it.
+///
+/// Only the visible region changes: no pixels are copied and no atlas space is
+/// used.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImageCrop {
+    /// The whole image: no crop.
+    None,
+    /// The largest centered square. Fills a square cell, such as a grid tile,
+    /// with an image of any shape.
+    CenteredSquare,
+    /// The largest region with this width-to-height `ratio`, placed by
+    /// `anchor`: `(0.5, 0.5)` centers it, `(0.0, 0.0)` keeps the top-left
+    /// corner, `(1.0, 1.0)` the bottom-right. A `ratio` that isn't positive
+    /// shows the whole image.
+    Aspect {
+        /// Width divided by height, such as `16.0 / 9.0`.
+        ratio: f32,
+        /// Where the region sits within the image, each axis from `0` to `1`.
+        anchor: glam::Vec2,
+    },
+    /// An explicit region, in fractions of the image: `x` and `y` are its
+    /// top-left corner, from `0` to `1`. Clamped to the image.
+    Rect {
+        /// Left edge, from `0` to `1`.
+        x: f32,
+        /// Top edge, from `0` to `1`.
+        y: f32,
+        /// Width, from `0` to `1`.
+        width: f32,
+        /// Height, from `0` to `1`.
+        height: f32,
+    },
+}
+
+impl ImageCrop {
+    /// The region this crop selects from a `width × height` image, as
+    /// `[x, y, width, height]` in fractions of the image.
+    pub fn region(&self, width: f32, height: f32) -> [f32; 4] {
+        let aspect = |ratio: f32, anchor: glam::Vec2| {
+            let image_ratio = width / height;
+            // `is_nan` as well: a NaN ratio would fail neither comparison.
+            if ratio.is_nan() || ratio <= 0.0 || image_ratio.is_nan() || image_ratio <= 0.0 {
+                return [0.0, 0.0, 1.0, 1.0];
+            }
+            let anchor = anchor.clamp(glam::Vec2::ZERO, glam::Vec2::ONE);
+            if ratio < image_ratio {
+                // Narrower than the image: full height, part of the width.
+                let w = ratio / image_ratio;
+                [(1.0 - w) * anchor.x, 0.0, w, 1.0]
+            } else {
+                let h = image_ratio / ratio;
+                [0.0, (1.0 - h) * anchor.y, 1.0, h]
+            }
+        };
+        match *self {
+            ImageCrop::None => [0.0, 0.0, 1.0, 1.0],
+            ImageCrop::CenteredSquare => aspect(1.0, glam::Vec2::splat(0.5)),
+            ImageCrop::Aspect { ratio, anchor } => aspect(ratio, anchor),
+            ImageCrop::Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            } => {
+                let x = x.clamp(0.0, 1.0);
+                let y = y.clamp(0.0, 1.0);
+                [x, y, w.clamp(0.0, 1.0 - x), h.clamp(0.0, 1.0 - y)]
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,12 +225,7 @@ mod tests {
 
     #[test]
     fn baked_image_stores_uv_coords() {
-        let baked = BakedImage {
-            uv_offset: [0.1, 0.2],
-            uv_scale: [0.3, 0.4],
-            page: 2,
-            pixel_size: [200.0, 300.0],
-        };
+        let baked = BakedImage::new([0.1, 0.2], [0.3, 0.4], 2, [200.0, 300.0]);
         let mut world = World::new();
         let e = world.spawn(baked.clone()).id();
         let b = world.get::<BakedImage>(e).unwrap();
@@ -137,12 +241,7 @@ mod tests {
         let e = world
             .spawn((
                 Image::new(vec![1u8, 2, 3]),
-                BakedImage {
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [0.1, 0.1],
-                    page: 0,
-                    pixel_size: [64.0, 64.0],
-                },
+                BakedImage::new([0.0, 0.0], [0.1, 0.1], 0, [64.0, 64.0]),
             ))
             .id();
         assert!(world.get::<Image>(e).is_some());

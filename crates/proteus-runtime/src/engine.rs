@@ -4,7 +4,7 @@
 //! ## Frame order
 //!
 //! ```text
-//! Proteus::tick(dt)          input, signals, transitions, then callbacks
+//! Proteus::tick(dt)          input, channel requests, transitions, then callbacks
 //! App::update(frame, dt)     the app reacts to this frame's events
 //! Proteus::refresh_cascades  recompute visibility and opacity after update's changes
 //! Renderer::render(target)   bake pending text and images, then draw
@@ -84,7 +84,7 @@ impl Engine {
     /// has acquired.
     ///
     /// 1. Clamps `dt` to [`crate::config::FrameConfig::dt_clamp_secs`].
-    /// 2. Calls [`Proteus::tick`]: input, signals, transitions, then callbacks.
+    /// 2. Calls [`Proteus::tick`]: input, channel requests, transitions, then callbacks.
     /// 3. Calls [`App::update`], so the app can react to this frame's events.
     /// 4. Recomputes visibility and opacity, so changes `update` made are
     ///    drawn this frame.

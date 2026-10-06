@@ -58,7 +58,7 @@ export interface MountOptions {
  *   setup(app) {
  *     const button = app.component({ geometry: buttonGeometry });
  *     const panel = app.component({ geometry: panelGeometry, visible: false });
- *     const open = app.signal();
+ *     const open = app.transitionChannel();
  *     button.onClick(() => open.set(panel, button, { duration: 0.4 }));
  *   },
  * });

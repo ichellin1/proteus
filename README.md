@@ -17,7 +17,7 @@ crates/
   proteus-gpu/          # Layer 0: surface + device/queue/swap-chain setup, shared by both hosts
   proteus-render/       # Layer 1: instanced render pipeline, atlases, offscreen bake pipeline
   proteus-ui/           # Layer 2: metamorphic component model, transition topologies
-  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/signal/texture) — headless
+  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/transition channel/texture) — headless
   proteus-sdk-web/      # Layer 2.5 (web): wasm-bindgen bridge + npm-publishable TypeScript SDK (ts/)
   proteus-runtime/      # Layer 2.75: Renderer + Engine + the App / HostServices contracts
   proteus-host-winit/   # Layer 3: native host — winit window, frame loop, file-backed assets

@@ -210,7 +210,7 @@ export interface ComponentSpec {
    * Whether the component starts visible. Defaults to `true`.
    *
    * A hidden component is neither drawn nor hit-tested. A transition into it
-   * through {@link SignalHandle.set} shows it, so a component that should
+   * through {@link TransitionChannel.set} shows it, so a component that should
    * first appear through a transition can start hidden.
    */
   visible?: boolean;
@@ -234,7 +234,7 @@ export interface ComponentSpec {
    */
   startDisabled?: boolean;
   /** Whether the component accepts input while transitioning. Without this, it doesn't. */
-  transitioning?: TransitioningConfig;
+  transitionInteraction?: TransitionInteractionConfig;
 }
 
 /**
@@ -304,9 +304,9 @@ export interface TextureRequest {
 }
 
 /** Whether a component accepts input while it is transitioning. Both default to `false`. */
-export interface TransitioningConfig {
+export interface TransitionInteractionConfig {
   /** Accept pointer input during a transition. */
-  allowInput?: boolean;
+  allowPointer?: boolean;
   /** Not read yet; reserved for keyboard navigation. */
   allowNavigation?: boolean;
 }
@@ -379,7 +379,7 @@ export interface TransitionConfig {
  * config for that component. The usual use is a stagger:
  *
  * ```ts
- * source.splitTo(targets, config, { kind: "slice" },
+ * source.splitTo(targets, config, { kind: "row" },
  *   (i) => ({ duration: 0.4, delay: i * 0.08, easing: "easeOutCubic" }));
  * ```
  *
@@ -391,6 +391,49 @@ export type ChildBehavior = (
   index: number,
   total: number,
 ) => TransitionConfig;
+
+/**
+ * Which part of an image a component shows; see {@link Handle.cropImage}.
+ * Always measured from the whole image, so changing the crop never compounds
+ * it.
+ */
+export type ImageCrop =
+  /** The whole image: no crop. */
+  | {
+      /** Selects this crop. */
+      kind: "none";
+    }
+  /** The largest centered square. */
+  | {
+      /** Selects this crop. */
+      kind: "centeredSquare";
+    }
+  /**
+   * The largest region with this width-to-height `ratio`, placed by `anchor`:
+   * `{ x: 0.5, y: 0.5 }`, the default, centers it; `{ x: 0, y: 0 }` keeps the
+   * top-left corner.
+   */
+  | {
+      /** Selects this crop. */
+      kind: "aspect";
+      /** Width divided by height, such as `16 / 9`. */
+      ratio: number;
+      /** Where the region sits within the image, each axis from `0` to `1`. */
+      anchor?: Vec2;
+    }
+  /** An explicit region, in fractions of the image, clamped to it. */
+  | {
+      /** Selects this crop. */
+      kind: "rect";
+      /** Left edge, from `0` to `1`. */
+      x: number;
+      /** Top edge, from `0` to `1`. */
+      y: number;
+      /** Width, from `0` to `1`. */
+      width: number;
+      /** Height, from `0` to `1`. */
+      height: number;
+    };
 
 /**
  * How a split ({@link Handle.splitTo}) turns one component into several.
@@ -412,16 +455,24 @@ export type SplitStrategy =
   /**
    * Bakes the source, with its children, into an image, then moves one slice
    * of that image to each target. Use it when the pieces should read as parts
-   * of what was there. Slices are strips, side by side.
+   * of what was there. The slices are strips side by side, left to right.
    */
   | {
       /** Selects this strategy. */
-      kind: "slice";
+      kind: "row";
     }
-  /** Like `"slice"`, but the slices are a grid of `cols` by `rows`. */
+  /** Like `"row"`, but the strips are stacked top to bottom. */
   | {
       /** Selects this strategy. */
-      kind: "gridSlice";
+      kind: "column";
+    }
+  /**
+   * Like `"row"`, but the slices are a grid of `cols` by `rows`, filled row by
+   * row from the top-left. Throws if the grid has fewer cells than targets.
+   */
+  | {
+      /** Selects this strategy. */
+      kind: "grid";
       /** Columns in the grid. */
       cols: number;
       /** Rows in the grid. */
@@ -436,11 +487,17 @@ export type MergeLayout =
   /** Strips side by side, left to right, one per source in order. */
   | {
       /** Selects this layout. */
-      kind: "horizontal";
+      kind: "row";
+    }
+  /** Strips stacked top to bottom, one per source in order. */
+  | {
+      /** Selects this layout. */
+      kind: "column";
     }
   /**
    * A grid of `cols` by `rows`, filled row by row from the top-left. Use it
-   * when the sources are themselves laid out in a grid.
+   * when the sources are themselves laid out in a grid. Throws if the grid
+   * has fewer cells than sources.
    */
   | {
       /** Selects this layout. */
@@ -451,7 +508,11 @@ export type MergeLayout =
       rows: number;
     };
 
-/** The interaction style a component is showing. */
+/**
+ * The interaction style a component is showing. More states may be added,
+ * such as one for keyboard focus, so a `switch` over it should keep a
+ * `default` case.
+ */
 export type InteractionState =
   | "default"
   | "hover"
@@ -509,9 +570,9 @@ export interface ComponentData {
 }
 
 /**
- * Why a {@link SignalHandle.set} request couldn't run:
+ * Why a {@link TransitionChannel.set} request couldn't run:
  *
- * - `"signalNotFound"`: the signal has been destroyed.
+ * - `"channelNotFound"`: the channel has been destroyed.
  * - `"entityNotFound"`: `to` or `from` has been destroyed.
  * - `"alreadyTransitioning"`: `to` is transitioning and the request wasn't
  *   `interruptible`.
@@ -519,12 +580,12 @@ export interface ComponentData {
  *   from.
  */
 export type DropReason =
-  | "signalNotFound"
+  | "channelNotFound"
   | "entityNotFound"
   | "alreadyTransitioning"
   | "entityNotVisible";
 
-/** A {@link SignalHandle.set} request that couldn't run, passed to {@link SignalHandle.onDropped}. */
+/** A {@link TransitionChannel.set} request that couldn't run, passed to {@link TransitionChannel.onDropped}. */
 export interface TransitionDropped {
   /** ID of the request's `to` component. */
   to: number;

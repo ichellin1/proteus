@@ -42,14 +42,14 @@ impl Handle {
 }
 
 // ---------------------------------------------------------------------------
-// SignalHandle
+// TransitionChannel
 // ---------------------------------------------------------------------------
 
-/// A handle to a signal. It has no methods of its own; it is passed to
-/// `signalSet`, `signalDestroy` and `onDropped`.
-#[wasm_bindgen(js_name = SignalHandle)]
+/// A handle to a transition channel. It has no methods of its own; it is
+/// passed to `channelSet`, `channelDestroy` and `onDropped`.
+#[wasm_bindgen(js_name = TransitionChannel)]
 #[derive(Clone, Copy)]
-pub struct JsSignalHandle(pub(crate) sdk::SignalHandle);
+pub struct JsTransitionChannel(pub(crate) sdk::TransitionChannel);
 
 // ---------------------------------------------------------------------------
 // TextureHandle

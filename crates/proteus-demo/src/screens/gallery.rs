@@ -18,7 +18,7 @@
 //! An empty tile (before its fetch resolves) is a plain white rounded
 //! square with a violet border. A fetched photo's real aspect ratio is
 //! essentially never square, so each tile's baked image gets center-cropped
-//! to a centered square in place (`Handle::center_crop_to_square`, driven by
+//! to a centered square in place (`Handle::crop_image`, driven by
 //! `Demo::advance_gallery_tile_crop`) once it lands, so the grid cell shows
 //! a crop, never a stretch. The *uncropped* frame is stashed on a separate,
 //! hidden `tile_full[idx]` entity first (see that field's doc) — the
