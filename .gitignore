@@ -31,3 +31,6 @@ Thumbs.db
 
 # Scripts
 make_hls.sh
+
+# Personal record of review findings; not part of the project
+REVIEW-FINDINGS.md
