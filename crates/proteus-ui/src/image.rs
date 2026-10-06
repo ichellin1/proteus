@@ -1,49 +1,25 @@
-//! Static image ECS components (M9.7) — PNG/JPEG-as-texture rendering.
-//!
-//! Mirrors [`crate::text`]'s `Text`/`BakedText` split exactly, just with
-//! `proteus_render::static_texture::decode_image` in place of glyph
-//! rasterization:
+//! Images: a PNG or JPEG drawn on an entity. They work like [`crate::text`],
+//! with decoding in place of rasterizing:
 //!
 //! ```text
-//! Image { bytes }                    ← developer declares on an entity
-//!         │
-//!         │ (shell detects Image without BakedImage, calls decode_image)
+//! Image { bytes }                declared on an entity
+//!         │  the renderer finds Image without BakedImage
 //!         ▼
-//! decode_image → DecodedImage (RGBA8 pixels + dimensions)
-//!         │
-//!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
-//!         │  then write_to_main_atlas to upload the pixels — M11)
+//! decode_image                   the image, as RGBA pixels
+//!         │  added to the main atlas
 //!         ▼
-//! BakedImage { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the entity
+//! BakedImage + TextureRef        where the image is in the atlas
 //!         │
-//!         │ (collect_instances uses these UVs in the entity's background QuadInstance;
-//!         │  TextureRef ref-counts the region against this entity's lifetime)
 //!         ▼
-//! GPU shader samples main_atlas sub-region → tinted image pixel
+//! drawn as the entity's background
 //! ```
 //!
-//! ## Sizing — unlike `BakedText`
+//! Unlike text, the image fills the entity at the entity's size: an entity
+//! with a different shape from its image stretches it. To crop instead, see
+//! `Handle::center_crop_to_square`.
 //!
-//! `Text` renders as a *second* overlay instance layered on top of a
-//! (possibly differently-sized) parent quad, so `BakedText::pixel_size`
-//! exists to size that overlay to the glyph run's own footprint rather than
-//! inheriting the wrong size from its parent.
-//!
-//! `Image` has no such parent/overlay split — it maps directly onto the
-//! entity's own background instance, at whatever size the entity's
-//! `QuadState` already declares (same as a plain solid-color fill). A tile
-//! sized to its poster's aspect ratio just shows the poster; a tile sized
-//! differently stretches it to fit, same as any other textured quad.
-//! `BakedImage::pixel_size` is carried for parity with `BakedText` and any
-//! future aspect-fit logic, but `collect_instances` does not use it to
-//! resize the quad.
-//!
-//! ## Color
-//!
-//! Unlike text (white base + coverage alpha, designed for tinting), image
-//! pixels are the image's real RGB values. `QuadState::color` still
-//! multiplies them in the shader, so `Vec4::ONE` (white) is the "untinted"
-//! choice for an entity meant to show the image as-is.
+//! `QuadState::color` multiplies the image's colors, so use `Vec4::ONE` to show
+//! it unchanged.
 
 use bevy_ecs::prelude::*;
 use std::sync::Arc;
@@ -52,33 +28,26 @@ use std::sync::Arc;
 // Image component
 // ---------------------------------------------------------------------------
 
-/// Declares that an entity should display a decoded PNG/JPEG image.
+/// A PNG or JPEG image to draw on an entity.
 ///
-/// When this component is present on an entity that does not yet have a
-/// [`BakedImage`] component, the shell's image-bake step decodes `bytes`,
-/// uploads the result to `main_atlas`, and inserts [`BakedImage`] with the
-/// resulting UV coordinates. The baked texture is permanent for the entity's
-/// lifetime — re-baking on content change is not implemented.
+/// The renderer decodes it into the main atlas and adds a [`BakedImage`].
+/// Changing `bytes` afterwards has no effect until the `BakedImage` is
+/// removed.
 #[derive(Component, Clone, Debug)]
 pub struct Image {
-    /// Raw PNG or JPEG file bytes (format sniffed from the data, not a file
-    /// extension). `Arc` so the shell's per-frame "already baked?" check
-    /// (mirroring `bake_pending_text`) doesn't copy the whole buffer.
+    /// The PNG or JPEG file's bytes. The format is detected from the data.
+    /// Shared rather than copied.
     pub bytes: Arc<[u8]>,
-    /// Downscale cap (longest side, pixels) applied before packing into
-    /// `main_atlas`. `None` = pack at native resolution. Per-entity because
-    /// real assets vary wildly in how much on-screen footprint they need —
-    /// a 12-up gallery grid tile and the one enlarged hero view of the same
-    /// photo want very different caps (M13.1: this replaced the shells'
-    /// hand-ordered "bake this one entity bigger" special-case passes).
+    /// Scale the image down so its longer side is at most this many pixels.
+    /// `None` uses the configured default. Set per image, since a small grid
+    /// tile and a full-screen view of the same photo need very different
+    /// sizes.
     pub max_side: Option<u32>,
 }
 
 impl Image {
-    /// `bytes` accepts anything convertible to `Arc<[u8]>` — a `Vec<u8>`
-    /// from `std::fs::read`, or a `&[u8]` slice (e.g. from a wasm-bindgen
-    /// parameter), without an extra explicit conversion at call sites.
-    /// No downscale cap; see [`Image::with_max_side`].
+    /// Creates an image from its file's bytes, such as a `Vec<u8>` or a
+    /// `&[u8]`. See [`Image::with_max_side`] to limit its size.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
         Self {
             bytes: bytes.into(),
@@ -86,7 +55,7 @@ impl Image {
         }
     }
 
-    /// Set the downscale cap (see [`Image::max_side`]).
+    /// Sets [`Image::max_side`].
     pub fn with_max_side(mut self, max_side: u32) -> Self {
         self.max_side = Some(max_side);
         self
@@ -97,30 +66,22 @@ impl Image {
 // BakedImage component
 // ---------------------------------------------------------------------------
 
-/// Written by the shell after an [`Image`] entity's bytes have been decoded
-/// and uploaded to the GPU `main_atlas`.
-///
-/// The render loop reads `uv_offset`/`uv_scale` to point the entity's
-/// background [`QuadInstance`] at the correct atlas sub-region — see the
-/// [module docs](self) for why, unlike `BakedText`, this does not resize the
-/// entity's own quad.
+/// Where an entity's image is in the main atlas, added once it is baked. The
+/// entity's background [`QuadInstance`] draws it.
 ///
 /// [`QuadInstance`]: proteus_render::QuadInstance
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct BakedImage {
-    /// Normalised UV origin within `main_atlas` (top-left corner of the image region).
-    /// Range: [0, 1] × [0, 1].
+    /// Texture coordinates of the image's top-left corner in the atlas.
     pub uv_offset: [f32; 2],
-    /// Normalised UV extent of the image region.
-    /// `uv_offset + uv_scale` gives the bottom-right UV corner.
+    /// The image's size in texture coordinates; `uv_offset + uv_scale` is its
+    /// bottom-right corner.
     pub uv_scale: [f32; 2],
-    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — `main_atlas` is a
-    /// multi-page pool, so the UVs alone are ambiguous without it. Comes straight from
-    /// `TextureRegistry::main_atlas_uv`'s `MainAtlasUv::page` and is encoded into
-    /// `QuadInstance::atlas_page` by `proteus_render::pack_atlas_page`.
+    /// The main-atlas page the image is on. The main atlas has several pages,
+    /// so the texture coordinates alone don't locate it.
     pub page: u32,
-    /// The decoded image's native size in pixels (`DecodedImage::width`/`height`).
-    /// Not used to resize the entity's quad — see the [module docs](self).
+    /// The image's size in pixels, after any scaling down. The entity isn't
+    /// resized to it.
     pub pixel_size: [f32; 2],
 }
 

@@ -1,45 +1,34 @@
-//! Per-state interaction styling (M12.2) — the rest of what M7's DoD deferred
-//! to M12, beyond the raw events `input.rs` produces.
-//!
-//! ## Data flow
+//! Interaction styles: how a component looks while *hovered*, *pressed*, *focused*
+//! or *disabled*.
 //!
 //! ```text
-//! HoveredEntity / PressedEntity / FocusState / Disabled  (this frame's state)
+//! HoveredEntity, PressedEntity, FocusState, Disabled   (this tick's state)
 //!         │
 //!         ▼
-//! interaction_style_system  (resolves precedence, compares to InteractionState.current)
-//!         │  state changed? insert TransitionRequest + updated InteractionState
+//! interaction_style_system   works out which style applies
+//!         │  changed? a TransitionRequest to the new style
 //!         ▼
-//! transition_setup_system (transition.rs)  — same machinery a signal-driven morph uses
+//! transition_setup_system    as for any other transition
 //! ```
 //!
-//! ## Precedence
+//! ## Which style wins
 //!
-//! When more than one of disabled/pressed/focused/hovered is true at once:
-//! `Disabled` > `Pressed` > `Focused` > `Hover` > `Default`. Not specified in
-//! PLANNING.md's Phase A — this is a documented default (disabled always wins;
-//! pressed is more specific than hover; a focus ring showing through hover is
-//! conventional).
+//! When several apply at once: `Disabled`, then `Pressed`, then `Focused`, then
+//! `Hover`, then `Default`.
 //!
-//! ## The "declared" state
+//! ## The declared geometry
 //!
-//! A style override resolves against the entity's true rest geometry, not its
-//! live `QuadState` (which may itself be mid-interaction-style). There is no
-//! general "declared state" storage yet — that's M12.3's `proteus-sdk` job —
-//! so [`InteractionState`] captures it locally: the first frame an
-//! `InteractionDef`-carrying entity is seen, its current `QuadState` is
-//! snapshotted into `InteractionState.declared` and nothing else happens that
-//! frame. Every later resolution targets `override.resolve(&declared)`.
+//! A style applies on top of the entity's declared geometry, not its current
+//! `QuadState`, which may be partway through another style's transition.
+//! [`InteractionState::declared`] holds it: the first tick the system sees an
+//! entity, it records the entity's `QuadState` there and does nothing else.
+//! `proteus-sdk`'s `set_declared_geometry` updates it.
 //!
-//! ## Never fights a live signal-driven transition
+//! ## Other transitions take priority
 //!
-//! If an entity is `Lifecycle::Transitioning` (a big morph in flight),
-//! [`interaction_style_system`] skips it entirely that frame. Inserting a
-//! competing `TransitionRequest` would hijack `transition_setup_system`'s
-//! existing retarget-from-current-state behavior and visibly redirect an
-//! in-flight signal-driven morph toward a hover/press style instead. Once the
-//! entity returns to `Idle`, the next frame's resolution catches up on any
-//! state drift that happened while it was transitioning.
+//! While an entity is transitioning for another reason,
+//! [`interaction_style_system`] leaves it alone, since a style transition would
+//! redirect it. Once the entity is idle again, its style catches up.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
@@ -53,14 +42,19 @@ use crate::QuadState;
 // InteractionStateKind
 // ---------------------------------------------------------------------------
 
-/// Which sparse style, if any, currently applies to an interactive component.
+/// Which interaction style applies to a component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InteractionStateKind {
+    /// No style: the declared geometry.
     #[default]
     Default,
+    /// The pointer is over it.
     Hover,
+    /// It is pressed.
     Pressed,
+    /// It has focus.
     Focused,
+    /// It is disabled.
     Disabled,
 }
 
@@ -68,24 +62,29 @@ pub enum InteractionStateKind {
 // StyleOverride
 // ---------------------------------------------------------------------------
 
-/// A sparse `QuadState` override — only declare the fields that change for a
-/// given interaction state. Undeclared fields inherit from the entity's
-/// declared default (Phase A: "only the properties that change for a given
-/// state need to be declared").
+/// How a component looks in one interaction state. Set only the fields that
+/// change; the others come from the declared geometry.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StyleOverride {
+    /// Position, in world units.
     pub position: Option<Vec3>,
+    /// Width and height.
     pub size: Option<Vec2>,
+    /// Rotation, in radians.
     pub rotation: Option<f32>,
+    /// Uniform scale.
     pub scale: Option<f32>,
+    /// The point `position` refers to, as fractions of the size.
     pub anchor: Option<Vec2>,
+    /// Fill color.
     pub color: Option<Vec4>,
+    /// Corner radius, in pixels.
     pub corner_radius: Option<f32>,
 }
 
 impl StyleOverride {
-    /// Apply this override on top of `base`, returning a fully resolved
-    /// `QuadState`. Fields left `None` pass `base`'s value through unchanged.
+    /// Returns `base` with this style's fields applied. Fields that are `None`
+    /// keep `base`'s value.
     pub fn resolve(&self, base: &QuadState) -> QuadState {
         QuadState {
             position: self.position.unwrap_or(base.position),
@@ -103,14 +102,17 @@ impl StyleOverride {
 // InteractionDef component
 // ---------------------------------------------------------------------------
 
-/// Declares the sparse per-state style overrides for an interactive
-/// component. Any state left `None` simply resolves to the declared default
-/// unchanged.
+/// A component's interaction styles. A state without one shows the declared
+/// geometry.
 #[derive(Component, Debug, Clone, Default)]
 pub struct InteractionDef {
+    /// The style while the pointer is over it.
     pub hover: Option<StyleOverride>,
+    /// The style while it is pressed.
     pub pressed: Option<StyleOverride>,
+    /// The style while it has focus.
     pub focused: Option<StyleOverride>,
+    /// The style while it is disabled.
     pub disabled: Option<StyleOverride>,
 }
 
@@ -118,13 +120,14 @@ pub struct InteractionDef {
 // InteractionState component
 // ---------------------------------------------------------------------------
 
-/// Tracks an entity's currently-resolved interaction state and its captured
-/// declared (rest) geometry. Inserted automatically by
-/// [`interaction_style_system`] the first frame it sees an `InteractionDef`
-/// entity — never constructed by callers directly.
+/// An entity's current interaction style and declared geometry. Added by
+/// [`interaction_style_system`] the first tick it sees an entity with an
+/// [`InteractionDef`].
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct InteractionState {
+    /// The style that applies now.
     pub current: InteractionStateKind,
+    /// The geometry styles apply on top of.
     pub declared: QuadState,
 }
 
@@ -132,18 +135,16 @@ pub struct InteractionState {
 // interaction_style_system
 // ---------------------------------------------------------------------------
 
-/// Every state change is a mini-transition, driven through the same
-/// `TransitionRequest`/`ActiveTransition` machinery a full signal-driven morph
-/// uses — not an instant snap (Phase A: "every state change is a potential
-/// mini-transition, not just a CSS swap").
+/// The transition to a new interaction style: styles change smoothly, not
+/// instantly.
 const STYLE_TRANSITION_CONFIG: TransitionConfig = TransitionConfig {
     duration: 0.15,
     delay: 0.0,
     easing: ease_out_quad,
 };
 
-/// Query for [`interaction_style_system`]: every `InteractionDef` entity,
-/// with whatever `InteractionState`/`Lifecycle`/`Disabled` it currently has.
+/// The entities [`interaction_style_system`] considers: every entity with an
+/// `InteractionDef`.
 type InteractionStyleQuery<'w, 's> = Query<
     'w,
     's,
@@ -157,16 +158,13 @@ type InteractionStyleQuery<'w, 's> = Query<
     ),
 >;
 
-/// Resolves each `InteractionDef` entity's current [`InteractionStateKind`]
-/// from this frame's [`HoveredEntity`]/[`PressedEntity`]/[`FocusState`]/
-/// [`Disabled`], and — on change — triggers a mini-transition to the
-/// resolved style. Runs in [`crate::schedule::ProteusSet::InteractionStyle`],
-/// right after [`crate::input::hit_test_system`].
+/// Works out which interaction style applies to each entity from this tick's
+/// [`HoveredEntity`], [`PressedEntity`], [`FocusState`] and [`Disabled`], and
+/// when it changes, starts a transition to it. Runs just after
+/// [`crate::input::hit_test_system`].
 ///
-/// Skips any entity that is `Lifecycle::Transitioning` (see this module's top
-/// doc) and, for a never-before-seen entity, only captures
-/// [`InteractionState::declared`] without transitioning anywhere — there is
-/// nothing to visually move *from* on that first frame.
+/// Skips a transitioning entity, and for an entity seen for the first time
+/// only records its declared geometry; see the module docs.
 pub fn interaction_style_system(
     mut commands: Commands,
     hovered: Res<HoveredEntity>,
@@ -196,15 +194,10 @@ pub fn interaction_style_system(
         };
 
         let Some(existing) = existing else {
-            // First time seeing this entity: establish the baseline as
-            // Default, regardless of `resolved` — even if the entity happens
-            // to already be hovered/pressed/focused/disabled this very frame.
-            // Recording `resolved` directly here would mark it e.g. Hover
-            // without ever having inserted the TransitionRequest that gets it
-            // there, silently skipping the mini-transition on every future
-            // frame too (the resolved-vs-current comparison below would find
-            // no change). Next frame's comparison against this Default
-            // baseline correctly detects the drift and transitions properly.
+            // First sighting: record Default, even if the entity is already
+            // hovered or pressed. Recording that style instead would mark it
+            // as applied without transitioning to it, and later ticks would
+            // see no change. Next tick finds the difference and transitions.
             commands.entity(entity).insert(InteractionState {
                 current: InteractionStateKind::Default,
                 declared,
@@ -243,9 +236,8 @@ pub fn interaction_style_system(
         commands.entity(entity).insert(TransitionRequest {
             to: target,
             config: STYLE_TRANSITION_CONFIG,
-            // None — snapshot the entity's current QuadState as the origin,
-            // smooth even if it was already mid-way through a previous
-            // interaction-style mini-transition.
+            // `None`: start from the current QuadState, which stays smooth even
+            // partway through another style's transition.
             from_state: None,
         });
         commands.entity(entity).insert(InteractionState {

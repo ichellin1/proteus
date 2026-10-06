@@ -1,10 +1,7 @@
-//! Photo selection and URL-building for the reference demo's picsum.photos
-//! gallery (M13.4). Moved here — and de-duplicated away from an equivalent
-//! hand-written copy in `proteus-shell-web`'s pre-M13.2 `www/index.html` —
-//! now that [`proteus_runtime::HostServices::fetch_async`] gives every host
-//! one real async-fetch primitive to build on instead of each shell
-//! reimplementing "pick a photo, build a URL" itself. `DemoApp` (`app.rs`)
-//! is the only caller.
+//! Choosing photos and building their URLs for the demo's picsum.photos
+//! gallery. The requests go through
+//! [`proteus_runtime::HostServices::fetch_async`], which works on every host.
+//! `DemoApp` (`app.rs`) is the only caller.
 //!
 //! picsum.photos, addressed by a *specific photo id*
 //! (`https://picsum.photos/id/{id}/{w}/{h}`), not loremflickr.com — see
@@ -195,14 +192,13 @@ mod tests {
         (w as f32 / h as f32 - real_ratio).abs() / real_ratio
     }
 
-    /// Reported regression: at the gallery grid's ~186px tile cap, photo
-    /// ids 606 (2513×1670) and 798 (4592×3448) visibly shifted content the
-    /// instant their hires fetch swapped in over the low-res stand-in;
-    /// ids 582 (2509×1673) and 630 (2517×1667) — whose *naive* single-axis
-    /// rounding happens to already land close to the real ratio at this
-    /// resolution — never showed it. The fix doesn't need to change 582/630
-    /// at all; it just needs to pull 606/798 down under roughly the same
-    /// relative-error ceiling those two were already living under.
+    // At the gallery grid's ~186px tile cap, photo ids 606 (2513×1670)
+    // and 798 (4592×3448) visibly shift content the instant their hires
+    // fetch swaps in over the low-res stand-in when their sizes are rounded
+    // from one axis; ids 582 (2509×1673) and 630 (2517×1667), whose single-axis
+    // rounding already lands close to the real ratio at this resolution, don't.
+    // `fetch_dimensions` must pull 606/798 under roughly the same
+    // relative-error ceiling 582/630 already meet.
     #[test]
     fn fetch_dimensions_keeps_previously_shifting_photos_as_accurate_as_previously_fine_ones() {
         let side_px = 186;
@@ -220,9 +216,9 @@ mod tests {
         }
     }
 
-    /// The naive (no-search) approximation for id 606 landed on a ratio
-    /// exactly 1.5 (186×124) — 0.32% off its real 1.50479. Confirms the
-    /// search actually finds a closer pair, not just an equally-bad one.
+    // The naive (no-search) approximation for id 606 landed on a ratio
+    // exactly 1.5 (186×124) — 0.32% off its real 1.50479. Confirms the
+    // search actually finds a closer pair, not just an equally-bad one.
     #[test]
     fn fetch_dimensions_finds_a_closer_ratio_than_pinning_the_larger_axis_exactly() {
         let aspect = Vec2::new(2513.0, 1670.0);

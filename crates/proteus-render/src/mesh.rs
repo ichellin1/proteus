@@ -1,8 +1,9 @@
-//! Base quad geometry and per-instance data for the instanced render pipeline.
+//! The base quad's geometry and the per-instance data for the instanced render
+//! pipeline.
 //!
-//! Every visible component in Proteus is rendered as a `QuadInstance` — a 124-byte
-//! struct packed into the instance buffer. One buffer upload + one draw call per frame
-//! renders the entire scene regardless of component count.
+//! Every visible component is drawn as a [`QuadInstance`], a 160-byte struct in
+//! the instance buffer. One buffer upload and one draw call per frame draw
+//! everything, however many components there are.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -75,22 +76,23 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 // Per-instance data — one entry per visible component, packed each frame
 // ---------------------------------------------------------------------------
 
-/// Per-instance GPU data for one component quad. Packed into the instance buffer
-/// each frame by the render system; uploaded in a single transfer.
+/// The GPU data for one component's quad, packed into the instance buffer
+/// each frame and uploaded in one transfer.
 ///
-/// Size: 156 bytes. 1000 components ≈ 156 KB — well within GPU limits.
+/// Size: 160 bytes, so 1000 components take about 160 KB.
 ///
-/// Field byte offsets must match `buffer_layout()` and `@location` attributes in `quad.wgsl`.
+/// The field offsets must match `buffer_layout()` and the `@location`
+/// attributes in `quad.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct QuadInstance {
     // --- Transform ---
-    /// World-space position (x, y, z). Z is reserved for future depth sorting;
-    /// draw order currently determines stacking (last in instance buffer = on top).
+    /// Position in world units. Instances are drawn in buffer order, so the
+    /// last is on top; `collect_instances` orders them.
     pub position: [f32; 3], // offset   0, size 12
     /// Component size in pixels (width, height).
     pub size: [f32; 2], // offset  12, size  8
-    /// Rotation in radians. Converted from degrees at the WASM boundary.
+    /// Rotation in radians.
     pub rotation: f32, // offset  20, size  4
     /// Uniform scale multiplier.
     pub scale: f32, // offset  24, size  4
@@ -111,22 +113,23 @@ pub struct QuadInstance {
     pub uv_offset: [f32; 2], // offset  60, size  8
     /// Sub-region size within the active atlas.
     pub uv_scale: [f32; 2], // offset  68, size  8
-    /// Packed atlas selector + `main_atlas` page index (M11.2). Bits 0–7 select the atlas
-    /// (`ATLAS_SELECTOR_MAIN` = 0, `ATLAS_SELECTOR_TRANSITION` = 1, `ATLAS_SELECTOR_VIDEO` = 2);
-    /// bits 8–31 are the `main_atlas` array layer, meaningful only when the selector is
-    /// `ATLAS_SELECTOR_MAIN` (the other two atlases are single-layer). Build with
-    /// [`pack_atlas_page`], read with [`unpack_atlas_page`] — `shaders/quad.wgsl` unpacks the
-    /// identical bit layout.
+    /// Which atlas to sample, and for the main atlas, which page. Bits 0–7
+    /// select the atlas (`ATLAS_SELECTOR_MAIN` = 0, `ATLAS_SELECTOR_TRANSITION`
+    /// = 1, `ATLAS_SELECTOR_VIDEO` = 2); bits 8–31 are the main-atlas page,
+    /// since the other atlases have one page. Build it with [`pack_atlas_page`]
+    /// and read it with [`unpack_atlas_page`]; `shaders/quad.wgsl` uses the same
+    /// layout.
     ///
-    /// Packed rather than given its own field because the vertex-attribute budget is exhausted
-    /// (see [`QuadInstance::buffer_layout`]). `pack_atlas_page(selector, 0) == selector`, so every
-    /// pre-M11.2 value (0/1/2) means exactly what it always meant.
+    /// Packed into one field because every vertex attribute location is in use
+    /// (see [`QuadInstance::buffer_layout`]). Page 0 packs to the selector
+    /// alone: `pack_atlas_page(selector, 0) == selector`.
     pub atlas_page: u32, // offset  76, size  4
 
     // --- Crossfade (from-state during a baked transition) ---
-    /// From-state sub-region origin within `transition_atlas`.
+    /// Texture coordinates of the start image's top-left corner, in the atlas
+    /// [`Self::base_atlas_page`] selects: usually `transition_atlas`.
     pub base_uv_offset: [f32; 2], // offset  80, size  8
-    /// From-state sub-region size within `transition_atlas`.
+    /// Size of the start image, in texture coordinates of that atlas.
     pub base_uv_scale: [f32; 2], // offset  88, size  8
     /// Blend factor: 0.0 = fully from-state, 1.0 = fully to-state. 0.0 disables crossfade.
     pub crossfade_t: f32, // offset  96, size  4
@@ -139,24 +142,19 @@ pub struct QuadInstance {
     /// Border placement: -1.0 = inner, 0.0 = center, 1.0 = outer.
     pub border_offset: f32, // offset 120, size  4
 
-    // --- Drop shadow (M8) ---
+    // --- Drop shadow ---
     /// Shadow params: [offset_x, offset_y, softness, spread] in world-space pixels.
     /// `shadow_color.a == 0` disables the shadow (zero-cost in shader).
     pub shadow_params: [f32; 4], // offset 124, size 16
     /// Shadow color RGBA.  Alpha = 0 means no shadow.
     pub shadow_color: [f32; 4], // offset 140, size 16
 
-    // --- Crossfade base atlas (M9.8 — live video crossfade) ---
-    /// Which atlas `base_uv_offset`/`base_uv_scale` sample from during a
-    /// crossfade — same packed selector-plus-`main_atlas`-page layout as
-    /// [`Self::atlas_page`] (see [`pack_atlas_page`]/[`unpack_atlas_page`]).
-    /// Selector `ATLAS_SELECTOR_TRANSITION` is the default (matches every
-    /// crossfade user before this field existed). Lets the "from" side of a
-    /// crossfade be a *different* atlas than the "to" side's `atlas_page` —
-    /// e.g. a tile's baked box-cover art (main_atlas) crossfading into its
-    /// still-live, still-updating video feed (video_atlas) during the
-    /// tile↔screen morph, without ever snapshotting the video into a static
-    /// bake (which would freeze it).
+    // --- Crossfade start atlas ---
+    /// Which atlas `base_uv_offset` and `base_uv_scale` sample during a
+    /// crossfade, packed like [`Self::atlas_page`]. `ATLAS_SELECTOR_TRANSITION`
+    /// by default. It lets the start of a crossfade be in a different atlas from
+    /// the end: for example, an image in the main atlas fading into playing
+    /// video, which keeps playing rather than being frozen into a bake.
     pub base_atlas_page: u32, // offset 156, size 4
 } // total       160 bytes
 
@@ -286,12 +284,12 @@ impl QuadInstance {
     }
 }
 
-// Compile-time size guard. If QuadInstance changes, this fails immediately
-// and forces the developer to audit buffer_layout() offsets.
+// Fails to compile if `QuadInstance`'s size changes, so that
+// `buffer_layout()`'s offsets are checked.
 const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 160);
 
 // ---------------------------------------------------------------------------
-// atlas_page bit packing (M11.2)
+// atlas_page bit packing
 //
 // These four constants and the two functions below are mirrored verbatim in
 // `shaders/quad.wgsl`. `wgsl_atlas_page_bit_layout_matches_rust` (below) fails the build if the
@@ -313,7 +311,7 @@ pub const ATLAS_SELECTOR_MASK: u32 = 0xFF;
 /// 256 array layers.
 pub const ATLAS_PAGE_SHIFT: u32 = 8;
 
-/// Pack an atlas selector and a `main_atlas` page index into one
+/// Packs an atlas selector and a `main_atlas` page index into one
 /// [`QuadInstance::atlas_page`]/[`QuadInstance::base_atlas_page`] value.
 ///
 /// `page` is ignored by the shader for the `ATLAS_SELECTOR_TRANSITION`/`ATLAS_SELECTOR_VIDEO`
@@ -386,7 +384,7 @@ mod tests {
     //   clip         = view_projection * vec4(world, inst_position.z, 1)
     // -----------------------------------------------------------------------
 
-    /// Replicates the vertex shader transform for one vertex.
+    // Replicates the vertex shader transform for one vertex.
     fn transform_vertex(
         vertex_pos: [f32; 2],    // base quad corner e.g. [-0.5, -0.5]
         inst_position: [f32; 3], // world position (x, y, z)
@@ -425,8 +423,8 @@ mod tests {
         (a - b).abs() < 1e-4
     }
 
-    /// Center anchor, no rotation, scale=1 — simplest case.
-    /// vertex [-0.5,-0.5] of a 200×100 quad at origin should land at world (-100,-50).
+    // Center anchor, no rotation, scale=1 — simplest case.
+    // vertex [-0.5,-0.5] of a 200×100 quad at origin should land at world (-100,-50).
     #[test]
     fn transform_center_anchor_no_rotation() {
         let clip = transform_vertex(
@@ -444,13 +442,13 @@ mod tests {
         assert!(approx_eq(clip.w, 1.0), "w: {}", clip.w);
     }
 
-    /// Top-left anchor [0,0] (Y-down screen convention): the component's top-left
-    /// corner becomes the pivot. In Y-up world space the top-left vertex is [-0.5,+0.5].
-    ///
-    /// With the Y-flip:
-    ///   anchor_shift = ([0,0] - 0.5) * [200,100] * [1,-1] = [-100, +50]
-    ///   centered for [-0.5,+0.5] = (-100, +50)
-    ///   pivoted = (-100,+50) - (-100,+50) = (0, 0)  ✓
+    // Top-left anchor [0,0] (Y-down screen convention): the component's top-left
+    // corner becomes the pivot. In Y-up world space the top-left vertex is [-0.5,+0.5].
+    //
+    // With the Y-flip:
+    //   anchor_shift = ([0,0] - 0.5) * [200,100] * [1,-1] = [-100, +50]
+    //   centered for [-0.5,+0.5] = (-100, +50)
+    //   pivoted = (-100,+50) - (-100,+50) = (0, 0)  ✓
     #[test]
     fn transform_top_left_anchor() {
         let clip = transform_vertex(
@@ -466,8 +464,8 @@ mod tests {
         assert!(approx_eq(clip.y, 0.0), "y: {}", clip.y);
     }
 
-    /// Scale=2 doubles the effective size. A 100×50 quad at scale=2 behaves
-    /// identically to a 200×100 quad at scale=1.
+    // Scale=2 doubles the effective size. A 100×50 quad at scale=2 behaves
+    // identically to a 200×100 quad at scale=1.
     #[test]
     fn transform_scale() {
         let scale1 = transform_vertex(
@@ -518,7 +516,7 @@ mod tests {
     // Without the flip, textures (BakedText, VideoPlayer) appear upside-down.
     // -----------------------------------------------------------------------
 
-    /// Mirror of the fragment-shader UV computation from quad.wgsl.
+    // Mirror of the fragment-shader UV computation from quad.wgsl.
     fn compute_norm_uv(local_pos: glam::Vec2, half_size: glam::Vec2) -> glam::Vec2 {
         let safe_half = half_size.max(glam::Vec2::splat(0.5));
         let raw = (local_pos + safe_half) / (safe_half * 2.0);
@@ -526,8 +524,8 @@ mod tests {
         glam::Vec2::new(raw.x, 1.0 - raw.y).clamp(glam::Vec2::ZERO, glam::Vec2::ONE)
     }
 
-    /// Top-center of the entity (local_pos.y = +half_y) must sample the TOP of
-    /// the texture (UV.y = 0.0).  Without the Y-flip this returns 1.0 instead.
+    // Top-center of the entity (local_pos.y = +half_y) must sample the TOP of
+    // the texture (UV.y = 0.0).  Without the Y-flip this returns 1.0 instead.
     #[test]
     fn uv_top_of_entity_samples_texture_top() {
         let half = glam::Vec2::new(100.0, 50.0);
@@ -545,8 +543,8 @@ mod tests {
         );
     }
 
-    /// Bottom-center of the entity (local_pos.y = -half_y) must sample the BOTTOM
-    /// of the texture (UV.y = 1.0).  Without the Y-flip this returns 0.0 instead.
+    // Bottom-center of the entity (local_pos.y = -half_y) must sample the BOTTOM
+    // of the texture (UV.y = 1.0).  Without the Y-flip this returns 0.0 instead.
     #[test]
     fn uv_bottom_of_entity_samples_texture_bottom() {
         let half = glam::Vec2::new(100.0, 50.0);
@@ -564,8 +562,8 @@ mod tests {
         );
     }
 
-    /// Top-left corner of the entity in world-Y-up space is (−half_x, +half_y).
-    /// It must map to UV (0, 0) — the top-left of the texture.
+    // Top-left corner of the entity in world-Y-up space is (−half_x, +half_y).
+    // It must map to UV (0, 0) — the top-left of the texture.
     #[test]
     fn uv_top_left_entity_corner_maps_to_uv_origin() {
         let half = glam::Vec2::new(100.0, 50.0);
@@ -575,8 +573,8 @@ mod tests {
         assert!((uv.y - 0.0).abs() < 1e-5, "UV Y at top should be 0.0");
     }
 
-    /// Bottom-right corner of the entity in world-Y-up space is (+half_x, −half_y).
-    /// It must map to UV (1, 1) — the bottom-right of the texture.
+    // Bottom-right corner of the entity in world-Y-up space is (+half_x, −half_y).
+    // It must map to UV (1, 1) — the bottom-right of the texture.
     #[test]
     fn uv_bottom_right_entity_corner_maps_to_uv_one_one() {
         let half = glam::Vec2::new(100.0, 50.0);
@@ -589,7 +587,7 @@ mod tests {
         assert!((uv.y - 1.0).abs() < 1e-5, "UV Y at bottom should be 1.0");
     }
 
-    /// Center of the entity must always map to UV (0.5, 0.5).
+    // Center of the entity must always map to UV (0.5, 0.5).
     #[test]
     fn uv_center_of_entity_maps_to_uv_center() {
         let half = glam::Vec2::new(200.0, 80.0);
@@ -599,9 +597,9 @@ mod tests {
         assert!((uv.y - 0.5).abs() < 1e-5, "UV Y at center should be 0.5");
     }
 
-    /// 90° CCW rotation: a point at (1, 0) should become (0, 1).
-    /// Use a 2×2 quad at center anchor so vertex (0.5, -0.5) → world (1, -1) pre-rotation,
-    /// then after 90° CCW it should be (1, 1).
+    // 90° CCW rotation: a point at (1, 0) should become (0, 1).
+    // Use a 2×2 quad at center anchor so vertex (0.5, -0.5) → world (1, -1) pre-rotation,
+    // then after 90° CCW it should be (1, 1).
     #[test]
     fn transform_rotation_90_deg() {
         let clip = transform_vertex(
@@ -620,8 +618,8 @@ mod tests {
         assert!(approx_eq(clip.y, 1.0), "y: {}", clip.y);
     }
 
-    /// Orthographic projection: a world point at pixel (640, 400) on a 1280×800
-    /// viewport should map to NDC (1, 1) — the top-right corner.
+    // Orthographic projection: a world point at pixel (640, 400) on a 1280×800
+    // viewport should map to NDC (1, 1) — the top-right corner.
     #[test]
     fn transform_ortho_projection() {
         use crate::pipeline::QuadPipeline;
@@ -642,7 +640,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // atlas_page bit packing (M11.2)
+    // atlas_page bit packing
     // -----------------------------------------------------------------------
 
     #[test]
@@ -663,8 +661,8 @@ mod tests {
 
     #[test]
     fn pack_atlas_page_is_bit_identical_to_the_legacy_encoding_for_page_zero() {
-        // Pins the compatibility property every pre-M11.2 hardcoded `atlas_page`/
-        // `base_atlas_page` value (0/1/2) relies on: packing page 0 must be a no-op.
+        // Page 0 must pack to the selector alone, which code that writes
+        // 0, 1 or 2 directly relies on.
         assert_eq!(pack_atlas_page(ATLAS_SELECTOR_MAIN, 0), 0);
         assert_eq!(pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0), 1);
         assert_eq!(pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0), 2);
@@ -672,9 +670,9 @@ mod tests {
 
     #[test]
     fn wgsl_atlas_page_bit_layout_matches_rust() {
-        // Drift guard: quad.wgsl hand-mirrors these constants (WGSL can't `include!` Rust
-        // consts) — if either side changes without the other, main_atlas sampling silently
-        // reads the wrong layer. Fails the build instead of failing at render time.
+        // quad.wgsl copies these constants, since WGSL can't include Rust. If one
+        // side changes without the other, the main atlas samples the wrong page;
+        // this catches it in tests instead.
         let src = crate::QUAD_SHADER_SRC;
         let mask_line = format!("ATLAS_SELECTOR_MASK: u32 = {ATLAS_SELECTOR_MASK:#04X}u");
         let shift_line = format!("ATLAS_PAGE_SHIFT:    u32 = {ATLAS_PAGE_SHIFT}u");

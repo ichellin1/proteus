@@ -1,17 +1,17 @@
 //! `VideoTiles` — reached from `Home`'s first nav button ("Videos"). Three
 //! tiles with box-cover art (falling back to a solid placeholder color if
 //! the image never loads) laid out in a fixed centered row. Clicking a tile
-//! grows it into `VideoScreen` — real `.mp4` playback via `ffmpeg`, driven
-//! by `Demo`'s `take_pending_video_*` injection points (see the crate-root
-//! doc: decoding stays a shell concern, same as `Text`/`Image` baking).
+//! grows it into `VideoScreen`, which plays the tile's video. `Demo` requests
+//! playback, and `DemoApp` starts it through the host (see the crate-root
+//! doc).
 //!
 //! Hover: a black overlay + title label fade in over the box art (neither
-//! visible at rest), plus the Design-System glow/scale every other
-//! interactive surface gets — the glow/scale ride the shared
+//! visible at rest), plus the hover glow and scale all the other
+//! interactive surfaces get — the glow/scale ride the shared
 //! `HoverEntry`/`Demo::advance_hovers` engine (registered in `Demo::new`,
 //! same as everything else); the overlay/label/screen-scale are
 //! tile-specific enough (continuous geometry-tracking through the
-//! tile↔screen morph, a hard scale bump once resting as the video screen)
+//! tile↔screen transition, a hard scale bump once resting as the video screen)
 //! to need their own `Demo::advance_tile_hover`, which reads each tile's
 //! ramped hover progress back out of that same shared engine rather than
 //! duplicating the ramp. The label's colour is hardcoded rather than
@@ -30,10 +30,9 @@ use proteus_sdk::{Border, ComponentSpec, Glow, Handle, Proteus, QuadState, Text}
 pub const TILE_WIDTH: f32 = 200.0;
 pub const TILE_HEIGHT: f32 = TILE_WIDTH * 1.5;
 const TILE_GAP: f32 = 100.0;
-/// Also the theme-blend target in `Demo::advance_theme` — the dark-theme
-/// counterpart is numerically identical (`TILE_CORNER_RADIUS_DARK`), wired
-/// anyway per this pass's design decision (see `screens::home::CORNER_
-/// RADIUS`'s own doc for the same call).
+/// Also the theme-blend target in `Demo::advance_theme`. The dark-theme
+/// counterpart (`TILE_CORNER_RADIUS_DARK`) has the same value, but is kept
+/// separate so the themes can diverge (see `screens::home::CORNER_RADIUS`).
 pub const TILE_CORNER_RADIUS: f32 = 20.0;
 /// Dark-theme counterpart of [`TILE_CORNER_RADIUS`] — see its doc.
 pub const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
@@ -91,7 +90,7 @@ fn violet() -> Vec4 {
 }
 
 /// The Color-dark treatment's lighter violet — used here (unlike almost
-/// every other text/border/glow color in this crate) as a **hardcoded**
+/// all the other text/border/glow colors in this crate) as a **hardcoded**
 /// label color, not a live `theme_progress` blend target: the label sits on
 /// top of a black semi-transparent overlay in both themes, and the lighter
 /// violet reads clearly against black regardless of which theme is active.
@@ -99,7 +98,7 @@ fn violet_dark() -> Vec4 {
     Vec4::new(182.0 / 255.0, 168.0 / 255.0, 1.0, 1.0)
 }
 
-/// The z every idle tile (and, at the very instant a morph starts, the
+/// The z every idle tile (and, at the very instant a transition starts, the
 /// clicked one too) rests at — named so `backdrop_quad`'s own dynamic z
 /// (see its doc) can be derived from it directly, instead of duplicating
 /// the literal.
@@ -128,11 +127,9 @@ pub(crate) fn tile_quad(idx: usize) -> QuadState {
 /// back on this tile's own grid slot
 /// (`Handle::split_to_with_states`, used by `Demo::start_home_to_tiles`/
 /// `Demo::start_screen_to_tiles`). A bare `tile_quad(idx)` would always
-/// carry the tint, even multiplying real box art underneath it — a real
-/// bug, reported directly ("tiles keep color tint from the original bg
-/// colors"). Both `Demo::start_home_to_tiles` and
-/// `Demo::start_screen_to_tiles` gate the override on `BakedImage` the same
-/// way.
+/// carry the tint, multiplying the real box art underneath it. Both
+/// `Demo::start_home_to_tiles` and `Demo::start_screen_to_tiles` gate the
+/// override on `BakedImage` the same way.
 pub(crate) fn tile_target_state(app: &Proteus, tile: Handle, idx: usize) -> QuadState {
     let mut state = tile_quad(idx);
     if tile.baked_image_size(app).is_some() {
@@ -146,9 +143,9 @@ pub(crate) fn tile_target_state(app: &Proteus, tile: Handle, idx: usize) -> Quad
 /// underneath. `size`/`corner_radius` here are only the *spawn-time*
 /// values (tile-shaped, inset by the border) — `Demo::advance_tile_hover`
 /// recomputes both every tick from the parent tile's own *current*
-/// geometry, since (unlike every other child quad in this crate) the
+/// geometry, since (unlike all the other child quads in this crate) the
 /// parent's shape itself changes continuously through the tile↔screen
-/// morph.
+/// transition.
 fn tile_overlay_quad() -> QuadState {
     QuadState {
         position: Vec3::ZERO,
@@ -171,35 +168,27 @@ fn tile_overlay_quad() -> QuadState {
 /// rather than leaving fixed here (see its own doc for the exact formula
 /// and why); this spawn-time value is never actually seen.
 ///
-/// **Not** source's fixed `0.49`. Source puts `video_backdrop` "just behind
-/// the tile/screen quad's own z (0.5)", which works there because its own
-/// renderer draws in spawn/insertion order, not a global z-sort — nothing
-/// else nearby ever "wins" a z comparison it isn't part of. This crate's
-/// `collect_instances` sorts *every* root by z globally (see
-/// `video_screen_quad`'s own doc for the tie-break bug that already forced
-/// once), so a fixed `0.49` would sit *below* the two untouched idle
-/// sibling tiles (`video_tiles::TILE_Z`, `0.5`) — normally harmless (the
-/// entering/settled tile, opaque, covers it completely) until source's own
-/// `advance_tiles_to_screen_fade` behavior (ported to `Demo::
-/// advance_video_loading`) fades that tile's own alpha toward 0, both
-/// during the entering morph and while settled-and-waiting for the first
-/// real frame: with the tile partially or fully transparent, the idle
-/// siblings (geometrically inside the much-bigger growing/settled screen's
-/// footprint) would render "in front of" backdrop wherever it should be
-/// covering them — reported directly as "the other tiles are on top of the
-/// one I clicked."
+/// A fixed z doesn't work. `collect_instances` sorts *every* root by z
+/// globally (see `video_screen_quad`'s doc for the tie-break this already
+/// forced), so a z just behind the tile/screen (`0.49`) would sit *below*
+/// the two idle sibling tiles (`video_tiles::TILE_Z`, `0.5`). That's
+/// harmless while the entering/settled tile is opaque and covers it, but
+/// `Demo::advance_video_loading` fades that tile's alpha toward 0, both
+/// during the entering transition and while waiting for the first real
+/// frame. With the tile partly or fully transparent, the idle siblings
+/// (inside the much bigger screen's footprint) would render in front of
+/// `backdrop` wherever it should cover them.
 ///
-/// A single *fixed* z above `0.5` doesn't fully fix this either: the
-/// tracked tile's own z is itself sweeping from `TILE_Z` (`0.5`) up to
-/// `video_screen_quad`'s settled `0.51` over the same morph, and backdrop
-/// must stay strictly *behind* whatever that current value is (or it would
-/// wrongly cover the tile's own still-mostly-opaque content early in the
-/// fade) while staying strictly *above* `TILE_Z` throughout (or the idle
-/// siblings show through again). `Demo::advance_video_loading` instead
-/// re-derives it every tick as the midpoint between `TILE_Z` and the
-/// tracked tile's own *current* z — always strictly between the two for
-/// any current z `> TILE_Z`, converging on the same `0.505` this once was
-/// as a static value once the tile settles at `0.51`.
+/// A fixed z above `0.5` doesn't work either: the tracked tile's own z
+/// sweeps from `TILE_Z` (`0.5`) up to `video_screen_quad`'s settled `0.51`
+/// over the same transition, and `backdrop` must stay strictly *behind*
+/// that current value (or it would cover the tile's still mostly opaque
+/// content early in the fade) while staying strictly *above* `TILE_Z`
+/// throughout (or the idle siblings show through again).
+/// `Demo::advance_video_loading` instead re-derives it every tick as the
+/// midpoint between `TILE_Z` and the tracked tile's *current* z — always
+/// strictly between the two for any current z `> TILE_Z`, and `0.505` once
+/// the tile settles at `0.51`.
 fn backdrop_quad() -> QuadState {
     QuadState {
         position: Vec3::new(0.0, 0.0, TILE_Z),
@@ -358,8 +347,8 @@ const SCREEN_CLEARANCE_PX: f32 = 110.0;
 /// 0.51 (this crate's established "just above resting content" tier, same
 /// one `example_detail::CONTENT_Z` uses over its panel's own 0.5) guarantees
 /// the screen always wins the tie, growing or settled. `animate_to` lerps
-/// `position` (and so `z`) same as every other field, so this ramps in
-/// smoothly alongside the rest of the morph, not a jump-cut.
+/// `position` (and so `z`) like any other field, so this ramps in
+/// smoothly alongside the rest of the transition, not a jump-cut.
 pub fn video_screen_quad(viewport_size: Vec2) -> QuadState {
     let uncapped_height = viewport_size.x * SCREEN_WIDTH_FRACTION * SCREEN_ASPECT;
     let max_height = (viewport_size.y - 2.0 * SCREEN_CLEARANCE_PX).max(0.0);

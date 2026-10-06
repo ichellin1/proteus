@@ -1,85 +1,62 @@
-//! [`TextureRegistry`] — reference-counted, generation-safe texture tracking (M11).
+//! [`TextureRegistry`]: which textures are in the main atlas and the video
+//! slot, how many entities use each, and which to evict when space runs out.
 //!
-//! Before M11 this was a plain `Vec<Entry>` keyed by a raw `u32`, with no way to ever free an
-//! entry. `main_atlas` (baked text/images/composites), `transition_atlas` (ephemeral crossfade
-//! snapshots), and `video_atlas` (the streamed video slot) are genuinely different lifecycles, so
-//! this registry does not force them into one physical atlas — it's the single source of truth
-//! for *metadata* (kind, ref count, state, recency) sitting above whichever low-level allocator is
-//! appropriate per kind. `transition_atlas`/`TransitionAtlasAllocator` are already correctly
-//! self-managed (real allocate/free, tied to transition start/completion) and are intentionally
-//! **not** tracked here — this closes the `main_atlas`/`video_atlas` gap specifically.
+//! It holds metadata (kind, reference count, state, when last used) and the
+//! main atlas's space allocators; the GPU textures themselves are in
+//! [`crate::QuadPipeline`]. The transition atlas manages its own space and
+//! isn't tracked here.
 //!
 //! ## Reference counting
 //!
-//! `main_atlas` entries (`TextureKind::Static`) are ref-counted against
-//! `proteus_ui::TextureRef` component lifecycle — see that type's docs for the `ComponentHooks`
-//! wiring. A ref count of zero does **not** mean immediately freed; it means the entry becomes a
-//! reclaim *candidate*, actually freed only via an explicit [`TextureRegistry::free`] call or via
-//! eviction under allocation pressure. `TextureKind::Video` is metadata/observability only — the
-//! single video texture slot is managed by ordinary Rust `Drop` in [`crate::QuadPipeline`],
-//! independent of this registry's ref-counting.
+//! Main-atlas entries are counted by `proteus_ui::TextureRef` components. A
+//! count of zero doesn't free an entry: it makes it a candidate, freed by
+//! [`TextureRegistry::free`] or when space is needed. The video entry is only
+//! metadata; `QuadPipeline` owns the video texture itself.
 //!
-//! ## Eviction never touches referenced content
+//! ## Eviction never touches a texture in use
 //!
-//! If every `main_atlas` page is full, [`TextureRegistry::register_static`] evicts unreferenced
-//! (`ref_count == 0`), non-`eternal` entries — oldest-`last_used`-first, **globally across every
-//! page**, not scoped to one — until either enough room opens or none remain eligible. It never
-//! evicts a still-referenced entry: `BakedText`/`BakedImage`/`BakedComposite` cache their UV
-//! coordinates directly on the component for a fast render path (no per-frame registry lookup),
-//! so evicting a referenced region and letting a *different* texture reuse it later would make
-//! the original component silently render the wrong (new occupant's) pixels — wrong content with
-//! no error, not a crash. If unreferenced eviction isn't enough, registration simply fails
-//! (`None`, logged), same as every other atlas-full path in this codebase.
+//! When every page is full, [`TextureRegistry::register_static`] frees
+//! unreferenced, non-`eternal` entries, least recently used first across all
+//! pages, until the new texture fits. It never frees a referenced one:
+//! components keep their texture coordinates, so a freed region reused by
+//! another texture would make them draw the wrong image. If freeing
+//! unreferenced entries isn't enough, registration fails and returns `None`,
+//! with a log message.
 //!
-//! Evicting still-referenced content (with a restoration mechanism to make that safe — the
-//! prerequisite for general atlas repacking/compaction too, not just eviction) and
-//! backgrounding-driven eviction beyond video are Post-V1 — see `ROADMAP.md`.
+//! ## Pages
 //!
-//! ## Multi-page pool (M11.2)
+//! The main atlas has a fixed number of pages, set by [`AtlasConfig`], since an
+//! array texture can't grow without being recreated. Eviction keeps usage
+//! within it: many images can be available without all being loaded at once.
+//! Each page has its own [`MainAtlasAllocator`]; allocation tries the page that
+//! worked last time, then all the others.
 //!
-//! `main_atlas` is a `wgpu::TextureViewDimension::D2Array` with a fixed page count decided at
-//! construction (see [`AtlasConfig`]) — capacity scales with page count, but the pool never grows
-//! after creation (a `D2Array`'s layer count can't grow without recreating the whole texture).
-//! Instead, capacity is *held* bounded by eviction: "thousands of images available, not thousands
-//! resident" is what makes unbounded content tractable, not an ever-growing pool. Each page is an
-//! independent [`MainAtlasAllocator`]; allocation tries a preferred page first, then every other
-//! page in order, then falls back to the eviction path above (still keyed by global recency, not
-//! per-page).
-//!
-//! No explicit "repack/defragment a page" step exists, and testing found none is needed for the
-//! case that seemed likeliest to require it: fully emptying a page (mixed-size regions, freed in
-//! scattered order) already recovers its *entire* original space via `etagere`'s own coalescing —
-//! see `TextureRegistry::free_internal`'s doc for how this was verified rather than assumed. The
-//! harder case — repacking a page that's still *partially* full, with some content still
-//! referenced — is a real gap, but not one this fixes: it needs the same referenced-content
-//! relocation mechanism already deferred to Post-V1 above (moving a referenced region's pixels
-//! without updating every component's cached UV silently corrupts rendering). See `ROADMAP.md`.
+//! Emptying a page recovers all its space, since `etagere`, the allocator,
+//! merges freed regions. A page that is only partly empty can't be repacked,
+//! because moving a region still in use would need every component using it
+//! updated.
 
 use crate::main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 
-/// Configuration for `main_atlas`'s sizing — how big each page is, and how many pages exist.
+/// The size of each main-atlas page and how many there are.
 ///
-/// Defaults (`2048`, `4`) match what's safe on every target this project currently ships to,
-/// WebGL2 included. Override only when you know your deployment target's real headroom: a
-/// native-only build targeting a desktop/TV GPU can raise `page_size` well past 2048 (native's
-/// plain `wgpu::Limits::default()` guarantees 8192); a memory-constrained or video-free target
-/// can lower `page_count` (each page is `page_size² × 4` bytes, eagerly committed at texture
-/// creation — wgpu cannot lazily back array layers).
+/// The defaults, 2048 and 4, work everywhere, including WebGL2. A native-only
+/// app can raise `page_size` (native devices allow at least 8192); an app short
+/// of memory can lower `page_count`. Each page takes `page_size² × 4` bytes of
+/// GPU memory, allocated up front.
 ///
-/// **Known limitation, not fixed by this type**: `page_size` is still bounded by whatever the
-/// real device's `max_texture_dimension_2d` allows — 2048 on every WebGL2/downlevel target. A
-/// single baked region (one image, one text run, one composite) can never exceed `page_size` on
-/// any axis, so a genuinely UHD-resolution (3840×2160+) source image cannot be baked as one
-/// contiguous region on web today, no matter how this is tuned. Closing that gap for real would
-/// mean tiling a large source image across multiple ≤`page_size` regions at decode time and
-/// stitching them at render time — a materially bigger feature, not built here; see `ROADMAP.md`'s
-/// Post-V1 entry.
+/// No single texture can be larger than `page_size` on either side, and
+/// WebGL2 limits `page_size` to 2048. So an image larger than 2048 pixels
+/// can't be shown at full size on the web; it would need to be split across
+/// several regions.
 ///
-/// Validate a chosen config against the real device before use — see
-/// [`crate::validate_atlas_config`].
+/// Check a configuration against the device with
+/// [`crate::validate_atlas_config`] before using it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasConfig {
+    /// Width and height of each page, in pixels.
     pub page_size: u32,
+    /// Number of pages.
     pub page_count: u32,
 }
 
@@ -104,81 +81,81 @@ slotmap::new_key_type! {
 /// The category of a registered texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureKind {
-    /// Permanent content packed into `main_atlas` — baked text, images, and composites.
+    /// In the main atlas: baked text, images and components.
     Static,
-    /// A streaming video feed — pixel data is replaced each frame via
+    /// The video, whose pixels are replaced each frame by
     /// [`crate::QuadPipeline::upload_video_frame`].
     Video,
-    /// Reserved for future animated GIF/sprite-sheet playback — see `ROADMAP.md`'s Post-V1
-    /// entry for the full design (each frame decoded once and packed into `main_atlas` like
-    /// `Static`, cycled via a playhead rather than re-decoded like `Video`). Not constructed by
-    /// any `register_*` method yet; reserved now so the enum's public shape doesn't need to
-    /// break again once it is.
+    /// Not used yet; reserved for animated images, such as GIFs, whose frames
+    /// would be packed into the main atlas and shown in turn.
     Animated,
 }
 
-/// Lifecycle state of a registered texture.
+/// Whether a registered texture can be drawn.
 ///
-/// Registration and upload are one synchronous step here — a `register_*`
-/// method either returns a `TextureId` whose pixels are already on the GPU or
-/// doesn't return one at all — so there is no "loading" or "failed" state in
-/// between for an entry to sit in. (An earlier revision declared both; neither
-/// was ever constructed. If asynchronous uploads land, they come back.)
+/// Registering a texture uploads it at the same time, so there is no loading
+/// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureState {
     /// Uploaded and safe to sample.
     Ready,
-    /// GPU memory released (eviction, or `suspend_video`) — not safe to sample.
+    /// Its GPU memory has been released, by eviction or `suspend_video`; don't
+    /// draw it.
     Evicted,
 }
 
-/// Where a registered texture's pixels physically live.
+/// Where a registered texture's pixels are.
 ///
-/// `Main`'s `x`/`y` are the allocator's real placement, but deliberately carries no
-/// `width`/`height` of its own: `etagere`'s shelf allocator may round a request up to a larger
-/// bucket (documented on `MainAtlasAllocator`/`TransitionAtlasAllocator`'s own tests), and the
-/// *caller's originally requested* dimensions — already tracked in `TextureEntry::size` — are what
-/// upload/UV math must use. Using the allocator's (possibly padded) size there instead would
-/// upload fewer content pixels than the region claims, or stretch UVs into unwritten padding.
+/// `Main` has the allocator's position but not its size: the allocator may
+/// round a request up, and uploads and texture coordinates must use the size
+/// that was requested, which the entry keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtlasRegion {
-    /// A sub-region of one `main_atlas` array layer, owned by that layer's [`MainAtlasAllocator`].
+    /// A region of one main-atlas page, allocated by that page's
+    /// [`MainAtlasAllocator`].
     Main {
+        /// The page allocator's ID for the region.
         alloc_id: MainAtlasAllocId,
-        /// Which `main_atlas` array layer ("page") this region lives on (M11.2) — indexes
-        /// `TextureRegistry::main_atlas_pages`, and is the value encoded into the high bits of
-        /// `QuadInstance::atlas_page` at render time (see `mesh::pack_atlas_page`).
+        /// The page the region is on, which is also the texture's array layer.
         page: u32,
+        /// Left edge, in pixels.
         x: u32,
+        /// Top edge, in pixels.
         y: u32,
     },
-    /// The whole `video_atlas` texture *is* the resource — no packed sub-region.
+    /// The whole video texture.
     Video,
 }
 
-/// Where a `Static` entry's pixels physically live in `main_atlas` — which array layer ("page"),
-/// and the pixel rect within it. Returned by [`TextureRegistry::main_atlas_region`] and consumed
-/// directly by [`crate::QuadPipeline::write_to_main_atlas`]/
+/// Where a main-atlas texture is: its page and pixel rectangle. Returned by
+/// [`TextureRegistry::main_atlas_region`], and passed to
+/// [`crate::QuadPipeline::write_to_main_atlas`] and
 /// [`crate::QuadPipeline::bake_instances_to_main_atlas`].
 ///
-/// `width`/`height` are the caller's originally requested content dimensions, not the allocator's
-/// possibly-padded footprint — see [`AtlasRegion`] for why.
+/// The size is the one requested, not the allocator's possibly larger one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MainAtlasPlacement {
+    /// The page.
     pub page: u32,
+    /// Left edge, in pixels.
     pub x: u32,
+    /// Top edge, in pixels.
     pub y: u32,
+    /// Width, in pixels.
     pub width: u32,
+    /// Height, in pixels.
     pub height: u32,
 }
 
-/// A `Static` entry's `main_atlas` region as normalised UVs plus its page index — exactly the
-/// three values a `proteus_ui::BakedImage`/`BakedText`/`BakedComposite` stores. Destructure it to
-/// fill one of those with field-init shorthand.
+/// Where a main-atlas texture is, as texture coordinates and a page: the three
+/// values `proteus_ui::BakedImage`, `BakedText` and `BakedComposite` store.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MainAtlasUv {
+    /// The page.
     pub page: u32,
+    /// Texture coordinates of the top-left corner.
     pub uv_offset: [f32; 2],
+    /// Size in texture coordinates.
     pub uv_scale: [f32; 2],
 }
 
@@ -187,16 +164,12 @@ struct TextureEntry {
     kind: TextureKind,
     atlas_region: AtlasRegion,
     ref_count: u32,
-    /// Opts out of eviction-under-pressure. Both shells' animated-logo frame registrations pass
-    /// `eternal: true` (they must survive the whole idle loop, not just whichever frame is
-    /// currently shown); every other `register_static` call passes `false`.
-    /// `register_video`'s single slot is always `eternal` since there's no packed region for
-    /// eviction to reclaim anyway.
+    // Never evicted. Set for textures that must stay loaded, such as the
+    // frames of an animation, and always for the video entry.
     eternal: bool,
-    /// Frame counter (not wall-clock) of this entry's last real use — see
-    /// [`TextureRegistry::touch`]. Only ever advances while `ref_count > 0`; once a zero-ref entry
-    /// becomes a reclaim candidate this value freezes, which is exactly the LRU ordering eviction
-    /// wants (longest-dormant reclaim candidate evicted first).
+    // The frame counter when the entry was last used; see `touch`. It stops
+    // advancing once nothing references the entry, which gives eviction its
+    // least-recently-used order.
     last_used: u64,
     size: (u32, u32),
     state: TextureState,
@@ -206,32 +179,26 @@ struct TextureEntry {
 // TextureRegistry
 // ---------------------------------------------------------------------------
 
-/// Tracks GPU texture allocations for `main_atlas` (`Static`) and the streamed video slot
-/// (`Video`). A *metadata* store plus the CPU-side `main_atlas` sub-region allocators — the actual
-/// `wgpu::Texture` objects live in [`crate::QuadPipeline`], which owns one `TextureRegistry`.
+/// Tracks the textures in the main atlas and the video slot.
+///
+/// It holds metadata and the main atlas's space allocators; the GPU textures
+/// are in [`crate::QuadPipeline`], which owns the registry.
 pub struct TextureRegistry {
     entries: slotmap::SlotMap<TextureId, TextureEntry>,
-    /// One allocator per `main_atlas` array layer (M11.2). `Vec` index == GPU array-layer index
-    /// == the `page` stored in `AtlasRegion::Main`. Fixed at construction — see the module docs'
-    /// "Multi-page pool" section for why this doesn't grow.
+    // One allocator per page; the index is the page and array layer.
     main_atlas_pages: Vec<MainAtlasAllocator>,
-    /// Every page's width/height in pixels (all pages are the same size — see [`AtlasConfig`]).
-    /// Kept here (rather than asking a `MainAtlasAllocator`) so [`Self::main_atlas_uv`] can
-    /// normalise UVs without the caller needing to separately track/pass the configured size.
+    // Every page's size, for converting regions to texture coordinates.
     page_size: u32,
-    /// Page tried first by the next allocation — whichever page satisfied the previous one. Pure
-    /// optimisation: in the common case (steady-state registration into a page with room) this
-    /// makes allocation a single `etagere` call instead of a scan. Never affects correctness —
-    /// every page is tried before allocation is declared failed.
+    // The page to try first: the one the last allocation used. Only an
+    // optimization; every page is tried before allocation fails.
     preferred_page: usize,
     frame_counter: u64,
 }
 
 impl TextureRegistry {
-    /// Create an empty registry backing a `main_atlas` pool sized per `config` (see
-    /// [`AtlasConfig`]). `page_count` is clamped to at least 1. Layer 0's allocator reserves the
-    /// origin guard (the 1×1 white-pixel sentinel lives there); layers 1.. do not — see
-    /// [`MainAtlasAllocator::new_without_guard`].
+    /// Creates an empty registry for a main atlas sized by `config`.
+    /// `page_count` is at least 1. Page 0 reserves the white guard block at its
+    /// origin; see [`MainAtlasAllocator::new_without_guard`].
     pub fn new(config: AtlasConfig) -> Self {
         let page_count = config.page_count.max(1) as usize;
         let mut main_atlas_pages = Vec::with_capacity(page_count);
@@ -252,16 +219,13 @@ impl TextureRegistry {
     // Registration
     // -----------------------------------------------------------------------
 
-    /// Register a `width × height` region of `main_atlas` for permanent content (baked text,
-    /// images, or composites). Returns `None` if every page has no room even after evicting every
-    /// eligible unreferenced entry, globally, across the whole pool (see the module docs'
-    /// eviction-safety note).
+    /// Allocates a `width × height` region of the main atlas for text, an
+    /// image or a baked component. Returns `None` if nothing fits, even after
+    /// evicting every unreferenced texture; see the module docs.
     ///
-    /// `ref_count` starts at 0 — the caller inserts a `proteus_ui::TextureRef` component
-    /// immediately after, which increments it to 1 via its `ComponentHooks`, so a freshly
-    /// registered entry is never observably zero for longer than one call.
-    ///
-    /// `eternal: true` opts this entry out of eviction-under-pressure entirely.
+    /// The reference count starts at 0; the caller adds a
+    /// `proteus_ui::TextureRef` straight away, which raises it to 1. With
+    /// `eternal`, the texture is never evicted.
     pub fn register_static(&mut self, width: u32, height: u32, eternal: bool) -> Option<TextureId> {
         let (page, alloc_id, region) = self
             .allocate_across_pages(width, height)
@@ -283,13 +247,11 @@ impl TextureRegistry {
         Some(id)
     }
 
-    /// Try `preferred_page` first, then every other page in ascending order. Returns the page that
-    /// satisfied the request and updates `preferred_page` to it. Never evicts — an
-    /// all-pages-full result is what escalates to [`Self::evict_to_make_room`].
+    /// Tries `preferred_page`, then all the other pages in order, and records
+    /// the page that fits. Never evicts.
     ///
-    /// Deliberately first-fit-by-page rather than best-fit-by-remaining-space: `etagere` has no
-    /// cheap "remaining space" query, the pool is single-digit pages, and first-fit keeps the
-    /// steady-state (page has room) path to exactly one allocator call.
+    /// It takes the first page that fits, not the best fit: `etagere` can't
+    /// cheaply report free space, and there are only a few pages.
     fn allocate_across_pages(
         &mut self,
         width: u32,
@@ -306,10 +268,9 @@ impl TextureRegistry {
         None
     }
 
-    /// Register the single streaming video slot. Metadata-only — mirrors the pre-M11 `register`
-    /// call `QuadPipeline::init_video` made. Always `eternal`: there is no packed atlas region for
-    /// eviction to reclaim here (the whole `video_atlas` texture is the resource, freed by ordinary
-    /// Rust `Drop` when `QuadPipeline` replaces it — see the module docs).
+    /// Registers the video slot. Metadata only, and always `eternal`, since
+    /// there is no atlas region to reclaim: the whole video texture is freed
+    /// when `QuadPipeline` replaces it.
     pub(crate) fn register_video(&mut self, width: u32, height: u32) -> TextureId {
         self.entries.insert(TextureEntry {
             kind: TextureKind::Video,
@@ -323,36 +284,36 @@ impl TextureRegistry {
     }
 
     // -----------------------------------------------------------------------
-    // Reference counting — driven by `proteus_ui::TextureRef`'s ComponentHooks
+    // Reference counting, by `proteus_ui::TextureRef`'s hooks
     // -----------------------------------------------------------------------
 
-    /// Increment `id`'s reference count. Called only from `proteus_ui::TextureRef`'s
-    /// `on_insert` hook — not intended for direct application use.
+    /// Adds a reference to `id`. Called by `proteus_ui::TextureRef`'s hooks,
+    /// not by apps.
     pub fn incref(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.ref_count += 1;
         }
     }
 
-    /// Decrement `id`'s reference count (floored at 0). Called only from
-    /// `proteus_ui::TextureRef`'s `on_replace` hook (covers reassignment, explicit removal, and
-    /// despawn uniformly) — not intended for direct application use. Reaching zero does *not*
-    /// free the entry — see the module docs.
+    /// Removes a reference to `id`, never going below zero. Called by
+    /// `proteus_ui::TextureRef`'s hooks, not by apps. Reaching zero doesn't
+    /// free the entry; see the module docs.
     pub fn decref(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.ref_count = e.ref_count.saturating_sub(1);
         }
     }
 
-    /// Bump `id`'s recency to the current frame. Called once per frame for every live
-    /// `TextureRef` by `proteus_ui`'s touch system.
+    /// Marks `id` as used this frame. `proteus_ui` calls it every frame for
+    /// every texture in use.
     pub fn touch(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.last_used = self.frame_counter;
         }
     }
 
-    /// Advance the internal frame counter. Call once per tick, before this frame's `touch` calls.
+    /// Advances the frame counter. Call once per tick, before that tick's
+    /// `touch` calls.
     pub fn advance_frame(&mut self) {
         self.frame_counter += 1;
     }
@@ -361,10 +322,8 @@ impl TextureRegistry {
     // Freeing / eviction
     // -----------------------------------------------------------------------
 
-    /// Explicitly release a zero-ref entry back to the allocator (`freeResources()`/`.free()` in
-    /// Phase B's vocabulary). No-ops (with a warning) on a still-referenced entry — this is the
-    /// primary way a reclaim candidate gets its GPU space back before allocation pressure forces
-    /// the question.
+    /// Frees an entry that nothing references, returning its space. Does
+    /// nothing, with a warning, if something still references it.
     pub fn free(&mut self, id: TextureId) {
         let Some(entry) = self.entries.get(id) else {
             return;
@@ -379,9 +338,9 @@ impl TextureRegistry {
         self.free_internal(id);
     }
 
-    /// Free every current zero-ref, non-`eternal` `Static` entry, regardless of any specific size
-    /// need. Returns how many were freed. For proactively reclaiming memory (e.g. before loading a
-    /// large batch of new content) without waiting for an allocation to fail first.
+    /// Frees every unreferenced, non-`eternal` main-atlas entry, and returns how
+    /// many. Useful before loading many new textures, rather than waiting for
+    /// space to run out.
     pub fn evict_unused(&mut self) -> usize {
         let candidates: Vec<TextureId> = self
             .entries
@@ -396,20 +355,10 @@ impl TextureRegistry {
         freed
     }
 
-    /// Internal-only: called from [`register_static`](Self::register_static) when
-    /// [`allocate_across_pages`](Self::allocate_across_pages) fails on every page. Frees
-    /// unreferenced, non-`eternal` `Static` entries **globally oldest-`last_used`-first across
-    /// every page** — not scoped to one — retrying the allocation after each free (preferring
-    /// whichever page was just freed), and returns as soon as one succeeds. Never considers
-    /// `ref_count > 0` entries (see the module docs). If every eligible entry across every page is
-    /// freed and the allocation still doesn't fit, returns `None` — the caller's registration
-    /// simply fails, matching every other atlas-full path in this codebase. The pool does not
-    /// grow: its page count is fixed at construction (see [`AtlasConfig`]).
-    ///
-    /// Intentionally *not* public: it's inherently tied to one specific in-progress allocation
-    /// attempt (a size to satisfy), an awkward, leaky shape for a general-purpose API —
-    /// [`evict_unused`](Self::evict_unused)/[`free`](Self::free) cover the actual developer-facing
-    /// use cases without exposing this internal.
+    /// Makes room for a `width × height` region when no page has space: frees
+    /// unreferenced, non-`eternal` entries, least recently used first across all
+    /// pages, trying the allocation after each. Returns `None` if it still
+    /// doesn't fit.
     fn evict_to_make_room(
         &mut self,
         width: u32,
@@ -441,44 +390,35 @@ impl TextureRegistry {
             && matches!(entry.atlas_region, AtlasRegion::Main { .. })
     }
 
-    /// Removes `id` and frees its `main_atlas` region (a no-op for a `Video` entry). Returns the
-    /// page the region was released back to, or `None` for a `Video` entry / unknown id.
+    /// Removes `id` and frees its main-atlas region. Returns the page the
+    /// region was on, or `None` for the video entry or an unknown `id`.
     ///
-    /// No explicit "reset this page if it's now entirely empty" step: an earlier draft of this
-    /// milestone added one (as a cheap, safe partial defragmentation — no live content ever
-    /// moves, so none of the hazards around repacking *referenced* content apply), but direct
-    /// testing against `etagere` — filling a page with both uniform and heterogeneous-sized
-    /// regions, freeing them in scattered (non-LIFO) order, then comparing the next allocation's
-    /// placement against a truly-fresh allocator of the same size — found the two identical in
-    /// every case tried. `etagere` already fully reclaims a page's free space once every region on
-    /// it is freed; an explicit reset would have paid a linear scan of every resident entry on
-    /// every single free, for a defragmentation `etagere` was already doing for free. See
-    /// `ROADMAP.md`'s Post-V1 notes for the fragmentation case this *doesn't* cover — a page
-    /// that's partially (not fully) empty, with some content still referenced.
+    /// A page doesn't need resetting when it becomes empty: tests showed that
+    /// `etagere` already recovers all of an empty page's space, however its
+    /// regions were freed.
     fn free_internal(&mut self, id: TextureId) -> Option<u32> {
         let entry = self.entries.remove(id)?;
         let AtlasRegion::Main { alloc_id, page, .. } = entry.atlas_region else {
             return None;
         };
-        // `get_mut` rather than indexing: `page` is always in range today (it only ever comes
-        // from `allocate_across_pages`, which can't return an out-of-bounds index), but a stale
-        // value must not panic the render loop.
+        // `get_mut` rather than indexing, so a bad page can't panic.
         self.main_atlas_pages.get_mut(page as usize)?.free(alloc_id);
         Some(page)
     }
 
     // -----------------------------------------------------------------------
-    // Video suspend/resume (M9, kept working against the real registry)
+    // Video suspend and resume
     // -----------------------------------------------------------------------
 
-    /// Mark the video texture as suspended (GPU memory freed or replaced with placeholder).
+    /// Marks the video texture as evicted: its GPU memory was released.
     pub(crate) fn mark_suspended(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.state = TextureState::Evicted;
         }
     }
 
-    /// Mark the video texture as active again after a `QuadPipeline::resume_video` call.
+    /// Marks the video texture as active again, after
+    /// `QuadPipeline::resume_video`.
     pub(crate) fn mark_active(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.state = TextureState::Ready;
@@ -501,11 +441,10 @@ impl TextureRegistry {
         self.entries.get(id).map(|e| (e.kind, e.size.0, e.size.1))
     }
 
-    /// The [`MainAtlasPlacement`] (page plus pixel rect) for a `Static` entry, ready to pass to
-    /// [`crate::QuadPipeline::write_to_main_atlas`]/
-    /// [`crate::QuadPipeline::bake_instances_to_main_atlas`]. `width`/`height` are the caller's
-    /// originally requested content dimensions (see the [`AtlasRegion`] docs for why, not the
-    /// allocator's possibly-padded footprint). `None` for a `Video` entry or an unknown id.
+    /// Where a main-atlas texture is, to pass to
+    /// [`crate::QuadPipeline::write_to_main_atlas`] or
+    /// [`crate::QuadPipeline::bake_instances_to_main_atlas`]. `None` for the
+    /// video entry or an unknown `id`.
     pub fn main_atlas_region(&self, id: TextureId) -> Option<MainAtlasPlacement> {
         let entry = self.entries.get(id)?;
         match entry.atlas_region {
@@ -520,10 +459,9 @@ impl TextureRegistry {
         }
     }
 
-    /// UV offset/scale for a `Static` entry's `main_atlas` region, normalised by this registry's
-    /// own configured page size (see [`AtlasConfig`] — there's no need for the caller to track or
-    /// pass that separately, which would otherwise be easy to get out of sync with a non-default
-    /// config), plus the page those UVs address. `None` for a `Video` entry or an unknown id.
+    /// Where a main-atlas texture is, as texture coordinates and a page,
+    /// converted with this registry's page size. `None` for the video entry or
+    /// an unknown `id`.
     pub fn main_atlas_uv(&self, id: TextureId) -> Option<MainAtlasUv> {
         let p = self.main_atlas_region(id)?;
         let s = self.page_size as f32;
@@ -534,14 +472,12 @@ impl TextureRegistry {
         })
     }
 
-    /// How many `main_atlas` array layers this registry manages.
+    /// How many main-atlas pages there are.
     pub fn page_count(&self) -> u32 {
         self.main_atlas_pages.len() as u32
     }
 
-    /// How many `main_atlas` regions are currently resident (registered and not yet freed or
-    /// evicted), across every page. Observability, and the handle a "working set stays bounded
-    /// under sustained churn" test needs.
+    /// How many textures are in the main atlas now, across all pages.
     pub fn resident_static_count(&self) -> usize {
         self.entries
             .values()
@@ -558,7 +494,7 @@ impl TextureRegistry {
 mod tests {
     use super::*;
 
-    /// Single-page config — shorthand for tests unconcerned with the multi-page pool itself.
+    // A one-page configuration, for tests that aren't about pages.
     fn single_page(page_size: u32) -> AtlasConfig {
         AtlasConfig {
             page_size,
@@ -984,10 +920,10 @@ mod tests {
         // Pins the empirical finding `free_internal`'s doc comment describes: after fully
         // emptying a page fragmented by many small allocations, `etagere` already recovers
         // the *entire* original space, not just room for same-size pieces — no explicit
-        // "reset the allocator" step is needed to get this. If a future `etagere` upgrade
-        // regressed this, a much larger allocation (comfortably bigger than any one of the
-        // small tiles that used to occupy the page, but well within its total area) would
-        // start failing here.
+        // "reset the allocator" step is needed to get this. If an `etagere` upgrade
+        // changed this, a much larger allocation (comfortably bigger than any one of the
+        // small tiles that filled the page, but well within its total area) would start
+        // failing here.
         let mut reg = TextureRegistry::new(single_page(64));
         let mut ids = Vec::new();
         while let Some(id) = reg.register_static(8, 8, false) {
@@ -1046,12 +982,10 @@ mod tests {
 
     #[test]
     fn the_gallery_workload_fits_in_the_default_page_pool() {
-        // Real-scale regression for the bug this milestone fixes: the demo's actual
-        // working set (light+dark logo frames, tiles, backgrounds, baked text, and 12
-        // gallery images at full MAX_TILE_IMAGE_SIDE quality, not the emergency
-        // GALLERY_IMAGE_MAX_SIDE downscale) must all fit simultaneously in the default
-        // pool. Everything stays referenced (mirrors real `TextureRef` usage), so this
-        // only passes if raw capacity — not eviction — is what accommodates it.
+        // The demo's real working set (light and dark logo frames, tiles, backgrounds,
+        // baked text, and 12 gallery images at the demo's `MAX_TILE_IMAGE_SIDE_PX`) must
+        // all fit at once in the default pool. Everything stays referenced, as with real
+        // `TextureRef`s, so this only passes if the capacity, not eviction, holds it.
         let mut reg = TextureRegistry::new(AtlasConfig::default());
         let mut register = |w: u32, h: u32| {
             let id = reg
@@ -1073,8 +1007,7 @@ mod tests {
             register(200, 40); // assorted baked text runs (nav/tile labels, etc.)
         }
         for _ in 0..12 {
-            register(400, 400); // gallery images at MAX_TILE_IMAGE_SIDE (real quality, not
-                                // the emergency GALLERY_IMAGE_MAX_SIDE downscale)
+            register(400, 400); // gallery images at MAX_TILE_IMAGE_SIDE_PX
         }
     }
 
@@ -1095,14 +1028,13 @@ mod tests {
         assert!(reg.is_active(id));
     }
 
-    /// A finished video's registry entry must actually go away.
-    ///
-    /// `QuadPipeline::suspend_video` only marks the entry `Evicted` — it's built
-    /// to be resumable — so stopping playback left the entry behind forever.
-    /// Nothing reclaims it either: eviction only ever considers `main_atlas`
-    /// entries (`is_eviction_candidate` requires `AtlasRegion::Main`), and a
-    /// `Video` entry has no packed region to reclaim. Every play therefore added
-    /// a permanent row to the slotmap.
+    // A finished video's registry entry must actually go away.
+    //
+    // `QuadPipeline::suspend_video` only marks the entry `Evicted`, so that it
+    // can resume, and nothing else reclaims it: eviction only considers
+    // `main_atlas` entries (`is_eviction_candidate` requires `AtlasRegion::Main`).
+    // Unless stopping frees it, every play leaves a permanent row in the
+    // slotmap.
     #[test]
     fn a_video_entry_can_be_freed_once_playback_is_over() {
         let mut reg = TextureRegistry::new(single_page(256));
@@ -1118,7 +1050,7 @@ mod tests {
             "suspend alone must not drop the entry — it's resumable"
         );
 
-        // What stopping for good now additionally does.
+        // What stopping for good also does.
         reg.free(id);
         assert!(
             reg.info(id).is_none(),

@@ -6,10 +6,6 @@
 //! real content; 4–5 (Layout, 3D) land on a "not built yet" placeholder
 //! instead (see `screens::example_detail`'s doc).
 //!
-//! Design-System treatment: same "no fill ever, border/glow only, violet
-//! label" call as `screens::home`'s nav buttons, down to the same
-//! border/glow/interactable recipe and constants. Hover registration lives in `Demo::new`
-//! (`register_hover`), theme-color blend in `Demo::advance_theme`.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -56,8 +52,7 @@ pub fn spawn(app: &mut Proteus) -> ExamplesHome {
                 rotation: 0.0,
                 scale: 1.0,
                 anchor: Vec2::new(0.5, 0.5),
-                // Transparent — border+glow only, Design System spec. See
-                // this module's doc.
+                // Transparent: the button shows only its border and glow.
                 color: Vec4::new(1.0, 1.0, 1.0, 0.0),
                 corner_radius: CORNER_RADIUS,
             })
@@ -127,12 +122,7 @@ pub fn layout(app: &Proteus, examples_home: &ExamplesHome) -> Option<[QuadState;
             position: Vec3::new(col_x[col], row_y[row], 0.5),
             // Both buttons in a column share the column's own width (its
             // wider label's own size) rather than each sizing to its own
-            // label — e.g. "3D" matches "Layout"'s width. This was the
-            // actual bug behind "button widths don't match" (reported
-            // directly): this line read `sizes[i]` (per-button, individual)
-            // instead of `col_width(col)` (shared) despite this very doc
-            // comment already describing the correct, column-shared
-            // behavior.
+            // label — e.g. "3D" matches "Layout"'s width.
             size: Vec2::new(col_width(col), row_height),
             rotation: 0.0,
             scale: 1.0,

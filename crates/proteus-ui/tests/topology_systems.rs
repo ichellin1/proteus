@@ -1,10 +1,6 @@
-//! Integration tests for M3 topology systems.
-//!
-//! Tests cover:
-//! - `one_to_n_setup_system` (bake and slice strategies)
-//! - `n_to_one_setup_system` (slice strategy)
-//! - `group_transition_complete_system`
-//! - Button → list → button round trip
+// Tests of splits and merges: `one_to_n_setup_system` with each strategy,
+// `n_to_one_setup_system`, `group_transition_complete_system`, and a
+// button -> list -> button round trip.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
@@ -64,13 +60,13 @@ fn default_cfg() -> TransitionConfig {
     }
 }
 
-/// Count entities in the world that carry a given component.
+// Count entities in the world that carry a given component.
 fn count_with<C: Component>(world: &mut World) -> usize {
     let mut q = world.query::<&C>();
     q.iter(world).count()
 }
 
-/// Spawn N target entities (small blue squares at evenly-spaced positions).
+// Spawn N target entities (small blue squares at evenly-spaced positions).
 fn spawn_targets(world: &mut World, n: usize) -> Vec<Entity> {
     (0..n)
         .map(|i| {
@@ -380,9 +376,8 @@ fn slice_1_to_n_source_has_active_group_transition() {
         .expect("source should carry ActiveGroupTransition");
     assert_eq!(coordinator.reveal_on_complete.len(), n);
 
-    // The coordinator used to cache a `total` field; completion is now decided
-    // by counting the virtuals that actually carry `PartOfGroup(source)`, so
-    // that is what this pins.
+    // Completion is decided by counting the virtuals that carry
+    // `PartOfGroup(source)`, so that is what this pins.
     let members = world
         .query::<&PartOfGroup>()
         .iter(&world)
@@ -932,12 +927,12 @@ fn slice_child_configs_set_per_virtual_duration() {
 // Edge-case / boundary
 // ---------------------------------------------------------------------------
 
-/// A `OneToNRequest` with an empty `targets` vec is a degenerate but valid
-/// call.  The system must not panic and must produce **zero** virtual entities.
-///
-/// With no children to animate there is nothing to coordinate, so
-/// `one_to_n_setup_system` should be a silent no-op with respect to virtual
-/// entity creation (both PerTarget and Slice strategies).
+// A `OneToNRequest` with an empty `targets` vec is a degenerate but valid
+// call.  The system must not panic and must produce **zero** virtual entities.
+//
+// With no children to animate there is nothing to coordinate, so
+// `one_to_n_setup_system` should be a silent no-op with respect to virtual
+// entity creation (both PerTarget and Slice strategies).
 #[test]
 fn one_to_n_with_zero_targets_is_noop() {
     let mut world = make_world();
@@ -986,21 +981,14 @@ fn one_to_n_with_zero_targets_is_noop() {
 }
 
 // ---------------------------------------------------------------------------
-// A group transition whose coordinator disappears (audit C-07)
+// A split whose coordinator is destroyed
 // ---------------------------------------------------------------------------
 
-/// Destroying the coordinator mid-transition must not strand its virtuals.
-///
-/// `group_transition_complete_system` bails out when the coordinator is gone,
-/// because everything finalization needs (`reveal_on_complete`, the shared
-/// allocation, the `Lifecycle` to restore) lives on it. That left the virtual
-/// entities alive forever — still rendering, frozen at whatever `t` they
-/// reached — and leaked every `transition_atlas` region the group held.
-///
-/// Reachable from shipped code: `examples/gallery` calls `splitTo` and then
-/// destroys the source on a `setTimeout` sized to the transition. `setTimeout`
-/// keeps running while `requestAnimationFrame` is throttled, so backgrounding
-/// the tab in that window destroys the coordinator with the group in flight.
+// Destroying the coordinating entity mid-transition must remove its virtual
+// pieces and free their atlas regions. The group can't finish without the
+// coordinator, and the pieces would otherwise stay on screen, frozen. This
+// happens in practice: a web page can destroy the source on a timer while its
+// tab is in the background and animation is paused.
 #[test]
 fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() {
     let mut world = make_world();

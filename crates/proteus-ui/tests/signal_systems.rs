@@ -1,6 +1,6 @@
-//! Integration tests for the M12.1 signal system: `SignalRegistry`,
-//! `signal::set`/`signal_dispatch_system`, `TransitionDropped` reporting, and
-//! `CommandQueue`/`flush_commands_system`.
+// Tests of signals: `SignalRegistry`, `signal::set` and
+// `signal_dispatch_system`, dropped requests, and
+// `CommandQueue`/`flush_commands_system`.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};

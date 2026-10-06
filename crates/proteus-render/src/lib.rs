@@ -1,23 +1,18 @@
-//! `proteus-render` — Layer 1: scene graph and instanced GPU render pipeline.
+//! Proteus's GPU rendering: the instanced quad pipeline, its shader, and the
+//! texture atlases.
 //!
-//! Provides:
-//! - The instanced quad pipeline — one buffer upload, one draw call per frame
-//! - The WGSL shader set (SDF corner radius, borders, texture crossfade)
-//! - The texture registry (reference counting, LRU eviction)
-//! - The offscreen render-to-texture pipeline used by static and transition bakes
+//! It provides:
+//! - the quad pipeline: one buffer upload and one draw call per frame;
+//! - the WGSL shader: rounded corners, borders, shadows and glows, and fading
+//!   between textures;
+//! - the texture registry: reference counting and eviction;
+//! - rendering into a texture, for baking components and transitions.
 
-// This crate's RGBA8-pixel code walks pixels via `chunks_exact(4)`/
-// `chunks_exact_mut(4)` at several call sites (`static_texture`,
-// `font_atlas`) — exactly what clippy's `chunks_exact_to_as_chunks` lint
-// (new as of a stable release newer than every toolchain this workspace
-// has otherwise needed so far — CI's `dtolnay/rust-toolchain@stable`
-// always tracks current stable, so it saw this before any locally
-// installed toolchain did) wants written as `as_chunks::<4>()` instead. A
-// pure style suggestion, not a correctness one, and not worth bumping this
-// crate's effective MSRV to adopt across every call site for. `unknown_
-// lints` is allowed alongside it, in this order, since an older local
-// clippy that's never heard of `chunks_exact_to_as_chunks` would otherwise
-// turn *this very allow* into a hard error under `-D warnings`.
+#![warn(missing_docs)]
+// Pixel code uses `chunks_exact(4)`, which newer clippy suggests writing as
+// `as_chunks::<4>()`. That is only a style change, and would raise the minimum
+// Rust version. `unknown_lints` comes first, because an older clippy that
+// doesn't know this lint would otherwise reject the `allow` itself.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
 pub mod font_atlas;

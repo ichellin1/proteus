@@ -1,32 +1,8 @@
-//! M6 visual regression tests — instance buffer approach.
-//!
-//! Instead of diffing pixel snapshots (which require a GPU and produce
-//! non-deterministic output across drivers), these tests verify the
-//! `Vec<QuadInstance>` that `collect_instances` produces from the ECS world.
-//!
-//! That buffer IS the ground truth for what appears on screen — the shader
-//! only multiplies colors and samples a UV region, so if the instance data
-//! is correct, the visual output is correct.
-//!
-//! ## Test matrix
-//!
-//! | Test | What it guards |
-//! |---|---|
-//! | `static_quad_produces_one_instance` | Basic position/size/color pass-through |
-//! | `hidden_entity_produces_no_instance` | `Visibility::HIDDEN` filter |
-//! | `no_visibility_defaults_to_visible` | Missing `Visibility` = visible |
-//! | `text_entity_produces_two_instances` | Two-layer rendering model |
-//! | `text_color_applied_to_overlay` | `Text::color` routes to overlay layer |
-//! | `transition_lerps_at_t_half` | 1→1 lerp math at t = 0.5 (linear easing) |
-//! | `shadow_params_populate_instance` | M8: DropShadow fields in background instance |
-//! | `no_shadow_by_default` | M8: absence of DropShadow → all-zero shadow fields |
-//! | `shadow_not_on_text_overlay` | M8: overlay layer never carries shadow data |
-//! | `glow_params_populate_instance` | M8.6: Glow encodes zero-offset halo into shadow slots |
-//! | `no_glow_by_default` | M8.6: absence of Glow → all-zero shadow fields |
-//! | `shadow_wins_over_glow` | M8.6: DropShadow takes precedence over Glow |
-//! | `border_params_populate_instance` | Border fields copy into instance border slots |
-//! | `no_border_by_default` | absence of Border → all-zero border fields |
-//! | `border_not_on_text_overlay` | overlay layer never carries border data |
+// Tests of what `collect_instances` produces for a given world.
+//
+// These check the `Vec<QuadInstance>` rather than rendered pixels, which would
+// need a GPU and vary between drivers. The instance data decides what appears
+// on screen: the shader only multiplies colors and samples texture regions.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
@@ -45,7 +21,7 @@ use proteus_ui::{
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// A sky-blue button quad — used as a stable fixture across tests.
+// A sky-blue button quad — used as a stable fixture across tests.
 fn sky_blue_button() -> QuadState {
     QuadState {
         position: Vec3::new(100.0, 200.0, 0.0),
@@ -58,7 +34,7 @@ fn sky_blue_button() -> QuadState {
     }
 }
 
-/// A gold detail quad — used as the transition target in lerp tests.
+// A gold detail quad — used as the transition target in lerp tests.
 fn gold_detail() -> QuadState {
     QuadState {
         position: Vec3::new(300.0, 200.0, 0.0),
@@ -71,7 +47,7 @@ fn gold_detail() -> QuadState {
     }
 }
 
-/// A standard 1-second linear transition config.
+// A standard 1-second linear transition config.
 fn linear_1s() -> TransitionConfig {
     TransitionConfig {
         duration: 1.0,
@@ -80,7 +56,7 @@ fn linear_1s() -> TransitionConfig {
     }
 }
 
-/// Assert two f32 slices are within epsilon of each other.
+// Assert two f32 slices are within epsilon of each other.
 fn assert_f32_slice_approx(actual: &[f32], expected: &[f32], label: &str) {
     assert_eq!(
         actual.len(),
@@ -96,8 +72,8 @@ fn assert_f32_slice_approx(actual: &[f32], expected: &[f32], label: &str) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// A single visible quad produces exactly one `QuadInstance` with the
-/// correct position, size, and color.
+// A single visible quad produces exactly one `QuadInstance` with the
+// correct position, size, and color.
 #[test]
 fn static_quad_produces_one_instance() {
     let mut world = World::new();
@@ -114,7 +90,7 @@ fn static_quad_produces_one_instance() {
     assert_eq!(instances[0].uv_scale, QuadPipeline::WHITE_PIXEL_UV_SCALE);
 }
 
-/// Entities with `Visibility::HIDDEN` must not appear in the instance buffer.
+// Entities with `Visibility::HIDDEN` must not appear in the instance buffer.
 #[test]
 fn hidden_entity_produces_no_instance() {
     let mut world = World::new();
@@ -129,8 +105,8 @@ fn hidden_entity_produces_no_instance() {
     );
 }
 
-/// Entities with no `Visibility` component at all are treated as visible.
-/// This is the default — Virtual entities have no Visibility and must render.
+// Entities with no `Visibility` component at all are treated as visible.
+// This is the default — Virtual entities have no Visibility and must render.
 #[test]
 fn no_visibility_defaults_to_visible() {
     let mut world = World::new();
@@ -145,8 +121,8 @@ fn no_visibility_defaults_to_visible() {
     );
 }
 
-/// A text entity produces two instances: a solid-color background layer
-/// (WHITE_PIXEL_UV) and a text overlay layer (BakedText UV).
+// A text entity produces two instances: a solid-color background layer
+// (WHITE_PIXEL_UV) and a text overlay layer (BakedText UV).
 #[test]
 fn text_entity_produces_two_instances() {
     let baked = BakedText {
@@ -197,8 +173,8 @@ fn text_entity_produces_two_instances() {
     );
 }
 
-/// `Text::color` is applied to the overlay instance, not the background.
-/// Default text color is opaque white (Vec4::ONE).
+// `Text::color` is applied to the overlay instance, not the background.
+// Default text color is opaque white (Vec4::ONE).
 #[test]
 fn text_color_applied_to_overlay() {
     let dark = Vec4::new(0.1, 0.1, 0.1, 1.0);
@@ -230,11 +206,11 @@ fn text_color_applied_to_overlay() {
 }
 
 // ---------------------------------------------------------------------------
-// M8 drop shadow tests
+// Drop shadows
 // ---------------------------------------------------------------------------
 
-/// An entity with a `DropShadow` component has the shadow fields populated in
-/// its (background) instance.
+// An entity with a `DropShadow` component has the shadow fields populated in
+// its (background) instance.
 #[test]
 fn shadow_params_populate_instance() {
     use glam::{Vec2, Vec4};
@@ -264,8 +240,8 @@ fn shadow_params_populate_instance() {
     );
 }
 
-/// An entity without a `DropShadow` component has all-zero shadow fields,
-/// meaning the shader skips the shadow branch entirely.
+// An entity without a `DropShadow` component has all-zero shadow fields,
+// meaning the shader skips the shadow branch entirely.
 #[test]
 fn no_shadow_by_default() {
     let mut world = World::new();
@@ -287,9 +263,9 @@ fn no_shadow_by_default() {
     );
 }
 
-/// The text overlay instance (layer 1) must never carry shadow data, even when
-/// the entity has a `DropShadow` component.  The background layer (layer 0)
-/// already casts the shadow; duplicating it on the overlay would render it twice.
+// The text overlay instance (layer 1) must never carry shadow data, even when
+// the entity has a `DropShadow` component.  The background layer (layer 0)
+// already casts the shadow; duplicating it on the overlay would render it twice.
 #[test]
 fn shadow_not_on_text_overlay() {
     use glam::Vec2;
@@ -328,11 +304,11 @@ fn shadow_not_on_text_overlay() {
     );
 }
 
-/// A 1→1 transition with linear easing at t = 0.5 produces an instance
-/// whose position and size are the midpoints of the from and to states.
-///
-/// Frame 0 (dt=0.0): `TransitionSetup` queues `ActiveTransition` via commands.
-/// Frame 1 (dt=0.5): `FlushCommands` applies it; `TransitionTick` advances t to 0.5.
+// A 1→1 transition with linear easing at t = 0.5 produces an instance
+// whose position and size are the midpoints of the from and to states.
+//
+// Frame 0 (dt=0.0): `TransitionSetup` queues `ActiveTransition` via commands.
+// Frame 1 (dt=0.5): `FlushCommands` applies it; `TransitionTick` advances t to 0.5.
 #[test]
 fn transition_lerps_at_t_half() {
     let from = sky_blue_button(); // position.x = 100, size.x = 120
@@ -368,12 +344,12 @@ fn transition_lerps_at_t_half() {
 }
 
 // ---------------------------------------------------------------------------
-// M8.6 glow tests
+// Glows
 // ---------------------------------------------------------------------------
 
-/// An entity with a [`Glow`] component has the glow encoded into the shadow
-/// slots of the background instance.  The offset fields are zero (producing a
-/// symmetric halo) and the effective alpha is `color.a * intensity`.
+// An entity with a [`Glow`] component has the glow encoded into the shadow
+// slots of the background instance.  The offset fields are zero (producing a
+// symmetric halo) and the effective alpha is `color.a * intensity`.
 #[test]
 fn glow_params_populate_instance() {
     let glow = Glow {
@@ -402,9 +378,9 @@ fn glow_params_populate_instance() {
     );
 }
 
-/// An entity without a [`Glow`] component (and without a [`DropShadow`]) has
-/// all-zero shadow fields.  The shader's `shadow_color.a == 0` branch is
-/// skipped, so there is no glow or shadow at zero runtime cost.
+// An entity without a [`Glow`] component (and without a [`DropShadow`]) has
+// all-zero shadow fields.  The shader's `shadow_color.a == 0` branch is
+// skipped, so there is no glow or shadow at zero runtime cost.
 #[test]
 fn no_glow_by_default() {
     let mut world = World::new();
@@ -426,12 +402,11 @@ fn no_glow_by_default() {
 }
 
 // ---------------------------------------------------------------------------
-// M9 VideoPlayer tests
+// Video
 // ---------------------------------------------------------------------------
 
-/// A `VideoPlayer` entity must have its background instance routed to
-/// `atlas_page = 2` (the `video_atlas` binding) with full-coverage UV mapping.
-/// This is the branch in `collect_instances` that had zero prior test coverage.
+// A `VideoPlayer` entity must have its background instance routed to
+// `atlas_page = 2` (the `video_atlas` binding) with full-coverage UV mapping.
 #[test]
 fn video_player_sets_atlas_page_2() {
     let mut world = World::new();
@@ -460,10 +435,10 @@ fn video_player_sets_atlas_page_2() {
     );
 }
 
-/// A `VideoPlayer` entity with `Glow` must emit both the atlas_page=2 routing
-/// *and* a correctly encoded glow in the same instance.  This guards the path
-/// where both the video branch and the shadow/glow branch are active at once —
-/// the combination that would have exposed the UV inflation distortion.
+// A `VideoPlayer` entity with `Glow` must emit both the atlas_page=2 routing
+// *and* a correctly encoded glow in the same instance.  This guards the path
+// where both the video branch and the shadow/glow branch are active at once,
+// where the glow's enlarged quad could distort the video's UVs.
 #[test]
 fn video_player_with_glow_has_atlas_page_and_glow_params() {
     let glow = Glow {
@@ -501,13 +476,12 @@ fn video_player_with_glow_has_atlas_page_and_glow_params() {
     );
 }
 
-/// Regression test: a tile carries a permanent `BakedImage` (box art) and,
-/// once clicked, a `VideoPlayer` — both present on the same entity.
-/// `VideoPlayer` must win outright: atlas_page must stay 2 (video_atlas) and
-/// the UV must stay the full-texture [0,0]/[1,1] mapping, not get overwritten
-/// by BakedImage's small main_atlas sub-rectangle (which previously caused
-/// the video to render as a small, blown-up fragment instead of the full
-/// frame — the two components' UVs point at entirely different atlases).
+// A tile carries a permanent `BakedImage` (box art) and, once clicked, a
+// `VideoPlayer`, both on the same entity. `VideoPlayer` must win outright:
+// atlas_page must stay 2 (video_atlas) and the UV must stay the full-texture
+// [0,0]/[1,1] mapping. If `BakedImage`'s small main_atlas sub-rectangle
+// overwrote it, the video would render as a small, blown-up fragment, since
+// the two components' UVs point at different atlases.
 #[test]
 fn video_player_takes_priority_over_baked_image() {
     let baked_image = BakedImage {
@@ -540,7 +514,7 @@ fn video_player_takes_priority_over_baked_image() {
 }
 
 // ---------------------------------------------------------------------------
-// VideoCrossfade (M9.8 — live video ↔ box-art blend)
+// VideoCrossfade: fading between an image and video
 // ---------------------------------------------------------------------------
 
 fn crossfade_baked_image() -> BakedImage {
@@ -552,9 +526,9 @@ fn crossfade_baked_image() -> BakedImage {
     }
 }
 
-/// `video_t = 0.0` shows the base image fully — same UV/atlas_page as if
-/// VideoPlayer weren't present at all, and no crossfade branch engaged
-/// (crossfade_t must stay 0.0, the shader's zero-cost skip value).
+// `video_t = 0.0` shows the base image fully — same UV/atlas_page as if
+// VideoPlayer weren't present at all, and no crossfade branch engaged
+// (crossfade_t must stay 0.0, the shader's zero-cost skip value).
 #[test]
 fn video_crossfade_at_zero_shows_image_fully() {
     let mut world = World::new();
@@ -577,8 +551,8 @@ fn video_crossfade_at_zero_shows_image_fully() {
     );
 }
 
-/// `video_t = 1.0` shows video fully — same as `VideoPlayer` with no
-/// `BakedImage`/`VideoCrossfade` at all.
+// `video_t = 1.0` shows video fully — same as `VideoPlayer` with no
+// `BakedImage`/`VideoCrossfade` at all.
 #[test]
 fn video_crossfade_at_one_shows_video_fully() {
     let mut world = World::new();
@@ -597,9 +571,9 @@ fn video_crossfade_at_one_shows_video_fully() {
     assert_eq!(instances[0].uv_scale, [1.0, 1.0]);
 }
 
-/// `video_t = 0.5` blends live: to-side is video (video_atlas, full UV),
-/// from-side is the box art (main_atlas, its own sub-rectangle) — the two
-/// atlases the shader's `base_atlas_page` field exists to let differ.
+// `video_t = 0.5` blends live: to-side is video (video_atlas, full UV),
+// from-side is the box art (main_atlas, its own sub-rectangle) — the two
+// atlases the shader's `base_atlas_page` field exists to let differ.
 #[test]
 fn video_crossfade_midway_blends_video_and_image() {
     let mut world = World::new();
@@ -633,9 +607,8 @@ fn video_crossfade_midway_blends_video_and_image() {
     assert_f32_slice_approx(&[instances[0].crossfade_t], &[0.5], "crossfade_t");
 }
 
-/// Absent `VideoCrossfade`, `VideoPlayer` + `BakedImage` together still
-/// default to fully video (video_t implicitly 1.0) — preserves the pre-M9.8
-/// behavior for anyone not opting into the crossfade.
+// Without `VideoCrossfade`, an entity with both `VideoPlayer` and `BakedImage`
+// shows only the video.
 #[test]
 fn video_without_crossfade_component_defaults_to_full_video() {
     let mut world = World::new();
@@ -648,9 +621,9 @@ fn video_without_crossfade_component_defaults_to_full_video() {
     assert_eq!(instances[0].uv_scale, [1.0, 1.0]);
 }
 
-/// `Glow::intensity > 1.0` must be clamped to 1.0 before the instance is
-/// emitted.  An effective alpha above 1.0 inverts the alpha-blending equation
-/// in the shader, producing visible negative-transparency artefacts.
+// `Glow::intensity > 1.0` must be clamped to 1.0 before the instance is
+// emitted.  An effective alpha above 1.0 inverts the alpha-blending equation
+// in the shader, producing visible negative-transparency artefacts.
 #[test]
 fn glow_intensity_above_one_is_clamped() {
     let glow = Glow {
@@ -673,8 +646,8 @@ fn glow_intensity_above_one_is_clamped() {
 
 // ---------------------------------------------------------------------------
 
-/// When both [`DropShadow`] and [`Glow`] are present on the same entity,
-/// `DropShadow` takes precedence and `Glow` is ignored.
+// When both [`DropShadow`] and [`Glow`] are present on the same entity,
+// `DropShadow` takes precedence and `Glow` is ignored.
 #[test]
 fn shadow_wins_over_glow() {
     use glam::Vec2;
@@ -764,9 +737,9 @@ fn no_border_by_default() {
     assert_eq!(instances[0].border_offset, 0.0, "border_offset should be 0");
 }
 
-/// The text overlay instance (layer 1) must never carry border data, even when
-/// the entity has a `Border` component — the background layer already draws
-/// the border; duplicating it on the overlay would render it twice.
+// The text overlay instance (layer 1) must never carry border data, even when
+// the entity has a `Border` component — the background layer already draws
+// the border; duplicating it on the overlay would render it twice.
 #[test]
 fn border_not_on_text_overlay() {
     let border = Border {
@@ -797,10 +770,10 @@ fn border_not_on_text_overlay() {
 // BakedTexture (two-sided crossfade)
 // ---------------------------------------------------------------------------
 
-/// A valid `TransitionAllocId` for test fixtures — `BakedTexture::own_alloc`
-/// has no public constructor other than going through a real allocator (by
-/// design: it's meant to always correspond to a live allocation). The
-/// allocator itself is pure CPU bookkeeping, no GPU device needed.
+// A valid `TransitionAllocId` for test fixtures — `BakedTexture::own_alloc`
+// has no public constructor other than going through a real allocator (by
+// design: it's meant to always correspond to a live allocation). The
+// allocator itself is pure CPU bookkeeping, no GPU device needed.
 fn fixture_alloc_id() -> proteus_render::TransitionAllocId {
     let mut allocator = TransitionAtlasAllocator::new(1024);
     allocator.allocate(64, 64).unwrap().0
@@ -816,9 +789,9 @@ fn baked_texture() -> BakedTexture {
     }
 }
 
-/// `BakedTexture` routes to the two crossfade UV pairs and forces
-/// `atlas_page = 1` (`transition_atlas` — the only atlas the shader's
-/// crossfade path reads `base_uv` from).
+// `BakedTexture` routes to the two crossfade UV pairs and forces
+// `atlas_page = 1` (`transition_atlas` — the only atlas the shader's
+// crossfade path reads `base_uv` from).
 #[test]
 fn baked_texture_populates_both_uv_sides() {
     let mut world = World::new();
@@ -834,9 +807,9 @@ fn baked_texture_populates_both_uv_sides() {
     assert_f32_slice_approx(&instances[0].uv_scale, &[0.03, 0.03], "uv_scale (to-side)");
 }
 
-/// With no `ActiveTransition` on the entity, `crossfade_t` defaults to 1.0 —
-/// show the to-side fully (matches a virtual that already finished, or one
-/// that's about to start with delay still pending).
+// With no `ActiveTransition` on the entity, `crossfade_t` defaults to 1.0 —
+// show the to-side fully (matches a virtual that already finished, or one
+// that's about to start with delay still pending).
 #[test]
 fn baked_texture_without_active_transition_shows_to_side_fully() {
     let mut world = World::new();
@@ -847,8 +820,8 @@ fn baked_texture_without_active_transition_shows_to_side_fully() {
     assert_eq!(instances[0].crossfade_t, 1.0);
 }
 
-/// `crossfade_t` tracks the entity's own `ActiveTransition` progress (eased),
-/// matching the same computation `transition_tick_system` uses.
+// `crossfade_t` tracks the entity's own `ActiveTransition` progress (eased),
+// matching the same computation `transition_tick_system` uses.
 #[test]
 fn baked_texture_crossfade_t_tracks_active_transition_progress() {
     let active = ActiveTransition::new(
@@ -877,8 +850,8 @@ fn baked_texture_crossfade_t_tracks_active_transition_progress() {
     );
 }
 
-/// `crossfade_t` still respects the delay phase — burns delay first, exactly
-/// like `transition_tick_system`'s own elapsed-time accounting.
+// `crossfade_t` still respects the delay phase — burns delay first, exactly
+// like `transition_tick_system`'s own elapsed-time accounting.
 #[test]
 fn baked_texture_crossfade_t_is_near_zero_during_delay() {
     let mut active = ActiveTransition::new(
@@ -904,9 +877,9 @@ fn baked_texture_crossfade_t_is_near_zero_during_delay() {
     );
 }
 
-/// The text overlay instance (layer 1) must never carry `BakedTexture`
-/// crossfade data — it isn't part of the baked snapshot's own crossfade;
-/// only the background layer is.
+// The text overlay instance (layer 1) must never carry `BakedTexture`
+// crossfade data — it isn't part of the baked snapshot's own crossfade;
+// only the background layer is.
 #[test]
 fn baked_texture_not_on_text_overlay() {
     let baked_text = BakedText {
@@ -934,7 +907,7 @@ fn baked_texture_not_on_text_overlay() {
 }
 
 // ---------------------------------------------------------------------------
-// BakedImage (static image, M9.7)
+// BakedImage
 // ---------------------------------------------------------------------------
 
 fn baked_image() -> BakedImage {
@@ -946,8 +919,8 @@ fn baked_image() -> BakedImage {
     }
 }
 
-/// `BakedImage` routes to the background instance's UV, staying on
-/// `atlas_page = 0` (`main_atlas`) — no page switch, unlike video/crossfade.
+// `BakedImage` routes to the background instance's UV, staying on
+// `atlas_page = 0` (`main_atlas`) — no page switch, unlike video/crossfade.
 #[test]
 fn baked_image_populates_uv() {
     let mut world = World::new();
@@ -961,10 +934,8 @@ fn baked_image_populates_uv() {
     assert_f32_slice_approx(&instances[0].uv_scale, &[0.2, 0.3], "uv_scale");
 }
 
-/// M11.2: a `BakedImage` whose region landed on a non-zero `main_atlas` page
-/// must have that page packed into `atlas_page`, not silently default to 0 —
-/// `main_atlas` is a multi-page pool now, so page 0 is no longer the only
-/// possible destination.
+// A `BakedImage` on a main-atlas page other than the first must carry its page
+// into the instance, or it draws whatever is on the first page.
 #[test]
 fn baked_image_on_a_nonzero_page_packs_the_page_into_atlas_page() {
     let mut world = World::new();
@@ -989,9 +960,9 @@ fn baked_image_on_a_nonzero_page_packs_the_page_into_atlas_page() {
     assert_eq!(page, 3, "must sample the page the image actually lives on");
 }
 
-/// Unlike `BakedText`'s overlay, `BakedImage` maps directly onto the
-/// background instance and does not resize the entity's own quad —
-/// `pixel_size` is carried on the component but not applied to `QuadState`.
+// Unlike `BakedText`'s overlay, `BakedImage` maps directly onto the
+// background instance and does not resize the entity's own quad —
+// `pixel_size` is carried on the component but not applied to `QuadState`.
 #[test]
 fn baked_image_does_not_resize_entity_quad() {
     let mut world = World::new();
@@ -1011,8 +982,8 @@ fn baked_image_does_not_resize_entity_quad() {
     );
 }
 
-/// `QuadState::color` still tints an image the same way it tints a plain
-/// solid-color fill — no special-casing for `BakedImage`.
+// `QuadState::color` still tints an image the same way it tints a plain
+// solid-color fill — no special-casing for `BakedImage`.
 #[test]
 fn baked_image_color_still_tints() {
     let mut world = World::new();
@@ -1027,9 +998,9 @@ fn baked_image_color_still_tints() {
     );
 }
 
-/// A poster image can still carry a text label overlay on top — the two
-/// systems (image on the background layer, text as a second layer) are
-/// independent, same as a solid-color background with a label.
+// A poster image can still carry a text label overlay on top — the two
+// systems (image on the background layer, text as a second layer) are
+// independent, same as a solid-color background with a label.
 #[test]
 fn baked_image_coexists_with_text_overlay() {
     let baked_text = BakedText {
@@ -1060,32 +1031,18 @@ fn baked_image_coexists_with_text_overlay() {
 }
 
 // ---------------------------------------------------------------------------
-// M13.8 investigation: draw-order stability across archetype boundaries
+// Drawing order across archetypes
 // ---------------------------------------------------------------------------
 
-/// `collect_instances`' own doc (and `QuadInstance`'s) promise "last spawned
-/// = on top" — draw order is meant to track spawn order. That promise is
-/// only backed by a `sort_by(|a, b| a.position.z...)` over whatever order
-/// the underlying `bevy_ecs` query happens to iterate in; for entities that
-/// share the same `z` (the overwhelmingly common case — most UI content
-/// never sets a nonzero `z`), `sort_by`'s stability only preserves *that*
-/// iteration order, which is not documented anywhere to equal spawn order.
-///
-/// This reproduces a real bug found while building M13.8's TS POC: a
-/// `background`-shaped entity (no `Interactable` — mirrors
-/// `ComponentSpec::non_interactive()`) spawned first, then an `Interactable`
-/// entity spawned second, rendered in the expected order (background
-/// behind). But the moment a *second* `Interactable` entity was spawned —
-/// joining the same archetype as the first one, not the background's —
-/// `collect_instances` started returning the background *after* both
-/// `Interactable` entities, i.e. drawn on top, completely hiding them.
-///
-/// If this test fails (background is no longer first once the third entity
-/// joins), the hypothesis is confirmed: crossing an archetype-population
-/// boundary (an already-existing archetype gaining a new member) can
-/// silently reorder that archetype's iteration position relative to a
-/// *different*, already-existing archetype — with no code anywhere
-/// requesting or expecting that reorder.
+// Among entities with the same `z`, the one created last must be drawn on top,
+// even across archetypes. `bevy_ecs` iterates archetypes in an order unrelated
+// to creation order, and adding an entity to an existing archetype can change
+// it, so the order must come from `SpawnOrder`.
+//
+// The case: a background without `Interactable` is created first, then two
+// interactable entities. When the second joins the first's archetype, the
+// background must stay first, drawn behind them, rather than jumping on top and
+// hiding them.
 #[test]
 fn spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype() {
     let mut world = World::new();

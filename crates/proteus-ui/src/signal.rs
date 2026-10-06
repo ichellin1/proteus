@@ -1,50 +1,25 @@
-//! Signal system — the developer-facing trigger layer for transitions (M12.1).
-//!
-//! ## Data flow
+//! Signals: 1→1 transitions from one entity into another.
 //!
 //! ```text
 //! signal::set(world, id, to, from, target, config, interruptible)
-//!         │  pushes a PendingSignalSet — world is not mutated synchronously
+//!         │  queues a PendingSignalSet; the world isn't changed yet
 //!         ▼
-//! PendingSignalSets  (Resource)
-//!         │  signal_dispatch_system drains this each frame, in
-//!         │  ProteusSet::SignalDispatch — immediately before TransitionSetup
+//! PendingSignalSets
+//!         │  signal_dispatch_system, next tick, just before transition setup
 //!         ▼
-//! validated?  ──── no ───► DroppedSignals (Resource)
+//! valid?  ── no ──► DroppedSignals
 //!         │ yes
 //!         ▼
-//! TransitionRequest inserted on `to` — the existing, already-correct
-//! transition_setup_system (transition.rs) takes it from there.
+//! a TransitionRequest on `to`, which transition_setup_system starts
 //! ```
 //!
-//! ## Scope note
+//! At this level the caller passes `target`, the geometry `to` ends at.
+//! `proteus-sdk` looks it up from the component's declared geometry.
 //!
-//! `target` — the geometry `to` should morph into — is supplied by the caller
-//! explicitly, matching what [`crate::component::TransitionRequest`] already
-//! requires. Resolving it automatically from a component's own *declared*
-//! rest state (the JS-API shape sketched in PLANNING.md's Phase A, where
-//! `signal.set([to.id(), from.id()])` needs no separate target argument) needs
-//! a place to store that declared state per entity — a component-declaration
-//! concept that belongs to the generic app API (M12.3's `proteus-sdk` crate),
-//! not to this ECS-level primitive.
+//! A signal with an owner entity is destroyed when the owner is, through the
+//! [`OwnedSignals`] hook. A signal without one lasts until [`destroy_signal`].
 //!
-//! ## Ownership
-//!
-//! A signal created with `owner: Some(entity)` is destroyed automatically when
-//! that entity despawns (via [`OwnedSignals`]'s despawn hook — same pattern as
-//! `texture_ref.rs`'s `TextureRef` ref-counting). A signal created with
-//! `owner: None` lives until [`destroy_signal`] is called explicitly.
-//!
-//! ## `TransitionDropped` reporting
-//!
-//! Every declined request is recorded in [`DroppedSignals`], always populated
-//! (no `cfg(debug_assertions)` gate at this layer — cheap, matches
-//! [`crate::input::InteractionEvents`] and
-//! [`crate::transition::CompletedTransitions`]). PLANNING.md's two-tier
-//! dev-automatic / release-opt-in *handler* distinction is a cost concern
-//! about per-signal callback dispatch, which belongs to the SDK layer
-//! (M12.3+) built on top of this resource — not to collecting the drops
-//! themselves.
+//! Every request that can't run is recorded in [`DroppedSignals`].
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::world::World;
@@ -67,57 +42,51 @@ struct SignalEntry {
     owner: Option<Entity>,
 }
 
-/// Registered signals. One instance lives as a `Resource` on
-/// [`crate::schedule::ProteusWorld`].
+/// Every signal that exists. A resource of [`crate::schedule::ProteusWorld`].
 #[derive(Resource, Default)]
 pub struct SignalRegistry {
     signals: SlotMap<SignalId, SignalEntry>,
 }
 
 impl SignalRegistry {
-    /// Register a new signal. Prefer [`create_signal`] over calling this
-    /// directly — it also wires up [`OwnedSignals`] for an owned signal.
+    /// Adds a signal. Use [`create_signal`] instead, which also records the
+    /// owner's [`OwnedSignals`].
     pub fn create(&mut self, owner: Option<Entity>) -> SignalId {
         self.signals.insert(SignalEntry { owner })
     }
 
-    /// Remove a signal from the registry. Further [`set`] calls referencing
-    /// `id` are dropped with [`DropReason::SignalNotFound`].
+    /// Removes a signal. Later [`set`] calls on it are dropped with
+    /// [`DropReason::SignalNotFound`].
     pub fn destroy(&mut self, id: SignalId) {
         self.signals.remove(id);
     }
 
-    /// True if `id` is currently registered.
+    /// Whether the signal `id` exists.
     pub fn exists(&self, id: SignalId) -> bool {
         self.signals.contains_key(id)
     }
 
-    /// The owner entity `id` was created with, if any.
+    /// The entity that owns the signal `id`, if any.
     pub fn owner(&self, id: SignalId) -> Option<Entity> {
         self.signals.get(id).and_then(|s| s.owner)
     }
 }
 
 // ---------------------------------------------------------------------------
-// OwnedSignals — despawn-cleanup for owned signals
+// OwnedSignals: destroying an entity's signals with it
 // ---------------------------------------------------------------------------
 
-/// Tracks which [`SignalId`]s an entity owns, for automatic cleanup on
-/// despawn.
+/// The signals an entity owns, which are destroyed with it.
 ///
-/// Attached to the owner entity by [`create_signal`] when `owner` is `Some`.
-/// Its `on_remove` hook (wired by [`register_signal_hooks`]) destroys every
-/// id it lists — `on_remove` fires on explicit component removal *and* on
-/// despawn, so despawning the owner destroys its signals with it. Same
-/// pattern `texture_ref.rs` uses for `TextureRef`'s ref-count hook.
+/// [`create_signal`] adds it to the owner. Its removal hook, from
+/// [`register_signal_hooks`], destroys every signal listed, and runs both when
+/// the component is removed and when the entity is destroyed.
 #[derive(Component, Debug, Clone, Default)]
 pub struct OwnedSignals(pub Vec<SignalId>);
 
-/// Register `OwnedSignals`'s despawn-cleanup hook. Call once, before any
-/// `OwnedSignals` is ever inserted — `bevy_ecs` panics if hooks are
-/// registered after the component already exists in an archetype. Same
-/// requirement and call site (`ProteusWorld::new()`) as
-/// `texture_ref::register_texture_ref_hooks`.
+/// Registers the hook that destroys an entity's owned signals. Call once,
+/// before any `OwnedSignals` exists, since `bevy_ecs` panics otherwise.
+/// `ProteusWorld::new` does this.
 pub fn register_signal_hooks(world: &mut World) {
     world
         .register_component_hooks::<OwnedSignals>()
@@ -134,12 +103,8 @@ pub fn register_signal_hooks(world: &mut World) {
         });
 }
 
-/// Create a new signal in `world`'s [`SignalRegistry`].
-///
-/// When `owner` is `Some`, the signal is destroyed automatically when the
-/// owner entity despawns — the caller never needs to call [`destroy_signal`]
-/// for component-scoped signals. When `owner` is `None`, the signal lives
-/// until [`destroy_signal`] is called explicitly.
+/// Creates a signal. If `owner` is given, the signal is destroyed along with
+/// that entity; otherwise it lasts until [`destroy_signal`].
 pub fn create_signal(world: &mut World, owner: Option<Entity>) -> SignalId {
     let id = world.resource_mut::<SignalRegistry>().create(owner);
     if let Some(owner) = owner {
@@ -154,15 +119,14 @@ pub fn create_signal(world: &mut World, owner: Option<Entity>) -> SignalId {
     id
 }
 
-/// Explicitly destroy a signal. Further [`set`] calls referencing `id` are
-/// dropped with [`DropReason::SignalNotFound`].
+/// Destroys a signal. Later [`set`] calls on it are dropped with
+/// [`DropReason::SignalNotFound`].
 pub fn destroy_signal(world: &mut World, id: SignalId) {
     world.resource_mut::<SignalRegistry>().destroy(id);
 }
 
-/// Initialize every resource this module owns. Called once from
-/// `ProteusWorld::new()`, alongside [`register_signal_hooks`] — a single
-/// entry point rather than making the caller init each resource individually.
+/// Adds this module's resources to `world`. Called once, from
+/// `ProteusWorld::new`.
 pub(crate) fn init_resources(world: &mut World) {
     world.init_resource::<SignalRegistry>();
     world.init_resource::<PendingSignalSets>();
@@ -170,48 +134,38 @@ pub(crate) fn init_resources(world: &mut World) {
 }
 
 // ---------------------------------------------------------------------------
-// set() — the developer-facing entry point
+// set()
 // ---------------------------------------------------------------------------
 
-/// One queued `set()` call, applied by [`signal_dispatch_system`] on the next
-/// frame.
-///
-/// `pub`, like [`crate::transition::ActiveTransition`] and
-/// [`crate::transition::CompletedTransitions`] — internal machinery a
-/// well-formed `pub fn signal_dispatch_system` system needs its `ResMut`
-/// parameter type to be at least as visible as the function itself, not
-/// something callers are expected to construct directly (use [`set`]).
+/// One queued [`set`] call, which [`signal_dispatch_system`] applies on the
+/// next tick. Public because that system is; create it with [`set`].
 #[derive(Debug, Clone)]
 pub struct PendingSignalSet {
+    /// The signal.
     pub signal: SignalId,
+    /// The entity to transition into.
     pub to: Entity,
+    /// The entity to transition from.
     pub from: Entity,
+    /// The geometry `to` ends at.
     pub target: QuadState,
+    /// How the transition is timed.
     pub config: TransitionConfig,
+    /// Whether to restart a transition already running on `to`.
     pub interruptible: bool,
 }
 
-/// Queue of pending [`set`] calls, drained by [`signal_dispatch_system`] each
-/// frame.
+/// The queued [`set`] calls, applied by [`signal_dispatch_system`] each tick.
 #[derive(Resource, Default)]
 pub struct PendingSignalSets(Vec<PendingSignalSet>);
 
-/// Declare a transition: `to` should morph into `target`, appearing to
-/// originate from `from`'s current geometry. Mirrors the TypeScript API's
-/// `signal.set([to, from], config)`, with `target` as the extra ECS-level
-/// argument described in this module's doc.
+/// Requests a transition of `to` into `target`, starting from `from`'s current
+/// geometry.
 ///
-/// This only enqueues the request — `world` is not mutated synchronously.
-/// [`signal_dispatch_system`] (runs in
-/// [`crate::schedule::ProteusSet::SignalDispatch`], immediately before
-/// transition setup) processes it on the next [`crate::schedule::ProteusWorld::update`]
-/// call.
-///
-/// Calling this from inside an interaction callback — i.e. while some other
-/// system is mid-execution — is unsound (it needs `&mut World`, which
-/// callbacks don't have). Route through
-/// [`crate::schedule::CommandQueue::push`] instead: push a closure that calls
-/// `signal::set`, applied safely at the start of next frame.
+/// This only queues the request; [`signal_dispatch_system`] applies it on the
+/// next tick. From code running inside a system, which has no `&mut World`,
+/// queue a closure that calls this with
+/// [`crate::schedule::CommandQueue::push`].
 #[allow(clippy::too_many_arguments)]
 pub fn set(
     world: &mut World,
@@ -236,43 +190,44 @@ pub fn set(
 }
 
 // ---------------------------------------------------------------------------
-// TransitionDropped reporting
+// Dropped requests
 // ---------------------------------------------------------------------------
 
-/// Why [`signal_dispatch_system`] declined to start a requested transition.
+/// Why a [`set`] request couldn't run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropReason {
-    /// `signal` doesn't exist in the registry (never created, or already destroyed).
+    /// The signal doesn't exist: it was destroyed, or never created.
     SignalNotFound,
-    /// `to` or `from` no longer exists (despawned since the request was queued).
+    /// `to` or `from` has been destroyed.
     EntityNotFound,
-    /// `to` is already `Lifecycle::Transitioning` and the request didn't set `interruptible`.
+    /// `to` is already transitioning, and the request wasn't `interruptible`.
     AlreadyTransitioning,
-    /// `from` exists but is explicitly `Visibility { visible: false }` — nothing to visually
-    /// originate the morph from.
+    /// `from` is hidden, so there is nothing visible to transition from.
     EntityNotVisible,
 }
 
-/// One request [`signal_dispatch_system`] declined to act on.
+/// A [`set`] request that couldn't run.
 #[derive(Debug, Clone)]
 pub struct TransitionDropped {
+    /// The signal.
     pub signal: SignalId,
+    /// The request's `to` entity.
     pub to: Entity,
+    /// The request's `from` entity.
     pub from: Entity,
+    /// Why it couldn't run.
     pub reason: DropReason,
 }
 
-/// Requests dropped this frame. Cleared and repopulated every
-/// [`signal_dispatch_system`] run — same drain-per-frame convention as
-/// [`crate::input::InteractionEvents`] and
-/// [`crate::transition::CompletedTransitions`].
+/// The requests dropped this tick, recorded by [`signal_dispatch_system`].
 #[derive(Resource, Default)]
 pub struct DroppedSignals {
+    /// The dropped requests.
     pub entries: Vec<TransitionDropped>,
 }
 
 impl DroppedSignals {
-    /// Take all of this frame's drops, leaving the internal list empty.
+    /// Takes this tick's dropped requests, leaving the list empty.
     pub fn drain(&mut self) -> Vec<TransitionDropped> {
         std::mem::take(&mut self.entries)
     }
@@ -282,28 +237,17 @@ impl DroppedSignals {
 // signal_dispatch_system
 // ---------------------------------------------------------------------------
 
-/// Drains [`PendingSignalSets`] (queued by [`set`]) and, for each request that
-/// validates, inserts a [`TransitionRequest`] on `to` — bridging to the
-/// existing transition machinery in `transition.rs` rather than duplicating
-/// it. Requests that fail validation are recorded in [`DroppedSignals`]
-/// instead.
+/// Applies the queued [`set`] calls: each valid one becomes a
+/// [`TransitionRequest`] on `to`, and each invalid one is recorded in
+/// [`DroppedSignals`]. Runs just before
+/// [`crate::transition::transition_setup_system`].
 ///
-/// Runs in [`crate::schedule::ProteusSet::SignalDispatch`], immediately
-/// before [`crate::transition::transition_setup_system`].
+/// A valid request hides `from` and shows `to`: `to` takes over from `from`'s
+/// geometry, so `from` has nothing left to show.
 ///
-/// `from`'s `Visibility` is set to `false` as part of dispatching a valid
-/// request — "the morph is the exit," per PLANNING.md's Phase B: `to` carries
-/// the entire visual from `from`'s geometry to its own, so `from` has nothing
-/// left to show once the transition starts.
-///
-/// Retargeting: if `to` is already `Transitioning` and the request set
-/// `interruptible`, the inserted `TransitionRequest` leaves `from_state` as
-/// `None` — `transition_setup_system` then snapshots `to`'s own current
-/// (mid-flight) `QuadState` as the new origin, exactly like a direct
-/// `TransitionRequest` retarget (see
-/// `tests/transition_systems.rs::retargeting_midtransition_starts_from_current_state`).
-/// A fresh (non-retarget) dispatch instead sets `from_state` explicitly to
-/// `from`'s current `QuadState`.
+/// A request on a `to` that is already transitioning, with `interruptible`,
+/// starts again from wherever `to` is. Otherwise the transition starts from
+/// `from`'s current geometry.
 pub fn signal_dispatch_system(
     mut commands: Commands,
     registry: Res<SignalRegistry>,

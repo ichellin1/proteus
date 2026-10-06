@@ -1,75 +1,67 @@
-//! Sub-region allocator for `transition_atlas`.
+//! Space allocation within the transition atlas.
 //!
-//! `main_atlas`'s only occupant that needs dynamic packing is [`crate::font_atlas::FontAtlas`],
-//! which uses its own simple shelf packer (baked text glyphs live for the entity's lifetime,
-//! never freed individually). `transition_atlas` is different: every region is ephemeral —
-//! allocated when a Slice group transition starts, freed the moment it completes — and
-//! multiple transitions can be in flight at once. That needs a real allocator that supports
-//! `allocate`/`deallocate`, not just append-only packing. `etagere::AtlasAllocator` is exactly
-//! that (a maintained, dependency-free shelf-based packer); this module wraps it so
-//! `etagere` stays an implementation detail of `proteus-render` — `proteus-ui` only ever
-//! sees the opaque [`TransitionAllocId`] handle.
+//! Every transition-atlas region is short-lived: allocated when a split or
+//! merge starts and freed when it ends, with several possibly in progress at
+//! once. `etagere::AtlasAllocator`, a shelf packer that frees and reuses
+//! regions, handles that; this module wraps it, so other crates only see the
+//! [`TransitionAllocId`] handle.
 
-/// Opaque handle to one allocated region within `transition_atlas`.
-///
-/// Returned by [`crate::QuadPipeline::allocate_transition_region`]; pass back to
-/// [`crate::QuadPipeline::free_transition_region`] once the region's content is no longer
-/// needed (e.g. when a group transition completes).
+/// Identifies one allocated transition-atlas region. Returned by
+/// [`crate::QuadPipeline::allocate_transition_region`]; pass it to
+/// [`crate::QuadPipeline::free_transition_region`] when the region isn't needed
+/// any more.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TransitionAllocId(etagere::AllocId);
 
 /// A `width × height` region of `transition_atlas`, in atlas pixel coordinates.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TransitionRegion {
+    /// Left edge, in pixels.
     pub x: u32,
+    /// Top edge, in pixels.
     pub y: u32,
+    /// Width, in pixels.
     pub width: u32,
+    /// Height, in pixels.
     pub height: u32,
 }
 
 impl TransitionRegion {
-    /// As an `(x, y, width, height)` tuple — the shape [`crate::QuadPipeline::bake_instances_to_transition_atlas`]
-    /// and [`crate::QuadPipeline::bake_instances_to_main_atlas`] already take.
+    /// The region as `(x, y, width, height)`, as
+    /// [`crate::QuadPipeline::bake_instances_to_transition_atlas`] and
+    /// [`crate::QuadPipeline::bake_instances_to_main_atlas`] take it.
     pub fn as_tuple(&self) -> (u32, u32, u32, u32) {
         (self.x, self.y, self.width, self.height)
     }
 }
 
-/// Transparent gutter (in atlas pixels) reserved on every side of each
-/// allocation, so a rounded corner's near-edge bilinear sample lands in
-/// guaranteed-transparent padding that `QuadPipeline::bake_instances_to_atlas`
-/// writes as part of *this* bake, rather than in an adjacent allocation's
-/// opaque content (or stale pixels from a since-freed one). Without this, a
-/// Slice-transition entity's rounded corner reads as "slightly opaque"
-/// instead of transparent whenever another baked region happens to land
-/// pixel-adjacent to it — see the corner-bleed bug this was added to fix.
+/// A transparent border, in atlas pixels, reserved around every allocation.
 ///
-/// Also used by `pipeline.rs`'s bake path (kept in sync via this constant —
-/// the allocator reserves the space, the pipeline is what actually paints it
-/// transparent).
+/// A rounded corner's edge samples then read transparent pixels, which the
+/// bake paints, rather than a neighboring region's content, which would make
+/// the corner look slightly opaque. The allocator reserves the space and
+/// `QuadPipeline::bake_instances_to_atlas` paints it.
 pub(crate) const TRANSITION_BAKE_PAD: u32 = 2;
 
-/// Wraps `etagere::AtlasAllocator`, sized to [`crate::DEFAULT_TRANSITION_ATLAS_SIZE`].
+/// Allocates regions within the transition atlas, using
+/// `etagere::AtlasAllocator`.
 pub struct TransitionAtlasAllocator {
     inner: etagere::AtlasAllocator,
 }
 
 impl TransitionAtlasAllocator {
+    /// Creates an allocator for a `size` × `size` atlas.
     pub fn new(size: u32) -> Self {
         Self {
             inner: etagere::AtlasAllocator::new(etagere::size2(size as i32, size as i32)),
         }
     }
 
-    /// Allocate a `width × height` region, reserving an extra
-    /// `TRANSITION_BAKE_PAD`-pixel transparent gutter on every side (not
-    /// reflected in the returned [`TransitionRegion`] — callers still bake
-    /// and UV-address exactly the `width × height` they asked for; the
-    /// gutter is an implementation detail shared only with
-    /// `QuadPipeline::bake_instances_to_atlas`). Returns `None` if the atlas
-    /// is full — callers should treat this the same as any other bake
-    /// failure (e.g. skip the crossfade and fall back to flat-color geometry
-    /// for that slice).
+    /// Allocates a `width × height` region, with a
+    /// `TRANSITION_BAKE_PAD`-pixel transparent border reserved around it. The
+    /// returned region is the requested size, without the border. Returns
+    /// `None` if the atlas is full; the caller then uses a plain colored shape
+    /// instead.
     pub fn allocate(
         &mut self,
         width: u32,
@@ -90,7 +82,8 @@ impl TransitionAtlasAllocator {
         Some((TransitionAllocId(alloc.id), region))
     }
 
-    /// Release a previously allocated region back to the packer.
+    /// Frees a region allocated by
+    /// [`TransitionAtlasAllocator::allocate`].
     pub fn free(&mut self, id: TransitionAllocId) {
         self.inner.deallocate(id.0);
     }

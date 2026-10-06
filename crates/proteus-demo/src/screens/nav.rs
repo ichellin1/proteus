@@ -55,7 +55,7 @@ pub struct Nav {
     pub back: Handle,
     pub back_dark: Handle,
     /// Persistent brand lockup — hidden until Splash finishes, then stays
-    /// up through every other state (including `Home` itself).
+    /// up through all the other states (including `Home` itself).
     pub lockup: Handle,
     pub lockup_dark: Handle,
 }

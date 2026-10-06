@@ -1,7 +1,5 @@
-//! Integration tests for the M2 transition systems.
-//!
-//! These tests spin up a real `bevy_ecs` `World` and run systems against it,
-//! verifying timing, state mutation, and lifecycle bookkeeping.
+// Tests of the transition systems, run against a real `bevy_ecs` world:
+// timing, geometry, and lifecycle.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
@@ -50,7 +48,7 @@ fn config(duration: f32) -> TransitionConfig {
     }
 }
 
-/// Minimal world for transition system tests.
+// Minimal world for transition system tests.
 fn make_world() -> World {
     let mut world = World::new();
     world.init_resource::<FrameTime>();
@@ -62,7 +60,7 @@ fn set_dt(world: &mut World, dt: f32) {
     world.resource_mut::<FrameTime>().delta_secs = dt;
 }
 
-/// Run a single system once against the world.
+// Run a single system once against the world.
 fn run<M>(world: &mut World, system: impl IntoSystem<(), (), M> + 'static) {
     let mut sched = Schedule::default();
     sched.add_systems(system);
@@ -405,15 +403,15 @@ fn full_transition_fires_complete_after_sufficient_ticks() {
 // Adversarial / boundary tests
 // ---------------------------------------------------------------------------
 
-/// A near-zero duration (1e-5 s) is below the `1e-4` clamp floor in
-/// `ActiveTransition::new`.  The stored duration must be clamped up to `1e-4`,
-/// and any realistic frame dt (≥ 1/240 s ≈ 4 ms) must satisfy `raw_t >= 1.0`
-/// on the very first tick — completing the transition immediately without NaN.
-///
-/// Note: `duration = 0.0` would trigger a `debug_assert!` in
-/// `ActiveTransition::new` (intentional loud-caller-error warning).  We use
-/// `1e-5` here — positive so the assert is silent, but well below the clamp
-/// floor so we still exercise the clamping and instant-completion paths.
+// A near-zero duration (1e-5 s) is below the `1e-4` clamp floor in
+// `ActiveTransition::new`.  The stored duration must be clamped up to `1e-4`,
+// and any realistic frame dt (≥ 1/240 s ≈ 4 ms) must satisfy `raw_t >= 1.0`
+// on the very first tick — completing the transition immediately without NaN.
+//
+// Note: `duration = 0.0` would trigger a `debug_assert!` in
+// `ActiveTransition::new` (intentional loud-caller-error warning).  We use
+// `1e-5` here — positive so the assert is silent, but well below the clamp
+// floor so we still exercise the clamping and instant-completion paths.
 #[test]
 fn near_zero_duration_transition_completes_in_first_tick() {
     let mut world = make_world();
@@ -465,11 +463,11 @@ fn near_zero_duration_transition_completes_in_first_tick() {
     );
 }
 
-/// Inserting a new `TransitionRequest` while a transition is in-flight
-/// (retargeting) must snapshot the **current mid-flight `QuadState`** as the
-/// new from-state — not the original from-state.  This ensures smooth
-/// motion: the animation starts from wherever it was interrupted, not from
-/// its original start position.
+// Inserting a new `TransitionRequest` while a transition is in-flight
+// (retargeting) must snapshot the **current mid-flight `QuadState`** as the
+// new from-state — not the original from-state.  This ensures smooth
+// motion: the animation starts from wherever it was interrupted, not from
+// its original start position.
 #[test]
 fn retargeting_midtransition_starts_from_current_state() {
     // A third QuadState to retarget to — distinct from red() and blue().
@@ -547,23 +545,17 @@ fn retargeting_midtransition_starts_from_current_state() {
 }
 
 // ---------------------------------------------------------------------------
-// The declared `from_state` takes effect when the transition is set up,
-// not when the first lerp tick lands (audit C-08)
+// A `from_state` applies as soon as the transition is set up
 // ---------------------------------------------------------------------------
 
-/// A transition with an explicit `from_state` must put the entity *at* that
-/// state as soon as it is set up — including for the whole of any `delay`.
-///
-/// `from_state: Some(..)` means "this morph visually originates somewhere other
-/// than where the entity currently sits": it's how a signal-driven 1→1 makes
-/// the destination appear to come from the source, and how `SplitStrategy::PerTarget`
-/// fans N targets out of one source. Until this was fixed, nothing wrote `from`
-/// to the entity's `QuadState`; only `transition_tick_system`'s first *lerping*
-/// tick did, as a side effect of `lerp(from, to, ~0)`. So during a `delay` the
-/// entity kept rendering wherever it already was — for a staggered `Bake` split,
-/// every target sat fully visible at its **final** position for the length of
-/// its stagger, then jumped back to the source and animated out again. The exact
-/// inverse of the intended effect.
+// A transition with a `from_state` must move the entity there as soon as it is
+// set up, and keep it there through any `delay`.
+//
+// A signal uses `from_state` so that `to` starts from `from`'s geometry, and a
+// `PerTarget` split so that every target starts from the source. If the entity
+// only moved on the first tick of the transition, it would sit at its old
+// position, usually its final one, through the delay, then jump back to the
+// start: for a staggered split, the reverse of what's intended.
 #[test]
 fn a_delayed_transition_sits_at_its_from_state_for_the_whole_delay() {
     let cfg = TransitionConfig {
@@ -574,8 +566,8 @@ fn a_delayed_transition_sits_at_its_from_state_for_the_whole_delay() {
     let mut world = make_world();
 
     // The entity currently sits at `blue()` — its own resting state, and also
-    // where this transition is heading. The morph is declared to originate from
-    // `red()` instead.
+    // where this transition is heading. The transition is declared to start
+    // from `red()` instead.
     let entity = world
         .spawn((
             blue(),
@@ -619,15 +611,10 @@ fn a_delayed_transition_sits_at_its_from_state_for_the_whole_delay() {
     );
 }
 
-/// The same fix, at zero delay: the frame a transition is set up must already
-/// render `from`, not the entity's pre-transition position.
-///
-/// `transition_setup_system` inserts `ActiveTransition` through `Commands`, so
-/// `transition_tick_system` doesn't see it until the following frame — meaning
-/// there was exactly one rendered frame showing the entity where it used to be.
-/// For a signal-driven morph, where the destination entity sits at its *final*
-/// geometry until the morph moves it, that frame is a flash of the end state
-/// before the animation begins.
+// Without a delay: the tick a transition is set up must already draw `from`,
+// not the entity's old position. The transition is only picked up the tick
+// after it is set up, so otherwise the entity shows where it was for one frame:
+// for a signal's `to` entity, a flash of the end state before it moves.
 #[test]
 fn a_transition_renders_its_from_state_on_the_frame_it_is_set_up() {
     let mut world = make_world();
@@ -653,11 +640,10 @@ fn a_transition_renders_its_from_state_on_the_frame_it_is_set_up() {
     );
 }
 
-/// The no-op half of the contract: with `from_state: None` the origin *is* the
-/// entity's current state, so setup must leave it exactly where it is. This is
-/// every transition the reference demo creates (`animate_to`, interaction
-/// styling, and the Slice/GridSlice group paths), which is why the fix above
-/// cannot change how the demo looks.
+// The no-op half of the contract: with `from_state: None` the origin *is* the
+// entity's current state, so setup must leave it exactly where it is. Most
+// transitions take this path: `animate_to`, interaction styles, and the
+// Slice/GridSlice group paths.
 #[test]
 fn setup_without_a_from_state_leaves_the_entity_where_it_is() {
     let mut world = make_world();

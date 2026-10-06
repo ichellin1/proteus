@@ -1,66 +1,59 @@
-//! [`GpuSurface`] — the one place a Proteus host turns a platform surface
-//! target into a live wgpu device, queue and configured swap chain.
+//! [`GpuSurface`]: a GPU device, queue and swap chain for a platform surface.
 
 use crate::GpuError;
 
-/// Everything a host needs after GPU setup, created together because the steps
-/// are interdependent: the adapter is requested *against* the surface, the
-/// device comes from the adapter, and the swap-chain format is picked from what
-/// that adapter reports the surface can do.
+/// Everything a host needs to draw to a platform surface.
+///
+/// The parts are created together because each depends on the last: the
+/// adapter is chosen for the surface, the device comes from the adapter, and
+/// the swap-chain format is picked from what that adapter supports.
 pub struct GpuSurface {
+    /// The surface frames are presented to.
     pub surface: wgpu::Surface<'static>,
+    /// The GPU device.
     pub device: wgpu::Device,
+    /// The device's command queue.
     pub queue: wgpu::Queue,
-    /// The configured swap chain. A host owns resizing: mutate `width`/`height`
-    /// and call [`GpuSurface::reconfigure`].
+    /// The swap chain's configuration. To resize, change `width` and `height`
+    /// and call [`GpuSurface::reconfigure`], or use [`GpuSurface::resize`].
     pub config: wgpu::SurfaceConfiguration,
-    /// Kept for `get_capabilities` and for logging which GPU was chosen.
+    /// The chosen GPU, for querying its capabilities and for logging.
     pub adapter: wgpu::Adapter,
-    /// Not read, but must outlive the surface it created.
+    // Not read, but must outlive the surface it created.
     _instance: wgpu::Instance,
 }
 
-/// The parts of GPU setup that genuinely differ per host.
-///
-/// Everything *not* here is identical across platforms and lives in
-/// [`GpuSurface::create`] — which is the whole point of this type existing.
+/// The parts of GPU setup that differ between hosts. Everything else is the
+/// same on every platform, and happens in [`GpuSurface::create`].
 pub struct SurfaceRequest {
     /// Debug label for the device.
     pub label: &'static str,
-    /// Initial swap-chain size in **physical** pixels. Native reads this from
-    /// the window; the web host multiplies its CSS size by `devicePixelRatio`.
+    /// The initial swap-chain size in physical pixels. A native host reads it
+    /// from the window; the web host multiplies the canvas's CSS size by
+    /// `devicePixelRatio`.
     pub size: (u32, u32),
-    /// Adapter selection hint (`ProteusConfig::render.power_preference`).
+    /// Which GPU to prefer on a machine with more than one.
     pub power_preference: wgpu::PowerPreference,
-    /// Swap-chain presentation mode (`ProteusConfig::render.present_mode`).
+    /// How frames are synchronized with the display.
     pub present_mode: wgpu::PresentMode,
-    /// Device limits. The real per-platform difference: native asks for
-    /// [`wgpu::Limits::default()`], the web host for
-    /// [`wgpu::Limits::downlevel_webgl2_defaults()`] so a WebGL2 fallback is
-    /// actually usable. The pipeline never relies on anything above the
-    /// WebGL2 floor either way — see `PLANNING.md` § M13.3's "GPU floor".
+    /// Device limits. A native host asks for [`wgpu::Limits::default()`], the
+    /// web host for [`wgpu::Limits::downlevel_webgl2_defaults()`] so that the
+    /// WebGL2 fallback works. Proteus's default settings fit the WebGL2 limits;
+    /// larger ones, such as `ProteusConfig::desktop()`, need more.
     pub limits: wgpu::Limits,
 }
 
 impl GpuSurface {
-    /// Create an instance, surface, adapter, device and configured swap chain
-    /// for `target`.
+    /// Creates the surface, adapter, device and configured swap chain for
+    /// `target`.
     ///
-    /// `target` is whatever the platform presents: an `Arc<winit::Window>` on
-    /// native, `wgpu::SurfaceTarget::Canvas` on the web. Both satisfy
-    /// `Into<SurfaceTarget<'static>>`, which is the only shape of the platform
-    /// this crate ever sees — no winit, no web-sys, no `#[cfg]`.
+    /// `target` is whatever the platform provides: an `Arc<winit::Window>`
+    /// natively, or `wgpu::SurfaceTarget::Canvas` on the web.
     ///
-    /// ## Why this lives here
+    /// # Errors
     ///
-    /// `proteus-host-winit` and `proteus-host-web` each carried their own copy
-    /// of this sequence, near-identical down to the comment explaining the
-    /// surface-format choice. That's the duplication `PLANNING.md` § M13.3
-    /// ("shared GPU init") scheduled for consolidation, and it's what this
-    /// crate was always supposed to hold — before this it declared a
-    /// surfaceless `GpuContext` that nothing anywhere constructed, so the
-    /// "Layer 0" crate the docs describe wasn't actually in the build graph of
-    /// anything.
+    /// Returns [`GpuError`] if the surface can't be created, no GPU supports
+    /// it, or the device can't be created.
     pub async fn create(
         target: impl Into<wgpu::SurfaceTarget<'static>>,
         request: SurfaceRequest,
@@ -119,16 +112,15 @@ impl GpuSurface {
         self.config.format
     }
 
-    /// Re-apply [`GpuSurface::config`] to the surface — after changing its
-    /// `width`/`height`, or to recover from a `Lost`/`Outdated` surface texture
-    /// or a restored GPU context.
+    /// Applies [`GpuSurface::config`] to the surface again: after changing its
+    /// size, or to recover when the surface is lost or outdated.
     pub fn reconfigure(&self) {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Set the swap-chain size in physical pixels and reconfigure. Zero in
-    /// either axis is ignored — a minimized window reports that, and
-    /// configuring a zero-sized surface is a wgpu validation error.
+    /// Sets the swap-chain size in physical pixels and reconfigures. A zero
+    /// width or height is ignored: a minimized window reports it, and a
+    /// zero-sized surface is invalid.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -145,12 +137,11 @@ impl GpuSurface {
     }
 }
 
-/// Pick a **non-sRGB** swap-chain format where one is offered.
+/// Picks a non-sRGB swap-chain format when one is available.
 ///
-/// Every colour in Proteus is authored as a flat, already-gamma-space value and
-/// the fragment shader passes it through untouched, so an sRGB-tagged swap chain
-/// would encode it a second time and wash the whole UI out. Both hosts made this
-/// same choice with the same comment before it moved here.
+/// Proteus colors are already gamma-encoded, and the shader passes them through
+/// unchanged. An sRGB swap chain would encode them a second time and wash the
+/// whole UI out.
 fn preferred_format(caps: &wgpu::SurfaceCapabilities) -> wgpu::TextureFormat {
     caps.formats
         .iter()

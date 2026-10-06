@@ -1,52 +1,34 @@
-//! `proteus-demo` — the Proteus reference demo, written once and run on
-//! every platform.
+//! `proteus-demo`: the Proteus reference demo, written once against
+//! [`proteus_sdk::Proteus`] and run natively and on the web.
 //!
-//! Built against [`proteus_sdk::Proteus`] and handed to a host through
-//! [`DemoApp`], replacing what was previously ~17,500 lines of
-//! independently hand-duplicated demo logic across two shells (M12.5).
-//! Currently live: a
-//! persistent background image and nav chrome, `Splash` (real animated logo,
-//! wordmark, intro fade/slide-in — see `screens::splash`'s doc) → `Home`
-//! (still placeholder colors), which reaches `ExamplesHome` →
-//! `ExampleDetail` (Effects/Text/Transforms & Animation/Stress Tests — see
-//! `screens::example_detail`'s doc for what's still out of scope beyond
-//! that), `VideoTiles` → `VideoScreen` (box-cover art tiles that grow into
-//! real `.mp4` playback — see `screens::video_tiles`'s doc for what's
-//! deferred there: loading-state UI and morph-time crossfade polish), and
-//! `Loading` → `Gallery` → `GalleryImage` (a real 12-image fetch, plus a
-//! real hires fetch for whichever one is enlarged — see `screens::gallery`'s
-//! doc for what's deferred there: center-cropping fetched photos and the
-//! hires upgrade's crossfade).
+//! The demo has a persistent background image and nav chrome, and these
+//! screens:
 //!
-//! ## Where the original lives
+//! - `Splash`: the animated logo, wordmark and intro fade (see
+//!   `screens::splash`).
+//! - `Home`: the three nav buttons that lead to the other screens.
+//! - `ExamplesHome` and `ExampleDetail`: the Effects, Text, Transforms &
+//!   Animation and Stress Tests examples (see `screens::example_detail` for
+//!   what isn't built yet).
+//! - `VideoTiles` and `VideoScreen`: box-cover tiles that grow into video
+//!   playback (see `screens::video_tiles`).
+//! - `Loading`, `Gallery` and `GalleryImage`: twelve fetched photos, and a
+//!   larger fetch of whichever one is enlarged (see `screens::gallery`).
 //!
-//! This crate was cut over from the two M12 shells at M12.5, and its doc
-//! comments used to name `proteus-shell-native::*` functions and constants
-//! throughout as fidelity anchors — "mirrors X exactly" — while the
-//! migration was in flight. That code is gone (`4825572` cut native over,
-//! `508b8a8` the web shell), so those references have been removed rather
-//! than left pointing at nothing. The last commit holding the original
-//! 8,728-line `proteus-shell-native/src/main.rs` is `0c954e0`; read it there
-//! if you need to check this crate against what it replaced.
+//! ## How the demo is split
 //!
-//! ## What stays a shell concern
+//! [`Demo`] holds the demo's logic. It changes the [`proteus_sdk::Proteus`]
+//! it is given and nothing else, so it has no access to the GPU, the network
+//! or assets, and can be tested without them. When it needs one of those, it
+//! queues a request that its `take_pending_*` methods return, and receives
+//! the result through its `set_*` methods.
 //!
-//! Rendering (GPU device/surface setup, `collect_instances`, the actual
-//! draw call, and baking `Text`/`Image` components into the GPU atlas) is
-//! **not** this crate's job — `proteus-sdk` itself is headless, and this
-//! crate follows suit. [`Demo`] mutates a [`proteus_sdk::Proteus`] handed to
-//! it and nothing else; it never sees a GPU.
-//!
-//! Since M13.4 a *shell* doesn't drive [`Demo`] either. [`DemoApp`] wraps it,
-//! implements `proteus_runtime::App`, and is handed to a host crate's
-//! `run()`; the host owns the window/canvas, the frame loop and the GPU, and
-//! `Engine` calls `DemoApp`'s `App::update` once per frame with a `Frame`.
-//! Per-platform asset work — reading files, `fetch()`-ing images, decoding
-//! video — reaches [`Demo`] through that `Frame` (`bake_texture`,
-//! `fetch_async`, `play_video`) over the host's own `HostServices`, rather
-//! than through a shell-side shim. `app.rs`'s own module doc has the full
-//! picture; [`Demo`]'s `set_*`/`take_*` methods are the injection points it
-//! drains.
+//! [`DemoApp`] wraps [`Demo`], implements `proteus_runtime::App`, and is
+//! handed to a host crate's `run()`. The host owns the window or canvas, the
+//! frame loop and the GPU, and calls `DemoApp`'s `update` once per frame.
+//! `update` drains [`Demo`]'s requests and does the work through the
+//! `Frame` it is given: loading assets, baking textures, fetching photos and
+//! playing video. `app.rs`'s module doc has the details.
 //!
 //! ## Why so many `let _ = handle.foo(...)`
 //!
@@ -86,16 +68,13 @@ use screens::{
 };
 
 /// Initial background/viewport size in logical pixels, used only until the
-/// shell's first [`Demo::set_viewport_size`] call — see that method's doc.
-/// Matches `examples/native_preview.rs`'s own default window size, so the
-/// harness never actually shows this placeholder in practice.
+/// first [`Demo::set_viewport_size`] call; see that method's doc.
+/// Matches `proteus-shell-native`'s window size, so the placeholder is never
+/// actually shown.
 const DEFAULT_VIEWPORT_SIZE: Vec2 = Vec2::new(1280.0, 800.0);
 
-/// Design-System hover constants, shared by every interactive surface via
-/// [`Demo::advance_hovers`] — see [`HoverEntry`]'s doc for the mechanism.
-/// (An earlier doc comment on the scale boost said "5%"; the constant is and
-/// always was 7% — matching the value,
-/// not the stale comment).
+/// Hover constants, shared by all the interactive surfaces through
+/// [`Demo::advance_hovers`]; see [`HoverEntry`]'s doc for the mechanism.
 const HOVER_GLOW_DURATION_SECS: f32 = 0.25;
 const HOVER_GLOW_MAX_RADIUS_PX: f32 = 15.0;
 const HOVER_SCALE_BOOST: f32 = 0.07;
@@ -103,7 +82,7 @@ const HOVER_SCALE_BOOST: f32 = 0.07;
 /// How long `theme_progress` takes to ramp fully from one theme to the
 /// other — a touch slower than a group transition's own 0.4–0.6s; the
 /// whole app re-themes at once, a bigger showcase moment than any one
-/// shape morphing into another.
+/// shape transitioning into another.
 const THEME_MORPH_DURATION_SECS: f32 = 0.6;
 
 /// The one primary color — border, glow, and idle text/icon color all draw
@@ -120,11 +99,9 @@ fn violet_dark() -> Vec4 {
     Vec4::new(182.0 / 255.0, 168.0 / 255.0, 1.0, 1.0)
 }
 
-/// Blends `handle`'s corner radius between `light`/`dark` by `p` (0=light,
-/// 1=dark) — consolidates the original's ~7 hand-copied
-/// `qs.corner_radius = light + (dark - light) * p` call sites (one per
-/// themed widget family) into one shared call. A no-op if `handle` has no
-/// live `QuadState` (e.g. hidden/destroyed).
+/// Blends `handle`'s corner radius between `light` and `dark` by `p`
+/// (0 = light, 1 = dark). A no-op if `handle` has no `QuadState`, for
+/// example because it was destroyed.
 fn blend_corner_radius(app: &mut Proteus, handle: Handle, light: f32, dark: f32, p: f32) {
     if let Some(mut qs) = app.world_mut().get_mut::<QuadState>(handle.id()) {
         qs.corner_radius = light + (dark - light) * p;
@@ -134,9 +111,7 @@ fn blend_corner_radius(app: &mut Proteus, handle: Handle, light: f32, dark: f32,
 /// Blends `handle`'s Border/Glow/Text RGB — never alpha, which stays
 /// independently owned by whatever hover/fade code the entity already has
 /// — toward [`violet_dark`] by `p`. Writes whichever of Border/Glow/Text
-/// `handle` actually carries; a no-op for whichever it lacks. Consolidates
-/// the original's `advance_theme` step 5 (~10 call sites, one per themed
-/// widget family) into one shared call.
+/// `handle` actually carries; a no-op for whichever it lacks.
 fn blend_primary_color(app: &mut Proteus, handle: Handle, p: f32) {
     let primary = violet().lerp(violet_dark(), p);
     if let Some(mut border) = app.world_mut().get_mut::<Border>(handle.id()) {
@@ -156,7 +131,7 @@ fn blend_primary_color(app: &mut Proteus, handle: Handle, p: f32) {
     }
 }
 
-/// Registers `handle` for the Design-System hover glow/scale treatment —
+/// Registers `handle` for the shared hover glow and scale —
 /// see [`HoverEntry`]'s doc for the mechanism and `Demo::advance_hovers`
 /// for the per-tick ramp. Call once per interactive surface, during
 /// `Demo::new()`, right alongside that surface's `on_click` wiring.
@@ -177,10 +152,8 @@ fn register_hover(app: &mut Proteus, hovers: &mut Vec<HoverEntry>, handle: Handl
     });
 }
 
-/// Config shared by every group transition. Placeholder — not the original
-/// demo's per-edge `BUTTON_TILES_MORPH_DURATION`/`GALLERY_GRID_MORPH_DURATION`
-/// distinction yet (both happen to be 0.4s in the original anyway, for every
-/// edge reachable so far).
+/// The config for group transitions, except those touching `gallery`'s grid
+/// (see [`gallery_group_transition_config`]).
 fn group_transition_config() -> TransitionConfig {
     TransitionConfig {
         duration: 0.4,
@@ -211,8 +184,9 @@ const GALLERY_FETCH_TIMEOUT_SECS: f32 = 10.0;
 const GALLERY_HIRES_CROSSFADE_DURATION_SECS: f32 = 0.25;
 
 /// Above this average FPS, a Stress Tests result is annotated as vsync-capped
-/// rather than left looking like the demo tops out there on its own — both
-/// shells run `PresentMode::AutoVsync`, a real, deliberate cap.
+/// rather than left looking like the demo tops out there on its own. The
+/// default `ProteusConfig` presents with `PresentMode::AutoVsync`, which caps
+/// the frame rate at the display's refresh rate.
 const VSYNC_FPS_CAP_THRESHOLD: f32 = 55.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,7 +257,7 @@ enum NavClick {
     RunTextureChurn,
     /// `theme.sun`/`theme.moon` — sets `dark_target` directly (`false`/
     /// `true`), unconditional on `self.state` (a theme switch is orthogonal
-    /// to navigation, unlike every other `NavClick` variant).
+    /// to navigation, unlike all the other `NavClick` variants).
     SetTheme(bool),
 }
 
@@ -291,9 +265,8 @@ enum NavClick {
 /// duration has elapsed. `reveal_on_complete` (built into
 /// `split_to`/`merge_from`) only knows about the literal target/source
 /// entities it was given, not their descendants or associated standalone
-/// content — first needed for `screens::home`'s nav labels, reused here for
-/// `screens::examples_home`'s labels and each `ExampleDetail` category's
-/// content.
+/// content. Used for `screens::home`'s nav labels, `screens::examples_home`'s
+/// labels and each `ExampleDetail` category's content.
 struct PendingReveal {
     elapsed: f32,
     duration: f32,
@@ -312,7 +285,7 @@ struct PendingReveal {
 /// "from" state, then hides it) doesn't run until the *next* tick.
 /// Resetting `tile`'s geometry immediately would corrupt that capture
 /// before it happens, collapsing the crossfade into an animation
-/// from-and-to the same (already-reset) shape — no visible morph at all,
+/// from-and-to the same (already-reset) shape — no visible transition at all,
 /// just an instant snap. `Demo::advance_pending_tile_reset` instead waits
 /// until `tile` is actually observed hidden (proof the setup system has
 /// already run and captured the real "from" state), only *then* resets
@@ -323,13 +296,11 @@ struct PendingTileReset {
     tile: Handle,
 }
 
-/// One entity registered for the Design-System hover glow/scale treatment
-/// — see `Demo::register_hover`'s doc for how it's wired up, and
-/// `Demo::advance_hovers`' for the per-tick ramp/write. Replaces what used
-/// to be ~9 hand-duplicated `advance_*_hover` functions, one per interactive
-/// surface, with a single generic mechanism — same runtime
-/// behavior (0.25s linear ramp, 15px glow, 7% scale, suppressed during any
-/// transition on this entity), not copy-pasted per screen.
+/// One entity registered for the shared hover glow and scale — see
+/// `Demo::register_hover`'s doc for how it's wired up, and
+/// `Demo::advance_hovers`' for the per-tick ramp. Every interactive surface
+/// gets the same behavior: a 0.25 s linear ramp to a 15 px glow and a 7%
+/// scale, suppressed while the entity is transitioning.
 struct HoverEntry {
     handle: Handle,
     /// Flipped by the `on_hover_enter`/`on_hover_exit` callbacks
@@ -367,11 +338,9 @@ struct StressRun {
 /// One Texture Churn slot's fresh synthetic texture, computed by `Demo`
 /// (pure data — a solid-color RGBA buffer, no GPU needed to generate it)
 /// but not yet registered anywhere. `Demo::take_pending_texture_churn`
-/// drains these each tick; the shell does the actual
-/// `register_static`/`write_to_main_atlas`/`Handle::set_texture` sequence
-/// (same "shell owns anything GPU-touching" convention as the crate-root
-/// doc, and the same shape as `Demo::set_logo_frames`'s pre-baked-frames
-/// injection, just generated on the fly instead of loaded from disk).
+/// drains these each tick, and `DemoApp` bakes each one with
+/// `Frame::bake_texture` and applies it with `Handle::set_texture`. See the
+/// crate doc for why `Demo` leaves GPU work to `DemoApp`.
 pub struct TextureChurnUpdate {
     pub handle: Handle,
     pub width: u32,
@@ -379,23 +348,23 @@ pub struct TextureChurnUpdate {
     pub rgba: Vec<u8>,
 }
 
-/// A fresh gallery fetch to kick off — drained by the shell via
+/// A fresh gallery fetch to kick off — drained by `DemoApp` via
 /// [`Demo::take_pending_gallery_fetch`], which owns starting
 /// `gallery::TILE_COUNT` concurrent image downloads its own way (native:
 /// blocking HTTP calls on background threads; web: `fetch()`) at roughly
 /// `tile_side_px` each, then calling [`Demo::set_gallery_tile_image`] per
 /// completed download. A fetch that never completes for some tile is fine —
-/// `Demo` handles that itself (`GALLERY_FETCH_TIMEOUT_SECS`); the shell
+/// `Demo` handles that itself (`GALLERY_FETCH_TIMEOUT_SECS`); `DemoApp`
 /// doesn't need a cancellation call of its own for an abandoned fetch (e.g.
 /// leaving `Loading` via the home icon before it finishes) — just stop
 /// delivering results for it.
 ///
-/// `tile_side_px` is in the same logical-pixel units as every other size
-/// `Demo` deals in — `Demo` has no notion of the display's pixel density
-/// (see [`Demo::set_viewport_size`]'s doc), so it's the shell's job to
+/// `tile_side_px` is in logical pixels, like all the other sizes `Demo`
+/// deals in — `Demo` has no notion of the display's pixel density
+/// (see [`Demo::set_viewport_size`]'s doc), so it's `DemoApp`'s job to
 /// scale this by its own `scale_factor` (and apply whatever physical-pixel
-/// cap it wants) before actually fetching — `DemoApp::advance_gallery` is
-/// where that happens now (`tile_side_px * scale_factor`, capped at
+/// cap it wants) before actually fetching. `DemoApp::advance_gallery` does
+/// that (`tile_side_px * scale_factor`, capped at
 /// `MAX_TILE_IMAGE_SIDE_PX`). `Demo` fetching a plain, un-scaled logical size
 /// would under-fetch on any HiDPI display.
 pub struct GalleryFetchRequest {
@@ -403,20 +372,18 @@ pub struct GalleryFetchRequest {
 }
 
 /// A hires upgrade to fetch for the currently-enlarged tile — drained by
-/// the shell via [`Demo::take_pending_gallery_hires_fetch`], which owns
-/// fetching (or re-fetching, at a bigger size — likely the *same* photo the
-/// original low-res fetch already picked, if the shell tracked which one)
-/// `idx`'s photo at exactly `width_px`×`height_px`, then calling
-/// [`Demo::set_gallery_hires_image`] with the result. `width_px`/
-/// `height_px` already preserve the box's exact aspect ratio (`Demo`
-/// computes them from `gallery_tile_aspect[idx]`, the only side that knows
-/// the photo's real aspect — see `Demo::start_gallery_to_image`'s doc) —
-/// the shell doesn't need to know or preserve the aspect ratio itself.
+/// `DemoApp` via [`Demo::take_pending_gallery_hires_fetch`], which fetches
+/// `idx`'s photo (the same photo the tile shows, at a bigger size) at exactly
+/// `width_px`×`height_px`, then calls [`Demo::set_gallery_hires_image`] with
+/// the result. `width_px`/`height_px` already preserve the box's exact aspect
+/// ratio (`Demo` computes them from `gallery_tile_aspect[idx]`, the only side
+/// that knows the photo's real aspect — see `Demo::start_gallery_to_image`'s
+/// doc) — `DemoApp` doesn't need to know or preserve the aspect ratio itself.
 ///
 /// Same logical-pixel/uncapped convention as [`GalleryFetchRequest::
-/// tile_side_px`] — see that field's doc. The shell scaling and capping
-/// this by its own `scale_factor` is `DemoApp::advance_gallery`'s job, the
-/// same as for the grid tiles above.
+/// tile_side_px`] — see that field's doc. `DemoApp::advance_gallery` scales
+/// it by the viewport's `scale_factor` and caps it, as it does for the grid
+/// tiles.
 ///
 /// Superseded (should be abandoned, not delivered) by
 /// [`Demo::take_pending_gallery_hires_cancel`] firing — see that method's
@@ -429,8 +396,8 @@ pub struct GalleryHiresFetchRequest {
 
 /// The shared reference demo application. One instance per running demo.
 ///
-/// Does **not** own its [`Proteus`] — the [`crate::DemoApp`] `App` impl (and,
-/// on web until M13.2, the shell) threads `&mut Proteus` into every method.
+/// Does **not** own its [`Proteus`]: [`crate::DemoApp`] passes
+/// `&mut Proteus` into every method.
 pub struct Demo {
     state: AppState,
     viewport_size: Vec2,
@@ -448,8 +415,8 @@ pub struct Demo {
     /// `splash::recenter`. 0 once the intro has fully settled.
     intro_slide_offset: f32,
     /// Splash's animated logo mark's pre-baked frames, in order — empty
-    /// until [`Demo::set_logo_frames`] is called. Baking the PNGs is shell
-    /// I/O (see [`Demo::set_logo_frames`]'s doc); cycling which one is shown
+    /// until [`Demo::set_logo_frames`] is called. Baking the PNGs is
+    /// `DemoApp`'s job (see [`Demo::set_logo_frames`]'s doc); cycling which one is shown
     /// is ordinary app state, tracked here.
     logo_frames: Vec<TextureHandle>,
     logo_frame_index: usize,
@@ -480,21 +447,21 @@ pub struct Demo {
     /// dependency.
     stress_rng: u32,
     stress_run: Option<StressRun>,
-    /// This tick's Texture Churn texture updates, drained by the shell via
+    /// This tick's Texture Churn texture updates, drained by `DemoApp` via
     /// [`Demo::take_pending_texture_churn`] — see that type's doc.
     pending_texture_churn: Vec<TextureChurnUpdate>,
     /// Set to `Some(tile_idx)` when a tile should start playing video —
-    /// drained by the shell via [`Demo::take_pending_video_start`], which
-    /// owns actually decoding a file for that index (see the crate-root
-    /// doc). The entity itself already shows the video texture by the time
-    /// this is set (`Handle::start_video`, called synchronously); this flag
-    /// only tells the shell *which* file to start decoding.
+    /// drained by `DemoApp` via [`Demo::take_pending_video_start`], which
+    /// starts that tile's video (see the crate doc). The entity itself
+    /// already shows the video texture by the time this is set
+    /// (`Handle::start_video`, called synchronously); this flag only tells
+    /// `DemoApp` *which* video to start.
     pending_video_start: Option<usize>,
-    /// Set when the currently-playing tile should stop — drained by the
-    /// shell via [`Demo::take_pending_video_stop`], which owns actually
-    /// killing the decode thread/releasing the GPU video texture.
+    /// Set when the currently-playing tile should stop — drained by
+    /// `DemoApp` via [`Demo::take_pending_video_stop`], which stops the
+    /// video and releases its GPU texture.
     pending_video_stop: bool,
-    /// Whether the shell has confirmed a real decoded frame has actually
+    /// Whether `DemoApp` has confirmed a real decoded frame has actually
     /// been uploaded for the currently-playing video — set via
     /// [`Demo::set_video_first_frame_shown`], reset to `false` each time
     /// [`Demo::start_tiles_to_screen`] starts a new video. Drives
@@ -513,20 +480,17 @@ pub struct Demo {
     /// each time [`Demo::start_tiles_to_screen`] starts a new video.
     video_load_timed_out: bool,
     /// Set the same instant `video_load_timed_out` first latches, drained
-    /// by the shell via [`Demo::take_pending_video_cancel`] — unlike
+    /// by `DemoApp` via [`Demo::take_pending_video_cancel`] — unlike
     /// `video_load_timed_out` itself (a level, read every tick to decide
     /// dots-vs-error visibility), this is an edge: exactly one `true` read
-    /// per timeout, telling the shell "abort whatever fetch/decode is still
+    /// per timeout, telling `DemoApp` "abort whatever fetch/decode is still
     /// in flight, `Demo` hasn't torn anything down (the screen stays on
     /// `VideoScreen`, now showing the error text), so don't stop playback,
-    /// just stop wasting bandwidth." Native's own local `.mp4`/`ffmpeg`
-    /// decode has no in-flight *fetch* to abort on a timeout, so it never
-    /// needed this — the web shell's real HLS segment fetch does (see
-    /// `proteus-shell-web`'s own former `take_video_cancel`, which this
-    /// mirrors).
+    /// just stop wasting bandwidth." A native `.mp4` decode has no
+    /// in-flight fetch to abort, but the web host's HLS segment fetch does.
     pending_video_cancel: bool,
     /// How long we've been *continuously* settled-and-waiting (tile not
-    /// mid-morph, resting on `VideoScreen`, no frame yet) — unlike
+    /// mid-transition, resting on `VideoScreen`, no frame yet) — unlike
     /// `video_dots_elapsed` (which runs from click time and never resets
     /// early), this resets to 0 the instant that condition stops holding,
     /// so it always measures just the current wait. Gates the dots'
@@ -591,21 +555,21 @@ pub struct Demo {
     /// (`Demo::set_gallery_tile_image`) but whose bake hasn't landed (and
     /// so hasn't been stashed/cropped) yet — polled and cleared by
     /// `Demo::advance_gallery_tile_crop` once it has. Baking is
-    /// asynchronous (the shell's own per-frame job — see the crate-root
-    /// doc), so this can't happen synchronously inside
+    /// asynchronous (the renderer bakes `Image` components during the
+    /// frame), so this can't happen synchronously inside
     /// `set_gallery_tile_image` itself; there's nothing to stash/crop yet
     /// at that point.
     pending_gallery_tile_crop: [bool; gallery::TILE_COUNT],
-    /// This tick's gallery fetch request, if any — drained by the shell via
+    /// This tick's gallery fetch request, if any — drained by `DemoApp` via
     /// [`Demo::take_pending_gallery_fetch`]. See [`GalleryFetchRequest`]'s
     /// doc.
     pending_gallery_fetch: Option<GalleryFetchRequest>,
-    /// This tick's hires fetch request, if any — drained by the shell via
+    /// This tick's hires fetch request, if any — drained by `DemoApp` via
     /// [`Demo::take_pending_gallery_hires_fetch`]. See
     /// [`GalleryHiresFetchRequest`]'s doc.
     pending_gallery_hires_fetch: Option<GalleryHiresFetchRequest>,
     /// Set whenever `GalleryImage` is left (either destination) — drained
-    /// by the shell via [`Demo::take_pending_gallery_hires_cancel`], which
+    /// by `DemoApp` via [`Demo::take_pending_gallery_hires_cancel`], which
     /// should stop delivering results for whatever hires fetch it has in
     /// flight (same "just stop delivering results, nothing to actually
     /// interrupt" convention as [`Demo::take_pending_gallery_fetch`]'s own
@@ -620,11 +584,11 @@ pub struct Demo {
     /// instantly for a new tile before its own hires image is ready.
     gallery_hires_fade: f32,
     /// Fade-in (once fully settled in `Gallery`) / fade-out (the instant a
-    /// `Gallery`→elsewhere morph starts) progress for `gallery.fetch_button`/
+    /// `Gallery`→elsewhere transition starts) progress for `gallery.fetch_button`/
     /// `.fetch_button_label` — see `Demo::advance_gallery_button_fade`'s
     /// doc.
     gallery_button_fade: f32,
-    /// Every entity registered for the Design-System hover treatment — see
+    /// Every entity registered for the shared hover glow and scale — see
     /// [`HoverEntry`]'s doc. Populated by `Demo::register_hover` calls
     /// during `Demo::new()`, one per interactive surface; drained/ramped
     /// every tick by `Demo::advance_hovers`.
@@ -713,8 +677,7 @@ impl Demo {
         // `fetch_button_label` deliberately stays out of this — it relies
         // entirely on cascading from `fetch_button`'s own `Visibility`
         // (toggled solely by `Demo::advance_gallery_button_fade`, which
-        // never touches the label directly, matching source's own
-        // identical setup): still effectively hidden right now since its
+        // never touches the label directly): still effectively hidden right now since its
         // parent is, but its own raw flag needs to stay `VISIBLE` forever
         // so a *later* `fetch_button` reveal doesn't have to also
         // remember to un-hide the label separately.
@@ -888,11 +851,10 @@ impl Demo {
         }
     }
 
-    /// Injects the background's light-theme image bytes — the shell reads
+    /// Injects the background's light-theme image bytes — `DemoApp` reads
     /// the file (or `fetch()`s it, on web) its own way and hands over the
-    /// bytes; baking them into `main_atlas` is the shell's own per-frame job
-    /// too (see the crate-root doc), same convention as `Text`/the logo
-    /// frames. Call once, before the first `tick`.
+    /// bytes, and the renderer bakes them into `main_atlas` during the frame,
+    /// as it does `Text`. Call once, before the first `tick`.
     pub fn set_background_image(&mut self, proteus: &mut Proteus, bytes: Vec<u8>) {
         proteus
             .world_mut()
@@ -912,7 +874,7 @@ impl Demo {
             .insert(Image::new(bytes));
     }
 
-    /// Injects `nav.home`'s idle-art bytes — same shell-does-the-I/O
+    /// Injects `nav.home`'s idle-art bytes — same `DemoApp`-does-the-I/O
     /// convention as [`Demo::set_background_image`]. Call once, before the
     /// first `tick`; a tile whose bytes never arrive just shows the bare
     /// (fully transparent) quad, same graceful-degradation convention as
@@ -989,8 +951,7 @@ impl Demo {
 
     /// Injects `theme.sun`'s own art — **not** the light-theme sun disc
     /// despite the field name; see `screens::theme`'s module doc for the
-    /// inverted-role convention this pair uses (mirrors `proteus-shell-
-    /// native::SUN_ICON_PATH`'s own doc, `sun-idle-dark.png`).
+    /// inverted-role convention this pair uses (`sun-idle-dark.png`).
     pub fn set_theme_sun_icon(&mut self, proteus: &mut Proteus, bytes: Vec<u8>) {
         proteus
             .world_mut()
@@ -1025,7 +986,7 @@ impl Demo {
             .insert(Image::new(bytes));
     }
 
-    /// Injects one video tile's box-cover art — same shell-does-the-I/O
+    /// Injects one video tile's box-cover art — same `DemoApp`-does-the-I/O
     /// convention as [`Demo::set_background_image`]. `idx` is 0/1/2
     /// (left/center/right); a tile whose image never arrives just keeps its
     /// solid placeholder `TILE_COLORS` fill — degradation is per tile, so
@@ -1044,30 +1005,30 @@ impl Demo {
     }
 
     /// Injects one gallery tile's fetched photo bytes — same
-    /// shell-does-the-I/O convention as [`Demo::set_background_image`]/
+    /// `DemoApp`-does-the-I/O convention as [`Demo::set_background_image`]/
     /// [`Demo::set_tile_image`], but a tile can be re-fetched
     /// (`start_gallery_to_loading`'s refetch), unlike either of those, so
     /// this also frees the tile's prior baked image/texture first
-    /// (`Handle::free_resources`) — without that, the shell's next bake
+    /// (`Handle::free_resources`) — without that, the renderer's next bake
     /// pass would see the tile already has a baked image (from the
     /// previous fetch) and skip re-baking the fresh bytes entirely, per
-    /// the generic "bake anything with an `Image` but no `BakedImage` yet"
-    /// convention `examples/native_preview.rs` uses. Stamps this tile as
+    /// the renderer's rule of baking anything with an `Image` but no
+    /// `BakedImage` yet. Stamps this tile as
     /// belonging to the current fetch generation — see
     /// `gallery_tile_fetch_generation`'s doc. Call only for tiles whose
-    /// bytes the shell actually managed to fetch; a tile that never gets a
+    /// bytes `DemoApp` actually managed to fetch; a tile that never gets a
     /// call here just keeps showing its plain white placeholder (or
     /// whichever photo it last had, on a refetch) and blocks the
     /// `Loading` → `Gallery` auto-advance until `GALLERY_FETCH_TIMEOUT_SECS`
     /// gives up on it.
     ///
-    /// `aspect` is the photo's real (width, height) ratio, known to the
-    /// shell before baking even happens (e.g. from whatever catalog/API
+    /// `aspect` is the photo's real (width, height) ratio, known to
+    /// `DemoApp` before baking even happens (e.g. from whatever catalog/API
     /// response supplied `bytes`). Stashed in `gallery_tile_aspect` and
     /// used later by `Demo::start_gallery_to_image` to contain-fit the
     /// *enlarged* view to the photo's true shape (portrait/landscape/
     /// square) — get this wrong and every enlarged photo comes out looking
-    /// square regardless of the source's real proportions. Also queues a
+    /// square regardless of the photo's real proportions. Also queues a
     /// crop for the tile's own square grid cell, applied once baking
     /// completes — see `Demo::advance_gallery_tile_crop`'s doc.
     pub fn set_gallery_tile_image(
@@ -1089,18 +1050,18 @@ impl Demo {
     }
 
     /// Injects a hires upgrade for the currently-enlarged tile — same
-    /// shell-does-the-I/O convention as [`Demo::set_gallery_tile_image`].
+    /// `DemoApp`-does-the-I/O convention as [`Demo::set_gallery_tile_image`].
     /// Targets `gallery.hires_overlay`, not `gallery.enlarged` itself —
     /// see that field's doc for why: `enlarged`'s own low-res image must
     /// stay in place the whole time so there's always *something* to show,
     /// while the overlay bakes in the background and
     /// `Demo::advance_gallery_hires_overlay` crossfades it in once ready.
     /// Guarded by `idx` still matching the *currently* enlarged tile:
-    /// [`Demo::take_pending_gallery_hires_cancel`] tells the shell to stop
+    /// [`Demo::take_pending_gallery_hires_cancel`] tells `DemoApp` to stop
     /// delivering results the moment `GalleryImage` is left, but a result
     /// that was already in flight at that exact instant could still land
     /// right after — this guard is what makes that race harmless rather
-    /// than needing the shell to get the timing exactly right.
+    /// than needing `DemoApp` to get the timing exactly right.
     pub fn set_gallery_hires_image(&mut self, proteus: &mut Proteus, idx: usize, bytes: Vec<u8>) {
         if self.state != AppState::GalleryImage(idx) {
             return;
@@ -1108,9 +1069,8 @@ impl Demo {
         let _ = self.gallery.hires_overlay.free_resources(proteus);
         // The one entity that wants a bigger cap than the rest of the grid —
         // only one hires image is ever resident, so it can afford a larger
-        // footprint than the 12 simultaneous thumbnails. Was a separate
-        // bigger-cap bake pass in the M12 native shell; now just a per-entity
-        // `Image::max_side` the generic renderer bake honours.
+        // footprint than the 12 simultaneous thumbnails. The renderer's bake
+        // honours `Image::max_side`.
         proteus
             .world_mut()
             .entity_mut(self.gallery.hires_overlay.id())
@@ -1138,11 +1098,10 @@ impl Demo {
         }
     }
 
-    /// Injects Splash's animated logo mark's pre-baked frames — the shell
-    /// loads/decodes/registers the 19 `frame-NN.png` files into `main_atlas`
-    /// its own way (`fs::read` natively, `fetch()` on web) and wraps each
-    /// with `Proteus::texture`, same shell-does-the-I/O convention as
-    /// `Text`/`Image` baking (see the crate-root doc). Call once, before the
+    /// Injects Splash's animated logo mark's pre-baked frames. `DemoApp`
+    /// loads the 19 `frame-NN.png` files, bakes them into `main_atlas` with
+    /// `Frame::bake_texture`, and passes the resulting handles here (see the
+    /// crate doc). Call once, before the
     /// first `tick`; shows `frames[0]` immediately if non-empty, so the
     /// sequence always starts on frame 1.
     pub fn set_logo_frames(&mut self, proteus: &mut Proteus, frames: Vec<TextureHandle>) {
@@ -1155,7 +1114,7 @@ impl Demo {
     }
 
     /// Injects `loading.logo_dark`'s pre-baked frames (`frame-NN-dark.png`)
-    /// — same shell-does-the-I/O convention as [`Demo::set_logo_frames`],
+    /// — same `DemoApp`-does-the-I/O convention as [`Demo::set_logo_frames`],
     /// which this doesn't replace: Splash's own logo never theme-crossfades
     /// (see `screens::loading`'s module doc for why only this screen needs
     /// a dark set at all), so the two frame sets are entirely independent
@@ -1252,14 +1211,10 @@ impl Demo {
         }
 
         // Compute the real target geometry immediately before the split
-        // starts — same ordering `start_examples_to_detail` uses for its
-        // own merge target, and the fix for a real bug an earlier version
-        // of this function had: calling `home::layout` repeatedly on some
-        // earlier recurring gate (rather than once, right here) left the
-        // buttons stuck at their identical spawn-time placeholder geometry
-        // whenever that gate never actually fired, which is a materially
-        // different (and much easier to hit) risk than the original's own
-        // "one call, right before the split" — see `home::layout`'s doc.
+        // starts, once, as `start_examples_to_detail` does for its merge target.
+        // Computing it at some earlier recurring point instead would leave the
+        // buttons at their spawn-time placeholder geometry whenever that point
+        // never ran — see `home::layout`'s doc.
         let states = home::layout(proteus, &self.home);
         for (button, state) in self.home.nav_buttons.into_iter().zip(states) {
             let _ = button.set_declared_geometry(proteus, state);
@@ -1280,12 +1235,12 @@ impl Demo {
         self.state = AppState::Home;
     }
 
-    /// Processes whichever `NavClick` fired this frame (see `nav_click`'s
+    /// Processes whichever `NavClick` fired this tick (see `nav_click`'s
     /// doc) and drives the corresponding transition. The guard on each arm
     /// re-checks `self.state` at processing time (not just at the moment
     /// the click happened) — since `self.state` flips the instant a
     /// transition starts, this also doubles as "ignore a click that arrived
-    /// while a transition triggered by an earlier click this same frame is
+    /// while a transition triggered by an earlier click this same tick is
     /// already underway."
     fn advance_nav_click(&mut self, proteus: &mut Proteus) {
         let Some(click) = self.nav_click.take() else {
@@ -1410,7 +1365,7 @@ impl Demo {
         self.state = AppState::VideoTiles;
     }
 
-    /// The exact mirror of `start_home_to_tiles` — since each morph is
+    /// The exact mirror of `start_home_to_tiles` — since each transition is
     /// already a degenerate 1→1 crossfade in *either* direction, going back
     /// is just `split_to` again with source/target swapped, not a merge.
     fn start_tiles_to_home(&mut self, proteus: &mut Proteus) {
@@ -1427,15 +1382,15 @@ impl Demo {
         self.state = AppState::Home;
     }
 
-    /// Grows the clicked tile into the video screen (a 1→1 morph, not a
+    /// Grows the clicked tile into the video screen (a 1→1 transition, not a
     /// group transition — same shape as `Handle::animate_to`'s doc
     /// describes) and marks it to start showing video, crossfading in from
-    /// the box-cover art in lockstep with the geometry morph
+    /// the box-cover art in lockstep with the geometry transition
     /// (`Demo::advance_video_crossfade` owns the ramp itself — this just
     /// starts it at `0.0` instead of `start_video`'s own instant-cut
-    /// default). Queues `idx` for the shell to actually start decoding
+    /// default). Queues `idx` for `DemoApp` to actually start decoding
     /// (`take_pending_video_start`) — `video_t` starts at `0.0` (fully box
-    /// art) regardless of how quickly the shell manages to actually get a
+    /// art) regardless of how quickly `DemoApp` manages to actually get a
     /// real frame decoded — a brief black gap behind the fading-in art
     /// before the first frame lands is expected.
     fn start_tiles_to_screen(&mut self, proteus: &mut Proteus, idx: usize) {
@@ -1473,7 +1428,7 @@ impl Demo {
         // waiting" override *before* `split_to_with_states` bakes its own
         // "from" snapshot below — otherwise backing out of a still-loading
         // video would bake the tile's momentarily-invisible alpha into that
-        // snapshot, and the whole outgoing morph back to the grid would show
+        // snapshot, and the whole outgoing transition back to the grid would show
         // nothing instead of fading back in. Unconditional (not gated on
         // `ready`): harmless if the tile was already fully visible.
         if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
@@ -1715,7 +1670,7 @@ impl Demo {
     /// touches the destination's `BakedImage` (see `Handle::split_to`'s
     /// doc).
     ///
-    /// Also queues a hires fetch for the shell, sized from `enlarged`'s own
+    /// Also queues a hires fetch for `DemoApp`, sized from `enlarged`'s own
     /// target geometry — the *larger* axis rounded to an integer once, the
     /// other axis then derived from *that* rounded integer via the exact
     /// aspect ratio (never rounded independently — see the inline comment
@@ -1725,13 +1680,13 @@ impl Demo {
     /// and *uncapped* — `Demo` has no notion of the display's actual pixel
     /// density (see [`Demo::set_viewport_size`]'s doc), so it can't decide
     /// how many *physical* pixels "sharp enough" means; scaling by the
-    /// shell's own `scale_factor` and applying whatever physical-pixel cap
+    /// viewport's `scale_factor` and applying whatever physical-pixel cap
     /// bounds the network fetch happens above this crate, in
     /// `DemoApp::advance_gallery` — both applied after this same rounding,
     /// to the physical width/height, never to this method's logical
     /// `target_size`. `Demo` computes both axes
     /// itself, since it's the only side that actually knows the photo's
-    /// real aspect ratio (`aspect`, above) — the shell just scales/caps
+    /// real aspect ratio (`aspect`, above) — `DemoApp` just scales/caps
     /// and fetches, no aspect-ratio bookkeeping of its own needed.
     fn start_gallery_to_image(&mut self, proteus: &mut Proteus, idx: usize) {
         let aspect = self.gallery_tile_aspect[idx];
@@ -1772,15 +1727,14 @@ impl Demo {
         );
 
         // Round only the larger axis, then derive the other from *that*
-        // already-rounded integer via the exact aspect ratio — rounding
-        // both axes independently (as an earlier version of this code
-        // did) lets the fetched image's actual aspect ratio drift slightly
-        // from the box's exact one, which shows up as a small content
-        // shift the instant the crossfade swaps the (stretched) low-res
-        // stand-in for the (correctly-shaped) hires image. Same technique
-        // `examples/native_preview/gallery_fetch.rs::fetch_dimensions`
-        // already uses for the low-res fetch. Deliberately uncapped here —
-        // see this method's own doc for why capping belongs to the shell.
+        // already-rounded integer via the exact aspect ratio. Rounding both axes
+        // independently lets the fetched image's actual aspect ratio drift slightly
+        // from the box's exact one, which shows up as a small content shift the
+        // instant the crossfade swaps the (stretched) low-res stand-in for the
+        // (correctly-shaped) hires image. Same technique
+        // `gallery_fetch::fetch_dimensions` uses for the low-res fetch.
+        // Deliberately uncapped here — see this method's own doc for why
+        // capping belongs to `DemoApp`.
         let (width_px, height_px) = if target_size.x >= target_size.y {
             let width_px = target_size.x.round().max(1.0);
             let height_px = (width_px * target_size.y / target_size.x).round().max(1.0);
@@ -1847,7 +1801,7 @@ impl Demo {
     /// One 6→1 `Grid` merge — all 6 category buttons converge onto the
     /// shared `example_detail.panel`. The panel's target geometry is fixed
     /// *before* the merge starts — the real final resting state goes in up
-    /// front, so the morph animates straight to the correct spot instead of
+    /// front, so the transition animates straight to the correct spot instead of
     /// snapping after.
     fn start_examples_to_detail(&mut self, proteus: &mut Proteus, idx: usize) {
         let target = example_detail::panel_target(idx, self.viewport_size);
@@ -1964,19 +1918,13 @@ impl Demo {
     /// already covers for `BakedImage`) — the *other two* tiles, faded out
     /// by `Demo::advance_video_crossfade` while this one was playing (see
     /// that function's own doc), would otherwise stay stuck at that faded
-    /// alpha forever: reported directly as "the tile backgrounds on the
-    /// non-transitioning tiles are missing" the very first time this fade
-    /// was ported. Called for all 3 tiles from
+    /// alpha, with their backgrounds missing. Called for all 3 tiles from
     /// `settle(AppState::VideoTiles)`.
     ///
     /// `video_tiles::tile_target_state`'s own `color` is `tile_quad`'s
     /// placeholder tint unless real box-cover art is baked, in which case
     /// it's untinted opaque white — a bare `tile_quad(idx)` would discard
-    /// that and revert to the tint even with real art already loaded (a
-    /// different real bug, reported directly as "tiles keep color tint
-    /// from the original bg colors"). Mirrors `proteus-shell-
-    /// native::settle_tile_geometry`'s own `BakedImage`-gated white
-    /// override exactly.
+    /// that and tint the box art with the placeholder color.
     fn advance_pending_tile_reset(&mut self, proteus: &mut Proteus) {
         let Some(reset) = &self.pending_tile_reset else {
             return;
@@ -2040,7 +1988,7 @@ impl Demo {
     /// (waiting for a click) — swaps which pre-baked frame's texture sits on
     /// `splash.button`, wrapping through `logo_frames` every
     /// `splash::LOGO_FRAME_DURATION` seconds. Stops once Splash has handed
-    /// off to Home: the button is either mid-morph (its current frame gets
+    /// off to Home: the button is either mid-transition (its current frame gets
     /// baked into the Slice transition's snapshot, same as any other texture
     /// content) or already hidden, so there's nothing left to animate.
     fn advance_logo_animation(&mut self, proteus: &mut Proteus, dt: f32) {
@@ -2075,7 +2023,7 @@ impl Demo {
 
     /// For every tile `Demo::set_gallery_tile_image` queued
     /// (`pending_gallery_tile_crop`), checks whether its bake has landed
-    /// yet (`Handle::baked_image_size`) — baking is the shell's own
+    /// yet (`Handle::baked_image_size`) — baking is the renderer's own
     /// per-frame job, so this can lag an arbitrary number of ticks behind
     /// the `set_gallery_tile_image` call. Once it has: stashes the
     /// still-uncropped frame onto `gallery.tile_full[idx]`
@@ -2146,26 +2094,22 @@ impl Demo {
     }
 
     /// Fades `gallery.fetch_button`/`.fetch_button_label` in once fully
-    /// settled in `Gallery` (i.e. after whichever incoming grid morph
+    /// settled in `Gallery` (i.e. after whichever incoming grid transition
     /// revealed the tiles has actually completed — not just started), and
-    /// out the instant a `Gallery`→elsewhere morph begins. Paced by
+    /// out the instant a `Gallery`→elsewhere transition begins. Paced by
     /// `gallery_group_transition_config()`'s own duration so it lands at
-    /// `0`/`1` right as that morph completes/starts. The button has no
+    /// `0`/`1` right as that transition completes/starts. The button has no
     /// background fill (same transparent-idle-fill convention as the nav
     /// buttons), so border/glow/label alpha are what actually reads as
-    /// "fading in/out" — without this, the button only ever popped
-    /// instantly to fully visible/invisible, since neither had any other
-    /// alpha owner. Reported directly ("should quickly fade in and out, not
-    /// just pop in"). "Settled" is read from the tiles' own real
-    /// `Visibility` rather than a fixed-duration timer (which is what this
-    /// crate used before this fix, via `queue_reveal`) — group transitions
+    /// "fading in/out"; nothing else sets their alpha, so without this the
+    /// button would pop in and out. "Settled" is read from the tiles' own real
+    /// `Visibility` rather than a fixed-duration timer: group transitions
     /// never write a target's own `QuadState`/`Visibility` until the whole
     /// group actually completes (see `Handle::split_to`'s doc), so this
     /// tracks the *real* completion, not a guess that happens to usually
-    /// match it. The "settled" substitution is the one difference from a
-    /// single crate-wide `self.transition` flag, which this state machine doesn't
-    /// track — same kind of per-entity substitute `Demo::advance_hovers`'
-    /// doc already explains for the identical reason).
+    /// match it. This state machine has no crate-wide "transitioning" flag,
+    /// so this uses a per-entity check instead, as `Demo::advance_hovers`
+    /// does.
     fn advance_gallery_button_fade(&mut self, proteus: &mut Proteus, dt: f32) {
         let settled = self.state == AppState::Gallery
             && self
@@ -2240,48 +2184,33 @@ impl Demo {
     }
 
     /// Keeps `gallery.hires_overlay` glued to `gallery.enlarged`'s current
-    /// geometry (position/size/scale/corner_radius — including mid-morph
+    /// geometry (position/size/scale/corner_radius — including mid-transition
     /// values, since `enlarged` is still animating during the
     /// `Gallery↔GalleryImage` transition) and crossfades its alpha in once
     /// two things are both true: it has a real baked image (the hires fetch
-    /// landed and the shell's generic bake pass picked it up —
+    /// landed and the renderer's bake pass picked it up —
     /// `Handle::baked_image_size`), and `enlarged` has fully settled
     /// (`visible`, not mid-transition). Gating on *both* — not just "has a
     /// bake" — matters because the hires fetch routinely finishes well
-    /// before the ~0.6s grid morph does; crossfading in mid-morph would
+    /// before the ~0.6s grid transition does; crossfading in mid-transition would
     /// read as the sharp image popping in ahead of the tile finishing its
-    /// own growth, so the low-res stand-in holds until the morph settles,
+    /// own growth, so the low-res stand-in holds until the transition settles,
     /// only *then* crossfades. `gallery_hires_fade` only ramps up, never
     /// down, within one visit — `start_gallery_to_image` resets it to
     /// `0.0` for the next one. A no-op whenever `self.state` isn't
     /// `GalleryImage` at all.
     ///
     /// Deliberately does *not* re-derive `enlarged`'s box from the hires
-    /// bake's own decoded pixel size — an earlier version of this function
-    /// did exactly that (`Handle::baked_image_size` → `gallery::
-    /// large_image_quad`, replacing the box the instant the hires bake
-    /// landed), reasoning that the low-res fetch's own real decoded shape
-    /// and the hires fetch's real decoded shape are two independent
-    /// approximations of "the same" aspect ratio that can disagree by a
-    /// hair even after `start_gallery_to_image`'s own rounding fix. True, but
-    /// re-deriving is still the wrong fix — `gallery_enlarged_base`'s
-    /// box is set once, in `start_gallery_to_image`, from
-    /// `gallery_tile_aspect[idx]` (the photo's real catalog aspect, known
-    /// before *either* fetch happens), and never touched again. Reported
-    /// bug (a real photo's low-res→hires crossfade visibly shifting a px
-    /// or two, always the same direction, only on some photos — picsum
-    /// center-crops each fetch to whatever integer aspect it was asked
-    /// for, and the low-res and hires requests round that same real aspect
-    /// at wildly different target resolutions, so they occasionally land
-    /// on very slightly different picsum crops): the box-correction above
-    /// was the actual cause, not a fix for it — resizing/repositioning the
-    /// box the instant the hires bake lands *is* a visible geometry pop
-    /// whenever those two crops disagree, exactly the moment a user is
-    /// looking right at the image. Matching source (box never moves, both
-    /// low-res and hires just stretch into the one box `start_gallery_to_
-    /// image` already built) turns that same tiny crop disagreement into
-    /// an imperceptible sub-pixel stretch of content within a static box,
-    /// instead of a shifting box around static content.
+    /// bake's decoded pixel size. The low-res and hires fetches round the
+    /// photo's real aspect ratio at very different resolutions, and picsum
+    /// center-crops each fetch to the size it was asked for, so the two can
+    /// land on very slightly different crops. Resizing the box when the hires
+    /// bake lands would then be a visible one- or two-pixel jump, just as the
+    /// user is looking at the image. Instead the box is set once, in
+    /// `start_gallery_to_image`, from `gallery_tile_aspect[idx]` (the photo's
+    /// real aspect, known before either fetch happens), and both images
+    /// stretch into it: a crop disagreement becomes an imperceptible
+    /// sub-pixel stretch of the content within a still box.
     fn advance_gallery_hires_overlay(&mut self, proteus: &mut Proteus, dt: f32) {
         if !matches!(self.state, AppState::GalleryImage(_)) {
             return;
@@ -2567,7 +2496,7 @@ impl Demo {
     }
 
     /// Drains this tick's pending hires-fetch cancellation, if any — `true`
-    /// means the shell should stop delivering results for whatever hires
+    /// means `DemoApp` should stop delivering results for whatever hires
     /// fetch it currently has in flight. See `pending_gallery_hires_cancel`'s
     /// doc.
     pub fn take_pending_gallery_hires_cancel(&mut self) -> bool {
@@ -2575,25 +2504,25 @@ impl Demo {
     }
 
     /// Drains this tick's pending video-start request, if any — `Some(idx)`
-    /// means the shell should probe/decode whichever file index `idx`
+    /// means `DemoApp` should probe/decode whichever file index `idx`
     /// (0/1/2, matching `screens::video_tiles`' left/center/right tiles)
     /// maps to and start pushing frames at the video texture (see the
-    /// crate-root doc: decoding stays a shell concern). The entity
+    /// crate doc: `Demo` leaves decoding to `DemoApp`). The entity
     /// already shows the video texture by the time this fires — see
     /// `pending_video_start`'s doc.
     pub fn take_pending_video_start(&mut self) -> Option<usize> {
         self.pending_video_start.take()
     }
 
-    /// Drains this tick's pending video-stop request — `true` means the
-    /// shell should stop whatever decode is currently running and release
-    /// its GPU video texture (e.g. `QuadPipeline::suspend_video`).
+    /// Drains this tick's pending video-stop request — `true` means
+    /// `DemoApp` should stop whatever video is playing and release its GPU
+    /// video texture (with `Frame::stop_video`).
     pub fn take_pending_video_stop(&mut self) -> bool {
         std::mem::take(&mut self.pending_video_stop)
     }
 
     /// Tells `Demo` a real decoded video frame has actually landed for the
-    /// currently-playing tile — the shell's own job is just detecting that
+    /// currently-playing tile — `DemoApp`'s own job is just detecting that
     /// (e.g. `Frame::poll_video` returning `true`) and calling this once;
     /// `Demo` has no way to see the GPU texture itself. Drives
     /// `Demo::advance_video_loading`'s loading-dots/error visibility.
@@ -2605,14 +2534,13 @@ impl Demo {
     }
 
     /// Drains this tick's pending video-cancel signal — `true` means a load
-    /// just timed out and the shell should abort whatever fetch/decode is
+    /// just timed out and `DemoApp` should abort whatever fetch/decode is
     /// still in flight for it, *without* stopping/tearing down playback the
     /// way [`Demo::take_pending_video_stop`] means: `Demo` hasn't given up
     /// on this tile, it's just showing the error text now instead of
     /// pulsing dots, and playback may yet succeed if a response is close.
-    /// See `pending_video_cancel`'s own doc for why this exists (native's
-    /// local decode never needed it; the web shell's real network fetch
-    /// does).
+    /// See `pending_video_cancel`'s own doc for why this exists (a native
+    /// decode has nothing to abort; the web host's HLS fetch does).
     pub fn take_pending_video_cancel(&mut self) -> bool {
         std::mem::take(&mut self.pending_video_cancel)
     }
@@ -2620,8 +2548,8 @@ impl Demo {
     /// Ends the current run naturally: despawns every entity in bulk and
     /// reports the result via `stress.result_text`. `Text` doesn't support
     /// in-place content changes (see `StressContent::result_text`'s doc),
-    /// so updating `.content` alone wouldn't actually re-render — freeing
-    /// the old `BakedText` forces the shell's next bake pass to pick it
+    /// so updating `.content` alone wouldn't re-render — freeing the
+    /// current `BakedText` makes the renderer's next bake pass pick it
     /// back up.
     fn finalize_stress_test(&mut self, proteus: &mut Proteus) {
         let Some(run) = self.stress_run.take() else {
@@ -2631,7 +2559,7 @@ impl Demo {
             let _ = entity.destroy(proteus);
         }
         let avg_fps = run.frame_count as f32 / run.elapsed;
-        // A real, deliberate cap (both shells run `PresentMode::AutoVsync`),
+        // A real, deliberate cap (both hosts use `PresentMode::AutoVsync`),
         // not a stress-test bottleneck — a result that bumped up against it
         // deserves a callout rather than reading like this demo can't push
         // past ~60 FPS on its own.
@@ -2681,22 +2609,14 @@ impl Demo {
     /// `ExampleDetail::content_handles`'s doc for why this entity is
     /// managed separately from the rest of the category's content.
     ///
-    /// `panel`'s own `Visibility` stands in for the original's single
-    /// crate-wide `self.transition.is_none()` gate (this crate's state
-    /// machine doesn't track one): `self.state` flips to `ExampleDetail(3)`
-    /// the instant the merge *starts*, well before the panel has actually
-    /// finished morphing into place — but during an N→1 merge, the
-    /// *destination* (`panel`) is exactly what `n_to_one_setup_system`
-    /// hides for the transition's whole duration, revealing it again only
-    /// once every virtual has completed and `reveal_on_complete` fires (the
-    /// N *source* entities are what actually animate, as virtual clones —
-    /// `panel` itself never gets its own `ActiveTransition` mid-merge, so
-    /// checking that directly — the first thing tried here — doesn't work).
-    /// So gating on `panel.visible` is not a workaround but the literal
-    /// signal already being maintained for exactly this purpose. Without
-    /// this gate, the warning popped in mid-transition instead of only once
-    /// things had actually settled — a real bug, not a hypothetical
-    /// (reported directly against the running app).
+    /// "Settled" is read from `panel`'s own `Visibility`, since this state
+    /// machine has no crate-wide "transitioning" flag. `self.state` flips to
+    /// `ExampleDetail(3)` the instant the merge *starts*, but an N→1 merge
+    /// hides its *destination* (`panel`) for the whole transition and reveals
+    /// it only once every virtual has completed. The N *sources* are what
+    /// animate, as virtual clones, so `panel` never has an `ActiveTransition`
+    /// of its own to check. Without this gate, the warning would pop in
+    /// mid-transition.
     fn advance_stress_warning_visibility(&mut self, proteus: &mut Proteus) {
         let panel_visible = proteus
             .get(self.example_detail.panel)
@@ -2754,7 +2674,7 @@ impl Demo {
     /// `gallery.enlarged`'s hover reaction is glow-only, no scale-boost —
     /// it's already as big as the grid's own box allows, so growing it
     /// further on hover would read as an odd wobble rather than an
-    /// affordance, unlike every other hover-registered surface in this
+    /// affordance, unlike all the other hover-registered surfaces in this
     /// crate. `Demo::advance_hovers`' shared engine has no per-entity way to
     /// opt out of the scale half of its ramp, so this forces `enlarged`'s
     /// scale back to a flat `1.0` immediately after that generic pass runs
@@ -2801,7 +2721,7 @@ impl Demo {
 
             // Recomputed every tick from the tile's own *current* geometry —
             // tile-shaped in grid view, the screen's very different
-            // proportions once settled, anything in between mid-morph.
+            // proportions once settled, anything in between mid-transition.
             let tile_geometry = proteus
                 .get(tile)
                 .map(|d| (d.geometry.size, d.geometry.corner_radius));
@@ -2832,39 +2752,33 @@ impl Demo {
 
     /// Ramps the currently-playing tile's `VideoCrossfade.video_t` from
     /// `0.0` (box-cover poster art) to `1.0` (live video) in lockstep with
-    /// `start_tiles_to_screen`'s own geometry morph — eased the same way
+    /// `start_tiles_to_screen`'s own geometry transition — eased the same way
     /// (`ease_in_out_quad`, matching `group_transition_config()`'s own
     /// choice, since `TransitionData` doesn't expose which easing fn is
     /// actually driving it), so both read as one motion instead of two
-    /// separate effects. Once the morph settles (`proteus.get(tile)
-    /// .transition` goes `None`), forces `video_t` to `1.0` outright: local
-    /// `.mp4` playback (the only kind this crate does — no HLS/network
-    /// fetch) decodes its first frame fast enough that it's essentially
-    /// always ready well before the ~0.4s morph itself finishes in the
-    /// common case; `Demo::advance_video_loading` takes over from there for
-    /// the genuinely-slow-decode case.
+    /// separate effects. Once the transition settles (`proteus.get(tile)
+    /// .transition` goes `None`), forces `video_t` to `1.0` outright;
+    /// `Demo::advance_video_loading` takes over from there for a video whose
+    /// first frame hasn't arrived yet.
     ///
-    /// While actually mid-morph (not yet settled), this also does two more
-    /// things — added after a real, reported bug ("you can see the other
-    /// tiles over the transitioning tile"), which an earlier version missed
-    /// by ramping only `video_t` above:
+    /// While actually mid-transition (not yet settled), this also does two
+    /// more things, so the other tiles don't show over the transitioning one:
     /// - Fades the clicked tile's *own* alpha toward `0.0` in lockstep with
     ///   `video_t` (`1.0 - eased_t`, gated on `!ready` — a fast decode that's
-    ///   already showing a real frame before the morph even finishes must
+    ///   already showing a real frame before the transition even finishes must
     ///   *not* have this fade it back out, only to have `advance_video_
     ///   loading` snap it back to `1.0` the instant the transition
-    ///   settles — a one-frame flicker on exactly the path that never had a
-    ///   problem). This is what actually reveals `advance_video_loading`'s
-    ///   `backdrop` starting *during* the morph, not just once settled —
-    ///   without it, the tile stayed fully opaque (showing whatever
-    ///   `VideoCrossfade` blended, poster art or a real frame) for the
-    ///   entire morph and only snapped transparent the instant it settled,
+    ///   settles, a one-frame flicker). This is what reveals
+    ///   `advance_video_loading`'s `backdrop` *during* the transition, not just
+    ///   once settled; without it, the tile would stay fully opaque (showing
+    ///   whatever `VideoCrossfade` blended, poster art or a real frame) for the
+    ///   entire transition and snap transparent the instant it settled,
     ///   reading as an abrupt pop rather than a dissolve.
     /// - Fades the *other two* tiles' own alpha, `Border.color.w`, and
     ///   `Glow` (radius forced to `0`, color alpha faded too) toward `0.0`,
-    ///   over *half* the morph's own duration (`fade_t` reaches `1.0` at
+    ///   over *half* the transition's own duration (`fade_t` reaches `1.0` at
     ///   `raw_t == 0.5`) — without this, the two untouched tiles just sit
-    ///   there fully opaque for the whole morph. Once the growing/settled
+    ///   there fully opaque for the whole transition. Once the growing/settled
     ///   screen's own opacity is *also* fading toward `0.0` (the point
     ///   above), z-order between it and the idle siblings stops being
     ///   enough to hide them on its own — `advance_video_loading`'s
@@ -2879,14 +2793,13 @@ impl Demo {
     ///   own base appearance.
     ///
     /// Only the *forward* direction gets any of this: `start_screen_to_
-    /// tiles`'s reverse morph is a baked-slice crossfade (a frozen snapshot
+    /// tiles`'s reverse transition is a baked-slice crossfade (a frozen snapshot
     /// up front, and a fresh full-opacity target state for all 3 tiles —
     /// see `video_tiles::tile_target_state`'s doc), so there's no *live*
-    /// content to fade in the first place, matching source's own identical
-    /// asymmetry. Called every tick, unconditionally — a no-op outside
-    /// `VideoScreen` (nothing has `VideoCrossfade` then) and a no-op on
-    /// `Handle::set_video_crossfade`'s own end once `stop_video` has removed
-    /// it.
+    /// content to fade in the first place. Called every tick, unconditionally —
+    /// a no-op outside `VideoScreen` (nothing has `VideoCrossfade` then) and a
+    /// no-op on `Handle::set_video_crossfade`'s own end once `stop_video` has
+    /// removed it.
     fn advance_video_crossfade(&mut self, proteus: &mut Proteus) {
         let AppState::VideoScreen(idx) = self.state else {
             return;
@@ -2929,18 +2842,18 @@ impl Demo {
     }
 
     /// Video screen loading UI: a black backdrop tracking the tile's live
-    /// geometry (so the screen never looks broken mid-morph, before the
+    /// geometry (so the screen never looks broken mid-transition, before the
     /// first real frame even lands), 3 phase-staggered pulsing dots once
     /// settled and still waiting, replaced by inline error text after
     /// `video_tiles::VIDEO_LOAD_TIMEOUT_SECS`. Runs unconditionally, every
     /// tick, same as source — every branch below is gated on locally
     /// computed booleans rather than an early return, so a click away from
     /// `VideoScreen` mid-wait still correctly hides everything on the very
-    /// next tick. "Mid-morph" vs. "settled" is read off the tile's own
+    /// next tick. "Mid-transition" vs. "settled" is read off the tile's own
     /// `ActiveTransition` component (`d.transition`, the same technique
     /// `advance_video_crossfade` above uses) rather than a crate-wide
     /// transition flag — `self.state` flips to `VideoScreen(idx)`
-    /// immediately rather than waiting for the morph to settle (see
+    /// immediately rather than waiting for the transition to settle (see
     /// `start_tiles_to_screen`'s doc), so the per-entity check is what
     /// actually distinguishes the two.
     fn advance_video_loading(&mut self, proteus: &mut Proteus, dt: f32) {
@@ -2974,8 +2887,8 @@ impl Demo {
                     // for why: always the midpoint between the idle tiles'
                     // z and this tile's own *current* z, so it stays
                     // strictly behind the tracked tile (whatever point in
-                    // the morph it's currently at) and strictly above the
-                    // untouched idle siblings, throughout the entire morph
+                    // the transition it's currently at) and strictly above the
+                    // untouched idle siblings, throughout the entire transition
                     // and once settled alike.
                     qs.position.z = (video_tiles::TILE_Z + tile_state.geometry.position.z) / 2.0;
                     qs.size = tile_state.geometry.size;
@@ -3055,18 +2968,14 @@ impl Demo {
             .set_visible(proteus, error_visible);
     }
 
-    /// Drives the whole light/dark theme system off `theme_progress` — see
-    /// the crate-root design note for the full mechanism this consolidates
-    /// from the original's own `advance_theme`. Runs every tick,
-    /// unconditionally, regardless of `AppState`, so a component already
-    /// reflects the current theme by the time it becomes visible, with no
-    /// visibility branching needed here. Per-screen corner-radius/color
-    /// blend calls (`blend_corner_radius`/`blend_primary_color`) and
-    /// dark-overlay crossfades land here incrementally as each screen's own
-    /// fidelity pass wires them up — this function only owns what's
-    /// screen-agnostic: the ramp itself, the sun/moon toggle, and
-    /// `background`'s crossfade (persistent chrome, not owned by any one
-    /// screen).
+    /// Drives the whole light/dark theme system off `theme_progress`. Runs
+    /// every tick, unconditionally, regardless of `AppState`, so a component
+    /// already reflects the current theme by the time it becomes visible, with
+    /// no visibility branching needed here. It owns the ramp itself, the
+    /// sun/moon toggle, `background`'s crossfade (persistent chrome, not owned
+    /// by any one screen), and each screen's corner-radius and color blends
+    /// (`blend_corner_radius`/`blend_primary_color`) and dark-overlay
+    /// crossfades.
     fn advance_theme(&mut self, proteus: &mut Proteus, dt: f32) {
         // Ramp theme_progress toward dark_target — linear, not eased, over
         // THEME_MORPH_DURATION_SECS. dark_target itself already flipped
@@ -3107,8 +3016,8 @@ impl Demo {
         }
         // `sun_dark` holds the *light*-theme art (see `screens::theme`'s
         // doc for why) — it must be fully opaque while light and fade
-        // *away* going dark, so its alpha runs inverted from every other
-        // overlay.
+        // *away* going dark, so its alpha runs inverted from all the other
+        // overlays.
         if let Some(mut qs) = proteus
             .world_mut()
             .get_mut::<QuadState>(self.theme.sun_dark.id())
@@ -3122,12 +3031,9 @@ impl Demo {
             qs.color.w = p;
         }
 
-        // Fade sun/moon in once past Splash, forever after — same
-        // "chrome_visible" gate `apply_nav_visibility`-adjacent code uses
-        // elsewhere in this crate (state flips synchronously here, unlike
-        // the original's explicit from/to transition tracking, so a plain
-        // `self.state` check is the equivalent simplification already used
-        // throughout this crate, not a new one).
+        // Fade sun/moon in once past Splash, and keep them. `self.state` flips
+        // at the start of a transition, so a plain `self.state` check fades
+        // them in the instant the transition begins.
         let chrome_visible = if self.state == AppState::Splash {
             0.0
         } else {
@@ -3169,11 +3075,10 @@ impl Demo {
             qs.color.w = self.theme_icon_fade[1];
         }
 
-        // `home`'s nav buttons — corner radius (a currently-no-op blend,
-        // `NAV_BUTTON_CORNER_RADIUS_DARK` equals the light value in the
-        // original too, but wired anyway per this pass's design decision
-        // to match the original's actual behavior rather than only its
-        // *currently* visible differences) and Border/Glow/label RGB.
+        // `home`'s nav buttons — corner radius (the dark value,
+        // `NAV_BUTTON_CORNER_RADIUS_DARK`, currently equals the light one, but
+        // it's blended anyway so changing it just works) and Border/Glow/label
+        // RGB.
         for &button in &self.home.nav_buttons {
             blend_corner_radius(proteus, button, home::CORNER_RADIUS, home::CORNER_RADIUS, p);
             blend_primary_color(proteus, button, p);
@@ -3216,8 +3121,8 @@ impl Demo {
         // `examples_home`'s 6 category buttons — same corner-radius/
         // Border/Glow/label treatment as `home`'s nav buttons above
         // (`examples_home::CORNER_RADIUS`'s dark counterpart is likewise
-        // numerically identical, wired anyway per this pass's design
-        // decision — see that constant's own doc).
+        // equal to the light one, and blended anyway — see that constant's own
+        // doc).
         for &button in &self.examples_home.buttons {
             blend_corner_radius(
                 proteus,
@@ -3254,7 +3159,7 @@ impl Demo {
         }
 
         // Stress Tests' 2 buttons + labels — same treatment as `home`'s nav
-        // buttons; unlike every other category's own content, these do get
+        // buttons; unlike the content of all the other categories, these get
         // the live theme lerp (see `ExampleDetail::headings`' doc).
         for &button in &self.example_detail.stress.buttons {
             blend_primary_color(proteus, button, p);
@@ -3275,7 +3180,7 @@ impl Demo {
         };
         for (i, &tile) in self.video_tiles.tiles.iter().enumerate() {
             // While `tile` has its own active 1:1 `animate_to` transition
-            // (the tile↔screen morph itself), leave corner_radius alone —
+            // (the tile↔screen transition itself), leave corner_radius alone —
             // reasserting here would fight that transition's own eased
             // curve instead of letting it ease smoothly from the tile's
             // shape to the screen's. Reasserted immediately once settled,
@@ -3304,7 +3209,7 @@ impl Demo {
         // `gallery`'s 12 tiles + `enlarged` — real tiles stay hidden/static
         // during a `Loading`↔`Gallery` `GridSlice` transition (only the
         // virtuals animate), so it's always safe to reassert corner radius
-        // unconditionally here, no "actively morphing" guard needed (unlike
+        // unconditionally here, no "actively transitioning" guard needed (unlike
         // `video_tiles.tiles` above).
         for &tile in &self.gallery.tiles {
             blend_corner_radius(
@@ -3326,8 +3231,7 @@ impl Demo {
         blend_primary_color(proteus, self.gallery.enlarged, p);
 
         // `gallery.fetch_button` — corner radius blends against the
-        // NAV_BUTTON pair, matching source's own semantic pairing (see
-        // `gallery::FETCH_BUTTON_CORNER_RADIUS`'s own doc).
+        // NAV_BUTTON pair (see `gallery::FETCH_BUTTON_CORNER_RADIUS`'s own doc).
         blend_corner_radius(
             proteus,
             self.gallery.fetch_button,
@@ -3350,18 +3254,15 @@ impl Demo {
     /// unlike `back` (idle-screens-only) — since it's also persistent brand
     /// chrome, not just a "how do I get home" affordance; the `home_selected`
     /// overlay is what actually communicates "you're here" on top of it, not
-    /// visibility of the icon itself. Called before `advance_theme` (matches
-    /// the original's `advance_demo(); advance_nav_icons(); advance_theme();`
-    /// order) so that function always has the final say on `home_selected`'s
-    /// actual alpha split for the frame.
+    /// visibility of the icon itself. Called before `advance_theme`, so that
+    /// function always has the final say on `home_selected`'s actual alpha
+    /// split for the tick.
     fn advance_nav_icons(&mut self, proteus: &mut Proteus, dt: f32) {
-        // `home` fades in/out with `Splash` alone — no group-transition
-        // `from`/`to` distinction to make here, since (unlike the original)
-        // this crate flips `self.state` synchronously at the *start* of the
-        // splash→home morph rather than only once it lands (see
-        // `Demo::advance_state`) — so a plain state check already carries
-        // the "the instant the morph begins, not once it ends" timing the
-        // original gets from checking its in-flight `transition.from`.
+        // `home` fades in/out with `Splash` alone. This crate flips
+        // `self.state` synchronously at the *start* of the splash→home
+        // transition rather than once it lands (see `Demo::advance_state`),
+        // so a plain state check gives "the instant the transition begins,
+        // not once it ends" timing.
         let home_target = if self.state == AppState::Splash {
             0.0
         } else {
@@ -3493,32 +3394,17 @@ impl Demo {
     pub(crate) fn pointer_released(&mut self, proteus: &mut Proteus) {
         proteus.pointer_released();
     }
-
-    /// The hires upgrade's crossfade overlay entity — see
-    /// `screens::gallery::Gallery::hires_overlay`'s doc. Baking stays a
-    /// shell concern (this crate is headless — see the crate-root doc), but
-    /// unlike every other baked entity, this one specifically wants a
-    /// *bigger* resize cap than the rest of the gallery grid — only one
-    /// hires image is ever resident at a time, so it can afford a much
-    /// larger on-screen footprint than any of the 12 simultaneous tile
-    /// thumbnails. Exposed so the caller can single this one entity out for
-    /// that treatment instead of applying one resize cap to every baked
-    /// image uniformly.
-    pub fn gallery_hires_overlay(&self) -> Handle {
-        self.gallery.hires_overlay
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Test harness — owns the [`Proteus`] the M13.1 port moved out of
-    /// [`Demo`], and runs the full engine-style frame each `tick`
-    /// (`Proteus::tick` → `Demo::advance` → `Proteus::refresh_cascades`, the
-    /// same order [`crate::DemoApp`]'s engine does). Derefs to `Demo` for
-    /// reads; `.app` is the world these tests inspect directly via
-    /// `Proteus::get` / `world()`.
+    // Test harness: owns the `Proteus` that `Demo` is given, and runs the
+    // full frame sequence each `tick` (`Proteus::tick` → `Demo::advance` →
+    // `Proteus::refresh_cascades`, the same order `DemoApp`'s engine uses).
+    // Derefs to `Demo` for reads; `.app` is the world these tests inspect
+    // directly via `Proteus::get` / `world()`.
     struct Harness {
         app: Proteus,
         demo: Demo,
@@ -3550,8 +3436,8 @@ mod tests {
         }
     }
 
-    /// Forward a `Demo` method that now takes `&mut Proteus` as its first
-    /// arg, so tests can keep calling `harness.start_foo()`.
+    // Forward a `Demo` method that now takes `&mut Proteus` as its first
+    // arg, so tests can keep calling `harness.start_foo()`.
     macro_rules! harness_forward {
         ($( fn $name:ident ( $($arg:ident : $ty:ty),* ) );* $(;)?) => {
             impl Harness {
@@ -3590,30 +3476,30 @@ mod tests {
         fn pointer_released();
     }
 
-    /// How long a test needs to tick to be certain `Demo` has moved past
-    /// `Splash` — derived from the real constants (delay + intro + hold,
-    /// plus a small margin) rather than a hardcoded literal, so a change to
-    /// any of them (including a deliberate temporary one, e.g. while
-    /// visually verifying the Splash sequence — see `splash::HOLD_SECS`'s
-    /// own doc) can't silently desync every test that needs to get past
-    /// Splash first.
+    // How long a test needs to tick to be certain `Demo` has moved past
+    // `Splash` — derived from the real constants (delay + intro + hold,
+    // plus a small margin) rather than a hardcoded literal, so a change to
+    // any of them (including a deliberate temporary one, e.g. while
+    // visually verifying the Splash sequence — see `splash::HOLD_SECS`'s
+    // own doc) can't silently desync every test that needs to get past
+    // Splash first.
     fn past_splash_secs() -> f32 {
         splash::INTRO_DELAY_SECS + splash::INTRO_DURATION_SECS + splash::HOLD_SECS + 0.5
     }
 
-    /// `collect_instances` draws root entities in ascending `position.z`
-    /// order, breaking ties by `SpawnOrder` (earlier-spawned = further
-    /// back). Before `SpawnOrder` existed, a tie fell back to ECS iteration
-    /// order, which tracks archetype creation (roughly "when this exact set
-    /// of components was first seen") rather than spawn time or draw intent.
-    /// `background` gains its `Image` component *after* every other screen
-    /// has already spawned (via `Demo::set_background_image`) — which landed
-    /// it in a newer archetype than content spawned earlier with a
-    /// *matching* z, and silently drew it on top,
-    /// hiding that content entirely. Every root entity meant to be visible
-    /// over the background must have a strictly greater z — this guards
-    /// that invariant for every screen reachable from a fresh `Demo`,
-    /// rather than relying on visual inspection to catch the next one.
+    // `collect_instances` draws root entities in ascending `position.z`
+    // order, breaking ties by `SpawnOrder` (earlier-spawned = further
+    // back). Before `SpawnOrder` existed, a tie fell back to ECS iteration
+    // order, which tracks archetype creation (roughly "when this exact set
+    // of components was first seen") rather than spawn time or draw intent.
+    // `background` gains its `Image` component *after* all the other screens
+    // have already spawned (via `Demo::set_background_image`) — which landed
+    // it in a newer archetype than content spawned earlier with a
+    // *matching* z, and silently drew it on top,
+    // hiding that content entirely. Every root entity meant to be visible
+    // over the background must have a strictly greater z — this guards
+    // that invariant for every screen reachable from a fresh `Demo`,
+    // rather than relying on visual inspection to catch the next one.
     #[test]
     fn every_reachable_screens_content_draws_above_the_background() {
         let mut demo = Harness::new();
@@ -3676,14 +3562,14 @@ mod tests {
         assert_above(&demo, demo.nav.back, "nav.back");
     }
 
-    /// Regression test for the Splash intro fade sequence
-    /// (`Demo::advance_intro`/`Demo::advance_state`'s Splash arm): invisible
-    /// for `INTRO_DELAY_SECS`, fades 0 → 1 over `INTRO_DURATION_SECS`, then
-    /// holds at full opacity for `HOLD_SECS` before handing off to `Home`.
-    /// Every other Splash-adjacent test fast-forwards straight past all of
-    /// this with `past_splash_secs()`; this one actually samples mid-flight,
-    /// so a regression in the ramp itself (as opposed to "does it eventually
-    /// reach Home") gets caught.
+    // Checks the Splash intro fade sequence
+    // (`Demo::advance_intro`/`Demo::advance_state`'s Splash arm): invisible
+    // for `INTRO_DELAY_SECS`, fades 0 → 1 over `INTRO_DURATION_SECS`, then
+    // holds at full opacity for `HOLD_SECS` before handing off to `Home`.
+    // The other Splash tests fast-forward straight past all of
+    // this with `past_splash_secs()`; this one samples mid-flight,
+    // so a mistake in the ramp itself (as opposed to "does it eventually
+    // reach Home") gets caught.
     #[test]
     fn splash_button_fades_in_after_the_intro_delay_then_holds_before_advancing() {
         let mut demo = Harness::new();
@@ -3792,8 +3678,8 @@ mod tests {
             "result text should report what ran, got {:?}",
             result.content
         );
-        // Regression guard: the message used to omit the avg-FPS figure —
-        // reported directly as "the test result text doesn't match the demo."
+        // The message must include the average-FPS figure, as the demo's
+        // result text does.
         assert!(
             result.content.contains("avg") && result.content.contains("FPS"),
             "result text should report the run's average FPS, got {:?}",
@@ -3862,26 +3748,26 @@ mod tests {
         );
     }
 
-    /// Simulates a real pointer click on each of the 6 category buttons
-    /// rather than calling `start_examples_to_detail` directly — the
-    /// earlier z-order test caught geometry mistakes but not a
-    /// missing/absent `on_click` registration, which is exactly the bug
-    /// this test would have caught (`examples_home.buttons[3]`'s "Stress
-    /// Tests" tile was left out of the wiring loop in `Demo::new` when Step
-    /// 4 landed; 4/5 — "Layout"/"3D" — the same way, until the "not built
-    /// yet" placeholder landed). Each `idx` gets a fresh `Demo` —
-    /// deliberately not a single instance round-tripping through all six:
-    /// repeatedly re-declaring several `examples_home.buttons`' geometry
-    /// (needed headlessly, since `examples_home::layout` never resolves
-    /// without real text baking) before a *second* `GridSlice` split
-    /// surfaced a separate, not-yet-root-caused issue where
-    /// `reveal_on_complete` never fires for that second split — reproduced
-    /// only in the no-GPU fallback path (`one_to_n_setup_system`'s
-    /// baked-crossfade branch requires `GpuContext`/`QuadPipeline`, absent
-    /// here); the real app always has those, so it's very likely
-    /// fallback-path-only, but hasn't been confirmed against a GPU-backed
-    /// run. Worth another look if category navigation ever stops responding
-    /// after visiting several categories in a row.
+    // Simulates a real pointer click on each of the 6 category buttons
+    // rather than calling `start_examples_to_detail` directly — the
+    // earlier z-order test caught geometry mistakes but not a
+    // missing/absent `on_click` registration, which is exactly the bug
+    // this test would have caught (`examples_home.buttons[3]`'s "Stress
+    // Tests" tile was left out of the wiring loop in `Demo::new` when Step
+    // 4 landed; 4/5 — "Layout"/"3D" — the same way, until the "not built
+    // yet" placeholder landed). Each `idx` gets a fresh `Demo` —
+    // deliberately not a single instance round-tripping through all six:
+    // repeatedly re-declaring several `examples_home.buttons`' geometry
+    // (needed headlessly, since `examples_home::layout` never resolves
+    // without real text baking) before a *second* `GridSlice` split
+    // surfaced a separate, not-yet-root-caused issue where
+    // `reveal_on_complete` never fires for that second split — reproduced
+    // only in the no-GPU fallback path (`one_to_n_setup_system`'s
+    // baked-crossfade branch requires `GpuContext`/`QuadPipeline`, absent
+    // here); the real app always has those, so it's very likely
+    // fallback-path-only, but hasn't been confirmed against a GPU-backed
+    // run. Worth another look if category navigation ever stops responding
+    // after visiting several categories in a row.
     #[test]
     fn each_wired_examples_home_category_button_opens_its_own_example_detail() {
         for idx in 0..6 {
@@ -3917,13 +3803,11 @@ mod tests {
         }
     }
 
-    /// Regression test for a real bug: `advance_stress_warning_visibility`
-    /// only checked `self.state == ExampleDetail(3)`, but `self.state`
-    /// flips to that the instant the merge *starts* (see
-    /// `Demo::advance_nav_icons`'s doc for the same "flips synchronously,
-    /// not once landed" convention) — so the warning popped in immediately,
-    /// well before the panel had actually finished morphing into place.
-    /// Reported directly against the running app.
+    // `advance_stress_warning_visibility` must not go by `self.state ==
+    // ExampleDetail(3)` alone: `self.state` flips to that the instant the
+    // merge *starts* (see `Demo::advance_nav_icons`'s doc for the same "flips
+    // synchronously, not once landed" convention), so the warning would pop in
+    // well before the panel had finished transitioning into place.
     #[test]
     fn stress_warning_stays_hidden_until_the_panel_transition_settles() {
         let mut demo = advance_to_home();
@@ -4058,7 +3942,7 @@ mod tests {
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(1);
         demo.take_pending_video_start();
-        demo.tick(1.0); // settle the tile<->screen morph
+        demo.tick(1.0); // settle the tile<->screen transition
         assert_eq!(demo.state, AppState::VideoScreen(1));
 
         let label = demo.video_tiles.tile_labels[1];
@@ -4087,21 +3971,19 @@ mod tests {
             .is_some());
     }
 
-    /// Regression test for a real bug, reported directly: "tiles keep color
-    /// tint from the original bg colors. tiles shouldn't have any color
-    /// tint." `advance_pending_tile_reset` used to reset a tile's whole
-    /// `QuadState` — including `color` — straight back to `tile_quad`'s
-    /// placeholder tint, discarding the untinted white `set_tile_image`
-    /// establishes once real box-cover art lands. So the *first* trip
-    /// through the video screen and back was fine, but the tint came back
-    /// (multiplying whatever real art was showing) every time after.
+    // Box-cover tiles must stay untinted after a trip to the video screen
+    // and back. `advance_pending_tile_reset` must not reset a tile's whole
+    // `QuadState`, including `color`, to `tile_quad`'s placeholder tint: that
+    // discards the untinted white `set_tile_image` sets once real box art
+    // lands, so the tint would multiply the art on every return after the
+    // first.
     #[test]
     fn returning_from_video_screen_keeps_real_box_art_untinted() {
         use proteus_ui::BakedImage;
 
         let mut demo = advance_to_video_tiles();
         let tile = demo.video_tiles.tiles[0];
-        // Simulate the shell's bake pass having landed real box-cover art —
+        // Simulate the renderer's bake pass having landed real box-cover art —
         // real baking needs GPU, unavailable in this headless test world.
         demo.app
             .world_mut()
@@ -4136,16 +4018,13 @@ mod tests {
 
     #[test]
     fn returning_from_video_screen_restores_the_non_playing_tiles_own_box_art_too() {
-        // Regression test for a real, user-reported bug: "the tile
-        // backgrounds on the non-transitioning tiles are missing when
-        // transitioning back from playback to the tiles." Root cause: a
-        // split's own reveal only ever flips `Visibility` — it never
-        // rewrites a target's live `QuadState` — so the *other two* tiles,
-        // faded fully transparent by `Demo::advance_video_crossfade` while
-        // the clicked one was playing, stayed stuck at that alpha forever
-        // once `advance_pending_tile_reset` only ever reset the *clicked*
-        // tile's own `QuadState` (Border/Glow got a fix first, but that
-        // alone wasn't the whole bug — this is the other half).
+        // When returning from playback, the *other two* tiles must get their
+        // backgrounds back. A split's reveal only flips `Visibility` — it never
+        // rewrites a target's live `QuadState` — so those tiles, faded fully
+        // transparent by `Demo::advance_video_crossfade` while the clicked one
+        // was playing, stay at that alpha unless `advance_pending_tile_reset`
+        // resets all three tiles, not just the clicked one, including their
+        // Border and Glow.
         use proteus_ui::BakedImage;
 
         let mut demo = advance_to_video_tiles();
@@ -4205,29 +4084,17 @@ mod tests {
         }
     }
 
-    /// Regression test for a real bug, reported directly as "z index issues
-    /// with tiles and screen": `video_tiles.tiles[0..3]` are all root
-    /// entities tied at the exact same z — `collect_instances` breaks that
-    /// tie by spawn order, not visual intent, so the growing/settled
-    /// video screen could draw *under* whichever sibling tile(s) were
-    /// spawned later, clipped by their (untransformed) footprint
-    /// wherever it overlapped the much bigger screen. Asserts the settled
-    /// screen tile's own z has actually risen above its still-tile-shaped
-    /// siblings', not just that geometry/color came out right.
-    /// Regression test for a real bug, reported directly, complementing
-    /// `returning_from_video_screen_keeps_real_box_art_untinted`: that test
-    /// only proves the *settled* steady state is correct (which
-    /// `advance_pending_tile_reset` alone already guarantees, regardless of
-    /// this fix) — this one proves the transition's own mid-flight bake
-    /// *target* is correct too, which is what's actually visible "on
-    /// transition," per the user's own words. `tile[idx]` is both the
-    /// source and one of the 3 targets of `start_screen_to_tiles`'s split
-    /// (returning to its own grid slot) — before `split_to_with_states`,
-    /// that target's state resolved from `declared_geometry(tile)`, which
-    /// at this exact moment is still screen-sized (not yet reset), so the
-    /// virtual converging back into this slot would visibly animate toward
-    /// the *wrong* (stale, screen) shape/color instead of the real tile
-    /// grid target.
+    // Complements `returning_from_video_screen_keeps_real_box_art_untinted`:
+    // that test proves the *settled* steady state is correct (which
+    // `advance_pending_tile_reset` alone guarantees); this one proves the
+    // transition's own mid-flight bake *target* is correct too, which is what
+    // is visible during the transition. `tile[idx]` is both the source and
+    // one of the 3 targets of `start_screen_to_tiles`'s split (returning to
+    // its own grid slot). Resolving that target's state from
+    // `declared_geometry(tile)`, still screen-sized at this moment, would make
+    // the virtual converging back into this slot animate toward the stale
+    // screen shape and color instead of the real grid slot; hence
+    // `split_to_with_states`.
     #[test]
     fn screen_to_tiles_virtual_targets_the_real_grid_shape_not_the_stale_screen_shape() {
         use bevy_ecs::query::With;
@@ -4255,7 +4122,7 @@ mod tests {
 
         demo.start_screen_to_tiles(0);
         // One small tick: enough for `one_to_n_setup_system` to spawn the
-        // virtuals, nowhere near enough to finish the 0.4s morph.
+        // virtuals, nowhere near enough to finish the 0.4s transition.
         demo.tick(0.02);
 
         // All 3 targets are tile-sized (only tile[0] has real box art in
@@ -4287,6 +4154,13 @@ mod tests {
         );
     }
 
+    // `video_tiles.tiles[0..3]` are root entities at the same z, and
+    // `collect_instances` breaks that tie by spawn order, not visual intent,
+    // so the growing or settled video screen could draw *under* a sibling
+    // tile spawned later, clipped by its footprint wherever they overlap.
+    // Asserts the settled screen tile's own z has risen above its
+    // still-tile-shaped siblings', not just that its geometry and color are
+    // right.
     #[test]
     fn settled_video_screen_tile_draws_above_its_idle_siblings() {
         let mut demo = advance_to_video_tiles();
@@ -4338,15 +4212,11 @@ mod tests {
         assert_eq!(demo.take_pending_video_start(), None);
     }
 
-    /// Regression test for a real gap, reported directly: "there is a
-    /// crossfade of the tile background image, and the video background
-    /// when in playback. That transition is not happening in the native
-    /// preview." `Handle::start_video` alone always cuts instantly
-    /// (`video_t: 1.0`, its own documented default) — `Demo::
-    /// start_tiles_to_screen` must override that back down and
-    /// `Demo::advance_video_crossfade` must ramp it back up in step with
-    /// the geometry morph, or the crossfade this test is named for simply
-    /// never happens.
+    // Starting playback must crossfade from the tile's box art to the video.
+    // `Handle::start_video` alone cuts straight to the video (`video_t: 1.0`,
+    // its documented default), so `Demo::start_tiles_to_screen` must set it
+    // back to 0 and `Demo::advance_video_crossfade` must ramp it up in step
+    // with the geometry transition.
     #[test]
     fn video_crossfades_in_from_box_art_alongside_the_geometry_morph() {
         use proteus_ui::VideoCrossfade;
@@ -4366,7 +4236,7 @@ mod tests {
             "must start fully as box art, not cut straight to video"
         );
 
-        // Partway through the ~0.4s morph — neither endpoint yet.
+        // Partway through the ~0.4s transition — neither endpoint yet.
         demo.tick(0.2);
         let mid = video_t(&demo, 0).expect("still playing");
         assert!(
@@ -4374,7 +4244,7 @@ mod tests {
             "should be ramping partway through the morph, got {mid}"
         );
 
-        // Past the morph's duration — settled.
+        // Past the transition's duration — settled.
         demo.tick(1.0);
         assert_eq!(
             video_t(&demo, 0),
@@ -4389,9 +4259,9 @@ mod tests {
         demo.start_tiles_to_screen(0);
         demo.take_pending_video_start();
 
-        // Mid-morph: backdrop is visible and tracking from the very start —
+        // Mid-transition: backdrop is visible and tracking from the very start —
         // `Demo::advance_video_crossfade` fades the clicked tile's own art
-        // out *during* the morph too (not just once settled), so backdrop
+        // out *during* the transition too (not just once settled), so backdrop
         // has to be there to receive that fade from the first tick. Its z
         // must stay strictly between the idle siblings' fixed `TILE_Z` and
         // the tracked tile's own *current* (still-ramping) z throughout —
@@ -4445,21 +4315,18 @@ mod tests {
 
     #[test]
     fn other_two_tiles_fade_out_during_the_morph_and_are_fully_restored_on_return() {
-        // Regression test for the real, user-reported "you can see the
-        // other tiles over the transitioning tile" bug's actual root cause:
-        // the *other two* (non-clicked) tiles' own alpha/Border/Glow must
-        // fade out during the morph too, which an earlier version didn't do
-        // at all. Also checks the
-        // other half of the fix: Border/Glow don't ride the group-
-        // transition's own QuadState interpolation, so returning to
-        // VideoTiles must explicitly restore them (`advance_pending_tile_
-        // reset`) or they'd stay faded forever after the first video.
+        // The *other two* (non-clicked) tiles' own alpha/Border/Glow must fade
+        // out during the transition, or they show over the transitioning tile.
+        // Also checks that returning to VideoTiles restores them
+        // (`advance_pending_tile_reset`): Border/Glow don't ride the group
+        // transition's own QuadState interpolation, so they'd otherwise stay
+        // faded after the first video.
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(0);
         demo.take_pending_video_start();
 
-        // Partway through the morph: the other two tiles should already be
-        // partly faded (fade reaches 0 at *half* the morph's own progress).
+        // Partway through the transition: the other two tiles should already be
+        // partly faded (fade reaches 0 at *half* the transition's own progress).
         demo.tick(0.15);
         for &idx in &[1usize, 2] {
             let tile = demo.app.get(demo.video_tiles.tiles[idx]).unwrap();
@@ -4509,16 +4376,13 @@ mod tests {
 
     #[test]
     fn settled_video_backdrop_draws_above_the_idle_sibling_tiles_not_just_below_the_screen() {
-        // Regression test for a real, user-reported bug: once settled and
-        // waiting for the first real frame, the (now fully transparent —
-        // see `advance_video_loading`'s own doc) tile no longer occludes
-        // anything, so whatever `backdrop` doesn't cover shows through. The
-        // two untouched idle sibling tiles sit well inside the settled
-        // screen's much bigger footprint; if `backdrop`'s own z isn't
-        // strictly *above* theirs, they render "in front of" the video
-        // screen the user just opened. See `backdrop_quad`'s own doc for
-        // the full mechanism (this crate's global z-sort vs. source's
-        // draw-in-spawn-order renderer, which never had this problem).
+        // Once settled and waiting for the first real frame, the tile is
+        // fully transparent (see `advance_video_loading`'s doc) and occludes
+        // nothing, so whatever `backdrop` doesn't cover shows through. The two
+        // idle sibling tiles sit well inside the settled screen's much bigger
+        // footprint; unless `backdrop`'s own z is strictly *above* theirs, they
+        // render in front of the video screen the user just opened. See
+        // `backdrop_quad`'s doc for the mechanism.
         let mut demo = advance_to_video_tiles();
         let idle_z = demo
             .app
@@ -4577,7 +4441,7 @@ mod tests {
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(0);
         demo.take_pending_video_start();
-        // Fine-grained ticks past the ~0.4s morph — settled, still waiting.
+        // Fine-grained ticks past the ~0.4s transition — settled, still waiting.
         // Coarser ticks would fold the whole grace period into the same
         // call that crosses the settle boundary, hiding the "not shown
         // immediately" window this test wants to observe.
@@ -4644,7 +4508,7 @@ mod tests {
 
         // `video_dots_elapsed` (the timeout clock) runs from click time, not
         // from settling — so the whole budget is `VIDEO_LOAD_TIMEOUT_SECS`
-        // from here, independent of however long the morph itself took.
+        // from here, independent of however long the transition itself took.
         demo.tick(video_tiles::VIDEO_LOAD_TIMEOUT_SECS - 0.5);
         assert!(
             !demo.app.get(demo.video_tiles.error_text).unwrap().visible,
@@ -4663,11 +4527,9 @@ mod tests {
 
     #[test]
     fn video_load_timeout_fires_pending_video_cancel_exactly_once() {
-        // `take_pending_video_cancel` didn't exist before the web shell
-        // needed it (native's local `.mp4` decode has no in-flight fetch to
-        // abort on a timeout) — this locks in the edge-triggered "exactly
-        // once, right when the timeout first latches" contract its own doc
-        // promises, not just a level that stays true forever after.
+        // Locks in the edge-triggered "exactly once, right when the timeout
+        // first latches" contract its own doc promises, not just a level that
+        // stays true forever after.
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(0);
         demo.take_pending_video_start();
@@ -4697,9 +4559,9 @@ mod tests {
 
     #[test]
     fn leaving_video_screen_while_still_loading_restores_the_tiles_alpha_before_the_split() {
-        // Regression test: backing out of a still-loading video used to
-        // leave the tile's alpha baked at 0 into the outgoing split's own
-        // "from" snapshot — see `start_screen_to_tiles`'s own doc for why.
+        // Backing out of a still-loading video must not leave the tile's
+        // alpha at 0 in the outgoing split's "from" snapshot — see
+        // `start_screen_to_tiles`'s own doc for why.
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(0);
         demo.take_pending_video_start();
@@ -4722,13 +4584,14 @@ mod tests {
     fn leaving_video_screen_to_tiles_queues_a_stop_and_settles_back_to_the_grid() {
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(0);
-        demo.take_pending_video_start(); // drain, as the shell would
-                                         // Let the "grow to screen" morph actually finish — in the real,
-                                         // continuously-ticking app there are many frames between clicking a
-                                         // tile and later clicking "back"; skipping this leaves a stale,
-                                         // unprocessed `TransitionRequest` (targeting the screen size)
-                                         // sitting on the tile that would otherwise get applied *after*
-                                         // `start_screen_to_tiles`, fighting the group transition below.
+        // Drain, as `DemoApp` would.
+        demo.take_pending_video_start();
+        // Let the "grow to screen" transition actually finish — in the real,
+        // continuously-ticking app there are many frames between clicking a
+        // tile and later clicking "back"; skipping this leaves a stale,
+        // unprocessed `TransitionRequest` (targeting the screen size)
+        // sitting on the tile that would otherwise get applied *after*
+        // `start_screen_to_tiles`, fighting the group transition below.
         demo.tick(1.0);
         assert_eq!(
             demo.app
@@ -4748,11 +4611,11 @@ mod tests {
         // capture its (still screen-sized) live geometry as the group
         // transition's "from" state, but short enough that the transition
         // itself (0.4s) hasn't completed within this same tick. A single
-        // large `tick(1.0)` here (as the real app never does, but as this
-        // test used to) collapses setup/animate/complete into one call, so
-        // the tile is never *observably* hidden between two ticks — exactly
-        // the window `advance_pending_tile_reset` needs (see
-        // `PendingTileReset`'s doc) to safely reset the geometry.
+        // large `tick(1.0)` here (which the real app never does) collapses
+        // setup/animate/complete into one call, so the tile is never
+        // *observably* hidden between two ticks — exactly the window
+        // `advance_pending_tile_reset` needs (see `PendingTileReset`'s doc) to
+        // safely reset the geometry.
         demo.tick(0.02);
         assert!(
             !demo.app.get(demo.video_tiles.tiles[0]).unwrap().visible,
@@ -4883,9 +4746,8 @@ mod tests {
             demo.app.get(demo.loading.error_text).unwrap().visible,
             "should show the error text once the timeout fires"
         );
-        // Regression guard for a real gap (part of F6): the spinning logo
-        // used to keep looping forever behind the error text, which now
-        // sits dead center where the logo would otherwise show through.
+        // The spinning logo must stop once the error text shows, since the
+        // text sits dead center where the logo would otherwise show through.
         assert_eq!(
             demo.app.get(demo.loading.logo).unwrap().geometry.color.w,
             0.0,
@@ -4893,14 +4755,14 @@ mod tests {
         );
     }
 
-    /// Reaches `Gallery` by calling `start_loading_to_gallery` directly,
-    /// bypassing the "every tile baked" auto-advance gate — same pattern as
-    /// `advance_to_video_tiles` calling `start_home_to_tiles` directly.
-    /// `Handle::baked_image_size` can never return `Some` in this headless
-    /// test world (baking needs a real `QuadPipeline`/GPU — see
-    /// `Demo::set_gallery_tile_image`'s doc), so the auto-advance path
-    /// itself is covered separately by the timeout/error test above, not by
-    /// actually satisfying the gate here.
+    // Reaches `Gallery` by calling `start_loading_to_gallery` directly,
+    // bypassing the "every tile baked" auto-advance gate — same pattern as
+    // `advance_to_video_tiles` calling `start_home_to_tiles` directly.
+    // `Handle::baked_image_size` can never return `Some` in this headless
+    // test world (baking needs a real `QuadPipeline`/GPU — see
+    // `Demo::set_gallery_tile_image`'s doc), so the auto-advance path
+    // itself is covered separately by the timeout/error test above, not by
+    // actually satisfying the gate here.
     fn advance_to_gallery() -> Harness {
         let mut demo = advance_to_home();
         demo.start_home_to_loading();
@@ -4974,11 +4836,10 @@ mod tests {
         );
     }
 
-    /// Regression test for `gallery.enlarged`'s deliberately incomplete
-    /// hover reaction: glow yes, scale no (see `Demo::advance_gallery_
-    /// enlarged_hover_scale`'s doc for why) — a real, source-verified
-    /// design difference from every other hover-registered surface in this
-    /// crate, not an oversight worth "fixing" to match the others.
+    // `gallery.enlarged`'s hover reaction is deliberately incomplete: glow
+    // yes, scale no (see `Demo::advance_gallery_enlarged_hover_scale`'s doc
+    // for why). Unlike all the other hover-registered surfaces in this crate,
+    // and not an oversight to "fix".
     #[test]
     fn hovering_the_enlarged_image_ramps_glow_but_never_scales() {
         use proteus_ui::Glow;
@@ -5005,14 +4866,10 @@ mod tests {
         );
     }
 
-    /// Regression test for a real gap, reported directly: "the 'fetch new
-    /// images' should quickly fade in and out, not just pop in." Neither
-    /// direction had any alpha ramp before this fix — `fetch_button`/
-    /// `.fetch_button_label` only ever popped instantly to fully visible
-    /// (via a fixed-duration `queue_reveal`) or fully hidden (a direct
-    /// `Visibility::HIDDEN` insert), since `Border`/`Glow`/`Text` alpha had
-    /// no other owner and stayed at their spawn-time value (already fully
-    /// opaque) regardless of `Visibility`.
+    // "Fetch New Images" must fade in and out rather than pop.
+    // `fetch_button`/`.fetch_button_label` get no alpha ramp from
+    // `Visibility` alone: `Border`/`Glow`/`Text` alpha has no other owner and
+    // stays at its spawn-time value, fully opaque.
     #[test]
     fn gallery_fetch_button_fades_in_and_out_instead_of_popping() {
         use proteus_ui::Border;
@@ -5118,7 +4975,7 @@ mod tests {
             .expect("should queue a hires fetch for the clicked tile");
         assert_eq!(request.idx, 3);
         // Uncapped, logical pixels — see `Demo::start_gallery_to_image`'s
-        // doc for why the physical-pixel cap is the shell's job, not this
+        // doc for why the physical-pixel cap is `DemoApp`'s job, not this
         // one's.
         assert!(request.width_px > 0 && request.height_px > 0);
         // Draining is destructive — a second read this same tick sees nothing.
@@ -5182,7 +5039,7 @@ mod tests {
         let tile_full = demo.gallery.tile_full[0];
 
         demo.set_gallery_tile_image(0, vec![0u8; 4], Vec2::new(2.0, 3.0));
-        // Simulate the shell's bake pass landing a real (uncropped, 2:3)
+        // Simulate the renderer's bake pass landing a real (uncropped, 2:3)
         // image on the tile — real baking needs GPU, unavailable here.
         let uncropped = BakedImage {
             uv_offset: [0.0, 0.0],
@@ -5294,7 +5151,7 @@ mod tests {
         assert!(!demo.app.get(demo.gallery.hires_overlay).unwrap().visible);
         assert_eq!(demo.gallery_hires_fade, 0.0);
 
-        // Simulate the shell's generic bake pass landing a real image on
+        // Simulate the renderer's bake pass landing a real image on
         // the overlay (what `set_gallery_hires_image` + a real
         // `bake_pending_images` call would produce together).
         let overlay = demo.gallery.hires_overlay;
@@ -5335,29 +5192,22 @@ mod tests {
     fn enlarged_box_never_moves_once_the_hires_bake_lands_even_if_its_aspect_disagrees() {
         use proteus_ui::BakedImage;
 
-        // Regression test for a real, user-reported bug: on some photos
-        // (not all — it depends on exactly how each of the low-res and
-        // hires fetch's own independent aspect-rounding lands), the
-        // low-res stand-in and the hires bake disagree on the photo's
-        // exact aspect ratio by a hair, since picsum center-crops each
-        // fetch to whatever integer aspect it was asked for and the two
-        // fetches round the same real aspect at wildly different target
-        // resolutions. An earlier version of `advance_gallery_hires_
-        // overlay` "corrected" `enlarged`'s box to the hires bake's own
-        // decoded aspect the instant it landed — which meant *any* such
-        // disagreement was a visible geometry pop, on exactly the photo
-        // the user is looking at. Nothing may touch the box after
-        // `start_gallery_to_image` sets it — this asserts that: the box
-        // stays put, and only
-        // `gallery_hires_fade`/`Visibility` change.
+        // Nothing may touch `enlarged`'s box after `start_gallery_to_image` sets
+        // it. On some photos the low-res stand-in and the hires bake disagree on
+        // the photo's exact aspect ratio by a hair, since picsum center-crops each
+        // fetch to the integer size it was asked for, and the two fetches round
+        // the same real aspect at very different resolutions. Re-deriving the box
+        // from the hires bake's decoded aspect when it lands would make any such
+        // disagreement a visible jump, on exactly the photo the user is looking at.
+        // This asserts the box stays put, and only `gallery_hires_fade`/
+        // `Visibility` change.
         let mut demo = advance_to_gallery_image(4);
         let size_before = demo.app.get(demo.gallery.enlarged).unwrap().geometry.size;
 
         // `gallery_tile_aspect[4]` is still the default `Vec2::ONE`
         // (square) — the hires bake's real shape (800x500, 8:5) disagrees
         // with it about as sharply as two independent roundings ever
-        // could, making this the worst case for the old "correct the box"
-        // behavior.
+        // could, making this the worst case for re-deriving the box.
         let overlay = demo.gallery.hires_overlay;
         demo.app
             .world_mut()
@@ -5385,7 +5235,7 @@ mod tests {
         use proteus_ui::BakedText;
 
         let mut demo = Harness::new();
-        // Simulate the shell's text-baking pass landing on all 3 labels —
+        // Simulate the renderer's text-baking pass landing on all 3 labels —
         // real baking needs a font atlas/GPU, unavailable in this headless
         // test world.
         let nav_labels = demo.home.nav_labels;
@@ -5417,13 +5267,11 @@ mod tests {
     #[test]
     fn home_layout_spreads_buttons_out_even_when_no_label_has_baked_yet() {
         // No baking simulated at all — every label falls back to
-        // FALLBACK_SIZE. Regression guard: an earlier version of
-        // `home::layout` returned `Option<[QuadState; 3]>`, `None` unless
-        // *every* label had baked, applied on a recurring gate rather than
-        // once — in a headless world (or any world where baking is merely
-        // slow) that gate never fired, so buttons stayed stuck at their
-        // identical spawn-time placeholder position forever. The real
-        // function must always produce a spread-out row, fallback or not.
+        // FALLBACK_SIZE. `home::layout` must always produce a spread-out row,
+        // fallback or not. If it waited until *every* label had baked, in a
+        // headless world (or any world where baking is merely slow) it would
+        // never run, and the buttons would stay at their identical spawn-time
+        // placeholder position.
         let demo = Harness::new();
         let states = home::layout(&demo.app, &demo.home);
         assert_eq!(states[0].position.y, states[1].position.y);
@@ -5436,13 +5284,10 @@ mod tests {
         );
     }
 
-    /// Regression test for a real bug, reported directly: `examples_home`'s
-    /// grid `layout()` sized each button to its *own* label width instead of
-    /// its column's shared width (the wider of its top/bottom pair) — its
-    /// own doc comment already described the correct, column-shared
-    /// behavior, the implementation just didn't match it. Uses 6 visibly
-    /// different label widths so any per-button (rather than per-column)
-    /// sizing shows up immediately.
+    // `examples_home`'s grid `layout()` must size each button to its
+    // column's shared width (the wider of its top/bottom pair), not to its
+    // own label width. Uses 6 visibly different label widths so any
+    // per-button (rather than per-column) sizing shows up immediately.
     #[test]
     fn examples_home_layout_shares_each_columns_width_across_its_top_and_bottom_button() {
         use proteus_ui::BakedText;
@@ -5483,12 +5328,11 @@ mod tests {
 
     #[test]
     fn reaching_home_from_splash_spreads_the_3_nav_buttons_out_horizontally() {
-        // End-to-end regression test for the same bug
-        // `home_layout_spreads_buttons_out_even_when_no_label_has_baked_yet`
-        // guards directly — reaches `Home` the normal way (ticking through
-        // `Splash`, no manual geometry pokes), matching exactly how the
-        // real app is driven, and confirms the 3 buttons actually end up
-        // distinct once there.
+        // The end-to-end counterpart of
+        // `home_layout_spreads_buttons_out_even_when_no_label_has_baked_yet`:
+        // reaches `Home` the normal way (ticking through `Splash`, no manual
+        // geometry pokes), as the real app is driven, and confirms the 3
+        // buttons end up distinct once there.
         let mut demo = Harness::new();
         let mut t = 0.0;
         while t < past_splash_secs() {
@@ -5562,23 +5406,9 @@ mod tests {
         );
     }
 
-    /// Regression test for a real F3 bug: `nav.lockup` was missing
-    /// `.non_interactive()`, and its bounding box (the full `lockup.png`,
-    /// including trailing whitespace past the visible wordmark —
-    /// `nav::LOGO_TEXT_RIGHT_PX`'s doc) overlaps `nav.home`'s own hit
-    /// region. Clicking `home` right at that overlap hit `lockup` instead
-    /// (spawned later, and hit-testing is last-hit-wins), silently eating
-    /// the click — caught by
-    /// `clicking_videos_nav_button_opens_video_tiles_and_back_returns_home`
-    /// itself once F4's new content shifted entity spawn order enough to
-    /// expose it, but asserted directly here so it can't regress silently
-    /// again.
-    /// Regression test for a real gap, reported directly: `examples_home`'s
-    /// "Layout"/"3D" category buttons (4/5) used to be inert placeholders —
-    /// spawned for grid-layout parity but never wired to a click handler at
-    /// all, while 0–3 were. Now wired the same way, landing on a dedicated
-    /// "not built yet" message rather than a blank card — a blank card reads
-    /// as a bug, an explicit message doesn't.
+    // `examples_home`'s "Layout"/"3D" category buttons (4/5) must open a
+    // dedicated "not built yet" message, wired the same way as 0–3, rather
+    // than doing nothing or showing a blank card, which reads as a bug.
     #[test]
     fn clicking_layout_or_3d_shows_the_not_built_yet_placeholder() {
         use proteus_ui::Text;
@@ -5620,6 +5450,11 @@ mod tests {
         }
     }
 
+    // `nav.lockup` must be `.non_interactive()`. Its bounding box (the whole
+    // `lockup.png`, including the empty space past the visible wordmark —
+    // see `nav::LOGO_TEXT_RIGHT_PX`'s doc) overlaps `nav.home`'s hit region,
+    // and it's created later, so it would win clicks there and silently eat
+    // clicks meant for `home`.
     #[test]
     fn nav_lockup_is_not_a_click_target() {
         use proteus_ui::Interactable;
@@ -5635,12 +5470,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Viewport changes reach the demo (audit C-05)
+    // Viewport changes reach the demo
     // -----------------------------------------------------------------------
 
-    /// A `HostServices` that provides nothing — enough to build a `Frame` and
-    /// drive `DemoApp::update`, which is all the viewport test needs. Asset
-    /// loading, fetching and video are exercised elsewhere.
+    // A `HostServices` that provides nothing — enough to build a `Frame` and
+    // drive `DemoApp::update`, which is all the viewport test needs. Asset
+    // loading, fetching and video are exercised elsewhere.
     struct NullServices;
 
     impl proteus_runtime::HostServices for NullServices {
@@ -5656,15 +5491,14 @@ mod tests {
         fn cancel_fetch(&mut self, _id: proteus_runtime::FetchId) {}
     }
 
-    /// `Engine::resize` keeps `Frame::viewport` current, but `DemoApp` only read
-    /// it in `setup` — so resizing the window left the demo laid out for
-    /// whatever size it opened at: background stuck at its startup size, nav and
-    /// theme icons pinned to the old corners. A regression from the pre-M13
-    /// shells, which called `set_viewport_size` from their own resize handler.
-    ///
-    /// Drives the real `App::update` through a real `Frame` rather than calling
-    /// `Demo::set_viewport_size` directly — the forwarding *is* the thing under
-    /// test, and calling the setter would pass no matter what `update` does.
+    // `Engine::resize` keeps `Frame::viewport` current, and `DemoApp` must
+    // pass changes on to `Demo`. Reading the viewport only in `setup` would
+    // leave the demo laid out for whatever size it opened at: background stuck
+    // at its startup size, nav and theme icons pinned to the old corners.
+    //
+    // Drives the real `App::update` through a real `Frame` rather than calling
+    // `Demo::set_viewport_size` directly — the forwarding *is* the thing under
+    // test, and calling the setter would pass no matter what `update` does.
     #[test]
     fn resizing_the_viewport_relays_out_the_demo() {
         use proteus_runtime::{App, Frame, Viewport};

@@ -1,6 +1,6 @@
 [package]
 name = "proteus-gpu"
-description = "GPU device abstraction over wgpu (WebGPU, Vulkan, Metal, DX12)"
+description = "GPU setup for Proteus hosts: a wgpu device, queue and swap chain for a window or canvas."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

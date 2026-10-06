@@ -1,65 +1,94 @@
-/**
- * Public TS interfaces for `proteus-sdk`'s data shapes. Field names and
- * nesting match the Rust DTOs in `proteus-sdk-web/src/dto.rs` exactly
- * (`serde(rename_all = "camelCase")`) — this file's shapes are what
- * actually crosses the wasm boundary, not just documentation.
- *
- * Units and coordinate space are **raw**: radians (not degrees), RGBA
- * floats 0–1 (not hex strings), world-space position (viewport-center
- * origin, Y-up — not top-left/CSS pixels). Use `convert.ts`'s helpers to
- * translate from the more familiar web conventions before constructing
- * these.
- */
+// The data types the SDK takes and returns. Their field names must match the
+// Rust types in `../../src/dto.rs`, since these objects cross into the wasm
+// module as they are.
+//
+// Units are radians, colors are RGBA with each channel from 0 to 1, and
+// positions are in world units (origin at the viewport center, y up). The
+// helpers in `convert.ts` convert from degrees, hex colors and page
+// coordinates.
 
+/** A 2D vector or size. */
 export interface Vec2 {
+  /** Horizontal: to the right, or the width. */
   x: number;
+  /** Vertical: up in world units, or the height. */
   y: number;
 }
 
+/** A 3D position. Among top-level components that overlap, higher `z` is drawn on top. */
 export interface Vec3 {
+  /** To the right of the viewport's center. */
   x: number;
+  /** Up from the viewport's center. */
   y: number;
+  /** Drawing order: higher is drawn on top. */
   z: number;
 }
 
+/**
+ * An RGBA color, each channel from `0` to `1`. Use {@link colorFrom} to convert
+ * from a hex string or color name.
+ */
 export interface Color {
+  /** Red, `0`–`1`. */
   r: number;
+  /** Green, `0`–`1`. */
   g: number;
+  /** Blue, `0`–`1`. */
   b: number;
+  /** Alpha: `0` is transparent, `1` opaque. */
   a: number;
 }
 
-/** A component's geometric and visual state. */
+// DOC-
+/** A component's position, size, shape and color: everything a transition animates. */
 export interface Geometry {
+  /** World units: origin at the viewport center, y up. See {@link topLeftToWorld}. */
   position: Vec3;
+  /** Width and height, in pixels. */
   size: Vec2;
-  /** Radians. */
+  /** Radians. See {@link degreesToRadians}. */
   rotation: number;
+  /** Uniform scale; `1` is the component's natural size. */
   scale: number;
+  /**
+   * The point of the component that `position` refers to, as fractions of its
+   * size from the top-left: `{ x: 0.5, y: 0.5 }` is the center.
+   */
   anchor: Vec2;
+  /** Fill color. */
   color: Color;
+  /** Corner radius in pixels; `0` for square corners. */
   cornerRadius: number;
 }
 
 /**
- * Sparse per-interaction-state override — only declare the fields that
- * change; everything else inherits from the component's declared
- * `geometry`.
+ * The style a component takes in one interaction state, such as hover.
+ * Declare only the fields that change; the rest come from the component's
+ * declared geometry.
  */
 export interface StyleOverride {
+  /** Position, in world units. */
   position?: Vec3;
+  /** Width and height, in pixels. */
   size?: Vec2;
+  /** Rotation, in radians. */
   rotation?: number;
+  /** Uniform scale. */
   scale?: number;
+  /** The point `position` refers to, as fractions of the size. */
   anchor?: Vec2;
+  /** Fill color. */
   color?: Color;
+  /** Corner radius, in pixels. */
   cornerRadius?: number;
 }
 
-/** A single line of text (M4). Rasterized and baked into `main_atlas` automatically each frame. */
+/** A single line of text. The host bakes it the next time it renders a frame. */
 export interface TextSpec {
+  /** The text: a single line. */
   content: string;
-  /** Pixels. Valid range 1–512; 12–48 is the recommended sweet spot. */
+  /** Font size in pixels. */
   sizePx: number;
   /** Defaults to opaque white — set a dark value for light backgrounds. */
   color?: Color;
@@ -68,130 +97,159 @@ export interface TextSpec {
 }
 
 /**
- * A static image (M9.7), given its already-loaded raw file bytes — e.g.
- * straight from a `fetch()` response's `arrayBuffer()`/`Uint8Array`, PNG or
- * JPEG (format sniffed from the data, not a file extension). Decoded and
- * baked into `main_atlas` automatically each frame, same as {@link TextSpec}.
+ * An image, as the bytes of a PNG or JPEG file, for example from a `fetch()`
+ * response. The format is detected from the data. The host decodes and bakes
+ * it the next time it renders a frame.
  */
 export interface ImageSpec {
+  /** The PNG or JPEG file's bytes. */
   bytes: Uint8Array;
-  /** Downscale cap (longest side, pixels) applied before baking. `undefined` = native resolution. */
+  /** Scale the image down so its longer side is at most this many pixels. Omit to keep its full size. */
   maxSide?: number;
 }
 
-/** Draws an SDF-based border around a component. */
+/** A border drawn around a component. */
 export interface Border {
   /** Pixels. `0` disables the border. */
   width: number;
+  /** The border's color. An alpha of `0` turns it off. */
   color: Color;
-  /** -1 inner, 0 center, 1 outer — only `-1` renders correctly. */
+  /** Where the border sits: `-1` inside the edge, `0` centered on it, `1` outside. Only `-1` draws correctly today. */
   offset: number;
 }
 
-/** Draws a soft radial glow behind a component. Mutually exclusive with {@link DropShadow} — if both are set, the drop shadow wins. */
+/** A soft glow behind a component. A component shows a glow or a drop shadow, not both; if both are set, the drop shadow is drawn. */
 export interface Glow {
-  /** Halo spread in pixels. */
+  /** How far the glow spreads, in pixels. */
   radius: number;
+  /** The glow's color. An alpha of `0` turns it off. */
   color: Color;
   /** Opacity multiplier (effective alpha = `color.a * intensity`). */
   intensity: number;
 }
 
-/** Draws an SDF-based drop shadow behind a component. See {@link Glow} for the mutual-exclusivity note. */
+/** A drop shadow behind a component. Takes precedence over {@link Glow} if both are set. */
 export interface DropShadow {
-  /** Displacement in entity-local pixels (X right, Y up). */
+  /** How far the shadow is offset, in pixels (x right, y up). */
   offset: Vec2;
+  /** The shadow's color. An alpha of `0` turns it off. */
   color: Color;
-  /** Penumbra softness in pixels. Values below 0.5 are clamped in the shader. */
+  /** How soft the shadow's edge is, in pixels. The minimum is `0.5`. */
   softness: number;
-  /** Uniform shape expansion in pixels applied before softening. */
+  /** How much larger than the component the shadow is, in pixels, before softening. */
   spread: number;
 }
 
-/** Argument to {@link ProteusApp.component}. */
+/**
+ * A description of a component, passed to {@link ProteusApp.component}.
+ *
+ * @example
+ * ```ts
+ * const button = app.component({
+ *   geometry: {
+ *     position: { x: 0, y: 0, z: 0 },
+ *     size: { x: 160, y: 48 },
+ *     rotation: 0,
+ *     scale: 1,
+ *     anchor: { x: 0.5, y: 0.5 },
+ *     color: colorFrom("#3366e6"),
+ *     cornerRadius: 8,
+ *   },
+ *   hover: { scale: 1.05 },
+ *   text: { content: "Open", sizePx: 18 },
+ * });
+ * ```
+ */
 export interface ComponentSpec {
+  /**
+   * The component's declared geometry: what it shows when no interaction
+   * style applies, and where a transition into it ends.
+   */
   geometry: Geometry;
+  /** The style while the pointer is over the component. */
   hover?: StyleOverride;
+  /** The style while the component is pressed. */
   pressed?: StyleOverride;
+  /** The style while the component has focus. */
   focused?: StyleOverride;
+  /** The style while the component is disabled. See {@link ComponentSpec.startDisabled} and {@link Handle.setDisabled}. */
   disabled?: StyleOverride;
-  /** Child component ids ({@link Handle.id}) — see {@link Handle.addChild} for adding children after creation. */
+  /**
+   * IDs ({@link Handle.id}) of the components to make its children. Their
+   * geometry becomes relative to this component's. To add children later, use
+   * {@link Handle.addChild}.
+   */
   children?: number[];
-  /** Collapse this component (and any `children`) into one permanent textured quad. */
+  /**
+   * Bakes the component and its children into a single texture, permanently.
+   * The host renders them once and then destroys the children, so their
+   * handles stop working. Suited to detailed content that never changes.
+   */
   bake?: boolean;
+  /** A single line of text drawn on the component. */
   text?: TextSpec;
+  /** An image drawn on the component. */
   image?: ImageSpec;
+  /** A border around the component. */
   border?: Border;
+  /** A glow behind the component. */
   glow?: Glow;
+  /** A drop shadow behind the component. */
   dropShadow?: DropShadow;
   /**
-   * Opts this component out of hit-testing entirely — e.g. a full-window
-   * background that shouldn't swallow clicks meant for something on top of
-   * it. Every component is interactive (`onClick`/etc. "just work") by
-   * default unless this is set.
+   * Makes the component ignore all input.
+   *
+   * Components are interactive by default, so handlers such as
+   * {@link Handle.onClick} work without an opt-in. A non-interactive component
+   * is never the target of any input, whether pointer, touch, keyboard,
+   * gamepad or remote. Use it for passive elements such as backgrounds and
+   * labels. See {@link Handle.setInteractive}.
    */
   nonInteractive?: boolean;
   /**
-   * Whether the component is visible when spawned. Defaults to `true`.
+   * Whether the component starts visible. Defaults to `true`.
    *
-   * `false` spawns it inert — skipped by render, input and navigation —
-   * until something reveals it. {@link SignalHandle.set} does that for its
-   * `to` side, so a component declared hidden here is ready to be morphed
-   * into without a separate reveal call.
+   * A hidden component is neither drawn nor hit-tested. A transition into it
+   * through {@link SignalHandle.set} shows it, so a component that should
+   * first appear through a transition can start hidden.
    */
   visible?: boolean;
   /**
-   * Alpha multiplier for this component and everything under it, clamped to
-   * `0.0`–`1.0`. Defaults to fully opaque.
+   * The opacity of the component and everything under it, clamped to `0`–`1`.
+   * Defaults to `1`.
    *
-   * Cascades down: a child's effective opacity is its own times its
-   * parent's effective, so `0.6` over `0.6` paints at `0.36`. A child never
-   * affects its parent.
-   *
-   * Separate from {@link ComponentSpec.visible} and unrelated to it —
-   * opacity is a paint multiplier, visibility is an ECS flag. A component
-   * at `0` opacity is invisible but still hit-tests; a hidden one doesn't.
+   * Opacity multiplies down the hierarchy: a child at `0.6` under a parent at
+   * `0.6` is drawn at `0.36`. It only affects drawing, so a component at `0`
+   * still receives pointer input; use {@link ComponentSpec.visible} to take it
+   * out of input as well.
    */
   opacity?: number;
   /**
-   * Spawn already disabled: rendered, but excluded from hit-testing and
-   * wearing whatever {@link ComponentSpec.disabled} style is declared.
+   * Creates the component disabled: drawn, but ignoring all input and showing
+   * its {@link ComponentSpec.disabled} style.
    *
-   * Distinct from {@link ComponentSpec.nonInteractive}, which is for a
-   * component that is *never* a click target — a backdrop, a label.
-   * Disabled is a state a real control moves in and out of, and it has a
-   * look; non-interactive is a permanent property with none.
+   * Use this for a control that is enabled later with
+   * {@link Handle.setDisabled}. For something that is never a control, such as
+   * a background or a label, use {@link ComponentSpec.nonInteractive} instead.
    */
   startDisabled?: boolean;
-  /** Opt in to receiving input while this component is mid-transition. */
+  /** Whether the component accepts input while transitioning. Without this, it doesn't. */
   transitioning?: TransitioningConfig;
 }
 
 /**
- * Per-entity opt-in to input while mid-transition. Both default to `false`:
- * the framework's safe default is no interaction during a morph.
+ * Engine settings for {@link mount}. Every field is optional; anything omitted
+ * keeps the web default.
  *
- * `allowNavigation` is accepted for forward-compatibility but is inert —
- * directional/tab navigation is still a stub, so nothing reads it yet.
- */
-/**
- * Partial engine configuration for {@link mount}, applied on top of the web
- * preset — anything omitted keeps the preset's value.
- *
- * Deliberately narrower than Rust's `ProteusConfig`: only knobs that
- * currently *do* something appear here. The Rust struct also carries fields
- * that are declared but not yet consumed (video sizing, MSAA, input tuning,
- * custom easings, most debug flags); in Rust those read as documented
- * placeholders, but here they would be controls that silently do nothing.
- * They get added when they work.
- *
- * Misspellings are rejected rather than ignored — a config typo that quietly
- * changes nothing is the failure this API is meant to prevent.
+ * Only settings that have an effect are listed. A misspelled field is
+ * rejected when the app mounts, rather than silently ignored.
  */
 export interface ProteusConfigOverrides {
+  /** Clear color and presentation. */
   render?: {
-    /** Linear RGBA, 0–1: the colour behind everything, and what shows through transparency. */
+    /** The color behind everything, and what shows through transparency: RGBA, each `0`–`1`. */
     clearColor?: [number, number, number, number];
+    /** How frames are synchronized with the display. `"autoVsync"` suits most apps. */
     presentMode?:
       | "autoVsync"
       | "autoNoVsync"
@@ -199,53 +257,61 @@ export interface ProteusConfigOverrides {
       | "fifoRelaxed"
       | "immediate"
       | "mailbox";
+    /** Which GPU to prefer on a device that has more than one. */
     powerPreference?: "none" | "lowPower" | "highPerformance";
   };
+  /** GPU memory: atlas and instance-buffer sizes. */
   memory?: {
-    /** Atlas page size/count. Larger than the device allows throws at mount. */
-    mainAtlas?: { pageSize?: number; pageCount?: number };
+    /** The size and number of pages in the main texture atlas. A size larger than the device supports throws at mount. */
+    mainAtlas?: {
+      /** Width and height of each page, in pixels. */
+      pageSize?: number;
+      /** Number of pages. */
+      pageCount?: number;
+    };
+    /** The size of the atlas used for images of components during splits and merges. */
     transitionAtlasSize?: number;
-    /** Upper bound on quads drawn in one frame. */
+    /** The most components that can be drawn in one frame. */
     maxInstances?: number;
   };
+  /** Frame timing. */
   frame?: {
-    /** Upper bound on a frame's delta time — stops a backgrounded tab resuming with one huge step. */
+    /** The longest time step one frame can take, so a tab returning from the background doesn't jump ahead. */
     dtClampSecs?: number;
   };
+  /** Image and texture loading. */
   resources?: {
-    /** Longest side an image is downscaled to before packing. `null` packs at native resolution. */
+    /** Scale images down so their longer side is at most this many pixels. `null` keeps full size. */
     imageMaxSide?: number | null;
+    /** Wait to bake a component's text or image until the component is visible. */
     lazyLoad?: boolean;
   };
 }
 
-/** How a texture should be packed into the atlas. */
+/** How to add a texture to the atlas. */
 export interface TextureRequest {
   /**
-   * Downscale cap (longest side, pixels) before packing. Omit to pack at
-   * native resolution — a photo straight off the network is usually far
-   * larger than it will ever be drawn.
+   * Scale the texture down so its longer side is at most this many pixels.
+   * Omit to keep its full size; a photo from the network is usually much
+   * larger than it will be drawn.
    */
   maxSide?: number;
   /**
-   * Pin the texture for the app's lifetime — never LRU-evicted. For assets
-   * referenced continuously, e.g. an animation frame set that must all stay
-   * resident.
+   * Keep the texture in the atlas for the life of the app, never evicting it.
+   * For textures in constant use, such as animation frames.
    */
   eternal?: boolean;
 }
 
+/** Whether a component accepts input while it is transitioning. Both default to `false`. */
 export interface TransitioningConfig {
+  /** Accept pointer input during a transition. */
   allowInput?: boolean;
+  /** Not read yet; reserved for keyboard navigation. */
   allowNavigation?: boolean;
 }
 
-/**
- * One of `proteus-ui`'s five built-in, already-tested easing functions
- * (implemented since the project's M2 milestone). Letting a caller supply
- * an arbitrary *custom* easing function is a separate, not-yet-built
- * feature (tracked as the framework's "pluggable interpolation interface").
- */
+/** A built-in easing curve: how a transition speeds up and slows down. ({@link TransitionConfig}) */
 export type EasingName =
   | "linear"
   | "easeInQuad"
@@ -253,77 +319,101 @@ export type EasingName =
   | "easeInOutQuad"
   | "easeOutCubic";
 
+/** How a transition is timed. */
 export interface TransitionConfig {
-  /** Seconds. */
+  // DOC-REVIEW: accurate today; step 5 makes 0 instant and drops the panic,
+  // and this doc changes with it.
+  /**
+   * How long the transition takes, in seconds. Must be positive. Zero or less
+   * completes on the next tick, as if instant, and panics in a debug build of
+   * the WebAssembly module.
+   */
   duration: number;
   /** Seconds to wait before the transition starts. Default `0`. */
   delay?: number;
-  /** Default `"linear"`. */
+  /** Easing curve function for the transition. ({@link EasingName}).  Default `"linear"`. */
   easing?: EasingName;
 }
 
 /**
- * How a 1→N transition ({@link Handle.splitTo}) is normalized to a set of
- * 1→1 lerps — see `proteus_ui::SplitStrategy`'s own doc for the visual
- * difference between each. `cols`/`rows` only apply to `"gridSlice"`.
- */
-/**
- * Per-child transition config for a group transition — Phase A's
- * `childBehavior` iterator. Called once per target (or source) with its
- * index and the total, and its result overrides the shared config for that
- * child. The usual reason is a stagger:
+ * Sets each component's transition config (timing properties) in a split or merge. Called once per target
+ * (or source) with its index and the total; its result replaces the shared
+ * config for that component. The usual use is a stagger:
  *
  * ```ts
  * source.splitTo(targets, config, { kind: "slice" },
  *   (i) => ({ duration: 0.4, delay: i * 0.08, easing: "easeOutCubic" }));
  * ```
  *
- * Called up front, when the transition is requested — never from inside the
- * engine's own update, so an ordinary closure is safe. A throw, or a return
- * value that isn't a {@link TransitionConfig}, raises an error naming the
- * index rather than silently substituting a default.
+ * Called once for each component when the transition is requested. If it
+ * throws, or returns something that isn't a {@link TransitionConfig}, the
+ * call fails with an error naming the index.
  */
 export type ChildBehavior = (
   index: number,
   total: number,
 ) => TransitionConfig;
 
+/**
+ * How a split ({@link Handle.splitTo}) turns one component into several.
+ */
 export type SplitStrategy =
   /**
-   * One independent 1-to-1 transition per target. **Experimental for V1.**
+   * Each target moves from the source's position to its own, showing its own
+   * content. **Experimental:** not yet used by the reference demo.
    *
-   * Each target renders its own content, starting at the source's rectangle
-   * and moving to its own — not N copies of the source. No virtuals, no
-   * bake, no GPU work. The hand-authored option: you decide what each target
-   * is and where it lands, and you own whether the set reads well together.
-   *
-   * Experimental because nothing in the reference demo exercises it, and
-   * because the per-target control it exists for is only half-exposed —
-   * per-target *geometry* works, per-target *timing* needs `childBehavior`,
-   * which the SDK doesn't surface yet.
-   *
-   * Completion fires on each **target**, not on the source — see
+   * Use it when you design each target yourself and want to control where and
+   * when each one moves; {@link ChildBehavior} sets their timing. Completion is
+   * reported on each target, not on the source; see
    * {@link Handle.onTransitionComplete}.
    */
-  | { kind: "perTarget" }
+  | {
+      /** Selects this strategy. */
+      kind: "perTarget";
+    }
   /**
-   * Flattens the source — and its whole subtree — into one texture, then
-   * hands each target a crop of it to morph from. What you want when the
-   * pieces should read as parts of the thing that was there.
+   * Bakes the source, with its children, into an image, then moves one slice
+   * of that image to each target. Use it when the pieces should read as parts
+   * of what was there. Slices are strips, side by side.
    */
-  | { kind: "slice" }
-  /** {@link SplitStrategy | `"slice"`}, but cropping a `cols`x`rows` grid rather than a row of strips. */
-  | { kind: "gridSlice"; cols: number; rows: number };
+  | {
+      /** Selects this strategy. */
+      kind: "slice";
+    }
+  /** Like `"slice"`, but the slices are a grid of `cols` by `rows`. */
+  | {
+      /** Selects this strategy. */
+      kind: "gridSlice";
+      /** Columns in the grid. */
+      cols: number;
+      /** Rows in the grid. */
+      rows: number;
+    };
 
 /**
- * How an N→1 transition ({@link Handle.mergeFrom}) divides the destination
- * among its sources — see `proteus_ui::MergeLayout`'s own doc. `cols`/`rows`
- * only apply to `"grid"`.
+ * How a merge ({@link Handle.mergeFrom}) divides the destination among its
+ * sources: which part of the destination each source moves toward.
  */
 export type MergeLayout =
-  | { kind: "horizontal" }
-  | { kind: "grid"; cols: number; rows: number };
+  /** Strips side by side, left to right, one per source in order. */
+  | {
+      /** Selects this layout. */
+      kind: "horizontal";
+    }
+  /**
+   * A grid of `cols` by `rows`, filled row by row from the top-left. Use it
+   * when the sources are themselves laid out in a grid.
+   */
+  | {
+      /** Selects this layout. */
+      kind: "grid";
+      /** Columns in the grid. */
+      cols: number;
+      /** Rows in the grid. */
+      rows: number;
+    };
 
+/** The interaction style a component is showing. */
 export type InteractionState =
   | "default"
   | "hover"
@@ -331,64 +421,90 @@ export type InteractionState =
   | "focused"
   | "disabled";
 
+/** A snapshot of a transition in progress. */
 export interface TransitionSnapshot {
+  /** The geometry the transition started from. */
   base: Geometry;
+  /** The geometry the transition ends at. */
   target: Geometry;
-  /** Same value as the enclosing {@link ComponentData.geometry}. */
+  /** The current geometry, the same as {@link ComponentData.geometry}. */
   current: Geometry;
-  /** `0`–`1`, pre-easing. */
+  /**
+   * Progress through the transition, from `0` to `1`, before easing. Useful for
+   * keeping other animation in step with the transition.
+   */
   progress: number;
 }
 
-/** Return shape of {@link ProteusApp.get}/{@link Handle.get}. */
+/**
+ * A snapshot of a component's state, from {@link ProteusApp.get} or
+ * {@link Handle.get}. It does not update afterwards.
+ */
 export interface ComponentData {
+  /**
+   * The component's current geometry: its declared geometry when idle, or its
+   * in-progress geometry while transitioning.
+   */
   geometry: Geometry;
   /**
-   * Current resolved interaction *style* state.
+   * The interaction style currently applied.
    *
-   * `"default"` for a component that declared no hover/pressed/focused/
-   * disabled styles — there is nothing to resolve, so it stays `"default"`
-   * even while disabled. It also lands one tick late, since the engine
-   * writes it through deferred commands. To ask whether a component is
-   * disabled, read {@link ComponentData.disabled}, which has neither caveat.
+   * Stays `"default"` for a component that declared no interaction styles,
+   * even while it is disabled, and updates one tick after the change. To check
+   * whether a component is disabled, use {@link ComponentData.disabled}.
    */
   state: InteractionState;
-  /** Whether the component is disabled — the marker itself, immediate. */
-  disabled: boolean;
-  visible: boolean;
-  /** Cascaded effective opacity: this component's own times its parent's. */
-  opacity: number;
-  /** Child component ids ({@link Handle.id}) — reconstruct with {@link ProteusApp.handleFromId}. */
-  children: number[];
   /**
-   * `undefined` when idle; populated for the duration of an active
-   * transition. `undefined` rather than `null` — matches the rest of this
-   * API's "absent" convention (`ProteusApp.get`/`TextureHandle.state`
-   * likewise return `undefined`, not `null`, for "nothing here"), and is
-   * `serde-wasm-bindgen`'s own default encoding for a Rust `None` crossing
-   * the wasm boundary.
+   * Whether the component is disabled. Unlike {@link ComponentData.state}, this
+   * changes as soon as {@link Handle.setDisabled} is called, and is correct for
+   * every component, including one with no interaction styles.
    */
+  disabled: boolean;
+  /** Whether the component is visible. A component inside a hidden parent is not. Updated each tick. */
+  visible: boolean;
+  /** The opacity it is drawn with: its own opacity multiplied by its parents'. Updated each tick. */
+  opacity: number;
+  /** IDs of the component's direct children. Get a handle with {@link ProteusApp.handleFromId}. */
+  children: number[];
+  /** The transition in progress, or `undefined` when idle. */
   transition?: TransitionSnapshot;
 }
 
+/**
+ * Why a {@link SignalHandle.set} request couldn't run:
+ *
+ * - `"signalNotFound"`: the signal has been destroyed.
+ * - `"entityNotFound"`: `to` or `from` has been destroyed.
+ * - `"alreadyTransitioning"`: `to` is transitioning and the request wasn't
+ *   `interruptible`.
+ * - `"entityNotVisible"`: `from` is hidden, so there's nothing to transition
+ *   from.
+ */
 export type DropReason =
   | "signalNotFound"
   | "entityNotFound"
   | "alreadyTransitioning"
   | "entityNotVisible";
 
-/** Payload delivered to a {@link SignalHandle.onDropped} handler. */
+/** A {@link SignalHandle.set} request that couldn't run, passed to {@link SignalHandle.onDropped}. */
 export interface TransitionDropped {
+  /** ID of the request's `to` component. */
   to: number;
+  /** ID of the request's `from` component. */
   from: number;
+  /** Why the request couldn't run. */
   reason: DropReason;
 }
 
+/** What a texture holds. `"animated"` is reserved and not used yet. */
 export type TextureKind = "static" | "video" | "animated";
 
-/** Return shape of {@link TextureHandle.state}; `undefined` if evicted/unknown. */
+/** A texture's kind and size, from {@link TextureHandle.state}. */
 export interface TextureState {
+  /** What the texture holds. */
   kind: TextureKind;
+  /** Width in pixels. */
   width: number;
+  /** Height in pixels. */
   height: number;
 }

@@ -270,9 +270,11 @@ impl Handle {
 
     /// Shows the playing video on this component.
     ///
-    /// Only one video plays at a time, and every component showing video
-    /// shows the same one. The app starts and stops playback through its host
-    /// (`proteus_runtime::Frame::play_video`). If the component also has an
+    /// Proteus doesn't play video: the app's own player supplies the frames
+    /// (see `proteus_runtime::HostServices::open_video`), and the app starts
+    /// and stops it with `proteus_runtime::Frame::play_video` and
+    /// `stop_video`. Only one video plays at a time, and every component
+    /// showing video shows the same one. If the component also has an
     /// image, [`Handle::set_video_crossfade`] blends between the two; this
     /// call starts fully on the video.
     ///

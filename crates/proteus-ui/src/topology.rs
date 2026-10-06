@@ -1,36 +1,25 @@
-//! Transition topology — 1→N and N→1 mechanics.
+//! Splits (1→N) and merges (N→1).
 //!
-//! Proteus supports three transition topologies:
+//! A transition takes one of three shapes:
 //!
-//! - **1→1** — a single entity morphs into another. Implemented in `transition.rs`.
-//! - **1→N** — one source entity splits into N targets. [`OneToNRequest`].
-//! - **N→1** — N source entities converge into one target. [`NToOneRequest`].
+//! - **1→1:** one entity transitions into another; see `transition.rs`.
+//! - **1→N:** one source splits into N targets; see [`OneToNRequest`].
+//! - **N→1:** N sources merge into one destination; see [`NToOneRequest`].
 //!
-//! ## How group transitions work
+//! ## How splits and merges work
 //!
-//! For both topologies the framework creates [`Virtual`] entities that carry
-//! `ActiveTransition` components and are ticked by the normal
-//! `transition_tick_system`.  Virtual entities also inherit the visual
-//! components ([`DropShadow`], [`Glow`], [`BakedText`]) from their source
-//! entity so that effects and text persist correctly through the transition
-//! rather than popping in or out at completion.  When all virtuals in a group complete,
-//! [`group_transition_complete_system`] reveals the real target entities,
-//! despawns the virtuals, and restores the coordinator's `Lifecycle` to `Idle`.
+//! Except for [`SplitStrategy::PerTarget`], a split or merge creates one
+//! [`Virtual`] entity per piece, with an ordinary `ActiveTransition`. When GPU
+//! resources are available, each piece shows baked images of the entities at
+//! both ends and fades from one to the other. Without them, or if a bake
+//! fails, a piece instead carries the visual components ([`DropShadow`],
+//! [`Glow`], [`BakedText`]) of the entity it comes from, so they don't appear
+//! or vanish at the end.
 //!
-//! ## Strategy variants
-//!
-//! For 1→N, two strategies are available via [`SplitStrategy`]:
-//!
-//! - **Bake** — normalize to N independent 1→1 transitions. Each target
-//!   animates directly from the source geometry to its own geometry. No virtual
-//!   entities are created; `transition_complete_system` handles each target's
-//!   completion normally.
-//! - **Slice** — divide the source into N equal horizontal slices. One virtual
-//!   entity per slice animates to the corresponding target. Real target entities
-//!   are hidden during the transition and revealed on group completion.
-//!
-//! For N→1, only the Slice strategy is implemented in M3. Each source entity's
-//! geometry is treated as a "slice" that animates to its portion of the target.
+//! When every piece has arrived, [`group_transition_complete_system`] shows
+//! the real entities, removes the pieces, and returns the entity that
+//! coordinates the group, the source of a split or the destination of a
+//! merge, to `Idle`.
 
 use std::collections::HashMap;
 
@@ -55,14 +44,9 @@ use crate::transition::{ActiveTransition, TransitionConfig};
 // TransitionAtlasSize
 // ---------------------------------------------------------------------------
 
-/// The `transition_atlas`'s real pixel dimensions, mirrored into the ECS
-/// world so this module's UV-normalisation math (`region_uv*`) doesn't have
-/// to assume the compile-time default (M13.5: `transition_atlas_size` is now
-/// a `proteus_runtime::ProteusConfig` field — not linkable from here, since
-/// that crate sits a layer above this one). `Engine::new` overwrites this
-/// resource with the configured value alongside inserting `QuadPipeline`,
-/// the same "world resource set post-hoc by the render layer" pattern
-/// `GpuContext`/`QuadPipeline` already use.
+/// The transition atlas's size in pixels, as configured, for turning atlas
+/// regions into texture coordinates. The renderer sets it when it starts; until
+/// then it holds the default size.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransitionAtlasSize(pub u32);
 
@@ -76,30 +60,15 @@ impl Default for TransitionAtlasSize {
 // transition_atlas reclamation
 // ---------------------------------------------------------------------------
 
-/// Tie every `transition_atlas` region to the lifetime of the component that
-/// owns it, so the region is reclaimed whether the transition finished normally
-/// or the entity holding it simply went away.
+/// Frees each transition-atlas region when the component that owns it is
+/// removed or its entity is destroyed, however the transition ended.
 ///
-/// Mirrors [`crate::texture_ref::register_texture_ref_hooks`]'s treatment of
-/// `main_atlas` regions: the component *is* the ownership record, so `on_remove`
-/// — which fires on explicit removal **and** on despawn — is the one place that
-/// can't be skipped.
+/// This works like [`crate::texture_ref::register_texture_ref_hooks`] for the
+/// main atlas: removing the component is the one event that always happens,
+/// even if the coordinating entity is destroyed mid-transition.
 ///
-/// Before this, both frees lived in [`group_transition_complete_system`], which
-/// bails out when the coordinator no longer exists. Destroy a coordinator
-/// mid-transition and its virtuals were never despawned (they kept rendering,
-/// frozen, forever) and every region the group had allocated — one shared bake
-/// plus one per virtual — leaked for the life of the process.
-///
-/// That is reachable from shipped code, not just in principle:
-/// `examples/gallery` calls `splitTo` and then destroys the source on a
-/// `setTimeout` sized to the transition's duration. A `setTimeout` keeps running
-/// while `requestAnimationFrame` is throttled, so backgrounding the tab during
-/// that window destroys the coordinator with the group still in flight.
-///
-/// Registered once, from `ProteusWorld::new()`, before any entity can exist —
-/// `bevy_ecs` panics if a hook is added after the component is already in an
-/// archetype.
+/// Called once, from `ProteusWorld::new`, before any entity exists: `bevy_ecs`
+/// panics if a hook is added after the component is in use.
 pub fn register_transition_alloc_hooks(world: &mut World) {
     world
         .register_component_hooks::<ActiveGroupTransition>()
@@ -131,117 +100,84 @@ pub fn register_transition_alloc_hooks(world: &mut World) {
 // ChildBehaviorFn
 // ---------------------------------------------------------------------------
 
-/// Per-child transition configs for a group transition, index-aligned with
-/// the request's own targets (1→N) or sources (N→1).
+/// A transition config for each piece of a split or merge, in the same order as
+/// the request's targets or sources. See `Handle::split_to_with_behavior`.
 ///
-/// This used to be `fn(idx, total) -> TransitionConfig`, evaluated inside the
-/// setup system. It is a list now because that function was a bare fn pointer
-/// — no captures — and is called once per child with nothing but `idx` and
-/// `total` in scope, so resolving it at request-construction time is exactly
-/// equivalent. Doing so lets a caller use a real closure, and lets the
-/// TypeScript SDK pass a JS function, neither of which a fn pointer allows.
-/// See `Handle::split_to_with_behavior`.
-///
-/// Shorter than the child count is fine: any index past the end falls back to
-/// the request's `default_config`.
+/// It may be shorter than the number of pieces; the rest use the request's
+/// `default_config`.
 pub type ChildConfigs = Vec<TransitionConfig>;
 
 // ---------------------------------------------------------------------------
 // SplitStrategy
 // ---------------------------------------------------------------------------
 
-/// How a 1→N transition is normalized to a set of 1→1 lerps.
+/// How a split turns one entity into several.
 #[derive(Debug, Clone)]
 pub enum SplitStrategy {
-    /// **PerTarget** — normalize to one independent 1→1 per target.
-    /// *Experimental for V1.*
+    /// Each target transitions from the source's position to its own, as an
+    /// independent 1→1 transition. **Experimental:** only tests use it so far.
     ///
-    /// Each of the N target entities receives a `TransitionRequest` whose
-    /// `from_state` is the source's geometry. All N run simultaneously and
-    /// independently. No virtual entities, no bake, no `transition_atlas`
-    /// allocation — nothing here touches the GPU.
+    /// Each target shows its own content throughout; it starts where the
+    /// source was, but doesn't look like it. There are no virtual entities and
+    /// no GPU work. Use it when you design each target yourself. When the
+    /// pieces should look like parts of the source, use
+    /// [`SplitStrategy::Slice`].
     ///
-    /// Visual: each target renders **its own** content, starting at the
-    /// source's rectangle and moving to its own. Not N copies of the source:
-    /// `from_state` carries geometry, not appearance.
-    ///
-    /// This is the hand-authored option — the developer decides what each
-    /// target is and where it lands, and is responsible for the set making
-    /// visual sense together. [`SplitStrategy::Slice`] instead flattens the
-    /// source (and its whole subtree) into one texture and hands out crops
-    /// of it, which is what you want when the pieces should read as parts of
-    /// the thing that was there.
-    ///
-    /// **Why experimental:** nothing in the reference demo uses it, so it is
-    /// unexercised outside tests; and the per-target control it exists for
-    /// is only half-exposed — `ChildBehaviorFn` can vary each target's
-    /// duration/delay/easing via `Handle::split_to_with_behavior`, but
-    /// nothing in the reference demo uses it, so the combination is
-    /// unexercised outside tests.
-    ///
-    /// Completion is reported per target, not on the source — the source has
-    /// no transition of its own here. See `Handle::on_transition_complete`.
+    /// Completion is reported on each target, since the source has no
+    /// transition of its own. See `Handle::on_transition_complete`.
     PerTarget,
 
-    /// **Slice** — normalize to N→N via virtual entities.
-    ///
-    /// The source geometry is divided into N equal horizontal slices. A virtual
-    /// entity is spawned for each slice, starting at the slice geometry and
-    /// lerping to the corresponding target entity's geometry. Real target
-    /// entities are hidden during the transition and revealed on group completion.
-    ///
-    /// Visual: the source "splits apart" into N pieces that each morph to a target.
+    /// The source is cut into N strips, side by side, and each strip
+    /// transitions to one target. The source and its children are baked into
+    /// one image, so the strips look like pieces of it. The targets are hidden
+    /// until every strip arrives.
     Slice,
 
-    /// **GridSlice** — like `Slice`, but divides the source into a `cols`×`rows`
-    /// grid (row-major: target 0 pairs with the top-left cell, target 1 the
-    /// next cell to its right, wrapping to the next row after `cols` targets)
-    /// instead of `Slice`'s single row of `n` flat horizontal strips.
+    /// Like `Slice`, but the source is cut into a grid of `cols` by `rows`,
+    /// filled row by row from the top-left: target 0 gets the top-left cell.
     ///
-    /// Matters once targets themselves form a same-shaped grid (e.g. a photo
-    /// gallery): `Slice`'s flat strip order only varies left-to-right, so a
-    /// target on row 2 can pair with a strip that started near a target on
-    /// row 0 — their straight-line paths cross, reading as a zigzag rather
-    /// than a fan. `GridSlice` starts each slice at the position within the
-    /// source that already corresponds to its own row/col, so every path
-    /// radiates outward toward its own quadrant — a starburst, not a zigzag.
-    GridSlice { cols: usize, rows: usize },
+    /// Use it when the targets are themselves laid out in a grid, such as a
+    /// photo gallery. Each piece then starts from the part of the source in
+    /// the same row and column as its target, so the pieces spread outward
+    /// rather than crossing each other.
+    GridSlice {
+        /// Columns in the grid.
+        cols: usize,
+        /// Rows in the grid.
+        rows: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
 // OneToNRequest — 1→N group transition
 // ---------------------------------------------------------------------------
 
-/// Added to the **source** entity to trigger a 1→N split transition.
+/// Added to the source entity to start a split (1→N).
 ///
-/// The source entity goes invisible immediately on setup. Depending on
-/// `strategy`, either virtual slice entities are created (Slice) or the
-/// target entities are given direct `TransitionRequest`s (Bake).
-///
-/// Remove the component yourself before the next frame if you decide not to
-/// proceed — otherwise `one_to_n_setup_system` will process it.
+/// The source is hidden when the split starts. With
+/// [`SplitStrategy::PerTarget`], each target gets its own `TransitionRequest`;
+/// otherwise virtual pieces are created. Removing the component before the
+/// next tick cancels the split.
 #[derive(Component, Debug, Clone)]
 pub struct OneToNRequest {
-    /// Destination entities and their target geometric states.
-    /// The order determines pairing with source slices: target 0 receives slice 0.
+    /// The targets, and the geometry each should end at. Target 0 gets the
+    /// first piece.
     pub targets: Vec<GroupTarget>,
-    /// Default transition config. Applied to any target `child_configs`
-    /// doesn't cover.
+    /// The transition config for any target `child_configs` doesn't cover.
     pub default_config: TransitionConfig,
-    /// Optional per-target config overrides, index-aligned with `targets`.
-    /// Any index not covered falls back to `default_config`.
+    /// A config for each target, in the same order as `targets`.
     pub child_configs: Option<ChildConfigs>,
-    /// Which strategy normalizes the 1→N to a set of 1→1 lerps.
+    /// How the source is divided.
     pub strategy: SplitStrategy,
 }
 
-/// One target entry in a 1→N group transition.
+/// One target of a split.
 #[derive(Debug, Clone)]
 pub struct GroupTarget {
-    /// The real destination entity. Hidden during a Slice transition;
-    /// transitions directly for a Bake transition.
+    /// The target entity. Hidden until the pieces arrive, except with
+    /// [`SplitStrategy::PerTarget`], where it transitions itself.
     pub entity: Entity,
-    /// The geometric state this entity should settle at after the transition.
+    /// The geometry it ends at.
     pub state: QuadState,
 }
 
@@ -249,94 +185,74 @@ pub struct GroupTarget {
 // NToOneRequest — N→1 group transition
 // ---------------------------------------------------------------------------
 
-/// Added to the **destination** entity to trigger an N→1 merge transition.
+/// Added to the destination entity to start a merge (N→1).
 ///
-/// The destination entity is hidden during the transition and revealed on
-/// group completion. N source entities go invisible immediately.
-/// N virtual entities are created (one per source), each animating from the
-/// corresponding source's geometry to its assigned slice of the destination
-/// — see [`MergeLayout`] for how the destination is divided into slices.
-///
-/// Bake N→1 is deferred to M4 (requires tracking multiple non-virtual
-/// completions) — every `NToOneRequest` uses a Slice-family strategy.
+/// The sources are hidden when the merge starts, and the destination until it
+/// completes. One virtual piece per source moves from the source's geometry to
+/// its part of the destination; [`MergeLayout`] decides which part.
 #[derive(Component, Debug, Clone)]
 pub struct NToOneRequest {
-    /// Source entities and their current geometric states.
-    ///
-    /// The caller must snapshot each source entity's `QuadState` and provide
-    /// it here — the setup system cannot query arbitrary entity components
-    /// without borrowing the world a second time.
+    /// The sources, and the geometry each starts from. The caller supplies
+    /// it, since the setup system can't read other entities' geometry.
     pub sources: Vec<GroupSource>,
-    /// Default transition config.
+    /// The transition config for any source `child_configs` doesn't cover.
     pub default_config: TransitionConfig,
-    /// Optional per-source config overrides, index-aligned with `sources`.
-    /// Any index not covered falls back to `default_config`.
+    /// A config for each source, in the same order as `sources`.
     pub child_configs: Option<ChildConfigs>,
-    /// How the destination is divided into per-source slices.
+    /// Which part of the destination each source moves toward.
     pub layout: MergeLayout,
 }
 
-/// How [`n_to_one_setup_system`] divides the destination into per-source
-/// slices.
+/// How a merge divides the destination among its sources.
 #[derive(Debug, Clone, Copy)]
 pub enum MergeLayout {
-    /// `n` equal left-to-right horizontal strips of the destination, source
-    /// `i` pairing with strip `i` — the original (and, until `Grid`, only)
-    /// N→1 behavior.
+    /// Strips side by side, left to right: source `i` moves to strip `i`.
     Horizontal,
 
-    /// A `cols`×`rows` grid of the destination (row-major: source 0 pairs
-    /// with the top-left cell, source 1 the next cell to its right, wrapping
-    /// after `cols` sources), the N→1 counterpart of
-    /// [`SplitStrategy::GridSlice`] — use when the sources themselves form a
-    /// same-shaped grid (or sub-grid), so each one converges toward the
-    /// destination cell that matches its own relative position instead of
-    /// every source converging along one shared axis.
-    Grid { cols: usize, rows: usize },
+    /// A grid of `cols` by `rows`, filled row by row from the top-left, like
+    /// [`SplitStrategy::GridSlice`]. Use it when the sources are laid out in a
+    /// grid, so each moves toward the matching cell.
+    Grid {
+        /// Columns in the grid.
+        cols: usize,
+        /// Rows in the grid.
+        rows: usize,
+    },
 }
 
-/// One source entry in an N→1 group transition.
+/// One source of a merge.
 #[derive(Debug, Clone)]
 pub struct GroupSource {
-    /// The source entity (becomes invisible immediately on setup).
+    /// The source entity, hidden when the merge starts.
     pub entity: Entity,
-    /// The source entity's current geometric state.
-    /// Must be supplied by the caller (snapshot it before inserting `NToOneRequest`).
+    /// The geometry it starts from.
     pub state: QuadState,
 }
 
 // ---------------------------------------------------------------------------
-// ActiveGroupTransition — coordinator state during a Slice group transition
+// ActiveGroupTransition: the coordinator's state during a split or merge
 // ---------------------------------------------------------------------------
 
-/// Attached to the group coordinator entity while a Slice group transition runs.
-///
-/// For 1→N: the coordinator is the source entity.
-/// For N→1: the coordinator is the destination entity.
-///
-/// `group_transition_complete_system` checks `remaining` each frame and
-/// finalizes when all virtual entities have completed.
+/// On the entity coordinating a split or merge, while it runs: the source of a
+/// split, or the destination of a merge. `group_transition_complete_system`
+/// finishes the group once all its pieces have arrived.
 #[derive(Component, Debug)]
 pub struct ActiveGroupTransition {
-    /// Entities to make visible (`Visibility::VISIBLE`) when all virtuals complete.
+    /// The entities to show when every piece has arrived.
     pub reveal_on_complete: Vec<Entity>,
-    /// The one `transition_atlas` bake shared by every virtual in this group
-    /// (the source's bake for 1→N, the destination's bake for N→1) — as
-    /// opposed to each virtual's own individual bake, tracked per-virtual on
-    /// its own `BakedTexture::own_alloc`. `None` when baking was unavailable
-    /// or failed and the group fell back to flat-color slices.
-    /// `group_transition_complete_system` frees this once, on completion.
+    /// The bake every piece shows part of: the source's for a split, the
+    /// destination's for a merge. Each piece's own bake is on its
+    /// `BakedTexture`. `None` when baking wasn't possible and the pieces are
+    /// plain colored shapes. Freed when this component is removed.
     pub shared_alloc: Option<TransitionAllocId>,
 }
 
 // ---------------------------------------------------------------------------
-// PartOfGroup — links a virtual entity to its coordinator
+// PartOfGroup: links a piece to its coordinator
 // ---------------------------------------------------------------------------
 
-/// Links a virtual entity to its group coordinator.
-///
-/// `group_transition_complete_system` groups all virtual entities by their
-/// coordinator to detect when a group's transition is fully complete.
+/// Links a virtual piece to the entity coordinating its split or merge, so the
+/// group can be finished once all its pieces have arrived.
 #[derive(Component, Debug, Clone)]
 pub struct PartOfGroup(pub Entity);
 
@@ -344,7 +260,7 @@ pub struct PartOfGroup(pub Entity);
 // Slice geometry helpers
 // ---------------------------------------------------------------------------
 
-/// Divide `source` into `n` equal horizontal strips (left-to-right columns).
+/// Divides `source` into `n` equal strips, side by side from left to right.
 ///
 /// Each strip has the full height of the source and `source.width / n` width.
 /// Strips are centered along the same Y axis as the source. The anchor,
@@ -362,12 +278,9 @@ pub fn horizontal_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
     assert!(n > 0, "horizontal_slices: n must be > 0");
     let slice_w = source.size.x / n as f32;
     let leftmost_center = source.position.x - source.size.x * 0.5 + slice_w * 0.5;
-    // Clamp corner_radius to the slice's own half-extents. Uncapped, a large
-    // radius inherited from the source (e.g. a circular button's radius =
-    // half its full width) exceeds a narrow slice's half-width, and the
-    // rounded-rect SDF collapses to little more than a sliver around the
-    // slice's center — the same degenerate case fixed for the text overlay
-    // quad in collect.rs, here applied to slice geometry instead.
+    // Clamp the corner radius to the slice's half-size. A round source's
+    // radius is half its width, far larger than a narrow slice's, and would
+    // shrink the slice's rounded rectangle to a sliver.
     let corner_radius = source
         .corner_radius
         .min(slice_w * 0.5)
@@ -385,13 +298,9 @@ pub fn horizontal_slices(source: &QuadState, n: usize) -> Vec<QuadState> {
         .collect()
 }
 
-/// Divide `source` into an equal `cols`×`rows` grid, row-major (index =
-/// `row * cols + col`; row 0 is the top). The two-axis counterpart of
-/// `horizontal_slices` — used
-/// when pairing with a same-shaped grid of targets, so each cell starts at
-/// the position within `source` that already corresponds to its own row/col
-/// rather than every cell starting along one shared axis (see
-/// [`SplitStrategy::GridSlice`] and [`MergeLayout::Grid`]).
+/// Divides `source` into an equal grid of `cols` by `rows`, row by row: cell
+/// `row * cols + col`, with row 0 at the top. Used by
+/// [`SplitStrategy::GridSlice`] and [`MergeLayout::Grid`].
 ///
 /// # Panics
 /// Panics if `cols == 0` or `rows == 0`.
@@ -422,16 +331,11 @@ pub fn grid_slices(source: &QuadState, cols: usize, rows: usize) -> Vec<QuadStat
 }
 
 // ---------------------------------------------------------------------------
-// Transition-bake helpers — shared by one_to_n_setup_system and n_to_one_setup_system
+// Baking for splits and merges
 // ---------------------------------------------------------------------------
 
-/// Visual components (beyond `QuadState`, which the caller already has —
-/// either from the coordinator's own query or a `GroupTarget`/`GroupSource`'s
-/// stored `state`) needed to bake an entity's rendered appearance.
-///
-/// `pub(crate)` so `bake::bake_system` (M10.5 — static component baking) can
-/// reuse it too; the underlying capture logic is identical whether the bake
-/// is transition-time (this module) or permanent (`bake.rs`).
+/// The visual components needed to bake an entity's appearance, besides its
+/// `QuadState`. Also used by `bake::bake_system`, which bakes permanently.
 pub(crate) type BakeVisualsQuery<'w, 's> = Query<
     'w,
     's,
@@ -447,22 +351,12 @@ pub(crate) type BakeVisualsQuery<'w, 's> = Query<
     ),
 >;
 
-/// Build the `QuadInstance`s that represent `entity`'s own rendered
-/// appearance — background (+ text overlay, if any) — the same two-instance
-/// shape `collect_instances` produces per frame, just for one entity, once,
-/// on demand. Then recurses into every descendant (M10), composing each
-/// child's world state via [`compose_with_parent`] and folding its own
-/// instances in too.
+/// Builds the `QuadInstance`s that draw `entity` and all its descendants: for
+/// each, its background and any text, as `collect_instances` would, with each
+/// child placed in the world by [`compose_with_parent`].
 ///
-/// This exists so a composite (e.g. a `Quad` button with a `Text` child) bakes
-/// as a whole for the transition-bake crossfade (`bake_one`, below) — without
-/// it, baking just the button entity would silently drop the child's visuals
-/// (its "START" label) from the crop the moment `Text` becomes a real child
-/// entity instead of living on the same entity as its container.
-///
-/// `pub(crate)` so `bake::bake_system` (M10.5) can reuse it for permanent
-/// static baking — same recursive subtree capture, different destination
-/// atlas/lifetime.
+/// Baking a component therefore includes its children, such as a button's
+/// text label. Also used by `bake::bake_system`, which bakes permanently.
 pub(crate) fn gather_bake_instances(
     visuals: &BakeVisualsQuery,
     children_q: &Query<&Children>,
@@ -475,30 +369,18 @@ pub(crate) fn gather_bake_instances(
     else {
         return vec![quad_state_to_instance(qs, None, None, None, None)];
     };
-    // Cascaded opacity (M10) — same fallback chain as
-    // `push_entity_instances`: prefer the cascaded `EffectiveOpacity`,
-    // fall back to the entity's own raw `Opacity`, else fully opaque.
-    // Without this, an `Opacity`-cascaded entity baked mid-transition
-    // (e.g. a group-transition source/destination whose subtree includes
-    // opacity-cascaded content) would bake at full alpha regardless of its
-    // real effective opacity, then visibly snap to the correct alpha once
-    // the transition completes and per-frame rendering takes over.
+    // The cascaded opacity if computed, else the entity's own, else opaque,
+    // as `push_entity_instances` does. Otherwise a faded entity would bake at
+    // full opacity and snap to its real opacity when the transition ends.
     let effective_opacity = effective_opacity
         .map(|o| o.0)
         .unwrap_or_else(|| opacity.map(|o| o.0).unwrap_or(1.0));
 
     let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
     bg_inst.opacity = effective_opacity;
-    // A static image (M9.7 box-cover art) is a one-time UV mapping into
-    // main_atlas — same handling as the per-frame path in collect.rs's
-    // push_entity_instances. Without this, a Slice-transition target with
-    // BakedImage would bake as its flat placeholder color instead of the
-    // actual box art it shows once revealed.
-    //
-    // atlas_page must be set explicitly here (M11.2) — main_atlas is a
-    // multi-page pool now, so a target whose box art landed on page ≥1
-    // would otherwise bake a garbage sample from whatever's on the default
-    // page 0 instead of its own image.
+    // Draw the entity's image, as `push_entity_instances` does, or a target
+    // would bake as its plain color. Set the atlas page too: the image may be
+    // on any page of the main atlas.
     if let Some(image) = baked_image {
         bg_inst.uv_offset = image.uv_offset;
         bg_inst.uv_scale = image.uv_scale;
@@ -509,8 +391,7 @@ pub(crate) fn gather_bake_instances(
     if let Some(b) = baked_text {
         let mut text_qs = qs.clone();
         text_qs.color = text.map(|t| t.color).unwrap_or(Vec4::ONE);
-        // Same footprint-sizing / corner_radius-zeroing fix as the per-frame
-        // text overlay in collect.rs — see that file for the full rationale.
+        // Sized and squared off like the text overlay in collect.rs.
         text_qs.size = b.pixel_size.into();
         text_qs.corner_radius = 0.0;
         let mut text_inst = quad_state_to_instance(&text_qs, Some(b), None, None, None);
@@ -518,9 +399,7 @@ pub(crate) fn gather_bake_instances(
         out.push(text_inst);
     }
 
-    // M10: fold in every descendant's own instances too, recursively (not
-    // just direct children) — matches collect_instances's per-frame handling
-    // of an arbitrarily deep hierarchy.
+    // Every descendant, not only direct children, as in collect_instances.
     if let Ok(children) = children_q.get(entity) {
         for child in children.iter() {
             let child_local = quad_states.get(child).cloned().unwrap_or_default();
@@ -538,8 +417,7 @@ pub(crate) fn gather_bake_instances(
     out
 }
 
-/// Normalise a `TransitionRegion` into `(uv_offset, uv_scale)` within
-/// `transition_atlas`.
+/// A transition-atlas region as `(uv_offset, uv_scale)`.
 fn region_uv(region: &TransitionRegion, atlas_size: f32) -> ([f32; 2], [f32; 2]) {
     let atlas = atlas_size;
     (
@@ -548,9 +426,8 @@ fn region_uv(region: &TransitionRegion, atlas_size: f32) -> ([f32; 2], [f32; 2])
     )
 }
 
-/// Divide a baked region into `n` equal left-to-right UV thirds — the UV-space
-/// counterpart of `horizontal_slices`, used to pair each geometry slice with
-/// its matching crop of the shared bake.
+/// Divides a baked region into `n` equal strips, left to right, in texture
+/// coordinates: the texture part of each of `horizontal_slices`' pieces.
 fn region_uv_slices(
     region: &TransitionRegion,
     n: usize,
@@ -569,12 +446,10 @@ fn region_uv_slices(
         .collect()
 }
 
-/// Divide a baked region into a `cols`×`rows` UV grid, row-major (row 0 =
-/// smallest pixel Y = the top of the bake, matching `grid_slices`' world-Y
-/// convention — a bake's row 0 texel is always the top of the source
-/// geometry, since `bake_instances_to_atlas` copies the scratch render
-/// straight in with no vertical flip) — the UV-space counterpart of
-/// `grid_slices`.
+/// Divides a baked region into a grid of `cols` by `rows`, row by row, in
+/// texture coordinates: the texture part of each of `grid_slices`' pieces.
+/// Row 0 is the top of the bake, which is the top of the source, since baking
+/// doesn't flip the image.
 fn region_uv_grid_slices(
     region: &TransitionRegion,
     cols: usize,
@@ -595,10 +470,9 @@ fn region_uv_grid_slices(
         .collect()
 }
 
-/// Bake `entity`'s rendered appearance (per `qs`) into a freshly allocated
-/// `transition_atlas` region. Returns `None` if there's nothing to bake or
-/// the atlas is full — callers treat that as "fall back to flat-color
-/// geometry for this entity," not a hard error.
+/// Bakes `entity`'s appearance, at `qs`, into a new transition-atlas region.
+/// Returns `None` if there is nothing to bake or the atlas is full, in which
+/// case the caller uses a plain colored shape instead.
 fn bake_one(
     pipeline: &mut QuadPipeline,
     gpu: &GpuContext,
@@ -617,9 +491,8 @@ fn bake_one(
     let height = qs.size.y.max(1.0).ceil() as u32;
     let (alloc_id, granted) = pipeline.allocate_transition_region(width, height)?;
 
-    // The allocator may grant a padded region (shelf packers commonly round
-    // up) — bake and UV-address only the requested width×height within it,
-    // not the full grant, so slice UV math stays exact.
+    // The allocator may grant a larger region than requested. Use only the
+    // requested size, so the slices' texture coordinates stay exact.
     let region = TransitionRegion {
         x: granted.x,
         y: granted.y,
@@ -643,27 +516,17 @@ fn bake_one(
 // one_to_n_setup_system
 // ---------------------------------------------------------------------------
 
-/// Processes [`OneToNRequest`] components and sets up the 1→N transition.
+/// Starts each split requested with [`OneToNRequest`].
 ///
-/// **Bake strategy:**
-/// - Hides the source entity.
-/// - Inserts [`TransitionRequest`] with `from_state = Some(source_state)` on
-///   each target entity so they animate from the source's geometry to their own.
-/// - No virtual entities; each target's completion is handled by
-///   `transition_complete_system` independently.
+/// With [`SplitStrategy::PerTarget`]: hides the source, and gives each target a
+/// [`TransitionRequest`] from the source's geometry to its own.
 ///
-/// **Slice strategy:**
-/// - Hides the source and all target entities.
-/// - Spawns N [`Virtual`] entities, each starting at a horizontal slice of
-///   the source and lerping to the corresponding target's state.
-/// - Attaches [`ActiveGroupTransition`] to the source (coordinator).
-/// - When [`GpuContext`]/[`QuadPipeline`] are available (`Option<Res<...>>` —
-///   absent in, e.g., a bare test `World`): bakes the source once and each
-///   target once, and each virtual crossfades texel-for-texel between its
-///   slice of the source bake and its target's own bake — real shape,
-///   border, and text on both ends, not a flat-color approximation. If GPU
-///   resources are unavailable, or a bake fails (atlas full), falls back to
-///   today's flat-color slice geometry for that virtual.
+/// With `Slice` or `GridSlice`: hides the source and the targets, creates one
+/// [`Virtual`] piece per target, starting from its part of the source, and
+/// adds [`ActiveGroupTransition`] to the source. When GPU resources are
+/// present, it bakes the source once and each target once, and each piece
+/// fades from its part of the source's bake to its target's bake. Without
+/// them, or if a bake fails, a piece is a plain colored shape.
 #[allow(clippy::too_many_arguments)]
 pub fn one_to_n_setup_system(
     mut commands: Commands,
@@ -686,13 +549,13 @@ pub fn one_to_n_setup_system(
             continue;
         }
 
-        // Hide the source — it is being replaced by (or transitioning into) N targets.
+        // Hide the source: the targets replace it.
         commands.entity(source_entity).insert(Visibility::HIDDEN);
 
         match request.strategy {
             SplitStrategy::PerTarget => {
-                // Normalize to N independent 1→1 transitions.
-                // Each target animates from the source geometry to its own position.
+                // One independent 1→1 transition per target, from the source's
+                // geometry to its own.
                 for (i, target) in request.targets.iter().enumerate() {
                     let cfg = request
                         .child_configs
@@ -707,7 +570,7 @@ pub fn one_to_n_setup_system(
                     });
                 }
 
-                // Source has no active transition of its own — goes Idle immediately.
+                // The source has no transition of its own, so it goes Idle.
                 commands.entity(source_entity).insert(Lifecycle::Idle);
             }
 
@@ -718,11 +581,9 @@ pub fn one_to_n_setup_system(
                 }
                 let reveal: Vec<Entity> = request.targets.iter().map(|t| t.entity).collect();
 
-                // Try the baked, two-sided crossfade path: bake the source
-                // once (shared across every slice), then each target once
-                // (one bake per slice). Only proceeds if GPU resources are
-                // present *and* the shared source bake succeeds — a partial
-                // source bake can't produce meaningful slice crops.
+                // Bake the source once, shared by every piece, and each target
+                // once. Only if GPU resources are present and the source bake
+                // succeeds, since the pieces are cut from it.
                 let mut shared_alloc: Option<TransitionAllocId> = None;
                 let mut from_uv_slices: Vec<([f32; 2], [f32; 2])> = Vec::new();
                 let mut target_bakes: Vec<Option<(TransitionAllocId, TransitionRegion)>> =
@@ -763,9 +624,8 @@ pub fn one_to_n_setup_system(
                     }
                 }
 
-                // Snapshot the source entity's visual components so a
-                // fallen-back (non-baked) virtual still inherits them —
-                // today's behavior, unchanged.
+                // The source's visual components, for any piece that isn't
+                // baked.
                 let src_glow = visuals
                     .get(source_entity)
                     .ok()
@@ -786,7 +646,7 @@ pub fn one_to_n_setup_system(
                     _ => horizontal_slices(source_state, n),
                 };
 
-                // Spawn one virtual entity per slice.
+                // One virtual piece per target.
                 for (i, (slice_state, target)) in
                     slices.iter().zip(request.targets.iter()).enumerate()
                 {
@@ -801,33 +661,19 @@ pub fn one_to_n_setup_system(
                         (Some(_), Some((own_id, own_region))) => {
                             let (from_off, from_scale) = from_uv_slices[i];
                             let (to_off, to_scale) = region_uv(&own_region, atlas_size);
-                            // Both ends flattened to a plain white pass-through
-                            // quad (no tint) — the baked pixels carry the real
-                            // color/text, so the QuadState wrapping them
-                            // shouldn't also tint on top.
+                            // Both ends are white and untinted: the baked
+                            // image has the real colors.
                             //
-                            // Corner radius is *not* symmetric between the two
-                            // ends, though. `from_state` (`slice_state`) is one
-                            // of `n` equal crops of a *single shared* source
-                            // bake — every slice gets the same clamped radius
-                            // from `horizontal_slices`/`grid_slices`, which is
-                            // only correct for the slice(s) that actually sit
-                            // at the source's real corners; asserting it as
-                            // this container's own SDF radius on *every*
-                            // slice (including interior ones with no real
-                            // corner at all) would carve a rounded notch out
-                            // of every interior seam. That radius must stay
-                            // baked-alpha-only, left at 0 here as before.
-                            // `to_state` (`target.state`) has no such sharing:
-                            // it's one whole, independent target's own real
-                            // shape, so reasserting its own real corner_radius
-                            // here is always safe — and, since our atlases
-                            // have no mip levels (see quad.wgsl), it also
-                            // backstops the arriving shape with a resolution-
-                            // independent analytic round-rect clip, rather
-                            // than relying solely on a fixed-resolution baked
-                            // alpha edge that can visibly lose its rounding to
-                            // minification aliasing while still small/mid-morph.
+                            // The corner radius differs between the ends. The
+                            // start is a slice of the source's bake, and only
+                            // slices at the source's corners should be
+                            // rounded, so its radius stays 0 and the bake's
+                            // own rounded edges show. The end is a whole
+                            // target, so it uses the target's real radius.
+                            // That also keeps its corners round while it is
+                            // small, where the bake alone would look jagged,
+                            // since the atlases have no smaller versions of
+                            // each image (mipmaps).
                             let from_state = QuadState {
                                 color: Vec4::ONE,
                                 corner_radius: 0.0,
@@ -861,8 +707,8 @@ pub fn one_to_n_setup_system(
                     if let Some(bt) = baked_texture {
                         entity_cmd.insert(bt);
                     } else {
-                        // Fallback path (no bake): propagate the source's own
-                        // visuals, exactly as before this feature existed.
+                        // Not baked: carry the source's own visual
+                        // components.
                         if let Some(ref s) = src_shadow {
                             entity_cmd.insert(s.clone());
                         }
@@ -875,7 +721,7 @@ pub fn one_to_n_setup_system(
                     }
                 }
 
-                // Coordinator: source entity tracks group completion.
+                // The source coordinates the group.
                 commands.entity(source_entity).insert((
                     Lifecycle::Transitioning,
                     ActiveGroupTransition {
@@ -892,22 +738,17 @@ pub fn one_to_n_setup_system(
 // n_to_one_setup_system
 // ---------------------------------------------------------------------------
 
-/// Processes [`NToOneRequest`] components and sets up the N→1 transition.
+/// Starts each merge requested with [`NToOneRequest`].
 ///
-/// Uses the Slice strategy (only strategy implemented for N→1 in M3):
-/// - Hides all source entities and the destination entity.
-/// - Spawns N [`Virtual`] entities, each animating from a source's geometry
-///   to the corresponding horizontal slice of the destination.
-/// - Attaches [`ActiveGroupTransition`] to the destination (coordinator).
-/// - On group completion: destination entity becomes visible.
+/// Hides the sources and the destination, creates one [`Virtual`] piece per
+/// source, moving from the source's geometry to its part of the destination,
+/// and adds [`ActiveGroupTransition`] to the destination, which is shown when
+/// the merge completes.
 ///
-/// The mirror image of [`one_to_n_setup_system`]'s baked crossfade, with
-/// source/target roles swapped: each source is baked individually (its own
-/// bake, freed with its virtual), and the destination is baked once and
-/// sliced (the shared bake, freed once on group completion). Same
-/// `Option<Res<GpuContext>>`/`Option<ResMut<QuadPipeline>>` graceful
-/// degradation to flat-color slices when GPU resources are unavailable or a
-/// bake fails.
+/// Baking mirrors [`one_to_n_setup_system`]: each source is baked, and the
+/// destination is baked once and shared, each piece fading from its source's
+/// bake to its part of the destination's. Without GPU resources, or if a bake
+/// fails, a piece is a plain colored shape.
 #[allow(clippy::too_many_arguments)]
 pub fn n_to_one_setup_system(
     mut commands: Commands,
@@ -929,7 +770,7 @@ pub fn n_to_one_setup_system(
             continue;
         }
 
-        // Hide the destination entity during the transition.
+        // Hide the destination until the merge completes.
         commands
             .entity(dest_entity)
             .insert(Visibility::HIDDEN)
@@ -940,15 +781,14 @@ pub fn n_to_one_setup_system(
             commands.entity(source.entity).insert(Visibility::HIDDEN);
         }
 
-        // Compute target slices — one per source.
+        // The part of the destination each source moves to.
         let target_slices = match request.layout {
             MergeLayout::Grid { cols, rows } => grid_slices(dest_state, cols, rows),
             MergeLayout::Horizontal => horizontal_slices(dest_state, n),
         };
 
-        // Try the baked, two-sided crossfade path: bake the destination once
-        // (shared across every virtual), then each source once (one bake per
-        // virtual). Mirrors one_to_n_setup_system with roles swapped.
+        // Bake the destination once, shared by every piece, and each source
+        // once, as one_to_n_setup_system does.
         let mut shared_alloc: Option<TransitionAllocId> = None;
         let mut to_uv_slices: Vec<([f32; 2], [f32; 2])> = Vec::new();
         let mut source_bakes: Vec<Option<(TransitionAllocId, TransitionRegion)>> = Vec::new();
@@ -988,7 +828,7 @@ pub fn n_to_one_setup_system(
             }
         }
 
-        // Spawn one virtual entity per source, transitioning to the matching slice.
+        // One virtual piece per source, moving to its part of the destination.
         for (i, (source, target_slice)) in
             request.sources.iter().zip(target_slices.iter()).enumerate()
         {
@@ -1003,20 +843,10 @@ pub fn n_to_one_setup_system(
                 (Some(_), Some((own_id, own_region))) => {
                     let (to_off, to_scale) = to_uv_slices[i];
                     let (from_off, from_scale) = region_uv(&own_region, atlas_size);
-                    // Mirror of `one_to_n_setup_system`'s asymmetric corner
-                    // radius handling above, roles swapped: `from_state`
-                    // (`source.state`) is one whole, independent source's own
-                    // real shape — safe to reassert its own corner_radius, both
-                    // for correctness and as a resolution-independent SDF
-                    // backstop against baked-texture minification aliasing
-                    // (no mip levels — see quad.wgsl). `to_state`
-                    // (`target_slice`) is one of `n` equal crops of the
-                    // single shared *destination* bake, all given the same
-                    // clamped radius by `horizontal_slices`/`grid_slices` —
-                    // asserting that on every slice's own container would
-                    // carve a rounded notch out of interior seams that have
-                    // no real corner at all, so it stays baked-alpha-only,
-                    // left at 0 here as before.
+                    // The corner radius, reversed from one_to_n_setup_system:
+                    // the start is a whole source, so it uses the source's
+                    // real radius; the end is a slice of the destination's
+                    // bake, so its radius stays 0.
                     let from_state = QuadState {
                         color: Vec4::ONE,
                         ..source.state.clone()
@@ -1051,8 +881,7 @@ pub fn n_to_one_setup_system(
             if let Some(bt) = baked_texture {
                 entity_cmd.insert(bt);
             } else if let Ok((_, glow, shadow, baked, _, _, _, _)) = visuals.get(source.entity) {
-                // Fallback path (no bake): propagate the source entity's own
-                // visuals, exactly as before this feature existed.
+                // Not baked: carry the source's own visual components.
                 if let Some(s) = shadow {
                     entity_cmd.insert(s.clone());
                 }
@@ -1065,7 +894,7 @@ pub fn n_to_one_setup_system(
             }
         }
 
-        // Coordinator: destination entity tracks group completion.
+        // The destination coordinates the group.
         commands.entity(dest_entity).insert(ActiveGroupTransition {
             reveal_on_complete: vec![dest_entity],
             shared_alloc,
@@ -1077,23 +906,22 @@ pub fn n_to_one_setup_system(
 // group_transition_complete_system
 // ---------------------------------------------------------------------------
 
-/// Detects when all virtual entities in a group are done and finalizes.
+/// Finishes each split or merge whose pieces have all arrived. Runs after
+/// `transition_complete_system`.
 ///
-/// Runs after `transition_complete_system` in the schedule. Groups all
-/// virtual entities by their [`PartOfGroup`] coordinator. When every virtual
-/// in a group has `is_complete = true`, the system:
+/// For each finished group, it:
 ///
-/// 1. Inserts `Visibility::VISIBLE` on all `reveal_on_complete` entities.
-/// 2. Sets the coordinator's `Lifecycle` to `Idle`.
-/// 3. Removes `ActiveGroupTransition` from the coordinator.
-/// 4. If a [`QuadPipeline`] resource is available: frees the coordinator's
-///    `shared_alloc` (once) and each virtual's own `BakedTexture::own_alloc`
-///    (if baking was used for that group at all).
-/// 5. Queues despawn of all virtual entities in the group.
+/// 1. shows the `reveal_on_complete` entities;
+/// 2. records the coordinator in `CompletedTransitions`;
+/// 3. returns the coordinator to `Idle` and removes its
+///    `ActiveGroupTransition`;
+/// 4. removes the virtual pieces.
 ///
-/// Completion is idempotent: once all deferred commands from step 3 are
-/// applied (next `FlushCommands`), the virtual entities are gone and the
-/// coordinator has no `ActiveGroupTransition`, so the system does no work.
+/// Removing the component and the pieces frees their transition-atlas regions,
+/// through the hooks from `register_transition_alloc_hooks`.
+///
+/// If the coordinator was destroyed mid-transition, its pieces are removed
+/// without finishing the group.
 pub fn group_transition_complete_system(
     mut commands: Commands,
     virtuals: Query<
@@ -1123,12 +951,9 @@ pub fn group_transition_complete_system(
     for (coord_entity, (v_entities, complete_count)) in by_coord {
         let total = v_entities.len();
 
-        // Coordinator gone (destroyed mid-transition) — these virtuals can
-        // never be finalized, because everything finalization needs lives on
-        // the coordinator. Despawn them rather than leaving them rendering
-        // frozen forever; their `transition_atlas` regions come back via
-        // `BakedTexture`'s own on_remove hook, and the shared bake via the
-        // coordinator's, which already fired when it was despawned.
+        // The coordinator was destroyed, so the group can't be finished.
+        // Remove its pieces rather than leave them frozen on screen. Their
+        // atlas regions are freed by the removal hooks.
         if !coordinators.contains(coord_entity) {
             log::warn!(
                 "group transition coordinator {coord_entity:?} disappeared with {} virtual(s) \
@@ -1145,39 +970,33 @@ pub fn group_transition_complete_system(
             continue; // still waiting on some virtuals
         }
 
-        // All virtuals for this group are done — finalize.
+        // Every piece has arrived: finish the group.
         let Ok((group, mut lifecycle)) = coordinators.get_mut(coord_entity) else {
             continue;
         };
 
-        // Reveal target entities.
+        // Show the real entities.
         for &entity in &group.reveal_on_complete {
             commands.entity(entity).insert(Visibility::VISIBLE);
         }
 
-        // The `transition_atlas` regions are *not* freed here — removing
-        // `ActiveGroupTransition` below and despawning the virtuals fires the
-        // `on_remove` hooks that own that (see
-        // `register_transition_alloc_hooks`). Keeping a second, parallel free
-        // path here would double-free whichever region both paths touched.
+        // Atlas regions aren't freed here: removing `ActiveGroupTransition`
+        // and the pieces does that, through the removal hooks. Freeing here too
+        // would free them twice.
 
-        // Record the coordinator as completed, alongside the 1:1 completions
-        // `transition_complete_system` already collects. Runs after that
-        // system (`ProteusSet::GroupTransitionComplete` follows
-        // `TransitionComplete`), which is what clears the bag — so appending
-        // here is safe. The coordinator is the entity the caller started the
-        // group from: the source for 1→N, the destination for N→1. The
-        // virtuals are excluded deliberately — they are machinery, and one
-        // group is one completion.
+        // Record one completion for the group, on its coordinator: the source
+        // of a split, the destination of a merge. The pieces don't count.
+        // `transition_complete_system` has already run and cleared the list
+        // this tick, so appending is safe.
         completed.entities.push(coord_entity);
 
-        // Restore coordinator lifecycle and remove group state.
+        // Return the coordinator to Idle and remove the group's state.
         *lifecycle = Lifecycle::Idle;
         commands
             .entity(coord_entity)
             .remove::<ActiveGroupTransition>();
 
-        // Despawn all virtual entities.
+        // Remove the pieces.
         for (v_entity, _) in v_entities {
             commands.entity(v_entity).despawn();
         }
@@ -1185,7 +1004,7 @@ pub fn group_transition_complete_system(
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests — slice geometry math
+// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -1251,12 +1070,7 @@ mod tests {
         }
     }
 
-    /// Regression test: `gather_bake_instances` must include a target's
-    /// `BakedImage` UV in the baked background instance. Before this fix,
-    /// `BakeVisualsQuery` didn't query `BakedImage` at all, so a Slice
-    /// transition's target (e.g. a video tile with box-cover art) baked as
-    /// its flat placeholder color instead of the actual box art it shows
-    /// once revealed — no crossfade ever showed the real image.
+    // A baked target must show its image, not its plain color.
     #[test]
     fn gather_bake_instances_includes_baked_image_uv() {
         use crate::image::BakedImage;
@@ -1286,10 +1100,8 @@ mod tests {
         assert_eq!(instances[0].uv_scale, [0.2, 0.3]);
     }
 
-    /// Regression test (M11.2): `gather_bake_instances` must carry a
-    /// `BakedImage`'s `page` into the baked instance's `atlas_page`, not just
-    /// its UVs — otherwise a target whose box art landed on a non-zero
-    /// `main_atlas` page bakes a garbage sample from whatever's on page 0.
+    // A baked image must keep its atlas page, or an image on any page but the
+    // first bakes whatever is on the first page.
     #[test]
     fn gather_bake_instances_carries_the_baked_images_page() {
         use crate::image::BakedImage;
@@ -1319,13 +1131,8 @@ mod tests {
         assert_eq!(page, 3);
     }
 
-    /// Regression test (M10): `gather_bake_instances` must walk *every*
-    /// descendant, not just the entity itself — otherwise a composite (e.g. a
-    /// `Quad` button with a `Text` child) loses the child's visuals from the
-    /// Slice-transition crossfade the moment `Text` becomes a real child
-    /// entity instead of living on the same entity as its container. Uses a
-    /// three-level chain (entity → child → grandchild) to prove recursion
-    /// isn't hard-coded to one level.
+    // Baking must include every descendant, such as a button's label. Three
+    // levels deep, to show it isn't limited to direct children.
     #[test]
     fn gather_bake_instances_walks_every_descendant() {
         use bevy_ecs::hierarchy::ChildOf;
@@ -1391,11 +1198,8 @@ mod tests {
         }
     }
 
-    /// A circular source (corner_radius == half its full width, e.g. a round
-    /// button) sliced into narrow strips must not carry that radius through
-    /// unclamped — it would exceed each slice's own half-width and collapse
-    /// the rounded-rect SDF to a sliver. See the comment in
-    /// `horizontal_slices` for the full explanation.
+    // Slicing a round source must clamp each slice's corner radius; see
+    // `horizontal_slices`.
     #[test]
     fn horizontal_slices_clamps_corner_radius_to_slice_half_extents() {
         let circle = QuadState {

@@ -1,18 +1,11 @@
-//! `proteus-shell-native` — native desktop entry point.
+//! `proteus-shell-native`: runs the reference demo in a desktop window.
 //!
-//! ## M13.4 (step 4a) — the collapse the M13.1 module doc predicted
+//! All the work happens in other crates: [`DemoApp`] holds the demo, and
+//! [`proteus_host_winit::run`] owns the window, the frame loop and the GPU.
+//! This binary only supplies the settings: the asset directory, the video
+//! files, the clear color and the image size cap.
 //!
-//! Video is now a real `HostServices` seam — [`proteus_host_winit`]'s
-//! `DirHostServices::open_video`, backed by `ffmpeg`/`ffprobe` (see that
-//! crate's own `mp4_player` module, moved there from this crate) — instead
-//! of a shell-side shim. That was the one thing still keeping this file
-//! more than a one-line `main()`: texture churn and the photo gallery
-//! already collapsed the same way at M13.4 steps 1 and 3. What's left is
-//! exactly `proteus_host_winit::run(DemoApp::new(...), RunConfig { .. })`.
-//!
-//! The web shell hasn't made this same video move yet (M13.4 step 4b — HLS
-//! decode needs `<video>`/`MediaSource`, tracked as its own unit of work
-//! given its size) and so keeps its own shell-side video shim for now.
+//! Video playback uses `ffmpeg` and `ffprobe`, which must be on `PATH`.
 
 use std::path::PathBuf;
 
@@ -42,7 +35,7 @@ const TILE_VIDEO_PATHS: [&str; 3] = [
     ),
 ];
 
-/// The resting page colour, shown briefly before the background image loads
+/// The resting page color, shown briefly before the background image loads
 /// and behind any component transparency. A light lavender, not black.
 const CLEAR_COLOR: [f64; 4] = [
     0xCD as f64 / 255.0,
@@ -51,8 +44,8 @@ const CLEAR_COLOR: [f64; 4] = [
     1.0,
 ];
 
-/// The generic renderer bakes every `Image` at this cap (the M12 shells'
-/// `MAX_IMAGE_SIDE`); the one hires gallery overlay overrides it per-entity.
+/// The largest side, in pixels, the renderer bakes an `Image` at. The demo's
+/// enlarged gallery photo sets its own larger cap.
 const IMAGE_MAX_SIDE: u32 = 400;
 
 fn main() {

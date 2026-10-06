@@ -1,39 +1,26 @@
-//! Component composition & hierarchy — M10.
+//! Parents and children: how a child's geometry, visibility and opacity
+//! depend on its parent's.
 //!
-//! Parent/child entity relationships built directly on `bevy_ecs`'s first-class
-//! [`ChildOf`]/[`Children`] relationship components (bevy_ecs 0.18 ships these
-//! with automatic cascading despawn — no hand-rolled hierarchy component
-//! needed).
+//! The hierarchy is `bevy_ecs`'s own [`ChildOf`] and [`Children`], which also
+//! destroy an entity's descendants with it.
 //!
-//! ## Local vs. world `QuadState`
+//! ## Local and world geometry
 //!
-//! A root entity's [`QuadState`] is world-space, exactly as before this
-//! milestone — nothing currently has a parent, so nothing's behavior changes.
-//! A *child* entity's `QuadState` fields are declared in its parent's local
-//! frame. [`resolve_world_position`] (and its `Query`-based twin
-//! [`resolve_world_position_query`], for systems that only have typed query
-//! access rather than a raw `&World`) compose position, rotation, *and* scale
-//! down the parent chain — see the function docs for the exact formula.
+//! A top-level entity's [`QuadState`] is in world units. A child's is relative
+//! to its parent. [`resolve_world_position`], and
+//! [`resolve_world_position_query`] for systems that only have queries, work
+//! out a child's world geometry by combining position, rotation and scale down
+//! the chain of parents; see their docs for the formula.
 //!
-//! This composition is a pure, on-demand function, not a cached component
-//! written by a schedule system. `collect_instances` (`collect.rs`) and the
-//! transition-bake capture (`topology.rs`) call it fresh
-//! every time they need an entity's world state. This sidesteps a same-frame
-//! staleness problem entirely (no system writes a `WorldQuadState` that another
-//! system must then read later in the same frame) and — as a bonus — means a
-//! future declarative/percentage-relative positioning system only needs to set
-//! a child's *local* `QuadState` before this resolution runs; nothing here
-//! needs to change to support that later.
+//! This is computed when needed, by drawing and by baking, rather than stored,
+//! so it is never a tick out of date.
 //!
-//! ## Cascading visibility & opacity
+//! ## Visibility and opacity
 //!
-//! Unlike position resolution, [`EffectiveVisibility`] and [`EffectiveOpacity`]
-//! *are* real components written by schedule systems ([`visibility_system`],
-//! [`opacity_system`]), because the DoD for this milestone explicitly calls for
-//! replacing `stub_visibility_system`/`stub_opacity_system` with cascade
-//! implementations in their existing schedule slots. See
-//! `schedule::ProteusSet::CascadeFlush` for why an extra `ApplyDeferred` had to
-//! be added right after them.
+//! [`EffectiveVisibility`] and [`EffectiveOpacity`], unlike world geometry, are
+//! components, written each tick by [`visibility_system`] and
+//! [`opacity_system`]. See `schedule::ProteusSet::CascadeFlush` for when their
+//! results are applied.
 
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
@@ -45,11 +32,11 @@ use crate::component::QuadState;
 // Opacity — declared, local
 // ---------------------------------------------------------------------------
 
-/// Declared per-entity opacity multiplier, local to this entity (not yet
-/// cascaded with its ancestors — see [`EffectiveOpacity`] for that).
+/// An entity's own opacity multiplier, before its ancestors' are applied; see
+/// [`EffectiveOpacity`] for the combined value.
 ///
-/// Absent is equivalent to `Opacity(1.0)` — matches the codebase's existing
-/// "no component = default" convention (e.g. [`crate::Visibility`]).
+/// An entity without it has `Opacity(1.0)`, as one without
+/// [`crate::Visibility`] is visible.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Opacity(pub f32);
 
@@ -81,7 +68,7 @@ pub struct EffectiveOpacity(pub f32);
 // World-position resolution
 // ---------------------------------------------------------------------------
 
-/// Compose a child's local [`QuadState`] with its parent's resolved world
+/// Composes a child's local [`QuadState`] with its parent's resolved world
 /// state, one level: position, rotation, and scale all inherit; size, anchor,
 /// color, and corner_radius stay the child's own.
 ///
@@ -113,11 +100,11 @@ pub(crate) fn compose_with_parent(parent_world: &QuadState, local: &QuadState) -
     }
 }
 
-/// Resolve `entity`'s world-space [`QuadState`] given its already-known local
+/// Resolves `entity`'s world-space [`QuadState`] given its already-known local
 /// state `local`, recursively composing through any `ChildOf` ancestor chain.
 ///
-/// Returns `local` unchanged for a root entity (no `ChildOf`) — zero-cost,
-/// zero-behavior-change for every entity that predates this milestone.
+/// Returns `local` unchanged for a top-level entity, one without a
+/// `ChildOf`.
 ///
 /// Call this fresh every time you need an entity's world state (per-frame
 /// rendering, on-demand bake capture) rather than caching the result — see the
@@ -161,15 +148,12 @@ pub fn resolve_world_position_query(
 // Cascade systems
 // ---------------------------------------------------------------------------
 
-/// Replaces `stub_visibility_system`. Cascades [`crate::Visibility`] down the
-/// hierarchy into [`EffectiveVisibility`]: a hidden parent makes its entire
-/// subtree effectively invisible regardless of what each descendant declares
-/// for itself.
+/// Cascades [`crate::Visibility`] down the hierarchy into
+/// [`EffectiveVisibility`]: a hidden parent hides its whole subtree, whatever
+/// each descendant's own visibility.
 ///
-/// Walks from roots (`Without<ChildOf>`) down through `Children`, so entities
-/// with no hierarchy involvement at all (every entity that predates this
-/// milestone) are treated as single-node roots and still get an
-/// `EffectiveVisibility` written (`own.visible`, unchanged from today).
+/// Walks down from each top-level entity through `Children`, so an entity with
+/// no parent or children gets an `EffectiveVisibility` equal to its own.
 pub fn visibility_system(
     mut commands: Commands,
     roots: Query<(Entity, Option<&crate::component::Visibility>), Without<ChildOf>>,
@@ -213,11 +197,11 @@ pub fn visibility_system(
     }
 }
 
-/// Replaces `stub_opacity_system`. Cascades [`Opacity`] down the hierarchy
-/// into [`EffectiveOpacity`], multiplying down the parent chain — a parent at
-/// `0.5` with a child at `0.8` yields an effective child opacity of `0.4`.
+/// Cascades [`Opacity`] down the hierarchy into [`EffectiveOpacity`],
+/// multiplying down the chain of parents: a parent at `0.5` with a child at
+/// `0.8` gives the child an effective opacity of `0.4`.
 ///
-/// Same root/children traversal shape as [`visibility_system`]; see its docs.
+/// It walks the hierarchy the same way as [`visibility_system`].
 pub fn opacity_system(
     mut commands: Commands,
     roots: Query<(Entity, Option<&Opacity>), Without<ChildOf>>,

@@ -1,6 +1,6 @@
 [package]
 name = "proteus-runtime"
-description = "Layer 2.75: Renderer + Engine + App/Host/HostServices contracts binding headless Proteus to a GPU surface (M13.1)"
+description = "Runs a Proteus app on a GPU surface: the app/host contract, the engine and its settings."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

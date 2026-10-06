@@ -1,18 +1,10 @@
-/**
- * `mount` — the TS → web front door, backed by `proteus-host-web` (M13.2).
- *
- * Wraps `proteus-host-web`'s raw wasm-bindgen `mount(canvasId, setup,
- * update)` export, converting the raw app object it hands `setup` into
- * this package's ergonomic {@link ProteusApp} before calling the caller's
- * own `setup`. That raw object is minted by `proteus-host-web`'s own,
- * separately-compiled wasm binary — not this package's `pkg/
- * proteus_sdk_web.js` — which is safe to wrap directly rather than a design
- * problem: both binaries compile the identical `#[wasm_bindgen] impl
- * ProteusApp` block (confirmed structurally identical generated `.d.ts`,
- * and each generated method call binds to its own module's wasm instance,
- * so nothing here ever crosses between the two). See `PLANNING.md`'s
- * M13.2 section for the full investigation.
- */
+// `mount`, which runs a TypeScript app on a canvas using `proteus-host-web`.
+//
+// The host is a separately compiled wasm module, and the app object it passes
+// to `setup` comes from that module, not from this package's own. Wrapping it
+// in this package's `ProteusApp` is safe: both modules compile the same
+// `ProteusApp` bindings, and each method call stays within the module that
+// created the object.
 
 import { mount as wasmMount } from "../pkg-host/proteus_host_web.js";
 import type { ProteusApp as WasmApp } from "../pkg/proteus_sdk_web.js";
@@ -20,19 +12,23 @@ import type { ProteusApp as WasmApp } from "../pkg/proteus_sdk_web.js";
 import { ProteusApp } from "./index.js";
 import type { ProteusConfigOverrides } from "./types.js";
 
+/** Options for {@link mount}. */
 export interface MountOptions {
-  /** Called once, synchronously, before the first frame is queued. */
+  /** Called once, before the first frame, to create the app's components. */
   setup: (app: ProteusApp) => void;
   /**
-   * Called every frame after `setup`, if provided. `app` isn't passed
-   * again here — capture it from `setup`'s own closure if `update` needs
-   * it (mirrors the raw wasm export's own doc: avoids reconstructing a
-   * fresh {@link ProteusApp} wrapper every frame for no reason).
+   * Called every frame, after the app has been ticked, with the time since
+   * the previous frame in seconds. To use the app here, keep the one passed
+   * to `setup`.
+   *
+   * Optional, because many apps need no per-frame code: an app that reacts
+   * only through callbacks registered in `setup`, such as `onClick` and
+   * `onTransitionComplete`, can leave it out. Use it for work that runs
+   * every frame, such as a countdown or an animation of your own.
    */
   update?: (deltaSeconds: number) => void;
   /**
-   * Partial engine configuration, applied on top of the web preset. Omit it,
-   * or omit any field, to keep the preset's value.
+   * Engine settings. Omit it, or any field, to keep the web default.
    *
    * ```ts
    * await mount("canvas", {
@@ -44,14 +40,33 @@ export interface MountOptions {
    * });
    * ```
    *
-   * Rejects rather than guesses: a misspelled field, an unknown
-   * `presentMode`, or a value the device can't support (an atlas larger than
-   * WebGL2 allows, say) throws with the offending field named.
+   * A misspelled field, an unknown value, or a value the device can't
+   * support, such as an atlas larger than WebGL2 allows, throws an error that
+   * names the field.
    */
   config?: ProteusConfigOverrides;
 }
 
-/** Mount a TS-authored app on the `<canvas>` element with the given id. */
+/**
+ * Runs an app on the `<canvas>` element with the given id: creates a
+ * {@link ProteusApp}, calls `setup` with it, then draws and ticks it every
+ * frame and reports pointer input to it.
+ *
+ * @example
+ * ```ts
+ * await mount("canvas", {
+ *   setup(app) {
+ *     const button = app.component({ geometry: buttonGeometry });
+ *     const panel = app.component({ geometry: panelGeometry, visible: false });
+ *     const open = app.signal();
+ *     button.onClick(() => open.set(panel, button, { duration: 0.4 }));
+ *   },
+ * });
+ * ```
+ *
+ * @throws if the canvas isn't found, the GPU can't be initialized, or
+ * `config` is invalid.
+ */
 export async function mount(
   canvasId: string,
   opts: MountOptions,

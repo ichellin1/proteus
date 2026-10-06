@@ -1,12 +1,12 @@
-//! Headless render integration test.
-//!
-//! Spins up a wgpu device without a surface, renders a known scene to an
-//! offscreen `Rgba8Unorm` texture, reads the pixels back via a mappable buffer,
-//! and asserts expected colors at specific pixel coordinates.
-//!
-//! If no GPU adapter is available (CI runner with no rendering support) the
-//! test is skipped with a warning rather than failing. On Linux CI the test
-//! requires `mesa-vulkan-drivers` (lavapipe) — see `.github/workflows/ci.yml`.
+// Headless render integration test.
+//
+// Spins up a wgpu device without a surface, renders a known scene to an
+// offscreen `Rgba8Unorm` texture, reads the pixels back via a mappable buffer,
+// and asserts expected colors at specific pixel coordinates.
+//
+// If no GPU adapter is available (CI runner with no rendering support) the
+// test is skipped with a warning rather than failing. On Linux CI the test
+// requires `mesa-vulkan-drivers` (lavapipe) — see `.github/workflows/ci.yml`.
 
 use proteus_render::{
     pack_atlas_page, AtlasConfig, MainAtlasPlacement, QuadInstance, QuadPipeline,
@@ -29,22 +29,22 @@ const BYTES_PER_ROW: u32 = WIDTH * 4;
 // Test
 // ---------------------------------------------------------------------------
 
-/// Render a 32×32 red quad into a 64×64 off-screen texture and verify:
-///
-///  - Center pixel (32,32) is red   — the quad covers the center quarter.
-///  - Corner pixels (0,0), (63,63)  are black — the clear color.
-///
-/// Scene layout (with `ortho(64,64)`, 1 unit = 1 pixel, origin at center):
-///
-/// ```text
-///  (0,0) ─────────────── (63,0)
-///    │    black           │
-///    │  (16,16)──(48,16)  │
-///    │    │   red  │      │
-///    │  (16,48)──(48,48)  │
-///    │           black    │
-///  (0,63)─────────────── (63,63)
-/// ```
+// Render a 32×32 red quad into a 64×64 off-screen texture and verify:
+//
+//  - Center pixel (32,32) is red   — the quad covers the center quarter.
+//  - Corner pixels (0,0), (63,63)  are black — the clear color.
+//
+// Scene layout (with `ortho(64,64)`, 1 unit = 1 pixel, origin at center):
+//
+// ```text
+//  (0,0) ─────────────── (63,0)
+//    │    black           │
+//    │  (16,16)──(48,16)  │
+//    │    │   red  │      │
+//    │  (16,48)──(48,48)  │
+//    │           black    │
+//  (0,63)─────────────── (63,63)
+// ```
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn headless_quad_renders_to_expected_color() {
@@ -110,14 +110,11 @@ fn headless_quad_renders_to_expected_color() {
 
     // Center (32, 32) — safely inside the red quad.
     //
-    // The `> 200` tolerance is historical: it was justified by the sampler
-    // blending the white sentinel texel with adjacent uninitialized ones, which
-    // is no longer true (the sentinel samples the atlas corner, `ClampToEdge`
-    // keeps every tap on white, and the whole guard block is white anyway —
-    // see `WHITE_PIXEL_UV_OFFSET`). Left as-is rather than tightened: this test
-    // is about the quad landing in the right place with the right hue, and
+    // The `> 200` tolerance is looser than needed, since the white pixel reads
+    // pure white (see `WHITE_PIXEL_UV_OFFSET`). This test is about the quad
+    // landing in the right place with the right hue;
     // `untextured_quad_renders_at_full_intensity_on_a_non_default_page_size`
-    // below is the one that actually pins sentinel intensity.
+    // below checks the intensity.
     let center = pixel(HEIGHT / 2, WIDTH / 2);
     assert!(
         center[0] > 200,
@@ -140,17 +137,15 @@ fn headless_quad_renders_to_expected_color() {
     assert!(br[2] < 10, "bottom-right.B expected ~0, got {}", br[2]);
 }
 
-/// A component with a `Glow` and a texture that has a genuine transparent
-/// hole in it (e.g. the reference demo's animated-logo mark, hatch gaps
-/// rendered as real alpha) must let whatever is *behind* the component show
-/// through that hole — not the glow's own color.
-///
-/// This was a latent bug in the shadow/glow SDF math: `shadow_alpha` plateaus
-/// at a roughly-constant value across the component's entire interior (not
-/// just near the edge), invisible for every component before this one because
-/// it always sat underneath fully-opaque main content. Regression test for
-/// the `shadow_alpha *= smoothstep(-1.0, 1.0, dist)` interior mask in
-/// `quad.wgsl`.
+// A component with a `Glow` and a texture that has a genuine transparent
+// hole in it (e.g. the reference demo's animated-logo mark, hatch gaps
+// rendered as real alpha) must let whatever is *behind* the component show
+// through that hole — not the glow's own color.
+//
+// Checks the `shadow_alpha *= smoothstep(-1.0, 1.0, dist)` interior mask in
+// `quad.wgsl`. Without it, `shadow_alpha` stays roughly constant across the
+// component's whole interior, not just near the edge. That only shows where
+// the texture is transparent; under opaque content it's hidden.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn glow_does_not_leak_through_transparent_texture_holes() {
@@ -175,8 +170,8 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
     // A 4×4 fully-transparent region — every texel is (0,0,0,0), so bilinear
     // sampling anywhere within it (no neighboring non-transparent texel to
     // blend against) reads back exactly transparent, keeping this test
-    // focused on the shadow/glow masking bug rather than the separate
-    // premultiplied-alpha filtering fix.
+    // focused on the shadow/glow mask rather than premultiplied-alpha
+    // filtering.
     let texture_id = pipeline
         .texture_registry
         .register_static(4, 4, false)
@@ -185,9 +180,8 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         .texture_registry
         .main_atlas_region(texture_id)
         .expect("just registered");
-    // Write to the region actually registered above, not a hardcoded (0, 0) — writing to
-    // (0, 0) would clobber the white-pixel sentinel every other component's untextured fill
-    // relies on, and wouldn't even be the region this test goes on to sample.
+    // Write to the region registered above, not to (0, 0), which is the white pixel
+    // every untextured component samples.
     pipeline.write_to_main_atlas(&queue, placement, &[0u8; 4 * 4 * 4]);
     let uv = pipeline
         .texture_registry
@@ -197,8 +191,8 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
 
     // Same 32×32 quad footprint as the test above (rows/cols [16,48]), fully
     // untinted so the transparent texture drives main_color's alpha, with a
-    // `Glow`-shaped shadow: navy at 0.8 effective alpha, softness 10 (matches
-    // `proteus-shell-native`'s `hover_glow()`), zero offset/spread.
+    // `Glow`-shaped shadow: navy at 0.8 effective alpha, softness 10, zero
+    // offset and spread.
     let instances = [QuadInstance {
         position: [0.0, 0.0, 0.5],
         size: [32.0, 32.0],
@@ -210,8 +204,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         corner_radius: 0.0,
         uv_offset,
         uv_scale,
-        // Use the real page this region landed on rather than assuming 0 — the whole point
-        // of pack_atlas_page/uv.page is that a static image's page isn't always 0 (M11.2).
+        // The page the region is actually on; it isn't always 0.
         atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, uv.page),
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
@@ -220,7 +213,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         border_color: [0.0, 0.0, 0.0, 0.0],
         border_offset: 0.0,
         shadow_params: [0.0, 0.0, 10.0, 0.0], // offset 0, softness 10, spread 0
-        shadow_color: [0.0, 0.0, 0.502, 0.8], // navy @ 0.8 — proteus-shell-native's hover_glow()
+        shadow_color: [0.0, 0.0, 0.502, 0.8], // navy @ 0.8
         base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
     }];
 
@@ -263,18 +256,17 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
     );
 }
 
-/// End-to-end proof that `main_atlas`'s array-layer index (M11.2) is actually load-bearing
-/// through the whole pipeline — `write_to_main_atlas`'s `origin.z`, the `D2Array` bind group,
-/// and `quad.wgsl`'s `textureSampleLevel(main_atlas, ..., layer, 0.0)` — not silently ignored
-/// anywhere along the way.
-///
-/// Writes solid red into page 1 at (8, 8), leaving page 0 at that same (x, y) untouched (still
-/// zero-initialized, i.e. transparent). Renders two quads with *identical* UVs side by side —
-/// one sampling page 1, one sampling page 0 — against a green clear. Both assertions matter:
-/// the positive one (page 1 shows red) proves the layer index reaches the GPU at all; the
-/// negative one (page 0 does *not* show red, despite identical UVs) is what actually rules out
-/// "the shader ignores the layer and always samples layer 0" — without it, a shader that
-/// dropped the layer argument entirely would still pass the positive half by coincidence.
+// Checks that the main-atlas page is used all the way through: by
+// `write_to_main_atlas`'s `origin.z`, the array bind group, and `quad.wgsl`'s
+// `textureSampleLevel(main_atlas, ..., layer, 0.0)`.
+//
+// Writes solid red into page 1 at (8, 8), leaving page 0 at that same (x, y) untouched (still
+// zero-initialized, i.e. transparent). Renders two quads with *identical* UVs side by side —
+// one sampling page 1, one sampling page 0 — against a green clear. Both assertions matter:
+// the positive one (page 1 shows red) proves the layer index reaches the GPU at all; the
+// negative one (page 0 does *not* show red, despite identical UVs) is what actually rules out
+// "the shader ignores the layer and always samples layer 0" — without it, a shader that
+// dropped the layer argument entirely would still pass the positive half by coincidence.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
@@ -370,20 +362,19 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
     );
 }
 
-/// An untextured quad must render its `color` at full intensity **whatever
-/// `AtlasConfig::page_size` is set to**.
-///
-/// `WHITE_PIXEL_UV_OFFSET` is a normalised UV, so the texel it lands on scales
-/// with the real page size. It used to be `0.5 / 2048` — the centre of texel 0
-/// only on a 2048px page. At 4096 (`ProteusConfig::desktop()`, a shipped public
-/// preset) that lands exactly on the texel 0/1 boundary on both axes, so the
-/// bilinear sampler averaged the one white texel with three never-written ones
-/// and every solid-colour quad in the app rendered at roughly quarter
-/// intensity. Nothing caught it because no host or test used a non-default
-/// page size.
-///
-/// Rendered here at 4096 against a green clear: a red quad must come back
-/// essentially pure red, not a quarter-strength wash of it.
+// An untextured quad must render its `color` at full intensity **whatever
+// `AtlasConfig::page_size` is set to**.
+//
+// `WHITE_PIXEL_UV_OFFSET` is a normalized UV, so the texel it lands on
+// depends on the page size. A texel-center offset such as `0.5 / 2048` is the
+// center of texel 0 only on a 2048px page. At 4096 (the
+// `ProteusConfig::desktop()` preset) it lands on the texel 0/1 boundary on
+// both axes, so the bilinear sampler averages the white texel with three
+// unwritten ones, and every solid-color quad renders at about quarter
+// intensity.
+//
+// Rendered here at 4096 against a green clear: a red quad must come back
+// essentially pure red, not a quarter-strength wash of it.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
@@ -457,8 +448,8 @@ fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Render `instances` into a fresh `WIDTH × HEIGHT` offscreen texture cleared
-/// to `clear_color`, and read the result back as a flat RGBA8 byte buffer.
+// Render `instances` into a fresh `WIDTH × HEIGHT` offscreen texture cleared
+// to `clear_color`, and read the result back as a flat RGBA8 byte buffer.
 fn render_and_read_back(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -546,11 +537,11 @@ fn render_and_read_back(
     view.to_vec()
 }
 
-/// Like [`make_device`], but asks for `wgpu::Limits::default()` so the test can
-/// build an atlas larger than `downlevel_defaults`' 2048 cap. Returns `None` if
-/// no adapter exists *or* the one we get can't actually reach `min_dimension` —
-/// a software rasteriser on CI may legitimately be smaller, and that's a skip,
-/// not a failure.
+// Like [`make_device`], but asks for `wgpu::Limits::default()` so the test can
+// build an atlas larger than `downlevel_defaults`' 2048 cap. Returns `None` if
+// no adapter exists *or* the one we get can't actually reach `min_dimension` —
+// a software rasteriser on CI may legitimately be smaller, and that's a skip,
+// not a failure.
 async fn make_device_with_large_textures(
     min_dimension: u32,
 ) -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -565,8 +556,8 @@ async fn make_device_with_large_textures(
     Some((device, queue))
 }
 
-/// Try to get a wgpu device suitable for headless rendering.
-/// Returns `None` if no adapter is available so the test can skip gracefully.
+// Try to get a wgpu device suitable for headless rendering.
+// Returns `None` if no adapter is available so the test can skip gracefully.
 async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     // downlevel_defaults: permissive enough for software renderers,
     // still enforces everything we actually use.

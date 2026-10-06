@@ -1,15 +1,9 @@
-//! Generic `Text` / `Image` → `main_atlas` baking.
+//! Baking a component's `Text` and `Image` into the atlas, once per frame from
+//! [`crate::Renderer::render`].
 //!
-//! Lifted verbatim from `proteus-shell-native/src/main.rs` (M13.1 step 2),
-//! where `bake_pending_text` / `bake_pending_images` / `bake_images` were
-//! identical free functions hand-duplicated into `proteus-shell-web`. Only
-//! *which* bytes and *what size cap* were ever platform- or app-specific;
-//! rasterizing a `Text` and decoding an `Image` into the atlas is generic,
-//! so it belongs here, driven once per frame by [`crate::Renderer::render`].
-//!
-//! Static **composite** baking (`Baked` / `childBehavior: 'bake'`) is a
-//! different thing entirely — it stays in `proteus_ui::bake_system`, which
-//! runs inside the ECS schedule and needs `Query` access to walk a subtree.
+//! Baking a whole component (`ComponentSpec::bake`) is separate: it is
+//! `proteus_ui::bake_system`, which runs in the ECS schedule because it walks
+//! the component's children.
 
 use std::sync::Arc;
 
@@ -23,28 +17,18 @@ use proteus_ui::{BakedImage, BakedText, EffectiveVisibility, Image, Text, Textur
 use crate::services::HostServices;
 use proteus_sdk::TextureRequest;
 
-/// Same "prefer the cascaded `EffectiveVisibility`, fall back to the
-/// entity's own raw `Visibility`, default visible" convention
-/// `proteus_ui::collect_instances` already uses — see that function's own
-/// doc for why (a bare `World` in a test may never have run the visibility
-/// cascade at all).
+/// Whether an entity is visible: its cascaded visibility if that has been
+/// computed, else its own, else visible. The same rule
+/// `proteus_ui::collect_instances` uses.
 fn is_visible(vis: Option<&Visibility>, eff_vis: Option<&EffectiveVisibility>) -> bool {
     eff_vis
         .map(|v| v.0)
         .unwrap_or_else(|| vis.map(|v| v.visible).unwrap_or(true))
 }
 
-/// Fetch an asset's bytes via `services`, decode, and bake — backs
-/// [`Frame::load_texture`]. The fetch-and-decode half of the work; the actual
-/// atlas registration/upload is [`bake_texture`], shared with
-/// [`Frame::bake_texture`] (M13.4) for a caller that already has pixels in
-/// hand and has no key to fetch (e.g. procedurally generated content).
-///
-/// A missing/undecodable asset yields a null `TextureHandle` — see
-/// [`bake_texture`]'s own doc for the rest of the graceful-degradation story.
-///
-/// [`Frame::load_texture`]: crate::Frame::load_texture
-/// [`Frame::bake_texture`]: crate::Frame::bake_texture
+/// Loads an asset through `services`, decodes it and bakes it. Implements
+/// [`Frame::load_texture`](crate::Frame::load_texture). A missing or
+/// undecodable asset gives a null handle.
 pub(crate) fn load_texture(
     proteus: &mut proteus_sdk::Proteus,
     services: &mut dyn HostServices,
@@ -62,8 +46,8 @@ pub(crate) fn load_texture(
             return TextureHandle::from_texture_id(TextureId::default());
         }
     };
-    // Decoded here rather than through `Proteus::load_texture` so the
-    // failure log can name the key, which that layer has no way to know.
+    // Decoded here rather than by `Proteus::load_texture`, so that the
+    // failure log can name the asset key.
     bake_texture(
         proteus,
         decoded.width,
@@ -72,13 +56,8 @@ pub(crate) fn load_texture(
         req,
     )
 }
-/// Bake already-decoded RGBA pixels into `main_atlas`.
-///
-/// Delegates to [`proteus_sdk::Proteus::bake_texture`], which is where this
-/// lives now — it needs nothing but the world and `proteus-render`, so it
-/// belongs a layer down where an SDK caller (including TypeScript) can reach
-/// it. `Frame` keeps the method so an app that already has a `Frame` in hand
-/// doesn't have to reach past it.
+/// Adds RGBA pixels to the atlas, through
+/// [`proteus_sdk::Proteus::bake_texture`].
 pub(crate) fn bake_texture(
     proteus: &mut proteus_sdk::Proteus,
     width: u32,
@@ -89,11 +68,9 @@ pub(crate) fn bake_texture(
     proteus.bake_texture(width, height, rgba, req)
 }
 
-/// Rasterize and upload every `Text` entity that has no `BakedText` yet. If
-/// `lazy_load` is set (M13.4 step 2 — `ResourceConfig.lazy_load`, declared in
-/// M13.5, previously never read), an entity that isn't currently visible is
-/// left pending rather than baked — it'll be picked up here again on some
-/// later call once it becomes visible.
+/// Rasterizes and uploads the text of every entity that has `Text` but no
+/// `BakedText` yet. With `lazy_load`, a hidden entity is skipped until it is
+/// visible.
 pub(crate) fn bake_pending_text(
     world: &mut World,
     font_atlas: &mut FontAtlas,
@@ -156,11 +133,12 @@ pub(crate) fn bake_pending_text(
     }
 }
 
-/// Decode and upload every `Image` entity that has no `BakedImage` yet.
+/// Decodes and uploads the image of every entity that has `Image` but no
+/// `BakedImage` yet. With `lazy_load`, a hidden entity is skipped until it is
+/// visible.
 ///
-/// Each entity's own [`Image::max_side`] wins; `default_max_side` is the
-/// fallback for entities that don't set one (`None` on both = no downscale).
-/// `lazy_load` — see [`bake_pending_text`]'s identical doc.
+/// An image is scaled down to its own [`Image::max_side`], or else to
+/// `default_max_side`; with neither, it keeps its full size.
 pub(crate) fn bake_pending_images(
     world: &mut World,
     queue: &wgpu::Queue,
@@ -238,11 +216,8 @@ mod tests {
     use super::is_visible;
     use proteus_ui::{EffectiveVisibility, Visibility};
 
-    // Mirrors M6's own stated preference for deterministic, GPU-free tests
-    // over pixel/integration ones (see PLANNING.md) — `is_visible` is the
-    // one piece of lazy-load logic worth pinning down in isolation; the
-    // surrounding `query_filtered` plumbing reuses the exact pattern
-    // `proteus_ui::collect_instances` already has extensive coverage for.
+    // `is_visible` is the part of lazy loading worth testing on its own, and
+    // it needs no GPU.
 
     #[test]
     fn no_components_defaults_to_visible() {
@@ -257,9 +232,8 @@ mod tests {
 
     #[test]
     fn effective_visibility_wins_over_raw_visibility() {
-        // A visible entity under a hidden ancestor: EffectiveVisibility
-        // reflects the cascade, raw Visibility does not — the cascaded
-        // value must win, exactly like collect_instances.
+        // A visible entity under a hidden ancestor: the cascaded visibility
+        // must win over the entity's own, as in collect_instances.
         assert!(!is_visible(
             Some(&Visibility::VISIBLE),
             Some(&EffectiveVisibility(false))

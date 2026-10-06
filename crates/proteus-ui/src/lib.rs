@@ -1,18 +1,24 @@
-//! `proteus-ui` — Layer 2: the metamorphic component model.
+//! The Proteus component model and transition engine, built on `bevy_ecs`.
 //!
-//! A component is an *identity* — a stable reference that exists independently
-//! of its current visual form. Transitions declare a new target geometric
-//! state; the framework morphs continuously between forms across three
-//! topologies: 1→1, 1→N, and N→1.
+//! A component is an identity that lasts, whatever its current appearance.
+//! A transition gives it new geometry, and the engine moves it there
+//! continuously, in one of three shapes: 1→1, 1→N and N→1. App code usually
+//! uses this through `proteus-sdk`.
 //!
 //! ## Key concepts
 //!
-//! - [`component::QuadState`] — the visual geometry of one component, lerped during transitions
-//! - [`component::Lifecycle`] — two-state machine: `Idle` / `Transitioning`
-//! - [`transition::ActiveTransition`] — per-entity transition state managed by the ECS systems
-//! - [`transition::TransitionConfig`] — duration, delay, easing declared at the call site
-//! - [`transition::CompletedTransitions`] — resource; drain after `world.update()` to react
-//! - [`schedule::ProteusWorld`] — the ECS world + schedule; call `update(dt)` once per frame
+//! - [`component::QuadState`]: a component's geometry, interpolated during
+//!   transitions.
+//! - [`component::Lifecycle`]: whether it is `Idle` or `Transitioning`.
+//! - [`transition::ActiveTransition`]: a transition in progress.
+//! - [`transition::TransitionConfig`]: a transition's duration, delay and
+//!   easing.
+//! - [`transition::CompletedTransitions`]: the transitions that finished this
+//!   tick.
+//! - [`schedule::ProteusWorld`]: the ECS world and schedule; `update(dt)` runs
+//!   one tick.
+
+#![warn(missing_docs)]
 
 pub mod bake;
 pub mod collect;
