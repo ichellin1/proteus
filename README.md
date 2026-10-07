@@ -4,10 +4,12 @@ Proteus is a cross-platform UI framework written in Rust. Its defining idea: **U
 
 ## Read First
 
+→ [Guides](./docs/README.md) — getting started, concepts and how-tos, in Rust and TypeScript
+→ API reference — [Rust](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/) and
+  [TypeScript](https://ichellin1.github.io/proteus/api/ts/)
 → [VISION.md](./VISION.md) — the philosophy and principles
 → [ROADMAP.md](./ROADMAP.md) — milestones and sequencing
-→ [PLANNING.md](./PLANNING.md) — full architecture decisions and definitions of done
-→ [GETTING_STARTED.md](./GETTING_STARTED.md) — dependencies, demo assets, build & run instructions
+→ [CONTRIBUTING.md](./CONTRIBUTING.md) — building from source, and how code and docs are written
 → [RELEASING.md](./RELEASING.md) — release strategy and deploy steps for the web reference demo
 
 ## Crate Structure
@@ -27,6 +29,7 @@ crates/
   proteus-shell-web/    # Layer 4: a wasm entry point that hands it to proteus-host-web
 examples/
   gallery/              # the TypeScript front door — the SDK driven from TS, no Rust
+  video/                # video from the browser's own <video> player, in TypeScript
 ```
 
 **Writing an app** means implementing `proteus_runtime::App` (`setup` once, `update` per frame)
@@ -54,9 +57,9 @@ framework examples (effects, text, transforms, stress tests).
 
 One `proteus-demo` crate drives both platforms; each shell just picks the host.
 
-See **[GETTING_STARTED.md](./GETTING_STARTED.md)** for dependency installation, demo-asset
-setup, and full run/test instructions for both shells. Quick version, once dependencies and
-assets are in place:
+See **[CONTRIBUTING.md](./CONTRIBUTING.md#building-from-source)** for dependencies, demo
+assets, and full run and test instructions for both shells. Quick version, once the
+dependencies are installed:
 
 ```
 cargo run -p proteus-shell-native   # native

@@ -1,0 +1,13 @@
+{
+  // Type-checks the TypeScript snippets in docs/, which
+  // scripts/check-ts-snippets.mjs writes to .snippets/. They import
+  // "proteus-sdk", resolved to this package's source.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "paths": { "proteus-sdk": ["./src/index.ts"] }
+  },
+  "include": [".snippets/**/*.ts"]
+}

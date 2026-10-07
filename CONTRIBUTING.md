@@ -1,7 +1,96 @@
 # Contributing to Proteus
 
-This guide covers how code comments, documentation and commit messages are written in this
-repository.
+This guide covers building Proteus from source, and how code comments, documentation and
+commit messages are written in this repository. To use Proteus in your own app, start with the
+[guides](./docs/README.md) instead.
+
+## Building from source
+
+### What runs what
+
+One crate, `proteus-demo`, is the reference demo: it implements `proteus_runtime::App` and
+knows nothing about windows, canvases or GPUs. Two shells hand it to a host:
+`proteus-shell-native` to `proteus-host-winit`, and `proteus-shell-web` to `proteus-host-web`.
+Each shell supplies only what differs by platform: where the assets are, the window or canvas,
+and a video player. The demo itself is the same code either way.
+
+`examples/` holds apps written with the TypeScript SDK, with no Rust in the app itself.
+
+### Platform support
+
+The native shell is only built and tested on macOS so far. It uses `wgpu` and `winit` with no
+macOS-specific code, so Linux and Windows will likely work, but they haven't been tested yet.
+The web shell runs in any browser with WebGL2.
+
+### Dependencies
+
+- **Rust**, through [rustup](https://rustup.rs/).
+- **Native shell:** `ffmpeg` and `ffprobe` on `PATH`. The native shell's video player,
+  `crates/proteus-shell-native/src/video_player.rs`, runs them to decode MP4. On macOS,
+  `brew install ffmpeg`. Without them, video logs a warning and is skipped; the rest of the demo
+  works.
+- **Web shell:** `wasm-pack` (`cargo install wasm-pack`), and Python 3, whose HTTP server
+  `make serve-web` uses. Any server for static files works instead.
+- **TypeScript SDK and examples:** Node 20 or later, and `wasm-pack`.
+
+### Demo assets
+
+The demo's images and videos are committed under each shell:
+`crates/proteus-shell-native/images/` and `assets/videos/`, and
+`crates/proteus-shell-web/www/images/` and `www/videos/`. There is nothing to download.
+
+The web shell plays HLS rather than the `.mp4` files: `www/videos/hls/{tiger,sintel,jellyfish}/`
+hold the segmented streams, made from those files by `www/videos/make_hls.sh`. Run it again if
+you replace them.
+
+To use your own assets, put them at the same paths. `DemoApp::asset_keys()` in
+`crates/proteus-demo/src/app.rs` lists every image the demo loads, and the web shell downloads
+exactly that list before the demo starts. The videos are listed in each shell:
+`TILE_VIDEO_PATHS` in `crates/proteus-shell-native/src/main.rs`, and `tile_streams()` in
+`crates/proteus-shell-web/src/lib.rs`. Without its assets, the demo still runs, with plain
+placeholders and no video.
+
+### Running the demo
+
+Natively:
+
+```bash
+cargo run --release -p proteus-shell-native
+```
+
+In a browser, the page must be served over HTTP, since it fetches its WebAssembly and assets:
+
+```bash
+make serve-web
+```
+
+This builds the WebAssembly bundle with `wasm-pack` and serves `crates/proteus-shell-web/www/`
+on <http://localhost:8080>. `make build-web` builds it without serving.
+
+### The TypeScript SDK and examples
+
+```bash
+make build-sdk-web
+```
+
+builds `proteus-sdk-web` and `proteus-host-web` to WebAssembly (into `ts/pkg` and
+`ts/pkg-host`), then compiles the TypeScript package into `crates/proteus-sdk-web/ts/dist/`. The
+examples depend on it through a `file:` link, so build it first. Then, in an example's
+directory, such as `examples/gallery`:
+
+```bash
+npm install
+npm run dev
+```
+
+### Checks
+
+```bash
+make check
+```
+
+runs the formatting, lint and test checks that CI runs. `make fmt`, `make clippy` and
+`make test` run one each.
 
 ## Writing comments and docs
 
@@ -68,6 +157,23 @@ catches the rest.
   and `transitionChannel` each carry an `@example`.
 - Write for someone who only knows TypeScript. Don't send them to Rust items ("see
   `proteus_ui::SplitStrategy`"); explain the behaviour where they are reading.
+
+### Guides in `docs/`
+
+- Rust is the first-class language: each page shows Rust first, then TypeScript, explaining
+  the concept once.
+- Every code snippet is checked in CI. Rust snippets run as doctests through the
+  `proteus-docs` crate (`cargo test -p proteus-docs`); add each new page to `pages!` in its
+  `lib.rs`, or a test fails. TypeScript snippets are type-checked against the SDK
+  (`npm run check-snippets` in `crates/proteus-sdk-web/ts`, after `make build-sdk-web`).
+- Label every code block. rustdoc tests a block with no language as Rust, so a shell command
+  is `bash`, output is `text`, and TypeScript is `ts`.
+- Keep snippets short. A Rust snippet hides its setup behind `# ` lines, and is `no_run` if it
+  opens a window. A TypeScript snippet can use the names that
+  `scripts/ts-snippet-prelude.ts` declares, such as `app` and `button`, without declaring them,
+  and mustn't declare them again.
+- Link to the API reference for details rather than repeating them, and never to
+  `PLANNING.md`.
 
 ### Terminology
 

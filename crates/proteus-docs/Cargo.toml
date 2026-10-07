@@ -1,0 +1,15 @@
+[package]
+name = "proteus-docs"
+description = "Runs the Rust snippets in docs/ as doctests."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# What the guides' Rust snippets use.
+proteus-sdk = { path = "../proteus-sdk" }
+proteus-runtime = { path = "../proteus-runtime" }
+proteus-host-winit = { path = "../proteus-host-winit" }
