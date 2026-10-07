@@ -84,7 +84,11 @@ export interface StyleOverride {
   cornerRadius?: number;
 }
 
-/** A single line of text. The host bakes it the next time it renders a frame. */
+/**
+ * A single line of text. The host bakes it the next time it renders a frame.
+ * Text wider than an atlas page (2048 pixels by default) is clipped to it,
+ * with a warning.
+ */
 export interface TextSpec {
   /** The text: a single line. */
   content: string;
@@ -99,7 +103,8 @@ export interface TextSpec {
 /**
  * An image, as the bytes of a PNG or JPEG file, for example from a `fetch()`
  * response. The format is detected from the data. The host decodes and bakes
- * it the next time it renders a frame.
+ * it the next time it renders a frame. An image larger than an atlas page
+ * (2048 pixels by default) is scaled down to fit it, with a warning.
  */
 export interface ImageSpec {
   /** The PNG or JPEG file's bytes. */
@@ -184,6 +189,12 @@ export interface ComponentSpec {
    * Bakes the component and its children into a single texture, permanently.
    * The host renders them once and then destroys the children, so their
    * handles stop working. Suited to detailed content that never changes.
+   * Baking happens once the host has baked the text and images in them,
+   * usually within a frame or two.
+   *
+   * A component larger than an atlas page (2048 pixels by default) can't be
+   * baked. It is drawn normally instead, with its children, and a warning is
+   * logged.
    */
   bake?: boolean;
   /** A single line of text drawn on the component. */
@@ -267,7 +278,11 @@ export interface ProteusConfigOverrides {
   memory?: {
     /** The size and number of pages in the main texture atlas. A size larger than the device supports throws at mount. */
     mainAtlas?: {
-      /** Width and height of each page, in pixels. */
+      /**
+       * Width and height of each page, in pixels. No texture can be larger
+       * than a page: larger text is clipped, a larger image is scaled down,
+       * and a larger baked component is drawn unbaked, each with a warning.
+       */
       pageSize?: number;
       /** Number of pages. */
       pageCount?: number;
@@ -284,7 +299,11 @@ export interface ProteusConfigOverrides {
   };
   /** Image and texture loading. */
   resources?: {
-    /** Scale images down so their longer side is at most this many pixels. `null` keeps full size. */
+    /**
+     * Scale images down so their longer side is at most this many pixels.
+     * `null` keeps full size, up to an atlas page: a larger image is scaled
+     * down to fit the page.
+     */
     imageMaxSide?: number | null;
     /** Wait to bake a component's text or image until the component is visible. */
     lazyLoad?: boolean;

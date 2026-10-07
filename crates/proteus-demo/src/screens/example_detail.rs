@@ -136,12 +136,8 @@ pub struct StressContent {
     /// why this is one of the few pieces of category content that *does*
     /// get the live theme lerp.
     pub button_labels: [Handle; 2],
-    /// Seeded with a single space, not empty — an empty string leaves
-    /// `bake_pending_text` with nothing to rasterize, so it never gains a
-    /// `BakedText` and gets retried forever. `Demo::finalize_stress_test`
-    /// updates `.content` then calls `Handle::free_resources` to force a
-    /// re-bake (`Text` doesn't support in-place content changes otherwise —
-    /// see `proteus_ui::text`'s own doc).
+    /// Empty until a run finishes; `Demo::finalize_stress_test` then sets
+    /// the result with `Handle::set_text`.
     pub result_text: Handle,
     pub warning_text: Handle,
 }
@@ -564,14 +560,14 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     let (burst_button, burst_label) = stress_button(app, "Run Burst Spawn");
     let (churn_button, churn_label) = stress_button(app, "Run Texture Churn");
 
-    // Seeded with a single space — see `StressContent::result_text`'s doc.
+    // Empty until a run finishes — see `StressContent::result_text`'s doc.
     let result_text = app.component(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, CONTENT_Z),
             color: Vec4::new(1.0, 1.0, 1.0, 0.0),
             ..Default::default()
         })
-        .text(Text::new(" ", 16.0).with_color(violet()))
+        .text(Text::new("", 16.0).with_color(violet()))
         .non_interactive(),
     );
     let warning_text = app.component(

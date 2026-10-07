@@ -33,14 +33,15 @@ impl Frame<'_> {
     /// components, or swapped frame by frame.
     ///
     /// A missing or undecodable asset gives a null handle, which draws
-    /// nothing.
+    /// nothing. Attach the texture in the same frame; see
+    /// [`Proteus::bake_texture`].
     pub fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle {
         crate::bake::load_texture(self.proteus, self.services, key, req)
     }
 
     /// Adds RGBA pixels to the atlas and returns a handle to them; see
     /// [`Proteus::bake_texture`]. `rgba` holds `width * height * 4` bytes. A
-    /// full atlas gives a null handle.
+    /// full atlas gives a null handle. Attach the texture in the same frame.
     pub fn bake_texture(
         &mut self,
         width: u32,
@@ -174,7 +175,7 @@ pub trait App {
 }
 
 #[cfg(test)]
-mod video_tests {
+pub(crate) mod video_tests {
     use super::*;
     use proteus_render::{AtlasConfig, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
     use proteus_sdk::Proteus;
@@ -221,7 +222,9 @@ mod video_tests {
         }
     }
 
-    async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    /// A GPU device with no surface, or `None` without an adapter. Shared
+    /// with the other modules' GPU tests.
+    pub(crate) async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()

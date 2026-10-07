@@ -27,10 +27,8 @@
 //! [`Border::new`] uses) draws correctly; see [`Border`]. A border is
 //! independent of shadows and glows, so a component can have all three.
 //!
-//  B-14, to be fixed in step 5; remove this paragraph then.
-//! **Known issue:** a component's opacity doesn't apply to its shadow, glow
-//! or border yet. They stay at full strength as the component fades, so to
-//! fade one out completely, fade their colors' alpha too.
+//! A component's opacity fades its shadow, glow and border along with the
+//! rest of it.
 
 use bevy_ecs::prelude::Component;
 use glam::{Vec2, Vec4};

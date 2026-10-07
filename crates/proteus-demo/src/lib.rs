@@ -1008,12 +1008,8 @@ impl Demo {
     /// `DemoApp`-does-the-I/O convention as [`Demo::set_background_image`]/
     /// [`Demo::set_tile_image`], but a tile can be re-fetched
     /// (`start_gallery_to_loading`'s refetch), unlike either of those, so
-    /// this also frees the tile's prior baked image/texture first
-    /// (`Handle::free_resources`) — without that, the renderer's next bake
-    /// pass would see the tile already has a baked image (from the
-    /// previous fetch) and skip re-baking the fresh bytes entirely, per
-    /// the renderer's rule of baking anything with an `Image` but no
-    /// `BakedImage` yet. Stamps this tile as
+    /// this uses `Handle::set_image`, which replaces the previous fetch's
+    /// image. Stamps this tile as
     /// belonging to the current fetch generation — see
     /// `gallery_tile_fetch_generation`'s doc. Call only for tiles whose
     /// bytes `DemoApp` actually managed to fetch; a tile that never gets a
@@ -1039,12 +1035,8 @@ impl Demo {
         aspect: Vec2,
     ) {
         let tile = self.gallery.tiles[idx];
-        let _ = tile.free_resources(proteus);
+        let _ = tile.set_image(proteus, Image::new(bytes));
         self.pending_gallery_tile_crop[idx] = true;
-        proteus
-            .world_mut()
-            .entity_mut(tile.id())
-            .insert(Image::new(bytes));
         self.gallery_tile_fetch_generation[idx] = self.gallery_fetch_generation;
         self.gallery_tile_aspect[idx] = aspect;
     }
@@ -1066,15 +1058,14 @@ impl Demo {
         if self.state != AppState::GalleryImage(idx) {
             return;
         }
-        let _ = self.gallery.hires_overlay.free_resources(proteus);
         // The one entity that wants a bigger cap than the rest of the grid —
         // only one hires image is ever resident, so it can afford a larger
         // footprint than the 12 simultaneous thumbnails. The renderer's bake
         // honours `Image::max_side`.
-        proteus
-            .world_mut()
-            .entity_mut(self.gallery.hires_overlay.id())
-            .insert(Image::new(bytes).with_max_side(900));
+        let _ = self
+            .gallery
+            .hires_overlay
+            .set_image(proteus, Image::new(bytes).with_max_side(900));
     }
 
     /// Resizes/repositions everything that depends on the viewport size but
@@ -1436,6 +1427,7 @@ impl Demo {
         }
         let _ = tile.stop_video(proteus);
         self.pending_video_stop = true;
+        self.restore_idle_tiles_opacity(proteus, idx);
         let targets: Vec<(Handle, QuadState)> = (0..3)
             .map(|i| {
                 let t = self.video_tiles.tiles[i];
@@ -1463,6 +1455,22 @@ impl Demo {
     /// get revealed by the split itself — they're hidden explicitly here;
     /// otherwise they'd be left visible at their old grid position, which
     /// would be wrong given nothing on `Home` should show any tile at all.
+    /// Restores the opacity of the tiles `advance_video_crossfade` faded out
+    /// while tile `idx` played, hiding them first. Must run before a split
+    /// that targets them: the split bakes each target's end image at the
+    /// target's current opacity, so a tile still faded out would bake as
+    /// nothing, and its pieces would fade out instead of in. Hidden, they
+    /// can't flash at full opacity before the split takes them over, and
+    /// whatever reveals them next shows them restored.
+    fn restore_idle_tiles_opacity(&self, proteus: &mut Proteus, idx: usize) {
+        for (i, &other) in self.video_tiles.tiles.iter().enumerate() {
+            if i != idx {
+                let _ = other.set_visible(proteus, false);
+                let _ = other.set_opacity(proteus, 1.0);
+            }
+        }
+    }
+
     fn start_screen_to_home(&mut self, proteus: &mut Proteus, idx: usize) {
         let tile = self.video_tiles.tiles[idx];
         // See `start_screen_to_tiles`'s identical restore for why this must
@@ -1472,6 +1480,7 @@ impl Demo {
         }
         let _ = tile.stop_video(proteus);
         self.pending_video_stop = true;
+        self.restore_idle_tiles_opacity(proteus, idx);
         let targets = self.home.nav_buttons;
         let _ = tile.split_to(
             proteus,
@@ -1487,11 +1496,6 @@ impl Demo {
         // `Visibility`, never resyncs geometry). See `PendingTileReset`'s
         // doc for why this can't happen synchronously here.
         self.pending_tile_reset = Some(PendingTileReset { tile });
-        for (i, &other) in self.video_tiles.tiles.iter().enumerate() {
-            if i != idx {
-                let _ = other.set_visible(proteus, false);
-            }
-        }
         self.state = AppState::Home;
     }
 
@@ -1704,10 +1708,6 @@ impl Demo {
         // crossfading the wrong photo in immediately, before this visit's
         // own fetch has even started.
         let _ = self.gallery.hires_overlay.free_resources(proteus);
-        proteus
-            .world_mut()
-            .entity_mut(self.gallery.hires_overlay.id())
-            .remove::<Image>();
         let _ = self.gallery.hires_overlay.set_visible(proteus, false);
         self.gallery_hires_fade = 0.0;
 
@@ -1913,12 +1913,11 @@ impl Demo {
     ///
     /// Covers all 3 tiles, not just the one that was playing — a split's
     /// own reveal only flips `Visibility`, it never rewrites a target's
-    /// live `QuadState`/`Border`/`Glow` back to anything (same "reveal
-    /// doesn't touch content" rule [`Handle::copy_baked_image_from`]'s doc
-    /// already covers for `BakedImage`) — the *other two* tiles, faded out
-    /// by `Demo::advance_video_crossfade` while this one was playing (see
-    /// that function's own doc), would otherwise stay stuck at that faded
-    /// alpha, with their backgrounds missing. Called for all 3 tiles from
+    /// live `QuadState` or `Glow` back to anything (same "reveal doesn't
+    /// touch content" rule [`Handle::copy_baked_image_from`]'s doc already
+    /// covers for `BakedImage`). Their opacity, faded out by
+    /// `Demo::advance_video_crossfade`, is restored earlier, before the
+    /// split: see `Demo::restore_idle_tiles_opacity`. Called for all 3 tiles from
     /// `settle(AppState::VideoTiles)`.
     ///
     /// `video_tiles::tile_target_state`'s own `color` is `tile_quad`'s
@@ -1939,12 +1938,8 @@ impl Demo {
             if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
                 *qs = state;
             }
-            if let Some(mut border) = proteus.world_mut().get_mut::<Border>(tile.id()) {
-                border.color.w = 1.0;
-            }
             if let Some(mut glow) = proteus.world_mut().get_mut::<Glow>(tile.id()) {
                 glow.radius = 0.0;
-                glow.color.w = 1.0;
             }
         }
     }
@@ -2098,10 +2093,7 @@ impl Demo {
     /// revealed the tiles has actually completed — not just started), and
     /// out the instant a `Gallery`→elsewhere transition begins. Paced by
     /// `gallery_group_transition_config()`'s own duration so it lands at
-    /// `0`/`1` right as that transition completes/starts. The button has no
-    /// background fill (same transparent-idle-fill convention as the nav
-    /// buttons), so border/glow/label alpha are what actually reads as
-    /// "fading in/out"; nothing else sets their alpha, so without this the
+    /// `0`/`1` right as that transition completes/starts. Without this the
     /// button would pop in and out. "Settled" is read from the tiles' own real
     /// `Visibility` rather than a fixed-duration timer: group transitions
     /// never write a target's own `QuadState`/`Visibility` until the whole
@@ -2126,24 +2118,8 @@ impl Demo {
         }
         let fade = self.gallery_button_fade;
         let _ = self.gallery.fetch_button.set_visible(proteus, fade > 0.0);
-        if let Some(mut border) = proteus
-            .world_mut()
-            .get_mut::<Border>(self.gallery.fetch_button.id())
-        {
-            border.color.w = fade;
-        }
-        if let Some(mut glow) = proteus
-            .world_mut()
-            .get_mut::<Glow>(self.gallery.fetch_button.id())
-        {
-            glow.color.w = fade;
-        }
-        if let Some(mut label) = proteus
-            .world_mut()
-            .get_mut::<Text>(self.gallery.fetch_button_label.id())
-        {
-            label.color.w = fade;
-        }
+        // Fades the border, the glow and the label, which is a child.
+        let _ = self.gallery.fetch_button.set_opacity(proteus, fade);
     }
 
     /// Fades `loading.logo`/`loading.logo_dark` out once
@@ -2580,11 +2556,12 @@ impl Demo {
                 example_detail::STRESS_TEST_DURATION
             ),
         };
-        let result_text = self.example_detail.stress.result_text;
-        if let Some(mut text) = proteus.world_mut().get_mut::<Text>(result_text.id()) {
-            text.content = result;
-        }
-        let _ = result_text.free_resources(proteus);
+        // The same style `example_detail::spawn` gives it.
+        let _ = self
+            .example_detail
+            .stress
+            .result_text
+            .set_text(proteus, Text::new(result, 16.0).with_color(violet()));
     }
 
     /// Ends the current run early, if any — despawns its entities without
@@ -2774,9 +2751,8 @@ impl Demo {
     ///   whatever `VideoCrossfade` blended, poster art or a real frame) for the
     ///   entire transition and snap transparent the instant it settled,
     ///   reading as an abrupt pop rather than a dissolve.
-    /// - Fades the *other two* tiles' own alpha, `Border.color.w`, and
-    ///   `Glow` (radius forced to `0`, color alpha faded too) toward `0.0`,
-    ///   over *half* the transition's own duration (`fade_t` reaches `1.0` at
+    /// - Fades the *other two* tiles out with `set_opacity` (and forces their
+    ///   `Glow` radius to `0`), over *half* the transition's own duration (`fade_t` reaches `1.0` at
     ///   `raw_t == 0.5`) — without this, the two untouched tiles just sit
     ///   there fully opaque for the whole transition. Once the growing/settled
     ///   screen's own opacity is *also* fading toward `0.0` (the point
@@ -2831,15 +2807,9 @@ impl Demo {
             if i == idx {
                 continue;
             }
-            if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(other.id()) {
-                qs.color.w = fade_alpha;
-            }
-            if let Some(mut border) = proteus.world_mut().get_mut::<Border>(other.id()) {
-                border.color.w = fade_alpha;
-            }
+            let _ = other.set_opacity(proteus, fade_alpha);
             if let Some(mut glow) = proteus.world_mut().get_mut::<Glow>(other.id()) {
                 glow.radius = 0.0;
-                glow.color.w = fade_alpha;
             }
         }
     }
@@ -3321,8 +3291,9 @@ impl Demo {
         {
             qs.position.x = logo_left_edge + nav::LOGO_WIDTH_PX / 2.0;
             qs.position.y = y;
-            qs.color.w = self.nav_lockup_fade;
         }
+        // Fades `lockup_dark` too, which is a child.
+        let _ = self.nav.lockup.set_opacity(proteus, self.nav_lockup_fade);
 
         // `home_selected`'s fade *envelope* — up while Home is the current
         // or (mid-transition) destination state. The final light/dark alpha
@@ -3361,17 +3332,13 @@ impl Demo {
 
             // Position + fade only — hover glow/scale is `advance_hovers`'
             // job (both icons are already registered via `register_hover`
-            // in `Demo::new`); this only additionally ties the glow's own
-            // alpha to the icon's fade envelope so it can't show through
-            // before the icon itself has faded in.
+            // in `Demo::new`). The opacity fades the glow and the icon's
+            // overlays with it.
             if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(icon.id()) {
                 qs.position.x = xs[i];
                 qs.position.y = y;
-                qs.color.w = self.nav_icon_fade[i];
             }
-            if let Some(mut glow) = proteus.world_mut().get_mut::<Glow>(icon.id()) {
-                glow.color.w = self.nav_icon_fade[i];
-            }
+            let _ = icon.set_opacity(proteus, self.nav_icon_fade[i]);
         }
     }
 
@@ -3746,7 +3713,7 @@ mod tests {
             .get::<Text>(demo.example_detail.stress.result_text.id())
             .unwrap();
         assert_eq!(
-            result.content, " ",
+            result.content, "",
             "cancelling shouldn't report a result — only a natural finish does"
         );
     }
@@ -4018,11 +3985,10 @@ mod tests {
     fn returning_from_video_screen_restores_the_non_playing_tiles_own_box_art_too() {
         // When returning from playback, the *other two* tiles must get their
         // backgrounds back. A split's reveal only flips `Visibility` — it never
-        // rewrites a target's live `QuadState` — so those tiles, faded fully
-        // transparent by `Demo::advance_video_crossfade` while the clicked one
-        // was playing, stay at that alpha unless `advance_pending_tile_reset`
-        // resets all three tiles, not just the clicked one, including their
-        // Border and Glow.
+        // rewrites a target's live `QuadState` or opacity — so those tiles,
+        // faded out by `Demo::advance_video_crossfade` while the clicked one
+        // was playing, stay faded unless `advance_pending_tile_reset` resets
+        // all three tiles, not just the clicked one.
         use proteus_ui::BakedImage;
 
         let mut demo = advance_to_video_tiles();
@@ -4051,12 +4017,7 @@ mod tests {
         assert_eq!(demo.state, AppState::VideoScreen(0));
         for &idx in &[1usize, 2] {
             assert_eq!(
-                demo.app
-                    .get(demo.video_tiles.tiles[idx])
-                    .unwrap()
-                    .geometry
-                    .color
-                    .w,
+                demo.app.get(demo.video_tiles.tiles[idx]).unwrap().opacity,
                 0.0,
                 "sanity: the non-playing tiles must actually be faded out at this point"
             );
@@ -4303,12 +4264,12 @@ mod tests {
 
     #[test]
     fn other_two_tiles_fade_out_during_the_morph_and_are_fully_restored_on_return() {
-        // The *other two* (non-clicked) tiles' own alpha/Border/Glow must fade
-        // out during the transition, or they show over the transitioning tile.
-        // Also checks that returning to VideoTiles restores them
-        // (`advance_pending_tile_reset`): Border/Glow don't ride the group
-        // transition's own QuadState interpolation, so they'd otherwise stay
-        // faded after the first video.
+        // The *other two* (non-clicked) tiles must fade out during the
+        // transition, or they show over the transitioning tile. Also checks
+        // that returning to VideoTiles restores them
+        // (`advance_pending_tile_reset`): a split's reveal doesn't reset a
+        // target's opacity, so they'd otherwise stay faded after the first
+        // video.
         let mut demo = advance_to_video_tiles();
         demo.start_tiles_to_screen(0);
         demo.take_pending_video_start();
@@ -4319,7 +4280,7 @@ mod tests {
         for &idx in &[1usize, 2] {
             let tile = demo.app.get(demo.video_tiles.tiles[idx]).unwrap();
             assert!(
-                tile.geometry.color.w < 1.0,
+                tile.opacity < 1.0,
                 "tile {idx} must already be fading out partway through the morph"
             );
         }
@@ -4333,14 +4294,24 @@ mod tests {
         for &idx in &[1usize, 2] {
             let tile = demo.app.get(demo.video_tiles.tiles[idx]).unwrap();
             assert_eq!(
-                tile.geometry.color.w, 0.0,
+                tile.opacity, 0.0,
                 "tile {idx} must be fully faded out once settled"
             );
         }
 
-        // Back to the grid: every tile's Border/Glow must be fully restored,
-        // not stuck at whatever alpha the fade-out left them at.
+        // Back to the grid: every tile must be fully restored, not stuck at
+        // whatever opacity the fade-out left it at. Restored at once, before
+        // the split bakes each tile's end image at its current opacity:
+        // baked faded out, the tiles would fade to nothing and then pop in.
         demo.start_screen_to_tiles(0);
+        demo.app.refresh_cascades();
+        for &idx in &[1usize, 2] {
+            assert_eq!(
+                demo.app.get(demo.video_tiles.tiles[idx]).unwrap().opacity,
+                1.0,
+                "tile {idx} is restored before the split bakes it"
+            );
+        }
         let mut t = 0.0;
         while t < 1.0 {
             demo.tick(0.05);
@@ -4349,15 +4320,11 @@ mod tests {
         assert_eq!(demo.state, AppState::VideoTiles);
         for &tile in &demo.video_tiles.tiles {
             assert_eq!(
-                demo.app.get(tile).unwrap().geometry.color.w,
+                demo.app.get(tile).unwrap().opacity,
                 1.0,
-                "tile's own alpha (not just Border/Glow) must be fully restored — a split's own \
-                 reveal never rewrites a target's live QuadState on its own"
+                "tile's opacity must be fully restored"
             );
-            let border = demo.app.world().get::<Border>(tile.id()).unwrap();
-            assert_eq!(border.color.w, 1.0, "border alpha must be fully restored");
             let glow = demo.app.world().get::<Glow>(tile.id()).unwrap();
-            assert_eq!(glow.color.w, 1.0, "glow alpha must be fully restored");
             assert_eq!(glow.radius, 0.0, "glow radius must be back at rest");
         }
     }
@@ -4854,26 +4821,15 @@ mod tests {
         );
     }
 
-    // "Fetch New Images" must fade in and out rather than pop.
-    // `fetch_button`/`.fetch_button_label` get no alpha ramp from
-    // `Visibility` alone: `Border`/`Glow`/`Text` alpha has no other owner and
-    // stays at its spawn-time value, fully opaque.
+    // "Fetch New Images" must fade in and out rather than pop: `Visibility`
+    // alone would show and hide it at once.
     #[test]
     fn gallery_fetch_button_fades_in_and_out_instead_of_popping() {
-        use proteus_ui::Border;
-
-        let border_alpha = |demo: &Harness| {
-            demo.app
-                .world()
-                .get::<Border>(demo.gallery.fetch_button.id())
-                .unwrap()
-                .color
-                .w
-        };
+        let opacity = |demo: &Harness| demo.app.get(demo.gallery.fetch_button).unwrap().opacity;
 
         let mut demo = advance_to_gallery();
         assert_eq!(
-            border_alpha(&demo),
+            opacity(&demo),
             1.0,
             "sanity check: fully faded in once settled in Gallery"
         );
@@ -4887,7 +4843,7 @@ mod tests {
             demo.app.get(demo.gallery.fetch_button).unwrap().visible,
             "must still be visible while mid-fade-out"
         );
-        let mid = border_alpha(&demo);
+        let mid = opacity(&demo);
         assert!(
             mid > 0.0 && mid < 1.0,
             "should be partway faded out, got {mid}"
@@ -4896,7 +4852,7 @@ mod tests {
         // Past the fade's duration — fully gone.
         demo.tick(1.0);
         assert!(!demo.app.get(demo.gallery.fetch_button).unwrap().visible);
-        assert_eq!(border_alpha(&demo), 0.0);
+        assert_eq!(opacity(&demo), 0.0);
     }
 
     #[test]

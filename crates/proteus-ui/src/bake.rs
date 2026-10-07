@@ -14,7 +14,7 @@
 //! gather_bake_instances          the entity and its descendants, as quads
 //!         │  drawn into a new main-atlas region
 //!         ▼
-//! BakedComposite + TextureRef    where the bake is in the atlas
+//! BakedComposite + its ref      where the bake is in the atlas
 //!         │  children destroyed; the entity's own color, corner radius
 //!         │  and effects removed, since the bake includes them
 //!         ▼
@@ -24,7 +24,13 @@
 //! This is an ECS system, unlike text and image baking, because walking the
 //! entity's descendants needs queries.
 //!
-//! The `TextureRef` releases the region when the entity is destroyed; see
+//! The bake waits until every `Text` and `Image` in the subtree, the entity's
+//! own included, has been baked by the host. Text and images are baked when
+//! the host renders, after the tick, so a component created before the first
+//! frame would otherwise be baked without them, and its children, destroyed
+//! by the bake, would take them with them.
+//!
+//! The `CompositeTextureRef` releases the region when the entity is destroyed; see
 //! `crate::texture_ref`.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
@@ -37,7 +43,9 @@ use proteus_render::{GpuContext, QuadPipeline};
 use crate::component::QuadState;
 use crate::effects::{Border, DropShadow, Glow};
 use crate::hierarchy::resolve_world_position_query;
-use crate::texture_ref::TextureRef;
+use crate::image::{BakedImage, Image};
+use crate::text::{BakedText, Text};
+use crate::texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 use crate::topology::{gather_bake_instances, BakeVisualsQuery};
 
 // ---------------------------------------------------------------------------
@@ -79,7 +87,29 @@ pub struct BakeQueries<'w, 's> {
     parents: Query<'w, 's, &'static ChildOf>,
     children_q: Query<'w, 's, &'static Children>,
     visuals: BakeVisualsQuery<'w, 's>,
+    /// Entities whose text or image the host hasn't baked yet.
+    unbaked_content: Query<'w, 's, (), UnbakedContentFilter>,
 }
+
+/// Whether `entity` or any of its descendants has text or an image the host
+/// hasn't baked yet.
+fn has_unbaked_content(
+    entity: Entity,
+    children_q: &Query<&Children>,
+    unbaked_content: &Query<(), UnbakedContentFilter>,
+) -> bool {
+    unbaked_content.contains(entity)
+        || children_q.get(entity).is_ok_and(|children| {
+            children
+                .iter()
+                .any(|child| has_unbaked_content(child, children_q, unbaked_content))
+        })
+}
+
+type UnbakedContentFilter = Or<(
+    (With<Text>, Without<BakedText>),
+    (With<Image>, Without<BakedImage>),
+)>;
 
 /// The entities `bake_system` bakes: marked [`Baked`], not yet baked.
 type PendingBakeQuery<'w, 's> =
@@ -88,8 +118,11 @@ type PendingBakeQuery<'w, 's> =
 /// Bakes each entity marked [`Baked`] that isn't baked yet. Runs in
 /// [`crate::schedule::ProteusSet::Bake`].
 ///
-/// A bake that can't happen, because the atlas is full or the GPU isn't set up
-/// yet, is tried again the next tick.
+/// A bake that can't happen yet, because the subtree's text or images aren't
+/// baked yet, the atlas is full or the GPU isn't set up, is tried again the
+/// next tick. An entity larger than an atlas page can
+/// never be baked: its `Baked` marker is removed, with a warning, and it is
+/// drawn normally, unbaked.
 pub fn bake_system(
     mut commands: Commands,
     query: PendingBakeQuery,
@@ -105,9 +138,13 @@ pub fn bake_system(
         parents,
         children_q,
         visuals,
+        unbaked_content,
     } = queries;
 
     for (entity, local_qs) in query.iter() {
+        if has_unbaked_content(entity, &children_q, &unbaked_content) {
+            continue;
+        }
         let world_qs = resolve_world_position_query(entity, local_qs, &quad_states, &parents);
 
         let instances =
@@ -118,6 +155,16 @@ pub fn bake_system(
 
         let width = world_qs.size.x.max(1.0).ceil() as u32;
         let height = world_qs.size.y.max(1.0).ceil() as u32;
+
+        let max = pipeline.texture_registry.max_texture_side();
+        if width > max || height > max {
+            log::warn!(
+                "bake_system: entity {entity:?} is {width}x{height} pixels, larger than an atlas \
+                 page ({max}x{max}); it is drawn unbaked"
+            );
+            commands.entity(entity).remove::<Baked>();
+            continue;
+        }
 
         let Some(texture_id) = pipeline
             .texture_registry
@@ -158,21 +205,21 @@ pub fn bake_system(
                 page: uv.page,
                 pixel_size: [width as f32, height as f32],
             },
-            TextureRef(texture_id),
+            CompositeTextureRef(texture_id),
         ));
 
-        // The bake already includes this entity's color, border, glow and
-        // shadow, so remove them, or they would be drawn a second time. The
-        // entity becomes a plain white quad showing the bake.
+        // The bake already includes this entity's color, border, glow,
+        // shadow, text and image, so remove them, or they would be drawn a
+        // second time. The entity becomes a plain white quad showing the bake.
         let mut neutralized = local_qs.clone();
         neutralized.color = Vec4::ONE;
         neutralized.corner_radius = 0.0;
         commands
             .entity(entity)
             .insert(neutralized)
-            .remove::<Border>()
-            .remove::<Glow>()
-            .remove::<DropShadow>();
+            .remove::<(Border, Glow, DropShadow)>()
+            .remove::<(Text, BakedText, TextTextureRef)>()
+            .remove::<(Image, BakedImage, ImageTextureRef)>();
 
         // Destroy the direct children; bevy_ecs destroys their descendants
         // with them.

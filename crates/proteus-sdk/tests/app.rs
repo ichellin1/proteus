@@ -5,7 +5,8 @@
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    ComponentSpec, HandleError, ImageCrop, Proteus, QuadState, StyleOverride, TransitionConfig,
+    ComponentSpec, HandleError, ImageCrop, Proteus, QuadState, StyleOverride, Text,
+    TransitionConfig,
 };
 
 fn quad_at(x: f32, y: f32) -> QuadState {
@@ -830,7 +831,7 @@ fn bake_texture_without_gpu_resources_yields_a_null_handle() {
 #[test]
 fn free_resources_decrefs_and_frees_the_texture_region() {
     use proteus_render::{AtlasConfig, GpuContext, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
-    use proteus_ui::{BakedComposite, TextureRef};
+    use proteus_ui::{BakedComposite, CompositeTextureRef};
 
     let Some((device, queue)) = pollster::block_on(make_device()) else {
         if std::env::var("REQUIRE_GPU").is_ok() {
@@ -861,8 +862,8 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
 
     let texture_id = app
         .world()
-        .get::<TextureRef>(handle.id())
-        .expect("bake() should have produced a TextureRef")
+        .get::<CompositeTextureRef>(handle.id())
+        .expect("bake() should have produced a CompositeTextureRef")
         .0;
     assert!(app
         .world()
@@ -878,8 +879,17 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
         "free_resources must remove BakedComposite"
     );
     assert!(
-        app.world().get::<TextureRef>(handle.id()).is_none(),
-        "free_resources must remove TextureRef"
+        app.world()
+            .get::<CompositeTextureRef>(handle.id())
+            .is_none(),
+        "free_resources must remove CompositeTextureRef"
+    );
+
+    // The `Baked` marker went too, so the component isn't baked again.
+    app.tick(0.0);
+    assert!(
+        app.world().get::<BakedComposite>(handle.id()).is_none(),
+        "free_resources must stay freed, not be baked again"
     );
 
     // Region should now be genuinely freeable (ref count reached zero).
@@ -897,6 +907,71 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
     );
 }
 
+// Text and an image are removed too, so the host has nothing to bake again.
+#[test]
+fn free_resources_removes_text_and_images_so_nothing_is_baked_again() {
+    use proteus_ui::Image;
+
+    let mut app = Proteus::new();
+    let handle = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .text(Text::new("Hello", 16.0))
+            .image(Image::new(vec![0u8; 4])),
+    );
+
+    handle.free_resources(&mut app).unwrap();
+
+    assert!(app.world().get::<Text>(handle.id()).is_none());
+    assert!(app.world().get::<Image>(handle.id()).is_none());
+}
+
+#[test]
+fn set_text_and_set_image_replace_the_content_and_its_bake() {
+    use proteus_render::TextureId;
+    use proteus_ui::{BakedImage, BakedText, Image, ImageTextureRef, TextTextureRef};
+
+    let mut app = Proteus::new();
+    let handle = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .text(Text::new("Old", 16.0))
+            .image(Image::new(vec![0u8; 4])),
+    );
+    // Stand-ins for what the host's bake adds.
+    app.world_mut().entity_mut(handle.id()).insert((
+        BakedText {
+            uv_offset: [0.0, 0.0],
+            uv_scale: [0.1, 0.1],
+            page: 0,
+            pixel_size: [30.0, 16.0],
+        },
+        TextTextureRef(TextureId::default()),
+        BakedImage::new([0.0, 0.0], [0.1, 0.1], 0, [4.0, 4.0]),
+        ImageTextureRef(TextureId::default()),
+    ));
+
+    handle.set_text(&mut app, Text::new("New", 16.0)).unwrap();
+    assert_eq!(app.world().get::<Text>(handle.id()).unwrap().content, "New");
+    assert!(
+        app.world().get::<BakedText>(handle.id()).is_none(),
+        "the old bake goes, so the host bakes the new text"
+    );
+    assert!(app.world().get::<TextTextureRef>(handle.id()).is_none());
+    assert!(
+        app.world().get::<BakedImage>(handle.id()).is_some(),
+        "the image is untouched"
+    );
+
+    handle
+        .set_image(&mut app, Image::new(vec![1u8; 4]))
+        .unwrap();
+    assert_eq!(
+        &*app.world().get::<Image>(handle.id()).unwrap().bytes,
+        &[1u8; 4]
+    );
+    assert!(app.world().get::<BakedImage>(handle.id()).is_none());
+    assert!(app.world().get::<ImageTextureRef>(handle.id()).is_none());
+}
+
 // ---------------------------------------------------------------------------
 // copy_baked_image_from()
 // ---------------------------------------------------------------------------
@@ -904,7 +979,7 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
 #[test]
 fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destination() {
     use proteus_render::TextureId;
-    use proteus_ui::{BakedImage, TextureRef};
+    use proteus_ui::{BakedImage, ImageTextureRef};
 
     let mut app = Proteus::new();
     let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
@@ -919,13 +994,13 @@ fn copy_baked_image_from_copies_the_baked_image_and_texture_ref_onto_the_destina
     let baked = BakedImage::new([0.1, 0.2], [0.3, 0.4], 1, [64.0, 32.0]);
     app.world_mut()
         .entity_mut(source.id())
-        .insert((baked.clone(), TextureRef(TextureId::default())));
+        .insert((baked.clone(), ImageTextureRef(TextureId::default())));
 
     assert!(dest.copy_baked_image_from(&mut app, source).unwrap());
     assert_eq!(app.world().get::<BakedImage>(dest.id()), Some(&baked));
     assert_eq!(
-        app.world().get::<TextureRef>(dest.id()),
-        Some(&TextureRef(TextureId::default()))
+        app.world().get::<ImageTextureRef>(dest.id()),
+        Some(&ImageTextureRef(TextureId::default()))
     );
     // The source's own copy is untouched — this only ever writes `dest`.
     assert_eq!(app.world().get::<BakedImage>(source.id()), Some(&baked));
@@ -1393,7 +1468,7 @@ fn a_per_target_split_completes_on_its_targets_not_its_source() {
         SplitStrategy::PerTarget,
     );
 
-    // PerTarget needs two ticks where Slice needs one: each target's
+    // PerTarget needs two ticks where Row needs one: each target's
     // transition request is created a tick after the split is set up.
     app.tick(1.0);
     assert_eq!(target1_count.get(), 0, "not converted to a transition yet");

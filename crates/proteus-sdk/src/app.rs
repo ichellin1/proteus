@@ -216,13 +216,19 @@ impl Proteus {
         })
     }
 
-    /// Adds RGBA number of pixels to the atlas and returns a [`TextureHandle`] to them.
+    /// Adds RGBA pixels to the atlas and returns a [`TextureHandle`] to them.
     ///
     /// `rgba` holds `width * height * 4` bytes. The pixels are on the GPU when
     /// this returns. For PNG or JPEG data, use [`Proteus::load_texture`].
     ///
-    /// Make sure to attach the texture to a component with [`Handle::set_texture`] right
-    /// away. Until a component uses it, it may be evicted to make room.
+    /// The texture is scaled down to `request.max_side` if set. If it is still
+    /// larger than an atlas page ([`AtlasConfig::page_size`](proteus_render::AtlasConfig::page_size)),
+    /// it is scaled down to fit the page, with a warning.
+    ///
+    /// Attach the texture to a component with [`Handle::set_texture`] in the
+    /// same frame. From the next frame on, a texture that no component uses
+    /// may be evicted to make room. Several textures can be added and then
+    /// attached: none is evicted in the frame it was added.
     ///
     /// Returns a null handle if the atlas is full (this
     /// is logged) or if no GPU is set up, as in a headless test.
@@ -252,6 +258,16 @@ impl Proteus {
         let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
             return null;
         };
+        let max = pipeline.texture_registry.max_texture_side();
+        if decoded.width > max || decoded.height > max {
+            log::warn!(
+                "bake_texture: {}x{} is larger than an atlas page ({max}x{max}); it is scaled \
+                 down to fit",
+                decoded.width,
+                decoded.height,
+            );
+            decoded = resize_to_fit(decoded, max);
+        }
         let Some(texture_id) = pipeline.texture_registry.register_static(
             decoded.width,
             decoded.height,

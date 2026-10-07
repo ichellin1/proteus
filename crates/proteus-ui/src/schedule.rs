@@ -172,7 +172,7 @@ impl ProteusWorld {
 
         // Component hooks must be registered before any entity has the
         // component, or bevy_ecs panics, so register them all here:
-        // `TextureRef` reference counting, removing a component's owned
+        // texture reference counting, removing a component's owned
         // channels when it is destroyed, stamping `SpawnOrder`, and returning
         // transition-atlas space when its owner goes away.
         register_texture_ref_hooks(&mut world);

@@ -182,7 +182,12 @@ impl ComponentSpec {
     ///
     /// The host renders the subtree once and then destroys the children, so
     /// their handles become stale. Suited to detailed content that never
-    /// changes. Baking happens the next time a host renders a frame.
+    /// changes. Baking happens once the host has baked the text and images
+    /// in the subtree, usually within a frame or two.
+    ///
+    /// A component larger than an atlas page (2048 pixels by default) can't be
+    /// baked. It is drawn normally instead, with its children, and a warning
+    /// is logged.
     pub fn bake(mut self) -> Self {
         self.bake = true;
         self
@@ -192,6 +197,9 @@ impl ComponentSpec {
     ///
     /// The host bakes the text the next time it renders a frame. Until then,
     /// [`Handle::baked_text_size`] returns `None`.
+    ///
+    /// Text wider than an atlas page (2048 pixels by default) is clipped to
+    /// it, with a warning.
     pub fn text(mut self, text: Text) -> Self {
         self.text = Some(text);
         self
@@ -201,6 +209,9 @@ impl ComponentSpec {
     ///
     /// The host decodes and bakes the image the next time it renders a
     /// frame. Until then, [`Handle::baked_image_size`] returns `None`.
+    ///
+    /// An image larger than an atlas page (2048 pixels by default) is scaled
+    /// down to fit it, with a warning.
     pub fn image(mut self, image: Image) -> Self {
         self.image = Some(image);
         self

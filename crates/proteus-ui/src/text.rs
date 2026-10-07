@@ -7,7 +7,7 @@
 //! FontAtlas::rasterize_text      the glyphs, as pixels
 //!         │  added to the main atlas
 //!         ▼
-//! BakedText + TextureRef         where the text is in the atlas
+//! BakedText + TextTextureRef     where the text is in the atlas
 //!         │
 //!         ▼
 //! drawn as a quad over the entity's background
@@ -19,6 +19,15 @@
 //! During a transition, the text moves and scales with the entity like any
 //! other texture. A label is usually a child entity of the component it
 //! labels, positioned relative to it.
+//!
+//! ## Text larger than an atlas page
+//!
+//! Text is one line, with no length limit. Text wider or taller than an atlas
+//! page ([`AtlasConfig::page_size`], 2048 pixels by default) is clipped to the
+//! page, with a warning: the part that fits is drawn at its normal size, and
+//! the rest is cut off.
+//!
+//! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
 
 use bevy_ecs::prelude::*;
 use glam::Vec4;
@@ -31,7 +40,8 @@ use glam::Vec4;
 ///
 /// The renderer rasterizes it into the main atlas and adds a [`BakedText`].
 /// Changing `content` or `size_px` afterwards has no effect until the
-/// `BakedText` is removed.
+/// `BakedText` is removed; `proteus-sdk`'s `Handle::set_text` does both. Text larger than an atlas page is clipped; see the
+/// [module docs](self).
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Text {
     /// The text. Any character the font has can be used.

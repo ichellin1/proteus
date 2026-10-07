@@ -264,7 +264,7 @@ fn per_target_1_to_n_child_configs_override_the_default() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_1_to_n_creates_n_virtual_entities() {
+fn row_1_to_n_creates_n_virtual_entities() {
     let mut world = make_world();
 
     let n = 5;
@@ -299,7 +299,7 @@ fn slice_1_to_n_creates_n_virtual_entities() {
 }
 
 #[test]
-fn slice_1_to_n_hides_source_and_targets() {
+fn row_1_to_n_hides_source_and_targets() {
     let mut world = make_world();
 
     let n = 3;
@@ -333,7 +333,7 @@ fn slice_1_to_n_hides_source_and_targets() {
         !world.get::<Visibility>(source).unwrap().visible,
         "source should be hidden"
     );
-    // All targets must be hidden during the slice transition.
+    // All targets must be hidden during the split.
     for &t in &targets {
         assert!(
             !world.get::<Visibility>(t).unwrap().visible,
@@ -343,7 +343,7 @@ fn slice_1_to_n_hides_source_and_targets() {
 }
 
 #[test]
-fn slice_1_to_n_source_has_active_group_transition() {
+fn row_1_to_n_source_has_active_group_transition() {
     let mut world = make_world();
     let n = 3;
     let targets = spawn_targets(&mut world, n);
@@ -387,7 +387,7 @@ fn slice_1_to_n_source_has_active_group_transition() {
 }
 
 #[test]
-fn slice_1_to_n_virtuals_have_active_transitions() {
+fn row_1_to_n_virtuals_have_active_transitions() {
     let mut world = make_world();
     let n = 3;
     let targets = spawn_targets(&mut world, n);
@@ -426,7 +426,7 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
+fn row_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
     let mut world = make_world();
     let n = 3;
     let targets = spawn_targets(&mut world, n);
@@ -491,7 +491,7 @@ fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
 }
 
 #[test]
-fn slice_1_to_n_partial_complete_does_not_finalize() {
+fn row_1_to_n_partial_complete_does_not_finalize() {
     // If only some virtuals complete, the group should NOT finalize yet.
     let mut world = make_world();
     let n = 3;
@@ -699,7 +699,7 @@ fn n_to_one_complete_reveals_dest() {
 }
 
 // ---------------------------------------------------------------------------
-// Round trip: button → list (1→N slice) → button (N→1 slice)
+// Round trip: button → list (a row split) → button (a row merge)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -736,7 +736,7 @@ fn round_trip_button_list_button() {
         })
         .collect();
 
-    // ----  Phase 1: button (1→N slice) → list items ----
+    // ----  Phase 1: button (row split) → list items ----
     let list_targets: Vec<GroupTarget> = list_entities
         .iter()
         .zip(list_states.iter())
@@ -803,7 +803,7 @@ fn round_trip_button_list_button() {
     };
     assert_eq!(all_entities.len(), 4, "no entity leaks after Phase 1");
 
-    // ---- Phase 2: list items (N→1 slice) → button ----
+    // ---- Phase 2: list items (row merge) → button ----
     let sources: Vec<GroupSource> = list_entities
         .iter()
         .zip(list_states.iter())
@@ -873,11 +873,11 @@ fn round_trip_button_list_button() {
 }
 
 // ---------------------------------------------------------------------------
-// ChildConfigs — slice strategy per-child config
+// ChildConfigs — per-child config with the row strategy
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_child_configs_set_per_virtual_duration() {
+fn row_child_configs_set_per_virtual_duration() {
     fn per_child(idx: usize, _total: usize) -> TransitionConfig {
         TransitionConfig {
             duration: 0.1 * (idx + 1) as f32, // 0.1, 0.2, 0.3
