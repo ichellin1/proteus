@@ -4341,7 +4341,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
 
 ##### Step 5b — Input and events
 
-- [ ] Make disabled and non-interactive genuinely different. Today both drop the component from
+- [x] Make disabled and non-interactive genuinely different. Today both drop the component from
   hit-testing, so both are click-through and differ only in that disabled has a look. Decided:
   - **Non-interactive** (`set_interactive(false)`, `non_interactive()`): the component is not
     there for input. It has no look of its own, and input goes to whatever is behind it. For
@@ -4354,13 +4354,13 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   emitted. Tested both ways (a disabled component over a clickable one absorbs the click; a
   non-interactive one passes it through). Update the Rust and TypeScript docs of all four
   methods and `input.rs`'s module doc to state the difference.
-- [ ] `non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps` (`proteus-sdk`
+- [x] `non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps` (`proteus-sdk`
   tests) no longer tests anything: the backdrop is created before the button, so the button is
   drawn on top and wins the click with or without `non_interactive()`. Create the backdrop after
   the button, check the test fails without `non_interactive()` (confirmed: it does), and replace
   its comment with "A full-window backdrop drawn over the button. Without `non_interactive()` it
   would take the click."
-- [ ] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
+- [x] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
   disabled style animates through an ordinary `TransitionRequest` (`interaction_style_system`),
   and its completion is recorded like any other, so a component with a hover style reports a
   "completed transition" every time the pointer moves onto or off it. A once-only completion
@@ -4368,18 +4368,18 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
   a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
   TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
-- [ ] An `on_dropped` handler that destroys its own channel leaves that channel's handlers
+- [x] An `on_dropped` handler that destroys its own channel leaves that channel's handlers
   registered: `fire_dropped` puts them back without checking that the channel still exists, and
   they fire again if the stale handle is used. Give it the same check `fire` has, with a test.
-- [ ] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
+- [x] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
   existing handlers for the same event. Keep registration order, or document the order.
-- [ ] `TransitionChannel::set` on a destroyed channel is silent: the request is dropped with
+- [x] `TransitionChannel::set` on a destroyed channel is silent: the request is dropped with
   `ChannelNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
   would have heard it. A `Handle` method on a destroyed component logs a warning; make `set` do
   the same, checking at call time that the channel exists. Rust and TypeScript, with a test, and
   `TransitionChannel::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
-- [ ] C-12 — dispatching a pointer event from inside the web `update` callback panics.
-- [ ] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
+- [x] C-12 — dispatching a pointer event from inside the web `update` callback panics.
+- [x] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
 
 ##### Step 5c — Rendering and textures
 

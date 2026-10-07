@@ -208,6 +208,11 @@ pub struct ActiveTransition {
     /// Read by `transition_complete_system` the same tick.
     /// Exposed `pub` so integration tests can inspect and seed this flag.
     pub is_complete: bool,
+    /// `true` for a change of interaction style, such as a hover effect,
+    /// started by [`crate::interaction::interaction_style_system`]. It leaves
+    /// the entity's `Lifecycle` alone, so the entity keeps taking input, and
+    /// its completion isn't recorded in [`CompletedTransitions`].
+    pub interaction_style: bool,
 }
 
 impl ActiveTransition {
@@ -239,6 +244,16 @@ impl ActiveTransition {
                 easing: config.easing,
             },
             is_complete: false,
+            interaction_style: false,
+        }
+    }
+
+    /// Starts a change of interaction style from `from` to `to`; see
+    /// [`ActiveTransition::interaction_style`](Self#structfield.interaction_style).
+    pub fn for_interaction_style(from: QuadState, to: QuadState, config: TransitionConfig) -> Self {
+        Self {
+            interaction_style: true,
+            ..Self::new(from, to, config)
         }
     }
 }
@@ -380,7 +395,8 @@ pub fn transition_tick_system(
 ///
 /// Runs after `transition_tick_system` in the schedule. Entities whose
 /// `ActiveTransition.is_complete` flag is set get the component removed and
-/// their `Lifecycle` restored to `Idle`.
+/// their `Lifecycle` restored to `Idle`. A change of interaction style is
+/// removed without being recorded, and its `Lifecycle` was never changed.
 ///
 /// Clears `CompletedTransitions` at the top of each call so the resource always
 /// holds exactly this tick's completions.
@@ -388,14 +404,20 @@ pub fn transition_complete_system(
     mut commands: Commands,
     // Exclude Virtual entities — their completions are handled by
     // `group_transition_complete_system` in `topology.rs`.
-    mut query: Query<(Entity, &ActiveTransition, &mut Lifecycle), Without<Virtual>>,
+    // `Lifecycle` is optional: a change of interaction style doesn't give the
+    // entity one.
+    mut query: Query<(Entity, &ActiveTransition, Option<&mut Lifecycle>), Without<Virtual>>,
     mut completed: ResMut<CompletedTransitions>,
 ) {
     completed.entities.clear();
-    for (entity, active, mut lifecycle) in query.iter_mut() {
+    for (entity, active, lifecycle) in query.iter_mut() {
         if active.is_complete {
-            *lifecycle = Lifecycle::Idle;
-            completed.entities.push(entity);
+            if !active.interaction_style {
+                if let Some(mut lifecycle) = lifecycle {
+                    *lifecycle = Lifecycle::Idle;
+                }
+                completed.entities.push(entity);
+            }
             commands.entity(entity).remove::<ActiveTransition>();
         }
     }

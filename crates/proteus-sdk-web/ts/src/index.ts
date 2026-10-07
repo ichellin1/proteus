@@ -104,8 +104,7 @@ export class Handle {
    * - {@link Handle.mergeFrom}: the destination, once every source has
    *   arrived.
    *
-   * Changes of interaction style, such as a hover effect, currently fire this
-   * callback as well when their animation finishes.
+   * Changes of interaction style, such as a hover effect, don't count.
    */
   onTransitionComplete(cb: PlainCallback): void {
     this.app.wasmApp.onTransitionComplete(this.wasmHandle, cb);
@@ -387,12 +386,12 @@ export class Handle {
   /**
    * Sets whether this component responds to input.
    *
-   * A non-interactive component is never the target of any input, whether
-   * pointer, touch, keyboard, gamepad or remote: it is never hovered, pressed,
-   * dragged or focused. `false` has the same effect as
-   * {@link ComponentSpec.nonInteractive}, applied after creation. For a
-   * control that is temporarily unavailable and should look unavailable, use
-   * {@link Handle.setDisabled}.
+   * A non-interactive component is not there for input: it is never hovered,
+   * pressed, dragged or focused, and input goes to whatever is behind it.
+   * `false` has the same effect as {@link ComponentSpec.nonInteractive},
+   * applied after creation. Use it for things that are never controls, such
+   * as backgrounds and labels. For a control that is temporarily unavailable,
+   * use {@link Handle.setDisabled}, which still blocks input.
    *
    * Proteus currently handles pointer input only (on the web, that includes
    * touch and pen). Other kinds of input will follow the same rule.
@@ -431,10 +430,12 @@ export class Handle {
   /**
    * Disables or re-enables this component.
    *
-   * A disabled component is still drawn but ignores all input, and shows its
-   * {@link ComponentSpec.disabled} style. Use it for a control that isn't
-   * available yet, such as a submit button. For something that is never a
-   * control, use {@link Handle.setInteractive}.
+   * A disabled component is still drawn and still blocks input from reaching
+   * what is behind it, but fires no events itself, and shows its
+   * {@link ComponentSpec.disabled} style, as a disabled control does on the
+   * web. Use it for a control that isn't available yet, such as a submit
+   * button. For something that is never a control, use
+   * {@link Handle.setInteractive}, which lets input through.
    */
   setDisabled(disabled: boolean): void {
     this.app.wasmApp.setDisabled(this.wasmHandle, disabled);
@@ -487,7 +488,8 @@ export class TransitionChannel {
    * the request is dropped unless `interruptible` is set; then a new
    * transition starts from wherever `to` is. The transition starts on the
    * next tick. A request that can't run is reported to
-   * {@link TransitionChannel.onDropped}.
+   * {@link TransitionChannel.onDropped}. On a destroyed channel, the call is
+   * ignored with a warning.
    *
    * @example
    * ```ts
@@ -518,7 +520,7 @@ export class TransitionChannel {
     this.app.wasmApp.onDropped(this.wasmHandle, cb);
   }
 
-  /** Destroys this channel and its `onDropped` handlers. Later `set` calls do nothing. */
+  /** Destroys this channel and its `onDropped` handlers. Later `set` calls are ignored, with a warning. */
   destroy(): void {
     this.app.wasmApp.channelDestroy(this.wasmHandle);
   }

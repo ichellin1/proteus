@@ -1,10 +1,8 @@
 //! The web host: runs a Proteus app on an HTML canvas, compiled to
 //! WebAssembly, drawing with WebGPU where available and WebGL2 otherwise.
 //!
-//! There are two ways to target a web browser when building a Proteus applicaiont,
-//! an application written in Rust and an application written in TypeScript.
-//! Both ways share the same canvas setup, frame loop and
-//! input handling:
+//! A Proteus app for the web is written in Rust or in TypeScript. Both share
+//! the same canvas setup, frame loop and input handling:
 //!
 //! - **From Rust:** [`run`] runs an [`App`](proteus_runtime::App) through a
 //!   [`proteus_runtime::Engine`], exactly as `proteus-host-winit` does.
@@ -72,6 +70,40 @@ pub(crate) trait FrameDriver {
 }
 
 // ---------------------------------------------------------------------------
+// Inbox: what the event listeners record for the next frame
+// ---------------------------------------------------------------------------
+
+/// What the event listeners record for [`WebLoop`] to apply at the start of
+/// the next frame.
+///
+/// The listeners never borrow the `WebLoop` itself. JavaScript's `update`
+/// runs while it is borrowed, and anything `update` does that fires a
+/// listener synchronously, such as dispatching a `PointerEvent` on the
+/// canvas, would borrow it again and panic. The inbox is only borrowed for a
+/// moment, never while JavaScript runs.
+#[derive(Default)]
+struct Inbox {
+    /// Pointer input, in the order it happened.
+    pointer: Vec<PointerInput>,
+    /// The canvas's latest size in CSS pixels, if it changed.
+    resize: Option<(f64, f64)>,
+    /// The page was hidden, so the next frame's time step starts over.
+    hidden: bool,
+    /// The WebGL context was lost.
+    context_lost: bool,
+    /// The WebGL context was restored.
+    context_restored: bool,
+}
+
+enum PointerInput {
+    /// `offsetX` and `offsetY`: CSS pixels from the canvas's corner. `None`
+    /// when the pointer left the canvas.
+    Moved(Option<(f32, f32)>),
+    Pressed,
+    Released,
+}
+
+// ---------------------------------------------------------------------------
 // WebLoop: canvas, frame loop and input, shared by both ways in
 // ---------------------------------------------------------------------------
 
@@ -83,6 +115,7 @@ pub(crate) struct WebLoop<D: FrameDriver + 'static> {
     canvas: HtmlCanvasElement,
     surface: surface::WebSurface,
     driver: D,
+    inbox: Rc<RefCell<Inbox>>,
     last_frame: Option<f64>,
     // Set when the WebGL context is lost; frames are skipped while it is.
     context_lost: bool,
@@ -94,26 +127,27 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             canvas,
             surface,
             driver,
+            inbox: Rc::default(),
             last_frame: None,
             context_lost: false,
         }
     }
 
-    /// Adds the event listeners and starts the frame loop. The listeners
-    /// share ownership of `self`, so the loop keeps running after this
-    /// returns, with nothing for the caller to keep.
+    /// Adds the event listeners and starts the frame loop. The frame loop
+    /// owns `self`, so it keeps running after this returns, with nothing for
+    /// the caller to keep.
     pub(crate) fn start(self) {
-        let state = Rc::new(RefCell::new(self));
+        wire_resize(&self.canvas, &self.inbox);
+        wire_pointer(&self.canvas, &self.inbox);
+        wire_visibility(&self.inbox);
+        wire_context_loss(&self.canvas, &self.inbox);
 
-        wire_resize(&state);
-        wire_pointer(&state);
-        wire_visibility(&state);
-        wire_context_loss(&state);
-
-        start_raf_loop(state);
+        start_raf_loop(self);
     }
 
     fn render_frame(&mut self, ts_ms: f64) {
+        self.apply_inbox();
+
         if self.context_lost {
             // Already logged once by the listener; skip frames until the
             // page reloads.
@@ -144,6 +178,44 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         frame.present();
     }
 
+    /// Applies what the listeners recorded since the last frame. Pointer
+    /// input is still passed on while the context is lost, as it always was.
+    fn apply_inbox(&mut self) {
+        let inbox = std::mem::take(&mut *self.inbox.borrow_mut());
+
+        if let Some((width, height)) = inbox.resize {
+            self.resize(width, height);
+        }
+        for input in inbox.pointer {
+            match input {
+                PointerInput::Moved(Some((x, y))) => {
+                    // The offsets are in the same units as
+                    // `Viewport::logical_size`.
+                    let size = self.surface.viewport().logical_size;
+                    let world = Vec2::new(x - size.x / 2.0, size.y / 2.0 - y);
+                    self.driver.pointer_moved(Some(world));
+                }
+                PointerInput::Moved(None) => self.driver.pointer_moved(None),
+                PointerInput::Pressed => self.driver.pointer_pressed(),
+                PointerInput::Released => self.driver.pointer_released(),
+            }
+        }
+        if inbox.hidden {
+            // Forget the last frame's time, so the first frame after the tab
+            // returns has a time step of zero rather than the whole time it
+            // was hidden.
+            self.last_frame = None;
+        }
+        if inbox.context_lost {
+            self.context_lost = true;
+        }
+        if inbox.context_restored {
+            self.surface.reconfigure();
+            self.context_lost = false;
+            self.last_frame = None;
+        }
+    }
+
     fn resize(&mut self, css_width: f64, css_height: f64) {
         if css_width <= 0.0 || css_height <= 0.0 {
             return;
@@ -154,15 +226,15 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
 }
 
 // ---------------------------------------------------------------------------
-// Event listeners. Each `wire_*` adds one, and leaks it with
-// `Closure::forget`, since it lives as long as the page.
+// Event listeners. Each `wire_*` adds one that records into the `Inbox`, and
+// leaks it with `Closure::forget`, since it lives as long as the page.
 // ---------------------------------------------------------------------------
 
-fn start_raf_loop<D: FrameDriver + 'static>(state: Rc<RefCell<WebLoop<D>>>) {
+fn start_raf_loop<D: FrameDriver + 'static>(mut web_loop: WebLoop<D>) {
     let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |ts_ms: f64| {
-        state.borrow_mut().render_frame(ts_ms);
+        web_loop.render_frame(ts_ms);
         request_animation_frame(f.borrow().as_ref().unwrap());
     }));
     request_animation_frame(g.borrow().as_ref().unwrap());
@@ -175,9 +247,8 @@ pub(crate) fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
         .expect("requestAnimationFrame failed");
 }
 
-fn wire_resize<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
-    let state = state.clone();
-    let canvas = state.borrow().canvas.clone();
+fn wire_resize(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
+    let inbox = inbox.clone();
     let closure: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |entries: js_sys::Array| {
         // One canvas is observed, so there is one entry. `contentRect` is in
         // CSS pixels.
@@ -189,71 +260,50 @@ fn wire_resize<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
             return;
         };
         let rect = entry.content_rect();
-        state.borrow_mut().resize(rect.width(), rect.height());
+        inbox.borrow_mut().resize = Some((rect.width(), rect.height()));
     });
     let observer = web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref())
         .expect("ResizeObserver construction failed");
-    observer.observe(&canvas);
+    observer.observe(canvas);
     closure.forget();
     // The observer must outlive the callback, so it is leaked too.
     std::mem::forget(observer);
 }
 
-fn wire_pointer<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
+fn wire_pointer(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
     use web_sys::PointerEvent;
 
-    let canvas = state.borrow().canvas.clone();
+    let listen = |event: &str, record: fn(&PointerEvent) -> Option<PointerInput>| {
+        let inbox = inbox.clone();
+        let closure: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
+            if let Some(input) = record(&e) {
+                inbox.borrow_mut().pointer.push(input);
+            }
+        });
+        canvas
+            .add_event_listener_with_callback(event, closure.as_ref().unchecked_ref())
+            .unwrap_or_else(|_| panic!("addEventListener({event}) failed"));
+        closure.forget();
+    };
 
-    let move_state = state.clone();
-    let on_move: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
-        let mut s = move_state.borrow_mut();
-        // `offsetX` and `offsetY` are CSS pixels from the canvas's corner: the
-        // same units as `Viewport::logical_size`.
-        let w = s.surface.viewport().logical_size.x;
-        let h = s.surface.viewport().logical_size.y;
-        let wx = e.offset_x() as f32 - w / 2.0;
-        let wy = h / 2.0 - e.offset_y() as f32;
-        s.driver.pointer_moved(Some(Vec2::new(wx, wy)));
+    listen("pointermove", |e| {
+        Some(PointerInput::Moved(Some((
+            e.offset_x() as f32,
+            e.offset_y() as f32,
+        ))))
     });
-    canvas
-        .add_event_listener_with_callback("pointermove", on_move.as_ref().unchecked_ref())
-        .expect("addEventListener(pointermove) failed");
-    on_move.forget();
-
-    let leave_state = state.clone();
-    let on_leave: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |_e: PointerEvent| {
-        leave_state.borrow_mut().driver.pointer_moved(None);
+    listen("pointerleave", |_| Some(PointerInput::Moved(None)));
+    // Only the primary button: the left mouse button, a touch or a pen tip.
+    listen("pointerdown", |e| {
+        (e.button() == 0).then_some(PointerInput::Pressed)
     });
-    canvas
-        .add_event_listener_with_callback("pointerleave", on_leave.as_ref().unchecked_ref())
-        .expect("addEventListener(pointerleave) failed");
-    on_leave.forget();
-
-    let down_state = state.clone();
-    let on_down: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
-        if e.button() == 0 {
-            down_state.borrow_mut().driver.pointer_pressed();
-        }
+    listen("pointerup", |e| {
+        (e.button() == 0).then_some(PointerInput::Released)
     });
-    canvas
-        .add_event_listener_with_callback("pointerdown", on_down.as_ref().unchecked_ref())
-        .expect("addEventListener(pointerdown) failed");
-    on_down.forget();
-
-    let up_state = state.clone();
-    let on_up: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
-        if e.button() == 0 {
-            up_state.borrow_mut().driver.pointer_released();
-        }
-    });
-    canvas
-        .add_event_listener_with_callback("pointerup", on_up.as_ref().unchecked_ref())
-        .expect("addEventListener(pointerup) failed");
-    on_up.forget();
 }
 
-fn wire_visibility<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
-    let state = state.clone();
+fn wire_visibility(inbox: &Rc<RefCell<Inbox>>) {
+    let inbox = inbox.clone();
     let document = web_sys::window()
         .expect("no window")
         .document()
@@ -263,12 +313,8 @@ fn wire_visibility<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
             .and_then(|w| w.document())
             .map(|d| d.hidden())
             .unwrap_or(false);
-        let mut s = state.borrow_mut();
         if hidden {
-            // Forget the last frame's time, so the first frame after the tab
-            // returns has a time step of zero rather than the whole time it
-            // was hidden.
-            s.last_frame = None;
+            inbox.borrow_mut().hidden = true;
         }
     });
     document
@@ -277,10 +323,8 @@ fn wire_visibility<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
     closure.forget();
 }
 
-fn wire_context_loss<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
-    let canvas = state.borrow().canvas.clone();
-
-    let lost_state = state.clone();
+fn wire_context_loss(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
+    let lost_inbox = inbox.clone();
     let on_lost: Closure<dyn FnMut(web_sys::Event)> = Closure::new(move |e: web_sys::Event| {
         // Required for the browser to ever restore the context.
         e.prevent_default();
@@ -288,20 +332,17 @@ fn wire_context_loss<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) 
             "proteus-host-web: WebGL context lost — rendering paused. Full recovery isn't \
              implemented yet (see this crate's root doc); reload the page."
         );
-        lost_state.borrow_mut().context_lost = true;
+        lost_inbox.borrow_mut().context_lost = true;
     });
     canvas
         .add_event_listener_with_callback("webglcontextlost", on_lost.as_ref().unchecked_ref())
         .expect("addEventListener(webglcontextlost) failed");
     on_lost.forget();
 
-    let restored_state = state.clone();
+    let restored_inbox = inbox.clone();
     let on_restored: Closure<dyn FnMut()> = Closure::new(move || {
         log::warn!("proteus-host-web: WebGL context restored — reconfiguring surface");
-        let mut s = restored_state.borrow_mut();
-        s.surface.reconfigure();
-        s.context_lost = false;
-        s.last_frame = None;
+        restored_inbox.borrow_mut().context_restored = true;
     });
     canvas
         .add_event_listener_with_callback(

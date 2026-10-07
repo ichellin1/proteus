@@ -8,14 +8,16 @@
 //! Calling a handler needs `&mut Proteus`, which also owns the handler map,
 //! so the map can't be borrowed while a handler runs. Dispatch therefore
 //! removes a key's handlers from the map, calls them, and then puts them
-//! back. Handlers registered during the call are kept alongside them.
+//! back. Handlers registered during the call are kept after them, so
+//! handlers always run in the order they were registered.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use bevy_ecs::prelude::Entity;
 use glam::Vec2;
 
-use proteus_ui::{TransitionChannelId, TransitionDropped};
+use proteus_ui::{ChannelRegistry, TransitionChannelId, TransitionDropped};
 
 use crate::Proteus;
 
@@ -95,17 +97,22 @@ pub(crate) fn fire(app: &mut Proteus, entity: Entity, kind: EventKind) {
     // are held here during the call. Putting them back would leave them
     // registered for a component that no longer exists.
     if is_alive(app, entity) {
-        app.callbacks
-            .handlers
-            .entry((entity, kind))
-            .or_default()
-            .extend(cbs);
+        put_back(&mut app.callbacks.handlers, (entity, kind), cbs);
     }
 }
 
 /// Check if the `entity` still exists.
 fn is_alive(app: &Proteus, entity: Entity) -> bool {
     app.world.world.entities().contains(entity)
+}
+
+/// Returns `cbs` to `map` under `key`, ahead of any handlers registered for
+/// `key` while they ran, so that handlers keep their registration order.
+fn put_back<K: Eq + Hash, V>(map: &mut HashMap<K, Vec<V>>, key: K, mut cbs: Vec<V>) {
+    if let Some(added) = map.remove(&key) {
+        cbs.extend(added);
+    }
+    map.insert(key, cbs);
 }
 
 /// [`fire`] for drag handlers, which also receive `delta`: how far the
@@ -118,11 +125,7 @@ pub(crate) fn fire_drag(app: &mut Proteus, entity: Entity, delta: Vec2) {
         cb(app, delta);
     }
     if is_alive(app, entity) {
-        app.callbacks
-            .drag_handlers
-            .entry(entity)
-            .or_default()
-            .extend(cbs);
+        put_back(&mut app.callbacks.drag_handlers, entity, cbs);
     }
 }
 
@@ -137,9 +140,14 @@ pub(crate) fn fire_dropped(app: &mut Proteus, dropped: TransitionDropped) {
     for cb in &mut cbs {
         cb(app, dropped.clone());
     }
-    app.callbacks
-        .dropped_handlers
-        .entry(channel)
-        .or_default()
-        .extend(cbs);
+    // As in `fire`: a handler can destroy its own channel, and its handlers
+    // must not be put back for a channel that no longer exists.
+    if app
+        .world
+        .world
+        .resource::<ChannelRegistry>()
+        .exists(channel)
+    {
+        put_back(&mut app.callbacks.dropped_handlers, channel, cbs);
+    }
 }

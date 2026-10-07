@@ -39,7 +39,8 @@ pub struct ComponentData {
     pub opacity: f32,
     /// The component's direct children, in order.
     pub children: Vec<Handle>,
-    /// The transition in progress, or `None` when idle.
+    /// The transition in progress, or `None` when idle. A change of
+    /// interaction style, such as a hover effect, isn't reported here.
     pub transition: Option<TransitionData>,
 }
 

@@ -6,10 +6,17 @@
 //!         │
 //!         ▼
 //! interaction_style_system   works out which style applies
-//!         │  changed? a TransitionRequest to the new style
+//!         │  changed? an ActiveTransition to the new style
 //!         ▼
-//! transition_setup_system    as for any other transition
+//! transition_tick_system     as for any other transition
 //! ```
+//!
+//! A style transition is not a transition of the component for anything else:
+//! the entity stays in its current `Lifecycle`, so it keeps taking input and
+//! a transition channel can still start a transition on it, and its completion
+//! isn't recorded in [`crate::CompletedTransitions`]. Without this, a component
+//! with a hover style would ignore the pointer for the length of the hover
+//! animation.
 //!
 //! ## Which style wins
 //!
@@ -33,9 +40,9 @@
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
-use crate::component::{Disabled, Lifecycle, TransitionRequest};
+use crate::component::{Disabled, Lifecycle};
 use crate::input::{FocusState, HoveredEntity, PressedEntity};
-use crate::transition::{Easing, TransitionConfig};
+use crate::transition::{ActiveTransition, Easing, TransitionConfig};
 use crate::QuadState;
 
 // ---------------------------------------------------------------------------
@@ -237,13 +244,15 @@ pub fn interaction_style_system(
                 .unwrap_or_else(|| declared.clone()),
         };
 
-        commands.entity(entity).insert(TransitionRequest {
-            to: target,
-            config: STYLE_TRANSITION_CONFIG,
-            // `None`: start from the current QuadState, which stays smooth even
-            // partway through another style's transition.
-            from_state: None,
-        });
+        // Start from the current QuadState, which stays smooth even partway
+        // through another style's transition.
+        commands
+            .entity(entity)
+            .insert(ActiveTransition::for_interaction_style(
+                quad_state.clone(),
+                target,
+                STYLE_TRANSITION_CONFIG,
+            ));
         commands.entity(entity).insert(InteractionState {
             current: resolved,
             declared,

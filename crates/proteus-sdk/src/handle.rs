@@ -11,9 +11,9 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    BakedComposite, BakedImage, BakedText, Disabled, GroupSource, GroupTarget, ImageCrop,
-    Interactable, MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy,
-    TextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
+    BakedComposite, BakedImage, BakedText, ChannelRegistry, Disabled, GroupSource, GroupTarget,
+    ImageCrop, Interactable, MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState,
+    SplitStrategy, TextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
     TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
@@ -472,12 +472,13 @@ impl Handle {
 
     /// Sets whether this component responds to input.
     ///
-    /// A non-interactive component is never the target of any input, whether
-    /// pointer, touch, keyboard, gamepad or remote: it is never hovered,
-    /// pressed, dragged or focused. `false` has the same effect as
+    /// A non-interactive component is not there for input: it is never
+    /// hovered, pressed, dragged or focused, and input goes to whatever is
+    /// behind it. `false` has the same effect as
     /// [`ComponentSpec::non_interactive`](crate::ComponentSpec::non_interactive),
-    /// applied after creation. For a control that is temporarily unavailable
-    /// and should look unavailable, use [`Handle::set_disabled`].
+    /// applied after creation. Use it for things that are never controls, such
+    /// as backgrounds and labels. For a control that is temporarily
+    /// unavailable, use [`Handle::set_disabled`], which still blocks input.
     ///
     /// Proteus currently handles pointer input only (on the web, that includes
     /// touch and pen). Other kinds of input will follow the same rule.
@@ -515,10 +516,12 @@ impl Handle {
 
     /// Disables or re-enables this component.
     ///
-    /// A disabled component is still drawn but ignores all input, and shows
-    /// its [`ComponentSpec::disabled`](crate::ComponentSpec::disabled) style. Use it for a control that isn't available yet, such as a submit
-    /// button. For something that is never a control, use
-    /// [`Handle::set_interactive`].
+    /// A disabled component is still drawn and still blocks input from
+    /// reaching what is behind it, but fires no events itself, and shows its
+    /// [`ComponentSpec::disabled`](crate::ComponentSpec::disabled) style, as a
+    /// disabled control does on the web. Use it for a control that isn't
+    /// available yet, such as a submit button. For something that is never a
+    /// control, use [`Handle::set_interactive`], which lets input through.
     ///
     /// # Errors
     ///
@@ -628,7 +631,7 @@ impl Handle {
     /// - [`Handle::merge_from`] and its variants: the destination, once every
     ///   source has arrived.
     ///
-    /// Changes of interaction style, such as a hover effect, don't count.
+    /// Changes of interaction style, such as a hover effect, don't trigger this hook.
     pub fn on_transition_complete(
         &self,
         app: &mut Proteus,
@@ -1036,6 +1039,7 @@ impl TransitionChannel {
     /// starts on the next tick.
     ///
     /// A request that can't run is reported to [`TransitionChannel::on_dropped`].
+    /// On a destroyed channel, the call is ignored with a warning.
     pub fn set(
         &self,
         app: &mut Proteus,
@@ -1044,6 +1048,15 @@ impl TransitionChannel {
         config: TransitionConfig,
         interruptible: bool,
     ) {
+        // Checked now rather than when the request is dispatched: by then,
+        // `destroy` has removed the `on_dropped` handlers that would hear it.
+        if !app.world.world.resource::<ChannelRegistry>().exists(self.0) {
+            log::warn!(
+                "TransitionChannel::set: channel {:?} has been destroyed — call ignored",
+                self.0
+            );
+            return;
+        }
         let target = app
             .world
             .world
@@ -1073,7 +1086,7 @@ impl TransitionChannel {
     }
 
     /// Destroys this channel and its `on_dropped` handlers. Later
-    /// [`TransitionChannel::set`] calls do nothing.
+    /// [`TransitionChannel::set`] calls are ignored, with a warning.
     pub fn destroy(self, app: &mut Proteus) {
         app.callbacks.forget_channel(self.0);
         proteus_ui::destroy_channel(&mut app.world.world, self.0);

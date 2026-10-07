@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 proteus-sdk = { path = "../proteus-sdk" }
 proteus-ui = { path = "../proteus-ui" }
 proteus-render = { path = "../proteus-render" }
-# Lenient DTO fallbacks log what they ignored rather than failing the call.
+# Logs exceptions thrown by JavaScript callbacks, and lenient DTO fallbacks.
 log = { workspace = true }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
