@@ -5,7 +5,7 @@ A TypeScript-only image gallery built on the `proteus-sdk` package, with no dire
 dependency on any Rust crate. It demonstrates two of Proteus's three transition topologies
 against real, network-fetched photos (picsum.photos):
 
-- grid tile → detail hero: **1→1** (`SignalHandle.set`)
+- grid tile → detail hero: **1→1** (`TransitionChannel.set`)
 - detail hero → fresh grid: **1→N** (`Handle.splitTo`, "back to grid")
 
 See the top comment in [`src/main.ts`](./src/main.ts) for the techniques it uses.

@@ -79,3 +79,14 @@ impl JsTextureHandle {
         )))
     }
 }
+
+// ---------------------------------------------------------------------------
+// VideoHandle
+// ---------------------------------------------------------------------------
+
+/// A handle to a video whose frames the app supplies. It has no methods of
+/// its own; it is passed to `uploadVideoFrame`, `releaseVideo` and
+/// `showVideo`.
+#[wasm_bindgen(js_name = VideoHandle)]
+#[derive(Clone, Copy)]
+pub struct JsVideoHandle(pub(crate) sdk::VideoHandle);

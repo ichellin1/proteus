@@ -1845,22 +1845,23 @@ fn animate_to_can_retarget_the_same_entity_once_its_prior_transition_settles() {
 }
 
 // ---------------------------------------------------------------------------
-// start_video() / stop_video() / set_video_crossfade()
+// Video: create_video(), show_video() / hide_video() / set_video_crossfade()
 // ---------------------------------------------------------------------------
 
 #[test]
-fn start_video_defaults_to_full_video_no_crossfade() {
+fn show_video_defaults_to_full_video_no_crossfade() {
     use proteus_ui::VideoCrossfade;
 
     let mut app = Proteus::new();
     let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let video = app.create_video();
 
-    let _ = tile.start_video(&mut app);
+    assert_eq!(tile.show_video(&mut app, &video), Ok(true));
 
     let video_t = app
         .world()
         .get::<VideoCrossfade>(tile.id())
-        .expect("start_video should attach VideoCrossfade")
+        .expect("show_video should attach VideoCrossfade")
         .video_t;
     assert_eq!(
         video_t, 1.0,
@@ -1874,7 +1875,8 @@ fn set_video_crossfade_updates_video_t_while_playing() {
 
     let mut app = Proteus::new();
     let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
-    let _ = tile.start_video(&mut app);
+    let video = app.create_video();
+    let _ = tile.show_video(&mut app, &video);
 
     let _ = tile.set_video_crossfade(&mut app, 0.0);
     assert_eq!(
@@ -1896,7 +1898,7 @@ fn set_video_crossfade_updates_video_t_while_playing() {
 }
 
 #[test]
-fn set_video_crossfade_is_a_noop_before_start_video_or_after_stop_video() {
+fn set_video_crossfade_is_a_noop_before_show_video_or_after_hide_video() {
     use proteus_ui::VideoCrossfade;
 
     let mut app = Proteus::new();
@@ -1906,11 +1908,32 @@ fn set_video_crossfade_is_a_noop_before_start_video_or_after_stop_video() {
     let _ = tile.set_video_crossfade(&mut app, 0.5);
     assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
 
-    // Started, then stopped: likewise nothing to do.
-    let _ = tile.start_video(&mut app);
-    let _ = tile.stop_video(&mut app);
+    // Shown, then hidden: likewise nothing to do.
+    let video = app.create_video();
+    let _ = tile.show_video(&mut app, &video);
+    let _ = tile.hide_video(&mut app);
     let _ = tile.set_video_crossfade(&mut app, 0.5);
     assert!(app.world().get::<VideoCrossfade>(tile.id()).is_none());
+}
+
+// There is one video at a time: a new one replaces the old, whose handle then
+// does nothing, as does a released one's.
+#[test]
+fn a_replaced_or_released_video_can_no_longer_be_shown_or_uploaded() {
+    use proteus_ui::VideoPlayer;
+
+    let mut app = Proteus::new();
+    let tile = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let first = app.create_video();
+    let second = app.create_video();
+
+    assert_eq!(tile.show_video(&mut app, &first), Ok(false));
+    assert!(app.world().get::<VideoPlayer>(tile.id()).is_none());
+    assert!(!first.upload_frame(&mut app, 1, 1, &[0; 4]));
+
+    assert_eq!(tile.show_video(&mut app, &second), Ok(true));
+    second.release(&mut app);
+    assert!(!second.upload_frame(&mut app, 1, 1, &[0; 4]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1942,12 +1965,13 @@ fn every_mutating_method_on_a_destroyed_handle_reports_instead_of_panicking() {
         handle.animate_to(&mut app, geometry.clone(), config),
         Err(HandleError::EntityNotFound)
     );
+    let video = app.create_video();
     assert_eq!(
-        handle.start_video(&mut app),
+        handle.show_video(&mut app, &video),
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
-        handle.stop_video(&mut app),
+        handle.hide_video(&mut app),
         Err(HandleError::EntityNotFound)
     );
     assert_eq!(
@@ -2073,7 +2097,7 @@ fn nothing_to_do_is_ok_false_not_an_error() {
     // No GPU pipeline in a headless world, so there is no texture to show.
     let texture = app.texture(Default::default());
     assert_eq!(a.set_texture(&mut app, texture), Ok(false));
-    // Alive, but never `start_video`-ed.
+    // Alive, but not showing video.
     assert_eq!(a.set_video_crossfade(&mut app, 0.5), Ok(false));
 }
 

@@ -830,8 +830,8 @@ impl QuadPipeline {
 
     /// Creates the video texture at `width` × `height` and registers it.
     ///
-    /// Upload frames to it with [`upload_video_frame`]. The host decodes the
-    /// video (see `VideoStream`); this crate has no decoder.
+    /// Upload frames to it with [`upload_video_frame`]. The app's own player
+    /// decodes the video; `proteus-sdk`'s `VideoHandle` drives these calls.
     ///
     /// Calling it again replaces the texture. The new texture is cleared to
     /// black, since a new GPU texture's contents are undefined and would show

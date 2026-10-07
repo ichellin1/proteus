@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use proteus_runtime::{FetchId, FetchResult, FetchTracker, HostServices, VideoStream};
+use proteus_runtime::{FetchId, FetchResult, FetchTracker, HostServices};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
@@ -115,24 +115,10 @@ impl HostServices for PreloadedHostServices {
             }
         }
     }
-
-    // shell that builds the demo's video keys. Worth documenting publicly, or
-    // replacing with a structured key, before other apps play video on the web.
-    // Opens an HLS video. `key` is `"{dir}|{codecs}"`: the directory holding
-    // the stream's manifest, and the codec string the browser needs to check
-    // it can play the stream, which varies between files.
-    fn open_video(&mut self, key: &str) -> Option<Box<dyn VideoStream>> {
-        let Some((dir, codecs)) = key.split_once('|') else {
-            log::error!("open_video: {key}: expected \"dir|codecs\"");
-            return None;
-        };
-        let stream = crate::hls_video::open(dir.to_string(), codecs.to_string())?;
-        Some(Box::new(stream))
-    }
 }
 
 /// Fetches a URL's bytes. `signal`, if given, lets an `AbortController`
-/// cancel the request; `fetch_async` and the HLS player use it.
+/// cancel the request; `fetch_async` uses it.
 pub(crate) async fn fetch_bytes(
     url: &str,
     signal: Option<&web_sys::AbortSignal>,

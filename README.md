@@ -21,7 +21,7 @@ crates/
   proteus-sdk-web/      # Layer 2.5 (web): wasm-bindgen bridge + npm-publishable TypeScript SDK (ts/)
   proteus-runtime/      # Layer 2.75: Renderer + Engine + the App / HostServices contracts
   proteus-host-winit/   # Layer 3: native host — winit window, frame loop, file-backed assets
-  proteus-host-web/     # Layer 3: wasm host — canvas, rAF loop, fetched assets, HLS video
+  proteus-host-web/     # Layer 3: wasm host — canvas, rAF loop, fetched assets
   proteus-demo/         # the reference demo, written once as an App
   proteus-shell-native/ # Layer 4: a `main()` that hands the demo to proteus-host-winit
   proteus-shell-web/    # Layer 4: a wasm entry point that hands it to proteus-host-web
@@ -35,6 +35,14 @@ frame loop and input; `Engine` owns `Proteus` and calls into the app. Nothing fo
 the same app runs on both platforms — `proteus-demo` is exactly this, and the two `proteus-shell-*`
 crates below it are thin entry points. From TypeScript, `mount()` plays the host's role instead;
 see `examples/gallery`.
+
+## Video
+
+Video is **experimental** in V1. Proteus shows video but doesn't play it: you bring your own
+player, such as the browser's `<video>` element, `ffmpeg` or a hardware decoder, and upload its
+frames to a `VideoHandle`, which components show. V1 supports one video at a time, with frames
+supplied by the app; playback controls are the player's own. See `examples/video` for a
+`<video>` element in TypeScript, and the native shell's `video_player` for `ffmpeg` in Rust.
 
 ## Reference Demo
 

@@ -2261,6 +2261,7 @@ name = "proteus-shell-web"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "log",
  "proteus-demo",
  "proteus-host-web",
@@ -2268,6 +2269,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-logger",
+ "web-sys",
 ]
 
 [[package]]

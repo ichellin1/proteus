@@ -33,6 +33,7 @@ pub(crate) struct DeclaredGeometry(pub QuadState);
 pub struct Proteus {
     pub(crate) world: ProteusWorld,
     pub(crate) callbacks: CallbackRegistry,
+    pub(crate) video: crate::video::VideoState,
 }
 
 impl Proteus {
@@ -41,6 +42,7 @@ impl Proteus {
         Self {
             world: ProteusWorld::new(),
             callbacks: CallbackRegistry::default(),
+            video: crate::video::VideoState::default(),
         }
     }
 

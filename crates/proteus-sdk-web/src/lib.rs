@@ -43,6 +43,7 @@ mod handle;
 
 pub use handle::{
     Handle, JsTextureHandle as TextureHandle, JsTransitionChannel as TransitionChannel,
+    JsVideoHandle as VideoHandle,
 };
 
 use dto::{
@@ -736,6 +737,59 @@ impl ProteusApp {
     ) -> TextureHandle {
         let req = texture_request_from(request);
         TextureHandle(self.0.borrow_mut().bake_texture(width, height, rgba, req))
+    }
+
+    /// Calls [`Proteus::create_video`](sdk::Proteus::create_video).
+    #[wasm_bindgen(js_name = createVideo)]
+    pub fn create_video(&mut self) -> VideoHandle {
+        VideoHandle(self.0.borrow_mut().create_video())
+    }
+
+    /// Calls [`VideoHandle::upload_frame`](sdk::VideoHandle::upload_frame).
+    #[wasm_bindgen(js_name = uploadVideoFrame)]
+    pub fn upload_video_frame(
+        &mut self,
+        video: &VideoHandle,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> bool {
+        video
+            .0
+            .upload_frame(&mut self.0.borrow_mut(), width, height, rgba)
+    }
+
+    /// Calls [`VideoHandle::release`](sdk::VideoHandle::release).
+    #[wasm_bindgen(js_name = releaseVideo)]
+    pub fn release_video(&mut self, video: &VideoHandle) {
+        video.0.release(&mut self.0.borrow_mut());
+    }
+
+    /// Calls [`Handle::show_video`](sdk::Handle::show_video).
+    #[wasm_bindgen(js_name = showVideo)]
+    pub fn show_video(&mut self, handle: &Handle, video: &VideoHandle) -> Result<bool, JsValue> {
+        handle
+            .0
+            .show_video(&mut self.0.borrow_mut(), &video.0)
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::hide_video`](sdk::Handle::hide_video).
+    #[wasm_bindgen(js_name = hideVideo)]
+    pub fn hide_video(&mut self, handle: &Handle) -> Result<(), JsValue> {
+        handle
+            .0
+            .hide_video(&mut self.0.borrow_mut())
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::set_video_crossfade`](sdk::Handle::set_video_crossfade).
+    #[wasm_bindgen(js_name = setVideoCrossfade)]
+    pub fn set_video_crossfade(&mut self, handle: &Handle, video_t: f32) -> Result<bool, JsValue> {
+        handle
+            .0
+            .set_video_crossfade(&mut self.0.borrow_mut(), video_t)
+            .map_err(handle_err)
     }
 
     /// Calls [`Handle::set_disabled`](sdk::Handle::set_disabled).

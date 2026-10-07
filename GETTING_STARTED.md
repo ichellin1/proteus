@@ -32,7 +32,7 @@ Both shells:
 Native shell only:
 
 - **ffmpeg / ffprobe** on `PATH` — native decodes MP4 by shelling out to `ffmpeg`
-  (`crates/proteus-host-winit/src/mp4_player.rs`). On macOS: `brew install ffmpeg`. Without
+  (`crates/proteus-shell-native/src/video_player.rs`). On macOS: `brew install ffmpeg`. Without
   it, video playback logs a warning and skips, but the tile↔screen morph still runs.
 
 Web shell only:
@@ -97,7 +97,7 @@ built-in HTTP server. To just build (e.g. to serve it with a different HTTP serv
 build-web` on its own.
 
 The web shell decodes video via the browser's own `<video>` element and `MediaSource`
-(`crates/proteus-host-web/src/hls_video.rs`), so there's no `ffmpeg` dependency on this
+(`crates/proteus-shell-web/src/video_player.rs`), so there's no `ffmpeg` dependency on this
 target.
 
 ## Building the TypeScript SDK

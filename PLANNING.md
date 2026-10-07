@@ -4507,7 +4507,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
 
 Last, since it changes both shells and the demo.
 
-- [ ] Demo: clicking a hovered video tile makes its title label flicker instead of fading out,
+- [x] Demo: clicking a hovered video tile makes its title label flicker instead of fading out,
   on both shells; sometimes it fades, sometimes it flickers. Not caused by step 5c (an offscreen
   render of the 5b commit gives the same frames). Leads from that render: on the click frame the
   label is hidden completely, apparently drawn under the video backdrop (whose z is the midpoint
@@ -4516,7 +4516,7 @@ Last, since it changes both shells and the demo.
   with the tile. The render didn't start real video playback, which the real app does. Check
   with a release build too, since a debug build's frame times can look like a flicker.
 
-- [ ] The demo owns its own settings and asset list; the shells pass in only what is
+- [x] The demo owns its own settings and asset list; the shells pass in only what is
   per-platform. Today both shells carry identical copies of the demo's `CLEAR_COLOR` and
   `IMAGE_MAX_SIDE`, and the web shell's `asset_keys()` is a hand-kept copy of every image
   `DemoApp` loads, which silently breaks if the two drift. `proteus-demo` exposes its config
@@ -4524,7 +4524,7 @@ Last, since it changes both shells and the demo.
   and its asset keys, which `load_assets` and the web shell's preload both read. The shells
   keep only the asset directory or URL, the video keys, and the window title and size. Done
   with the video item below, which also changes both shells.
-- [ ] Video: restore "bring your own player", and mark video experimental for V1. Proteus shows
+- [x] Video: restore "bring your own player", and mark video experimental for V1. Proteus shows
   video frames; it doesn't play video. An app brings its own player (on the web, usually the
   browser's `<video>` element) and hands Proteus the frames. M13.4 lost this: it moved an
   `ffmpeg` player into `proteus-host-winit` and an HLS player into `proteus-host-web`, deleted the
