@@ -3,10 +3,10 @@
 //! An entity with [`VideoPlayer`] shows the whole video texture instead of its
 //! color. `QuadState::color` still tints it; use `Vec4::ONE` for none.
 //!
-//! One video plays at a time, and every entity with `VideoPlayer` shows the
-//! same one. Proteus doesn't decode video: the app's own player does (see
-//! `HostServices::open_video`), and the app uploads its frames with
-//! `Frame::play_video` and `Frame::poll_video`.
+//! **Experimental.** There is one video at a time, and every entity with
+//! `VideoPlayer` shows it. Proteus doesn't play video: the app's own player
+//! decodes it, and the app uploads its frames with `proteus-sdk`'s
+//! `VideoHandle`.
 //!
 //! ## Fading between an image and the video
 //!

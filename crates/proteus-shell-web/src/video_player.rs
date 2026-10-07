@@ -1,13 +1,12 @@
-//! A reference video player for the web host, showing how to bring your own
-//! video player into a Proteus application.
-//!
-//! It plays an HLS stream as a [`VideoStream`](proteus_runtime::VideoStream):
-//! the stream plays in a `<video>` element fed through `MediaSource`, and
-//! each frame is drawn to an offscreen `<canvas>` and read back.
+//! The demo's web video player, an example of bringing your own. It plays an
+//! HLS stream in a `<video>` element fed through `MediaSource`, draws each
+//! frame to an offscreen `<canvas>`, reads it back, and delivers it as a
+//! [`VideoStream`], which the demo uploads with
+//! `proteus_sdk::VideoHandle::upload_frame`.
 //!
 //! Proteus doesn't play video; it shows the frames a player hands it. Any
-//! other browser player plugs in the same way, through
-//! [`HostServices::open_video`](proteus_runtime::HostServices::open_video).
+//! other browser player plugs in the same way: decode the frames, and upload
+//! them. A TypeScript app does the same with the SDK's `uploadFrom`.
 //!
 //! Frames are read once per animation frame, since `requestVideoFrameCallback`,
 //! which would report each new video frame, isn't available in the version of
@@ -23,16 +22,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use js_sys::Promise;
-use proteus_runtime::{VideoFrame, VideoStream};
+use proteus_demo::video::{VideoFrame, VideoSource, VideoStream};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     AbortController, CanvasRenderingContext2d, HtmlCanvasElement, HtmlVideoElement, MediaSource,
     MediaSourceReadyState, SourceBuffer,
 };
-
-use crate::request_animation_frame;
-use crate::services::fetch_bytes;
 
 /// State shared by the stream and every listener and asynchronous step, which
 /// can outlive it.
@@ -77,6 +73,22 @@ impl VideoStream for HlsVideoStream {
         if let Some(parent) = inner.video.parent_node() {
             let _ = parent.remove_child(&inner.video);
         }
+    }
+}
+
+/// The demo's three tile videos, as HLS streams.
+pub struct HlsVideos {
+    /// The left, center and right tiles' streams: the directory holding each
+    /// stream's manifest, relative to the page, such as
+    /// `"videos/hls/tiger"`, and the codec string the browser needs to check
+    /// it can play it, which varies between files.
+    pub streams: [(String, String); 3],
+}
+
+impl VideoSource for HlsVideos {
+    fn open(&mut self, tile: usize) -> Option<Box<dyn VideoStream>> {
+        let (dir, codecs) = self.streams.get(tile)?.clone();
+        open(dir, codecs).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
     }
 }
 
@@ -397,6 +409,40 @@ fn parse_leading_f64(s: &str) -> f64 {
         .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
         .unwrap_or(s.len());
     s[..end].parse().unwrap_or(0.0)
+}
+
+fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
+    web_sys::window()
+        .expect("no window")
+        .request_animation_frame(f.as_ref().unchecked_ref())
+        .expect("requestAnimationFrame failed");
+}
+
+/// Fetches a URL's bytes. `signal` lets an `AbortController` cancel the
+/// request.
+async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>) -> Result<Vec<u8>, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+    let promise = match signal {
+        Some(signal) => {
+            let init = web_sys::RequestInit::new();
+            init.set_signal(Some(signal));
+            window.fetch_with_str_and_init(url, &init)
+        }
+        None => window.fetch_with_str(url),
+    };
+    let resp: web_sys::Response = JsFuture::from(promise)
+        .await?
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("fetch: response was not a Response"))?;
+    if !resp.ok() {
+        return Err(JsValue::from_str(&format!(
+            "{} {}",
+            resp.status(),
+            resp.status_text()
+        )));
+    }
+    let buf = JsFuture::from(resp.array_buffer()?).await?;
+    Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
 #[cfg(test)]

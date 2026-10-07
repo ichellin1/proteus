@@ -57,11 +57,13 @@ mod callback;
 mod data;
 mod handle;
 mod spec;
+pub mod video;
 
 pub use app::Proteus;
 pub use data::{ComponentData, TransitionData};
 pub use handle::{Handle, HandleError, TextureHandle, TextureRequest, TransitionChannel};
 pub use spec::ComponentSpec;
+pub use video::VideoHandle;
 
 // The value types this API takes and returns, so an app needs no direct
 // `proteus-ui` dependency.

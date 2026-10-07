@@ -6,7 +6,7 @@
 //! | [`App`] | What an application implements: `setup` once, `update` every frame |
 //! | [`Engine`] | Owns the [`Proteus`] app state and the [`Renderer`], and runs one frame at a time |
 //! | [`Renderer`] | Bakes pending text and images, then draws everything in one pass |
-//! | [`HostServices`] | Loads assets, fetches data and plays video for the app, per platform |
+//! | [`HostServices`] | Loads assets and fetches data for the app, per platform |
 //! | [`ProteusConfig`] | Engine settings: memory, rendering, frame timing and more |
 //!
 //! A host is a crate rather than a trait: it owns the window or canvas, the GPU
@@ -60,7 +60,7 @@ mod renderer;
 mod services;
 mod viewport;
 
-pub use app::{App, Frame, PlayingVideo};
+pub use app::{App, Frame};
 pub use config::{Allowed, ConfigError, ProteusConfig};
 pub use config_dto::ProteusConfigDto;
 pub use engine::Engine;
@@ -72,7 +72,7 @@ pub use proteus_render::FontError;
 /// Re-exported from `proteus-sdk`.
 pub use proteus_sdk::TextureRequest;
 pub use renderer::Renderer;
-pub use services::{FetchId, FetchResult, FetchTracker, HostServices, VideoFrame, VideoStream};
+pub use services::{FetchId, FetchResult, FetchTracker, HostServices};
 pub use viewport::{Insets, Viewport};
 
 // Re-exported so a host can depend on `proteus-runtime` alone, and uses the

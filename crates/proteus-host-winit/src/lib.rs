@@ -18,8 +18,6 @@
 
 #![warn(missing_docs)]
 
-mod mp4_player;
-
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -30,7 +28,7 @@ use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
 use proteus_runtime::{
     App, Engine, FetchId, FetchResult, FetchTracker, GpuSurface, HostServices, ProteusConfig,
-    SurfaceRequest, VideoStream, Viewport,
+    SurfaceRequest, Viewport,
 };
 
 use winit::application::ApplicationHandler;
@@ -147,14 +145,6 @@ impl HostServices for DirHostServices {
     fn cancel_fetch(&mut self, id: FetchId) {
         self.fetches.cancel(id);
     }
-
-    // other assets? Today they are file paths.
-    // Opens an MP4 file for playback, decoded with `ffmpeg`. Unlike
-    // [`Self::load_asset`], `key` is a file path, not a path under the asset
-    // directory.
-    fn open_video(&mut self, key: &str) -> Option<Box<dyn VideoStream>> {
-        mp4_player::open(PathBuf::from(key)).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +157,8 @@ pub struct RunConfig {
     pub title: String,
     /// The window's initial content size, in logical pixels.
     pub initial_size: (u32, u32),
-    /// The directory [`DirHostServices`] reads assets from.
+    /// The directory [`DirHostServices`] reads assets from, for [`run`].
+    /// [`run_with_services`] doesn't use it.
     pub asset_dir: PathBuf,
     /// Engine settings.
     pub proteus: ProteusConfig,
@@ -196,7 +187,8 @@ pub fn limits() -> wgpu::Limits {
     wgpu::Limits::default()
 }
 
-/// Opens a window and runs `app` until the window is closed.
+/// Opens a window and runs `app` until the window is closed, with
+/// [`DirHostServices`] reading assets from `config.asset_dir`.
 ///
 /// # Panics
 ///
@@ -204,6 +196,22 @@ pub fn limits() -> wgpu::Limits {
 /// the `ConfigError`'s message; call `ProteusConfig::check` first to handle
 /// it yourself. Also if the window or the GPU can't be set up.
 pub fn run<A: App>(app: A, config: RunConfig) {
+    let services = DirHostServices::new(config.asset_dir.clone());
+    run_with_services(app, config, services);
+}
+
+/// [`run`], with the app's own [`HostServices`] in place of
+/// [`DirHostServices`], for example to load assets from an archive or a
+/// different source.
+///
+/// # Panics
+///
+/// As [`run`].
+pub fn run_with_services<A: App, S: HostServices + 'static>(
+    app: A,
+    config: RunConfig,
+    services: S,
+) {
     if let Err(e) = config.proteus.check(&limits()) {
         panic!("{e}");
     }
@@ -211,6 +219,7 @@ pub fn run<A: App>(app: A, config: RunConfig) {
     let mut host = WinitHostApp {
         app,
         config,
+        services: Some(Box::new(services)),
         running: None,
     };
     event_loop
@@ -225,6 +234,8 @@ pub fn run<A: App>(app: A, config: RunConfig) {
 struct WinitHostApp<A: App> {
     app: A,
     config: RunConfig,
+    /// Moved into `Running` once the window exists.
+    services: Option<Box<dyn HostServices>>,
     running: Option<Running>,
 }
 
@@ -233,7 +244,7 @@ struct Running {
     window: Arc<Window>,
     gpu: GpuSurface,
     engine: Engine,
-    services: DirHostServices,
+    services: Box<dyn HostServices>,
     last_frame: Instant,
 }
 
@@ -270,7 +281,7 @@ impl Running {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        self.engine.frame(dt, &view, app, &mut self.services);
+        self.engine.frame(dt, &view, app, self.services.as_mut());
         frame.present();
     }
 }
@@ -302,7 +313,10 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
         let gpu = pollster::block_on(init_gpu(window.clone(), render_cfg));
         log::info!("GPU adapter: {}", gpu.adapter_description());
 
-        let mut services = DirHostServices::new(self.config.asset_dir.clone());
+        let mut services = self
+            .services
+            .take()
+            .expect("services are moved into `Running` only once");
         let viewport = viewport_for(&window, gpu.config.width, gpu.config.height);
         let engine = Engine::new(
             &gpu.device,
@@ -311,7 +325,7 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
             viewport,
             self.config.proteus.clone(),
             &mut self.app,
-            &mut services,
+            services.as_mut(),
         );
 
         let running = Running {

@@ -25,3 +25,12 @@ wasm-bindgen-futures = { workspace = true }
 log = { workspace = true }
 wasm-logger = { workspace = true }
 console_error_panic_hook = { workspace = true }
+# The demo's HLS video player, src/video_player.rs: a <video> element fed
+# through MediaSource, and canvas readback of each frame.
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Window", "Document", "Element", "HtmlElement", "HtmlVideoElement", "HtmlMediaElement",
+    "HtmlCanvasElement", "CssStyleDeclaration", "MediaSource", "MediaSourceReadyState",
+    "SourceBuffer", "Url", "CanvasRenderingContext2d", "ImageData", "Node", "Event",
+    "Request", "RequestInit", "Response", "AbortController", "AbortSignal",
+] }

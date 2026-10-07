@@ -188,7 +188,9 @@ fn tile_overlay_quad() -> QuadState {
 /// `Demo::advance_video_loading` instead re-derives it every tick as the
 /// midpoint between `TILE_Z` and the tracked tile's *current* z — always
 /// strictly between the two for any current z `> TILE_Z`, and `0.505` once
-/// the tile settles at `0.51`.
+/// the tile settles at `0.51`. Until the tile's z rises above `TILE_Z`, on
+/// the click frame, the backdrop stays hidden, since no z is strictly
+/// between.
 fn backdrop_quad() -> QuadState {
     QuadState {
         position: Vec3::new(0.0, 0.0, TILE_Z),
@@ -361,7 +363,7 @@ pub fn video_screen_quad(viewport_size: Vec2) -> QuadState {
         scale: 1.0,
         anchor: Vec2::new(0.5, 0.5),
         // Untinted — multiplies the sampled video texture, see
-        // `Handle::start_video`'s doc.
+        // `Handle::show_video`'s doc.
         color: Vec4::ONE,
         corner_radius: SCREEN_CORNER_RADIUS,
     }

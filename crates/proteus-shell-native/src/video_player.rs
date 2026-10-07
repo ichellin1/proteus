@@ -1,18 +1,16 @@
-//! A reference video player for the native host, showing how to bring your
-//! own. It decodes an MP4 file by running `ffmpeg` on a background thread, and
-//! delivers RGBA frames through a [`proteus_runtime::VideoStream`].
+//! The demo's native video player, an example of bringing your own. It
+//! decodes an MP4 file by running `ffmpeg` on a background thread, and
+//! delivers RGBA frames as a [`VideoStream`], which the demo uploads with
+//! `proteus_sdk::VideoHandle::upload_frame`.
 //!
 //! Proteus doesn't play video. It shows the frames a player hands it, and
 //! knows nothing about MP4 or `ffmpeg`. Any other player, such as a hardware
-//! decoder, plugs in the same way: start it in
-//! [`HostServices::open_video`], and return its frames as a [`VideoStream`].
+//! decoder, plugs in the same way: decode the frames, and upload them.
 //!
 //! `ffmpeg` does all the decoding and plays at the file's own frame rate
 //! (`-re`). It and `ffprobe` must be on `PATH`.
 //!
 //! Audio is not decoded: this player shows video only.
-//!
-//! [`HostServices::open_video`]: proteus_runtime::HostServices::open_video
 
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -22,7 +20,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use proteus_runtime::{VideoFrame, VideoStream};
+use proteus_demo::video::{VideoFrame, VideoSource, VideoStream};
 
 /// The size of an MP4 file's video, in pixels.
 #[derive(Copy, Clone, Debug)]
@@ -66,7 +64,7 @@ fn probe(path: &Path) -> Result<VideoDimensions, String> {
         .ok_or("ffprobe: no height in output")?
         .parse()
         .map_err(|e| format!("ffprobe: bad height: {e}"))?;
-    log::info!("mp4_player: probed {path:?} — {width}×{height} px (via ffprobe)");
+    log::info!("video_player: probed {path:?} — {width}×{height} px (via ffprobe)");
     Ok(VideoDimensions { width, height })
 }
 
@@ -95,7 +93,7 @@ impl VideoStream for Mp4Stream {
         }
         if drained > 1 {
             log::debug!(
-                "mp4_player: {} stale frame(s) discarded (render loop behind decoder)",
+                "video_player: {} stale frame(s) discarded (render loop behind decoder)",
                 drained - 1
             );
         }
@@ -125,6 +123,19 @@ impl VideoStream for Mp4Stream {
     }
 }
 
+/// The demo's three tile videos, as MP4 files.
+pub struct Mp4Videos {
+    /// The left, center and right tiles' files.
+    pub paths: [PathBuf; 3],
+}
+
+impl VideoSource for Mp4Videos {
+    fn open(&mut self, tile: usize) -> Option<Box<dyn VideoStream>> {
+        let path = self.paths.get(tile)?.clone();
+        open(path).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
+    }
+}
+
 /// Starts decoding `path` on a background thread. Playback loops until
 /// [`VideoStream::stop`] is called. Returns `None`, and logs why, if `ffprobe`
 /// can't read the file.
@@ -132,7 +143,7 @@ pub fn open(path: PathBuf) -> Option<Mp4Stream> {
     let dims = match probe(&path) {
         Ok(dims) => dims,
         Err(e) => {
-            log::warn!("mp4_player: {path:?}: {e}");
+            log::warn!("video_player: {path:?}: {e}");
             return None;
         }
     };
@@ -172,7 +183,7 @@ fn decode_loop(
 ) {
     while !stop.load(Ordering::Relaxed) {
         if let Err(e) = decode_once(path, tx, width, height, stop, child_slot) {
-            log::warn!("mp4_player: {path:?}: {e}");
+            log::warn!("video_player: {path:?}: {e}");
             return;
         }
     }
@@ -241,12 +252,12 @@ fn decode_once(
     }
 
     if result.is_ok() {
-        log::info!("mp4_player: {path:?}: {frames_sent} frames sent");
+        log::info!("video_player: {path:?}: {frames_sent} frames sent");
     } else if let Some(handle) = stderr_thread {
         if let Ok(err_output) = handle.join() {
             if !err_output.trim().is_empty() {
                 log::warn!(
-                    "mp4_player: {path:?}: ffmpeg stderr:\n{}",
+                    "video_player: {path:?}: ffmpeg stderr:\n{}",
                     err_output.trim()
                 );
             }

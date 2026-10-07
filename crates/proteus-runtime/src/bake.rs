@@ -269,7 +269,7 @@ mod tests {
     use super::*;
     use proteus_render::{AtlasConfig, DEFAULT_TRANSITION_ATLAS_SIZE};
 
-    use crate::app::video_tests::headless_device;
+    use crate::app::gpu_tests::headless_device;
 
     // A world with a one-page atlas of 256 × 256, so that modest content is
     // larger than a page, and with texture references counted.

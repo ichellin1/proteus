@@ -312,23 +312,32 @@ impl Handle {
         Ok(())
     }
 
-    /// Shows the playing video on this component.
+    /// Shows `video` on this component, in place of its image or color.
+    /// **Experimental**; see the [`video`](crate::video) module.
     ///
-    /// Proteus doesn't play video: the app's own player supplies the frames
-    /// (see `proteus_runtime::HostServices::open_video`), and the app starts
-    /// and stops it with `proteus_runtime::Frame::play_video` and
-    /// `stop_video`. Only one video plays at a time, and every component
-    /// showing video shows the same one. If the component also has an
-    /// image, [`Handle::set_video_crossfade`] blends between the two; this
-    /// call starts fully on the video.
+    /// The app's own player supplies the frames, through
+    /// [`VideoHandle::upload_frame`](crate::VideoHandle::upload_frame). If the
+    /// component also has an image, [`Handle::set_video_crossfade`] blends
+    /// between the two; this call starts fully on the video.
+    ///
+    /// Returns `Ok(false)`, changing nothing, if `video` was released or
+    /// replaced.
     ///
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists.
-    pub fn start_video(&self, app: &mut Proteus) -> Result<(), HandleError> {
-        entity_mut(app, self.0, "start_video")?
+    pub fn show_video(
+        &self,
+        app: &mut Proteus,
+        video: &crate::VideoHandle,
+    ) -> Result<bool, HandleError> {
+        check_alive(app, self.0, "show_video")?;
+        if !app.video.is_current(*video) {
+            return Ok(false);
+        }
+        entity_mut(app, self.0, "show_video")?
             .insert((VideoPlayer, VideoCrossfade { video_t: 1.0 }));
-        Ok(())
+        Ok(true)
     }
 
     /// Stops showing video on this component. The component returns to
@@ -337,8 +346,8 @@ impl Handle {
     /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists.
-    pub fn stop_video(&self, app: &mut Proteus) -> Result<(), HandleError> {
-        entity_mut(app, self.0, "stop_video")?
+    pub fn hide_video(&self, app: &mut Proteus) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "hide_video")?
             .remove::<VideoPlayer>()
             .remove::<VideoCrossfade>();
         Ok(())
@@ -348,7 +357,7 @@ impl Handle {
     /// (`1.0`).
     ///
     /// To fade the video in, call this with `0.0` right after
-    /// [`Handle::start_video`], then raise it over time, for example in step
+    /// [`Handle::show_video`], then raise it over time, for example in step
     /// with a transition on the same component.
     ///
     /// Returns `Ok(false)` if the component isn't showing video.

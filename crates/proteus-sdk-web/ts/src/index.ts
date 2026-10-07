@@ -15,6 +15,7 @@ import {
   ProteusApp as WasmApp,
   TransitionChannel as WasmTransitionChannel,
   TextureHandle as WasmTextureHandle,
+  VideoHandle as WasmVideoHandle,
 } from "../pkg/proteus_sdk_web.js";
 
 import type {
@@ -497,6 +498,42 @@ export class Handle {
   setTexture(texture: TextureHandle): boolean {
     return this.app.wasmApp.setTexture(this.wasmHandle, texture.wasmHandle);
   }
+
+  /**
+   * Shows `video` on this component, in place of its image or color.
+   * **Experimental**: see {@link VideoHandle}.
+   *
+   * If the component also has an image, {@link Handle.setVideoCrossfade}
+   * blends between the two; this starts fully on the video. Returns `false`,
+   * changing nothing, if `video` was released or replaced.
+   *
+   * @throws if this component no longer exists.
+   */
+  showVideo(video: VideoHandle): boolean {
+    return this.app.wasmApp.showVideo(this.wasmHandle, video.wasmHandle);
+  }
+
+  /**
+   * Stops showing video on this component, which returns to its image or
+   * color.
+   *
+   * @throws if this component no longer exists.
+   */
+  hideVideo(): void {
+    this.app.wasmApp.hideVideo(this.wasmHandle);
+  }
+
+  /**
+   * Sets the blend between this component's image (`0`) and its video (`1`).
+   * To fade the video in, call it with `0` right after
+   * {@link Handle.showVideo}, then raise it over time. Returns `false` if the
+   * component isn't showing video.
+   *
+   * @throws if this component no longer exists.
+   */
+  setVideoCrossfade(videoT: number): boolean {
+    return this.app.wasmApp.setVideoCrossfade(this.wasmHandle, videoT);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -591,6 +628,114 @@ export class TextureHandle {
     return this.app.wasmApp.textureState(this.wasmHandle) as
       | TextureState
       | undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// VideoHandle
+// ---------------------------------------------------------------------------
+
+/**
+ * A video whose frames your own player supplies. **Experimental.**
+ *
+ * Proteus shows video; it doesn't play it. Play the video with your own
+ * player, usually a `<video>` element, and upload each frame: with
+ * {@link VideoHandle.uploadFrom} for a `<video>` element, or
+ * {@link VideoHandle.uploadFrame} for pixels you decoded yourself. Show it on
+ * components with {@link Handle.showVideo}. Playback controls are the
+ * player's own.
+ *
+ * There is one video at a time: {@link ProteusApp.createVideo} replaces any
+ * video that already exists, and its handle stops working.
+ *
+ * @example
+ * ```ts
+ * const video = app.createVideo();
+ * tile.showVideo(video);
+ * const element = document.querySelector("video")!;
+ * const upload = () => {
+ *   video.uploadFrom(element);
+ *   element.requestVideoFrameCallback(upload);
+ * };
+ * element.requestVideoFrameCallback(upload);
+ * ```
+ */
+export class VideoHandle {
+  private canvas?: HTMLCanvasElement;
+  private context?: CanvasRenderingContext2D;
+
+  /** Prefer {@link ProteusApp.createVideo} over calling this directly. */
+  constructor(
+    private readonly app: ProteusApp,
+    /** @internal */
+    public readonly wasmHandle: WasmVideoHandle,
+  ) {}
+
+  /**
+   * Uploads one frame of `width × height` RGBA pixels, `width * height * 4`
+   * bytes, which every component showing this video draws from the next
+   * frame. The video's texture follows the frames' size.
+   *
+   * Returns `false`, uploading nothing, if the video was released or
+   * replaced, or if `rgba` has the wrong length.
+   */
+  uploadFrame(
+    width: number,
+    height: number,
+    rgba: Uint8Array | Uint8ClampedArray,
+  ): boolean {
+    const bytes =
+      rgba instanceof Uint8Array
+        ? rgba
+        : new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+    return this.app.wasmApp.uploadVideoFrame(
+      this.wasmHandle,
+      width,
+      height,
+      bytes,
+    );
+  }
+
+  /**
+   * Uploads the frame `element` is showing now. Call it for each new frame,
+   * for example from `requestVideoFrameCallback`.
+   *
+   * The frame is drawn to an offscreen canvas and read back, which works in
+   * every browser. Returns `false` if the element has no frame yet, or as
+   * {@link VideoHandle.uploadFrame} does.
+   *
+   * @throws a `SecurityError` if the video comes from another origin without
+   * CORS, since the browser then won't let its pixels be read.
+   */
+  uploadFrom(element: HTMLVideoElement): boolean {
+    const width = element.videoWidth;
+    const height = element.videoHeight;
+    if (width === 0 || height === 0) {
+      return false;
+    }
+    if (!this.canvas || !this.context) {
+      this.canvas = document.createElement("canvas");
+      const context = this.canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        return false;
+      }
+      this.context = context;
+    }
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+    this.context.drawImage(element, 0, 0, width, height);
+    const pixels = this.context.getImageData(0, 0, width, height).data;
+    return this.uploadFrame(width, height, pixels);
+  }
+
+  /**
+   * Releases this video and its GPU texture. Components showing video show
+   * nothing in its place until {@link Handle.hideVideo} or another video.
+   */
+  release(): void {
+    this.app.wasmApp.releaseVideo(this.wasmHandle);
   }
 }
 
@@ -699,6 +844,15 @@ export class ProteusApp {
       this,
       this.wasmApp.bakeTexture(width, height, rgba, request ?? null),
     );
+  }
+
+  /**
+   * Creates a video, whose frames your own player supplies.
+   * **Experimental**: see {@link VideoHandle}. There is one video at a time:
+   * this replaces any video that already exists.
+   */
+  createVideo(): VideoHandle {
+    return new VideoHandle(this, this.wasmApp.createVideo());
   }
 
   /** Returns a {@link TextureHandle} for an ID from {@link TextureHandle.id}. */

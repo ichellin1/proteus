@@ -49,6 +49,7 @@
 mod app;
 mod gallery_fetch;
 mod screens;
+pub mod video;
 
 pub use app::DemoApp;
 
@@ -59,7 +60,7 @@ use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
     Border, ComponentSpec, Easing, Glow, Handle, Image, ImageCrop, MergeLayout, Proteus, QuadState,
-    SplitStrategy, Text, TextureHandle, TransitionConfig,
+    SplitStrategy, Text, TextureHandle, TransitionConfig, VideoHandle,
 };
 
 use screens::{
@@ -452,11 +453,14 @@ pub struct Demo {
     pending_texture_churn: Vec<TextureChurnUpdate>,
     /// Set to `Some(tile_idx)` when a tile should start playing video —
     /// drained by `DemoApp` via [`Demo::take_pending_video_start`], which
-    /// starts that tile's video (see the crate doc). The entity itself
-    /// already shows the video texture by the time this is set
-    /// (`Handle::start_video`, called synchronously); this flag only tells
-    /// `DemoApp` *which* video to start.
+    /// starts that tile's player (see the crate doc). The entity itself
+    /// already shows `video` by the time this is set
+    /// (`Handle::show_video`, called synchronously); this flag only tells
+    /// `DemoApp` *which* player to start.
     pending_video_start: Option<usize>,
+    /// The video the playing tile shows, while one plays. `DemoApp` uploads
+    /// the player's frames to it; see [`Demo::video`].
+    video: Option<VideoHandle>,
     /// Set when the currently-playing tile should stop — drained by
     /// `DemoApp` via [`Demo::take_pending_video_stop`], which stops the
     /// video and releases its GPU texture.
@@ -486,8 +490,8 @@ pub struct Demo {
     /// per timeout, telling `DemoApp` "abort whatever fetch/decode is still
     /// in flight, `Demo` hasn't torn anything down (the screen stays on
     /// `VideoScreen`, now showing the error text), so don't stop playback,
-    /// just stop wasting bandwidth." A native `.mp4` decode has no
-    /// in-flight fetch to abort, but the web host's HLS segment fetch does.
+    /// just stop wasting bandwidth." The native shell's `.mp4` decode has no
+    /// in-flight fetch to abort, but the web shell's HLS segment fetch does.
     pending_video_cancel: bool,
     /// How long we've been *continuously* settled-and-waiting (tile not
     /// mid-transition, resting on `VideoScreen`, no frame yet) — unlike
@@ -810,6 +814,7 @@ impl Demo {
             stress_run: None,
             pending_texture_churn: Vec::new(),
             pending_video_start: None,
+            video: None,
             pending_video_stop: false,
             video_first_frame_shown: false,
             video_dots_elapsed: 0.0,
@@ -1378,7 +1383,7 @@ impl Demo {
     /// describes) and marks it to start showing video, crossfading in from
     /// the box-cover art in lockstep with the geometry transition
     /// (`Demo::advance_video_crossfade` owns the ramp itself — this just
-    /// starts it at `0.0` instead of `start_video`'s own instant-cut
+    /// starts it at `0.0` instead of `show_video`'s own instant-cut
     /// default). Queues `idx` for `DemoApp` to actually start decoding
     /// (`take_pending_video_start`) — `video_t` starts at `0.0` (fully box
     /// art) regardless of how quickly `DemoApp` manages to actually get a
@@ -1388,8 +1393,10 @@ impl Demo {
         let tile = self.video_tiles.tiles[idx];
         let target = video_tiles::video_screen_quad(self.viewport_size);
         let _ = tile.animate_to(proteus, target, group_transition_config());
-        let _ = tile.start_video(proteus);
+        let video = proteus.create_video();
+        let _ = tile.show_video(proteus, &video);
         let _ = tile.set_video_crossfade(proteus, 0.0);
+        self.video = Some(video);
         self.pending_video_start = Some(idx);
         // Fresh loading-UI state for this visit — see each field's own doc.
         self.video_first_frame_shown = false;
@@ -1425,8 +1432,7 @@ impl Demo {
         if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
             qs.color.w = 1.0;
         }
-        let _ = tile.stop_video(proteus);
-        self.pending_video_stop = true;
+        self.stop_tile_video(proteus, tile);
         self.restore_idle_tiles_opacity(proteus, idx);
         let targets: Vec<(Handle, QuadState)> = (0..3)
             .map(|i| {
@@ -1478,8 +1484,7 @@ impl Demo {
         if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
             qs.color.w = 1.0;
         }
-        let _ = tile.stop_video(proteus);
-        self.pending_video_stop = true;
+        self.stop_tile_video(proteus, tile);
         self.restore_idle_tiles_opacity(proteus, idx);
         let targets = self.home.nav_buttons;
         let _ = tile.split_to(
@@ -2490,21 +2495,37 @@ impl Demo {
         self.pending_video_start.take()
     }
 
+    /// The video the playing tile shows, while one plays, for `DemoApp` to
+    /// upload the player's frames to.
+    pub fn video(&self) -> Option<VideoHandle> {
+        self.video
+    }
+
+    /// Stops showing video on `tile`, releases the video, and asks `DemoApp`
+    /// to stop the player.
+    fn stop_tile_video(&mut self, proteus: &mut Proteus, tile: Handle) {
+        let _ = tile.hide_video(proteus);
+        if let Some(video) = self.video.take() {
+            video.release(proteus);
+        }
+        self.pending_video_stop = true;
+    }
+
     /// Drains this tick's pending video-stop request — `true` means
-    /// `DemoApp` should stop whatever video is playing and release its GPU
-    /// video texture (with `Frame::stop_video`).
+    /// `DemoApp` should stop the player. The video itself is already
+    /// released.
     pub fn take_pending_video_stop(&mut self) -> bool {
         std::mem::take(&mut self.pending_video_stop)
     }
 
     /// Tells `Demo` a real decoded video frame has actually landed for the
     /// currently-playing tile — `DemoApp`'s own job is just detecting that
-    /// (e.g. `Frame::poll_video` returning `true`) and calling this once;
+    /// (`VideoHandle::upload_frame` returning `true`) and calling this once;
     /// `Demo` has no way to see the GPU texture itself. Drives
     /// `Demo::advance_video_loading`'s loading-dots/error visibility.
     /// A no-op call (e.g. after the tile has already moved on) is harmless —
     /// this just sets a flag `start_tiles_to_screen` resets on the next
-    /// visit anyway. `DemoApp` latches it from `poll_video`'s return value.
+    /// visit anyway.
     pub fn set_video_first_frame_shown(&mut self) {
         self.video_first_frame_shown = true;
     }
@@ -2516,7 +2537,7 @@ impl Demo {
     /// on this tile, it's just showing the error text now instead of
     /// pulsing dots, and playback may yet succeed if a response is close.
     /// See `pending_video_cancel`'s own doc for why this exists (a native
-    /// decode has nothing to abort; the web host's HLS fetch does).
+    /// decode has nothing to abort; the web shell's HLS fetch does).
     pub fn take_pending_video_cancel(&mut self) -> bool {
         std::mem::take(&mut self.pending_video_cancel)
     }
@@ -2716,10 +2737,12 @@ impl Demo {
             if let Some(mut text) = proteus.world_mut().get_mut::<Text>(label.id()) {
                 text.color.w = progress;
             }
-            let label_scale = if screen_focus_idx == Some(i) {
-                video_tiles::TILE_LABEL_SCREEN_SCALE
-            } else {
-                1.0
+            // On the tile becoming the screen, the label grows with the tile
+            // rather than jumping to its screen scale on the click.
+            let label_scale = match (screen_focus_idx == Some(i), tile_geometry) {
+                (true, Some((size, _))) => (size.x / video_tiles::TILE_WIDTH)
+                    .clamp(1.0, video_tiles::TILE_LABEL_SCREEN_SCALE),
+                _ => 1.0,
             };
             if let Some(mut label_qs) = proteus.world_mut().get_mut::<QuadState>(label.id()) {
                 label_qs.scale = label_scale;
@@ -2774,7 +2797,7 @@ impl Demo {
     /// see `video_tiles::tile_target_state`'s doc), so there's no *live*
     /// content to fade in the first place. Called every tick, unconditionally —
     /// a no-op outside `VideoScreen` (nothing has `VideoCrossfade` then) and a
-    /// no-op on `Handle::set_video_crossfade`'s own end once `stop_video` has
+    /// no-op on `Handle::set_video_crossfade`'s own end once `hide_video` has
     /// removed it.
     fn advance_video_crossfade(&mut self, proteus: &mut Proteus) {
         let AppState::VideoScreen(idx) = self.state else {
@@ -2843,7 +2866,14 @@ impl Demo {
                 .is_some()
         });
 
-        let backdrop_visible = video_idx.is_some();
+        // Only once the tile has risen above the idle ones. On the click
+        // frame it is still at `TILE_Z`, where the backdrop's midpoint z
+        // would tie with it and draw over it: a one-frame black flash.
+        let backdrop_visible = video_idx.is_some_and(|idx| {
+            proteus
+                .get(self.video_tiles.tiles[idx])
+                .is_some_and(|d| d.geometry.position.z > video_tiles::TILE_Z)
+        });
         let _ = self
             .video_tiles
             .backdrop
@@ -2883,7 +2913,7 @@ impl Demo {
         // black-fallback/dots design the instant loading is slow enough for
         // the gap to actually show. Restored the instant `ready` flips
         // true — same z, same geometry, just the real video showing
-        // through again. `stop_video`'s own callers already restore this
+        // through again. `hide_video`'s own callers already restore this
         // unconditionally too, for the "user backs out before ready" case
         // this alone doesn't cover.
         if let Some(idx) = video_idx {
@@ -3874,6 +3904,30 @@ mod tests {
         demo
     }
 
+    // On the click frame the clicked tile hasn't moved yet, so no z puts the
+    // backdrop strictly behind it: drawn, it would cover the tile for that
+    // frame, a black flash. It appears once the tile has risen.
+    #[test]
+    fn the_video_backdrop_waits_for_the_clicked_tile_to_rise() {
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        // The rest of the click frame: `Demo::advance`, as `DemoApp::update`
+        // runs it, before the next tick moves the tile.
+        demo.demo.advance(&mut demo.app, 0.016);
+        demo.app.refresh_cascades();
+        let backdrop = demo.video_tiles.backdrop;
+        assert!(
+            !demo.app.get(backdrop).unwrap().visible,
+            "hidden on the click frame"
+        );
+
+        demo.tick(0.05);
+        assert!(
+            demo.app.get(backdrop).unwrap().visible,
+            "shown once the tile rises"
+        );
+    }
+
     #[test]
     fn hovering_a_tile_fades_in_its_overlay_and_title_label() {
         let mut demo = advance_to_video_tiles();
@@ -4162,7 +4216,7 @@ mod tests {
     }
 
     // Starting playback must crossfade from the tile's box art to the video.
-    // `Handle::start_video` alone cuts straight to the video (`video_t: 1.0`,
+    // `Handle::show_video` alone cuts straight to the video (`video_t: 1.0`,
     // its documented default), so `Demo::start_tiles_to_screen` must set it
     // back to 0 and `Demo::advance_video_crossfade` must ramp it up in step
     // with the geometry transition.

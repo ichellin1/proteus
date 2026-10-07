@@ -6,10 +6,13 @@
 //! - **Fetching** ([`HostServices::fetch_async`]) starts a request and
 //!   delivers the result later, for anything that can't be loaded
 //!   immediately, such as an image from another site.
-//! - **Video** ([`HostServices::open_video`]) opens a stream of decoded frames.
 //!
-//! None of them touch the GPU. Turning bytes or frames into textures is done
-//! by [`Frame`](crate::Frame).
+//! Neither touches the GPU. Turning bytes into textures is done by
+//! [`Frame`](crate::Frame).
+//!
+//! Video isn't a host service: Proteus shows video but doesn't play it. The
+//! app brings its own player and uploads its frames with
+//! `proteus_sdk::Proteus::create_video`.
 //!
 //! This isn't a list of everything an app can use. An app is ordinary code,
 //! and uses any other platform feature, such as the clipboard or a file
@@ -79,8 +82,8 @@ impl FetchTracker {
     }
 }
 
-/// Asset loading, fetching and video playback, provided by a host to the
-/// running [`App`](crate::App).
+/// Asset loading and fetching, provided by a host to the running
+/// [`App`](crate::App).
 ///
 /// [`load_asset`](HostServices::load_asset) returns immediately. On native it
 /// reads a file from the host's asset directory; on the web it looks the asset
@@ -113,48 +116,6 @@ pub trait HostServices {
     /// a request already in progress, so it lets it finish and discards the
     /// result.
     fn cancel_fetch(&mut self, id: FetchId);
-
-    /// Starts decoding the video `key`. Returns `None`, and logs why, if the
-    /// player can't open it.
-    ///
-    /// Proteus doesn't play video: an app brings its own player and hands
-    /// Proteus the frames. Implementing this method is how a player is plugged
-    /// in: start it here, and return its frames as a [`VideoStream`]. Both
-    /// hosts include a reference player, `ffmpeg` natively and HLS on the web.
-    /// The default supports no video.
-    fn open_video(&mut self, key: &str) -> Option<Box<dyn VideoStream>> {
-        let _ = key;
-        None
-    }
-}
-
-/// One decoded frame from a [`VideoStream`].
-pub struct VideoFrame {
-    /// Width in pixels.
-    pub width: u32,
-    /// Height in pixels.
-    pub height: u32,
-    /// `width * height * 4` bytes of RGBA.
-    pub rgba: Arc<[u8]>,
-}
-
-/// A video being decoded, from [`HostServices::open_video`].
-/// [`Frame::poll_video`](crate::Frame::poll_video) reads it once per frame.
-pub trait VideoStream {
-    /// Returns the next decoded frame, or `None` if none is ready. Doesn't
-    /// block.
-    fn poll_frame(&mut self) -> Option<VideoFrame>;
-
-    /// Cancels the initial load, for when the app gives up waiting for the
-    /// first frame. Unlike [`stop`](Self::stop), a frame may still arrive.
-    ///
-    /// Only a stream that loads over the network, such as the web host's HLS
-    /// stream, can do this. The default does nothing.
-    fn cancel_load(&mut self) {}
-
-    /// Stops decoding and releases the stream's resources, such as a decoder
-    /// process or a network request.
-    fn stop(self: Box<Self>);
 }
 
 #[cfg(test)]
