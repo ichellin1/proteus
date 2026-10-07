@@ -51,8 +51,14 @@ fn font_atlas_constructs_with_embedded_font() {
 
 #[test]
 fn font_atlas_constructs_with_custom_bytes() {
-    // Verify the `new` constructor with explicit bytes works too.
-    let _fa = FontAtlas::new(EMBEDDED_FONT_BYTES);
+    assert!(FontAtlas::new(EMBEDDED_FONT_BYTES).is_ok());
+}
+
+// Bytes that aren't a font are an error the caller can handle, not a panic.
+#[test]
+fn font_atlas_rejects_bytes_that_arent_a_font() {
+    assert!(FontAtlas::new(b"not a font").is_err());
+    assert!(FontAtlas::new(&[]).is_err());
 }
 
 // ---------------------------------------------------------------------------

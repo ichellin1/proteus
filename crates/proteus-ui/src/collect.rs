@@ -284,14 +284,13 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
         bg_inst.crossfade_t = world
             .get::<ActiveTransition>(e)
             .map(|active| {
-                let raw_t = if active.delay_remaining > 0.0 {
-                    0.0
-                } else {
-                    (active.elapsed / active.config.duration).min(1.0)
-                };
                 // Clamped: an overshooting curve would otherwise fade past
                 // the end image.
-                active.config.easing.apply(raw_t).clamp(0.0001, 1.0)
+                active
+                    .config
+                    .easing
+                    .apply(active.raw_t())
+                    .clamp(0.0001, 1.0)
             })
             .unwrap_or(1.0); // no active transition — show the to-side fully
     }
@@ -314,12 +313,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
         // eased progress as the geometry, so it doesn't vanish at the end.
         if world.get::<Virtual>(e).is_some() {
             if let Some(active) = world.get::<ActiveTransition>(e) {
-                let raw_t = if active.delay_remaining > 0.0 {
-                    0.0
-                } else {
-                    (active.elapsed / active.config.duration).min(1.0)
-                };
-                let eased_t = active.config.easing.apply(raw_t).clamp(0.0, 1.0);
+                let eased_t = active.config.easing.apply(active.raw_t()).clamp(0.0, 1.0);
                 text_inst.opacity *= 1.0 - eased_t;
             }
         }

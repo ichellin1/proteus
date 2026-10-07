@@ -249,6 +249,53 @@ pub(crate) mod video_tests {
             .ok()
     }
 
+    // A font that can't be read doesn't stop the renderer: it logs an error
+    // and draws text in the embedded font instead.
+    #[test]
+    fn a_font_that_cant_be_read_falls_back_to_the_embedded_font() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        assert!(crate::config::FontSource::from_bytes(vec![1u8, 2, 3]).is_err());
+
+        let mut proteus = Proteus::new();
+        let mut config = crate::ProteusConfig::default();
+        config.text.default_font = crate::config::FontSource::Bytes(Arc::from(vec![1u8, 2, 3]));
+        let mut renderer = crate::Renderer::new(
+            &mut proteus,
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            crate::Viewport::new(glam::Vec2::new(64.0, 64.0), 1.0),
+            config,
+        );
+        let label = proteus.component(
+            proteus_sdk::ComponentSpec::new(proteus_ui::QuadState::default())
+                .text(proteus_ui::Text::new("Hi", 16.0)),
+        );
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        renderer.render(&mut proteus, &target.create_view(&Default::default()));
+
+        assert!(
+            label.baked_text_size(&proteus).is_some(),
+            "the text was drawn, in the embedded font"
+        );
+    }
+
     // Stopping a video must free its texture registry entry, not just mark it
     // evicted: nothing else ever reclaims a video entry, so each play would
     // leave one behind.

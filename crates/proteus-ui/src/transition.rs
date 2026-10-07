@@ -160,13 +160,9 @@ fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
 /// splits and merges can give each piece its own.
 #[derive(Copy, Clone, Debug)]
 pub struct TransitionConfig {
-    // DOC-REVIEW: accurate today; step 5 makes 0 instant and drops the panic,
-    // and this doc changes with it.
-    /// How long the transition takes, in seconds. Must be positive.
-    ///
-    /// Zero, a negative value or NaN is a mistake. In debug builds the
-    /// transition panics when it starts; in release builds it completes on
-    /// the next tick, as if instant.
+    /// How long the transition takes, in seconds. `0.0` means instant: the
+    /// transition completes on the next tick, after any `delay`. A negative
+    /// or NaN duration logs a warning and is treated as `0.0`.
     pub duration: f32,
     /// Seconds to wait before t starts advancing. Useful for staggered animations.
     pub delay: f32,
@@ -216,22 +212,19 @@ pub struct ActiveTransition {
 }
 
 impl ActiveTransition {
-    /// Starts a transition from `from` to `to`.
-    ///
-    /// # Panics
-    ///
-    /// In debug builds, if `config.duration` isn't positive. Release builds
-    /// treat such a duration as almost instant.
+    /// Starts a transition from `from` to `to`. A negative or NaN
+    /// `config.duration` logs a warning and is treated as `0.0`, instant.
     pub fn new(from: QuadState, to: QuadState, config: TransitionConfig) -> Self {
-        debug_assert!(
-            config.duration > 0.0,
-            "TransitionConfig.duration must be positive (got {}); treating as instant",
+        // `!(d >= 0.0)` is true for NaN as well as for negative values.
+        let duration = if config.duration >= 0.0 {
             config.duration
-        );
-        // Clamp to 0.1 ms minimum so division in transition_tick_system never
-        // produces NaN.  A zero or negative duration is a caller error; in
-        // practice any non-zero tick will immediately satisfy raw_t >= 1.0.
-        let duration = config.duration.max(1e-4);
+        } else {
+            log::warn!(
+                "TransitionConfig::duration is {}; treating it as 0.0, instant",
+                config.duration
+            );
+            0.0
+        };
         let delay_remaining = config.delay.max(0.0);
         Self {
             from,
@@ -245,6 +238,19 @@ impl ActiveTransition {
             },
             is_complete: false,
             interaction_style: false,
+        }
+    }
+
+    /// Progress through the transition, from `0.0` to `1.0`, before easing:
+    /// `0.0` during the delay, and `1.0` as soon as the delay is over for a
+    /// duration of `0.0`.
+    pub fn raw_t(&self) -> f32 {
+        if self.delay_remaining > 0.0 {
+            0.0
+        } else if self.config.duration > 0.0 {
+            (self.elapsed / self.config.duration).clamp(0.0, 1.0)
+        } else {
+            1.0
         }
     }
 
@@ -373,12 +379,16 @@ pub fn transition_tick_system(
             dt
         };
 
-        if effective_dt == 0.0 {
+        if active.delay_remaining > 0.0 {
+            continue;
+        }
+        // An instant transition completes even on a tick with no time step.
+        if effective_dt == 0.0 && active.config.duration > 0.0 {
             continue;
         }
 
         active.elapsed += effective_dt;
-        let raw_t = (active.elapsed / active.config.duration).clamp(0.0, 1.0);
+        let raw_t = active.raw_t();
         let eased_t = active.config.easing.apply(raw_t);
 
         *state = active.from.lerp(&active.to, eased_t);

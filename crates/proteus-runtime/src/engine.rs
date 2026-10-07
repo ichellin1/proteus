@@ -41,7 +41,7 @@ impl Engine {
     ///
     /// # Panics
     ///
-    /// If `config`'s atlas or render settings don't fit the device; see
+    /// If `config`'s memory settings don't fit the device; see
     /// [`Renderer::new`].
     pub fn new(
         device: &wgpu::Device,

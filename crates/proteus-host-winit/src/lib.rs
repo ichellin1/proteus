@@ -20,18 +20,17 @@
 
 mod mp4_player;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use proteus_runtime::config::RenderConfig;
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
 use proteus_runtime::{
-    App, Engine, FetchId, FetchResult, GpuSurface, HostServices, ProteusConfig, SurfaceRequest,
-    VideoStream, Viewport,
+    App, Engine, FetchId, FetchResult, FetchTracker, GpuSurface, HostServices, ProteusConfig,
+    SurfaceRequest, VideoStream, Viewport,
 };
 
 use winit::application::ApplicationHandler;
@@ -53,15 +52,22 @@ use winit::window::{Window, WindowAttributes, WindowId};
 /// plain key is read immediately, since a local file read is fast, but its
 /// result is still delivered through
 /// [`poll_fetches`](HostServices::poll_fetches) like any other fetch.
+///
+/// A URL fetch that hasn't finished after [`FETCH_TIMEOUT`] fails, with a
+/// warning, and its result is `None`, so a server that never answers doesn't
+/// keep a thread forever.
 pub struct DirHostServices {
     base: PathBuf,
     next_id: u64,
     fetch_tx: Sender<FetchResult>,
     fetch_rx: Receiver<FetchResult>,
-    // Cancelled fetches. A request already running can't be interrupted, so
-    // its result is discarded when it arrives.
-    cancelled: HashSet<FetchId>,
+    // A request already running can't be interrupted, so a cancelled one's
+    // result is discarded when it arrives.
+    fetches: FetchTracker,
 }
+
+/// How long [`DirHostServices`] waits for a URL fetch before it fails.
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl DirHostServices {
     /// Reads assets from the directory `base`.
@@ -72,7 +78,7 @@ impl DirHostServices {
             next_id: 0,
             fetch_tx,
             fetch_rx,
-            cancelled: HashSet::new(),
+            fetches: FetchTracker::default(),
         }
     }
 }
@@ -80,7 +86,8 @@ impl DirHostServices {
 fn fetch_url_bytes(url: &str) -> Option<Arc<[u8]>> {
     use std::io::Read;
     let result = (|| -> Result<Vec<u8>, String> {
-        let resp = ureq::get(url).call().map_err(|e| e.to_string())?;
+        let agent = ureq::AgentBuilder::new().timeout(FETCH_TIMEOUT).build();
+        let resp = agent.get(url).call().map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         resp.into_reader()
             .read_to_end(&mut bytes)
@@ -111,6 +118,7 @@ impl HostServices for DirHostServices {
     fn fetch_async(&mut self, key_or_url: &str) -> FetchId {
         let id = FetchId(self.next_id);
         self.next_id += 1;
+        self.fetches.started(id);
 
         if key_or_url.starts_with("http://") || key_or_url.starts_with("https://") {
             let url = key_or_url.to_string();
@@ -130,18 +138,14 @@ impl HostServices for DirHostServices {
     }
 
     fn poll_fetches(&mut self) -> Vec<FetchResult> {
-        let mut results = Vec::new();
         while let Ok((id, bytes)) = self.fetch_rx.try_recv() {
-            if self.cancelled.remove(&id) {
-                continue;
-            }
-            results.push((id, bytes));
+            self.fetches.finished(id, bytes);
         }
-        results
+        self.fetches.take()
     }
 
     fn cancel_fetch(&mut self, id: FetchId) {
-        self.cancelled.insert(id);
+        self.fetches.cancel(id);
     }
 
     // other assets? Today they are file paths.
@@ -184,12 +188,25 @@ impl Default for RunConfig {
 // run
 // ---------------------------------------------------------------------------
 
+/// The GPU limits this host requests: `wgpu::Limits::default()`, the full
+/// defaults, which larger settings such as `ProteusConfig::desktop()` need.
+/// The shaders use nothing beyond WebGL2, so they run on both hosts. Pass
+/// them to `ProteusConfig::check` to test a config for this host.
+pub fn limits() -> wgpu::Limits {
+    wgpu::Limits::default()
+}
+
 /// Opens a window and runs `app` until the window is closed.
 ///
 /// # Panics
 ///
-/// If the window or the GPU can't be set up.
+/// If `config.proteus` doesn't fit [`limits`], before the window opens, with
+/// the `ConfigError`'s message; call `ProteusConfig::check` first to handle
+/// it yourself. Also if the window or the GPU can't be set up.
 pub fn run<A: App>(app: A, config: RunConfig) {
+    if let Err(e) = config.proteus.check(&limits()) {
+        panic!("{e}");
+    }
     let event_loop = EventLoop::new().expect("failed to create winit event loop");
     let mut host = WinitHostApp {
         app,
@@ -379,12 +396,26 @@ async fn init_gpu(window: Arc<Window>, render: RenderConfig) -> GpuSurface {
             size: (size.width, size.height),
             power_preference: render.power_preference,
             present_mode: render.present_mode,
-            // Native asks for the full default limits, which larger settings
-            // such as `ProteusConfig::desktop()` need. The shaders use nothing
-            // beyond WebGL2, so they run on both hosts.
-            limits: wgpu::Limits::default(),
+            limits: limits(),
         },
     )
     .await
     .expect("GPU setup failed")
+}
+
+#[cfg(test)]
+mod limits_tests {
+    use super::*;
+
+    // The native host requests enough for every preset, `desktop()` included.
+    #[test]
+    fn every_preset_fits_the_native_host() {
+        for config in [
+            ProteusConfig::web(),
+            ProteusConfig::desktop(),
+            ProteusConfig::constrained(),
+        ] {
+            assert_eq!(config.check(&limits()), Ok(()));
+        }
+    }
 }

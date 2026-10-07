@@ -26,6 +26,17 @@ pub struct ProteusConfigDto {
     /// Overrides for [`ProteusConfig::resources`].
     #[serde(default)]
     pub resources: Option<ResourcesDto>,
+    /// Overrides for [`ProteusConfig::text`].
+    #[serde(default)]
+    pub text: Option<TextDto>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextDto {
+    /// A TTF or OTF font file's bytes, for all text.
+    #[serde(default)]
+    pub font: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -118,7 +129,7 @@ impl ProteusConfigDto {
     /// # Errors
     ///
     /// Returns a message naming the field if a value isn't recognized, such as
-    /// an unknown present mode.
+    /// an unknown present mode or a font that can't be read.
     pub fn apply(&self) -> Result<ProteusConfig, String> {
         let mut config = ProteusConfig::web();
 
@@ -160,6 +171,12 @@ impl ProteusConfigDto {
             }
             if let Some(v) = r.lazy_load {
                 config.resources.lazy_load = v;
+            }
+        }
+        if let Some(t) = &self.text {
+            if let Some(bytes) = &t.font {
+                config.text.default_font = crate::config::FontSource::from_bytes(bytes.as_slice())
+                    .map_err(|e| format!("text.font: {e}"))?;
             }
         }
         Ok(config)
@@ -241,5 +258,21 @@ mod tests {
             r#"{"render":{"clearColour":[0,0,0,1]}}"#
         )
         .is_err());
+    }
+
+    // TypeScript's `text.font`: a font that can't be read is an error naming
+    // the setting, which `mount` throws; a real one is used.
+    #[test]
+    fn a_font_that_cant_be_read_is_an_error_naming_the_setting() {
+        let err = dto(r#"{"text":{"font":[1,2,3]}}"#).apply().unwrap_err();
+        assert!(err.contains("text.font"), "{err}");
+
+        let font = proteus_render::EMBEDDED_FONT_BYTES.to_vec();
+        let json = format!(r#"{{"text":{{"font":{font:?}}}}}"#);
+        let applied = dto(&json).apply().unwrap();
+        assert!(matches!(
+            applied.text.default_font,
+            crate::config::FontSource::Bytes(_)
+        ));
     }
 }

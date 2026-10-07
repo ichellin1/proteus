@@ -23,7 +23,7 @@ pub mod static_texture;
 pub mod texture_registry;
 pub mod transition_atlas;
 
-pub use font_atlas::{FontAtlas, RasterizedGlyphs, EMBEDDED_FONT_BYTES};
+pub use font_atlas::{FontAtlas, FontError, RasterizedGlyphs, EMBEDDED_FONT_BYTES};
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{
     pack_atlas_page, unpack_atlas_page, QuadInstance, QuadVertex, ATLAS_PAGE_SHIFT,
@@ -31,9 +31,8 @@ pub use mesh::{
     QUAD_INDICES, QUAD_VERTICES,
 };
 pub use pipeline::{
-    validate_atlas_config, validate_render_config, GpuContext, QuadPipeline,
-    DEFAULT_MAIN_ATLAS_PAGE_COUNT, DEFAULT_MAIN_ATLAS_SIZE, DEFAULT_TRANSITION_ATLAS_SIZE,
-    DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
+    GpuContext, QuadPipeline, DEFAULT_MAIN_ATLAS_PAGE_COUNT, DEFAULT_MAIN_ATLAS_SIZE,
+    DEFAULT_TRANSITION_ATLAS_SIZE, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
 };
 pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
 pub use texture_registry::{

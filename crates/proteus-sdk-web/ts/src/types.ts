@@ -276,7 +276,7 @@ export interface ProteusConfigOverrides {
   };
   /** GPU memory: atlas and instance-buffer sizes. */
   memory?: {
-    /** The size and number of pages in the main texture atlas. A size larger than the device supports throws at mount. */
+    /** The size and number of pages in the main texture atlas. A size larger than WebGL2 allows, 2048, throws at mount, in every browser. */
     mainAtlas?: {
       /**
        * Width and height of each page, in pixels. No texture can be larger
@@ -307,6 +307,15 @@ export interface ProteusConfigOverrides {
     imageMaxSide?: number | null;
     /** Wait to bake a component's text or image until the component is visible. */
     lazyLoad?: boolean;
+  };
+  /** Text settings. */
+  text?: {
+    /**
+     * A TTF or OTF font file's bytes, used for all text, for example from a
+     * `fetch()` response. Omit it for the embedded font, Inter Bold. Bytes
+     * that aren't a font make {@link mount} throw, naming `text.font`.
+     */
+    font?: Uint8Array;
   };
 }
 
@@ -381,12 +390,10 @@ export type Easing =
 
 /** How a transition is timed. */
 export interface TransitionConfig {
-  // DOC-REVIEW: accurate today; step 5 makes 0 instant and drops the panic,
-  // and this doc changes with it.
   /**
-   * How long the transition takes, in seconds. Must be positive. Zero or less
-   * completes on the next tick, as if instant, and panics in a debug build of
-   * the WebAssembly module.
+   * How long the transition takes, in seconds. `0` means instant: the
+   * transition completes on the next frame, after any `delay`. A negative or
+   * `NaN` duration logs a warning and is treated as `0`.
    */
   duration: number;
   /** Seconds to wait before the transition starts. Default `0`. */

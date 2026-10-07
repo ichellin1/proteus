@@ -402,17 +402,47 @@ fn full_transition_fires_complete_after_sufficient_ticks() {
 // Adversarial / boundary tests
 // ---------------------------------------------------------------------------
 
-// A near-zero duration (1e-5 s) is below the `1e-4` clamp floor in
-// `ActiveTransition::new`.  The stored duration must be clamped up to `1e-4`,
-// and any realistic frame dt (≥ 1/240 s ≈ 4 ms) must satisfy `raw_t >= 1.0`
-// on the very first tick — completing the transition immediately without NaN.
-//
-// Note: `duration = 0.0` would trigger a `debug_assert!` in
-// `ActiveTransition::new` (intentional loud-caller-error warning).  We use
-// `1e-5` here — positive so the assert is silent, but well below the clamp
-// floor so we still exercise the clamping and instant-completion paths.
+// A duration of 0 means instant, and a negative or NaN one is treated as 0:
+// each completes on the next tick, even one with no time step, at the target
+// and without a panic.
 #[test]
-fn near_zero_duration_transition_completes_in_first_tick() {
+fn zero_negative_and_nan_durations_complete_on_the_next_tick() {
+    for duration in [0.0, -1.0, f32::NAN] {
+        let mut world = make_world();
+        let entity = world
+            .spawn((
+                red(),
+                Lifecycle::Idle,
+                TransitionRequest {
+                    to: blue(),
+                    config: config(duration),
+                    from_state: None,
+                },
+            ))
+            .id();
+
+        run(&mut world, transition_setup_system);
+        set_dt(&mut world, 0.0);
+        run(&mut world, transition_tick_system);
+
+        let active = world.get::<ActiveTransition>(entity).unwrap();
+        assert!(active.is_complete, "duration {duration}: complete");
+        assert_eq!(
+            active.config.duration, 0.0,
+            "duration {duration}: stored as 0"
+        );
+        let state = world.get::<QuadState>(entity).unwrap();
+        assert_eq!(
+            state.position,
+            blue().position,
+            "duration {duration}: at the target"
+        );
+    }
+}
+
+// An instant transition still waits for its delay.
+#[test]
+fn an_instant_transition_waits_for_its_delay() {
     let mut world = make_world();
     let entity = world
         .spawn((
@@ -420,46 +450,22 @@ fn near_zero_duration_transition_completes_in_first_tick() {
             Lifecycle::Idle,
             TransitionRequest {
                 to: blue(),
-                config: config(1e-5), // tiny positive — clamped to 1e-4 internally
+                config: TransitionConfig {
+                    delay: 0.1,
+                    ..config(0.0)
+                },
                 from_state: None,
             },
         ))
         .id();
-
     run(&mut world, transition_setup_system);
 
-    // Stored duration must have been clamped to at least 1e-4.
-    let stored_duration = world
-        .get::<ActiveTransition>(entity)
-        .unwrap()
-        .config
-        .duration;
-    assert!(
-        (stored_duration - 1e-4).abs() < 1e-9,
-        "duration below 1e-4 must be clamped to exactly 1e-4, got {stored_duration}"
-    );
-
-    // One tick with a realistic 60 Hz frame time — massively overshoots 0.1 ms.
-    let one_frame_dt = 1.0 / 60.0; // ~16.7 ms >> 0.1 ms
-    set_dt(&mut world, one_frame_dt);
+    set_dt(&mut world, 0.05);
     run(&mut world, transition_tick_system);
+    assert!(!world.get::<ActiveTransition>(entity).unwrap().is_complete);
 
-    let active = world.get::<ActiveTransition>(entity).unwrap();
-    assert!(
-        active.is_complete,
-        "near-zero-duration transition must complete within the first tick"
-    );
-    // Final QuadState must snap to the `to` target with no NaN or Inf.
-    let state = world.get::<QuadState>(entity).unwrap();
-    assert!(
-        state.position.x.is_finite(),
-        "position must not be NaN or Inf after near-zero-duration transition"
-    );
-    assert!(
-        (state.position.x - blue().position.x).abs() < 1e-3,
-        "state must snap to `to` target, got x={}",
-        state.position.x
-    );
+    run(&mut world, transition_tick_system);
+    assert!(world.get::<ActiveTransition>(entity).unwrap().is_complete);
 }
 
 // Inserting a new `TransitionRequest` while a transition is in-flight

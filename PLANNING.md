@@ -4450,7 +4450,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
 
 ##### Step 5d — Config, loading and robustness
 
-- [ ] A font that can't be parsed doesn't crash the app. Today `FontAtlas::new` panics on bytes
+- [x] A font that can't be parsed doesn't crash the app. Today `FontAtlas::new` panics on bytes
   that aren't a valid TTF or OTF font, so a bad `ProteusConfig.text.default_font` (downloaded, or
   a user's file) crashes the app at startup. Three layers:
   - `FontAtlas::new` returns a `Result` instead of panicking.
@@ -4463,7 +4463,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   TypeScript apps can choose a font too: the config object gets a font setting, and `mount`
   throws a clear error for a font that can't be parsed, as it does for invalid atlas settings.
   Tested in both languages.
-- [ ] Catch an atlas or instance-buffer setting that doesn't fit the host before the app runs.
+- [x] Catch an atlas or instance-buffer setting that doesn't fit the host before the app runs.
   Natively, the limits checked are the ones `proteus-host-winit` requests (`Limits::default()`),
   so a config fails the same way on every machine; weaker hardware that can't provide them
   already fails earlier, with a `GpuError`. On the web it depends on the browser:
@@ -4484,9 +4484,9 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
     `Limits::default()`. Done together with T-04.
   - **Docs:** each host states which limits it requests, and `ProteusConfig`'s docs say which
     presets fit which host.
-- [ ] T-04 — tests for the `desktop()` and `constrained()` config presets and for
+- [x] T-04 — tests for the `desktop()` and `constrained()` config presets and for
   `validate_render_config`.
-- [ ] A transition's `duration` of 0 means instant, and no duration panics. Today
+- [x] A transition's `duration` of 0 means instant, and no duration panics. Today
   `ActiveTransition::new` debug-asserts `duration > 0.0`, so 0 (a natural "snap there", or the
   first step of a stagger) panics in debug builds, and release builds clamp it to 0.1 ms. New
   rule: 0 completes on the next tick with no warning; a negative or NaN duration logs a warning
@@ -4494,14 +4494,14 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   TypeScript's to "0 means instant; a negative or NaN duration logs a warning and is treated as
   0", remove `ActiveTransition::new`'s `# Panics` section, and update the test that relies on
   the clamp. Tests: 0, a negative value and NaN each complete on the next tick, without a panic.
-- [ ] C-18 — native fetches have no timeout, so a hung request pins a thread.
-- [ ] The web host delivers a cancelled fetch if it finished before `cancel_fetch` was called:
+- [x] C-18 — native fetches have no timeout, so a hung request pins a thread.
+- [x] The web host delivers a cancelled fetch if it finished before `cancel_fetch` was called:
   `PreloadedHostServices` checks for cancellation only when a fetch finishes, so a result
   already queued is still returned by the next `poll_fetches`, and its ID stays in the
   `cancelled` set for good. `cancel_fetch` drops any queued result with that ID, so the
   documented contract holds ("after this call, `poll_fetches` never returns its result"). With
   a test, then remove the `DOC-REVIEW` note on `HostServices::cancel_fetch`.
-- [ ] C-14 — confirm A-01 fixed it and a test covers it, then close.
+- [x] C-14 — confirm A-01 fixed it and a test covers it, then close.
 
 ##### Step 5e — Video, demo and shells
 

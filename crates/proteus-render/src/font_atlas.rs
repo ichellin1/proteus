@@ -17,7 +17,8 @@
 //! ## Embedded font
 //!
 //! [`EMBEDDED_FONT_BYTES`] is Inter Bold (SIL Open Font License 1.1). To use
-//! another font, pass its bytes to [`FontAtlas::new`].
+//! another font, pass its bytes to [`FontAtlas::new`], which returns a
+//! [`FontError`] if they aren't a font it can read.
 //!
 //! `fontdue` can't use a variable font's weight axis, and Google Fonts only
 //! ships Inter as a variable font. So `assets/Inter-Bold.ttf` is a static
@@ -70,22 +71,27 @@ pub struct FontAtlas {
     font: fontdue::Font,
 }
 
+/// Font bytes that [`FontAtlas::new`] couldn't read as a TTF or OTF font.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("not a TTF or OTF font that can be read: {0}")]
+pub struct FontError(String);
+
 impl FontAtlas {
     /// Creates a [`FontAtlas`] for the TTF or OTF font in `font_bytes`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `font_bytes` cannot be parsed as a valid TTF or OTF file.
-    pub fn new(font_bytes: &[u8]) -> Self {
+    /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
+    pub fn new(font_bytes: &[u8]) -> Result<Self, FontError> {
         let font = fontdue::Font::from_bytes(font_bytes, fontdue::FontSettings::default())
-            .expect("FontAtlas: failed to parse font bytes — ensure the data is a valid TTF/OTF");
-        Self { font }
+            .map_err(|e| FontError(e.to_string()))?;
+        Ok(Self { font })
     }
 
     /// Creates a [`FontAtlas`] for the embedded font, [`EMBEDDED_FONT_BYTES`]
     /// (Inter Bold).
     pub fn with_embedded_font() -> Self {
-        Self::new(EMBEDDED_FONT_BYTES)
+        Self::new(EMBEDDED_FONT_BYTES).expect("the embedded font is a valid TTF")
     }
 
     /// Rasterizes `text` at `size_px` into an RGBA pixel buffer, with
