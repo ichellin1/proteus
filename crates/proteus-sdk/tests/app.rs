@@ -210,13 +210,9 @@ fn on_click_does_not_fire_for_a_miss() {
 #[test]
 fn non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps() {
     let mut app = Proteus::new();
-    // check accuracy. This test no longer tests anything: the
-    // backdrop is spawned before the button, and hit-testing picks the
-    // component drawn on top, which is the later one, so the button wins
-    // with or without `non_interactive()`. Spawn the backdrop after the
-    // button (step 5 test fix), then this comment becomes: "A full-window
-    // backdrop drawn over the button. Without `non_interactive()` it would
-    // take the click."
+    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    // A full-window backdrop drawn over the button. Without
+    // `non_interactive()` it would take the click.
     let _backdrop = app.component(
         ComponentSpec::new(QuadState {
             size: Vec2::new(2000.0, 2000.0),
@@ -224,7 +220,6 @@ fn non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps() {
         })
         .non_interactive(),
     );
-    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
 
     let fired = std::rc::Rc::new(std::cell::Cell::new(false));
     let fired_clone = fired.clone();
@@ -238,6 +233,38 @@ fn non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps() {
         fired.get(),
         "non_interactive backdrop must not shadow the button underneath it"
     );
+}
+
+#[test]
+fn a_disabled_component_absorbs_a_click_on_what_it_overlaps() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    // Drawn over the button. Disabled, it is inert but still there, so it
+    // takes the click and fires nothing.
+    let cover = app.component(
+        ComponentSpec::new(QuadState {
+            size: Vec2::new(400.0, 400.0),
+            ..quad_at(100.0, 100.0)
+        })
+        .start_disabled(),
+    );
+
+    let button_clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let clone = button_clicked.clone();
+    button.on_click(&mut app, move |_app| clone.set(true));
+    let cover_clicked = std::rc::Rc::new(std::cell::Cell::new(false));
+    let clone = cover_clicked.clone();
+    cover.on_click(&mut app, move |_app| clone.set(true));
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+
+    assert!(
+        !button_clicked.get(),
+        "the disabled cover blocks the button"
+    );
+    assert!(!cover_clicked.get(), "and fires no click of its own");
 }
 
 #[test]
@@ -1074,7 +1101,7 @@ fn click_at(app: &mut Proteus, pos: Vec2) {
 }
 
 #[test]
-fn a_disabled_component_does_not_hit_test_but_still_reports_its_state() {
+fn a_disabled_component_ignores_clicks_but_still_reports_its_state() {
     let mut app = Proteus::new();
     let button = app.component(
         ComponentSpec::new(quad_at(100.0, 100.0)).disabled(StyleOverride {
@@ -1093,7 +1120,7 @@ fn a_disabled_component_does_not_hit_test_but_still_reports_its_state() {
     clicked.set(false);
     button.set_disabled(&mut app, true).unwrap();
     click_at(&mut app, Vec2::new(100.0, 100.0));
-    assert!(!clicked.get(), "disabled components are not hit-tested");
+    assert!(!clicked.get(), "disabled components fire no clicks");
     assert_eq!(
         app.get(button).unwrap().state,
         proteus_sdk::InteractionStateKind::Disabled,
@@ -1102,7 +1129,7 @@ fn a_disabled_component_does_not_hit_test_but_still_reports_its_state() {
 
     button.set_disabled(&mut app, false).unwrap();
     click_at(&mut app, Vec2::new(100.0, 100.0));
-    assert!(clicked.get(), "re-enabling restores hit-testing");
+    assert!(clicked.get(), "re-enabling restores clicks");
 }
 
 #[test]
@@ -1268,7 +1295,7 @@ fn on_transition_complete_fires_on_the_to_side_of_a_channel_set() {
 }
 
 #[test]
-fn on_transition_complete_fires_once_on_the_source_of_a_slice_split() {
+fn on_transition_complete_fires_once_on_the_source_of_a_row_split() {
     use proteus_sdk::SplitStrategy;
 
     let mut app = Proteus::new();
@@ -1286,6 +1313,44 @@ fn on_transition_complete_fires_once_on_the_source_of_a_slice_split() {
         1,
         "one group is one completion, not one per target"
     );
+}
+
+#[test]
+fn a_hover_style_doesnt_block_a_click_or_count_as_a_transition() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0)).hover(StyleOverride {
+            color: Some(Vec4::new(0.5, 0.5, 0.5, 1.0)),
+            ..Default::default()
+        }),
+    );
+    let completions = completion_counter(&mut app, button);
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let clone = clicks.clone();
+    button.on_click(&mut app, move |_app| clone.set(clone.get() + 1));
+    let hovers = std::rc::Rc::new(std::cell::Cell::new(0));
+    let clone = hovers.clone();
+    button.on_hover_enter(&mut app, move |_app| clone.set(clone.get() + 1));
+
+    app.tick(1.0 / 60.0);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(1.0 / 60.0);
+    assert!(
+        app.get(button).unwrap().transition.is_none(),
+        "the hover animation isn't reported as a transition"
+    );
+
+    // Partway through the 0.15 s hover animation.
+    app.pointer_pressed();
+    app.tick(1.0 / 60.0);
+    app.pointer_released();
+    for _ in 0..30 {
+        app.tick(1.0 / 60.0);
+    }
+
+    assert_eq!(clicks.get(), 1, "a click during the hover animation lands");
+    assert_eq!(hovers.get(), 1, "and the hover isn't interrupted");
+    assert_eq!(completions.get(), 0, "style changes don't count");
 }
 
 #[test]

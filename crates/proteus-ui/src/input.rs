@@ -22,9 +22,17 @@
 //! `z` of its own; they can disagree for a child with a nonzero `z`, or one
 //! moved under a parent created later.
 //!
-//! Virtual, hidden and `Disabled` entities, and transitioning entities without
-//! `TransitionInteractionConfig::allow_pointer`, are never hit: they receive no events
-//! and don't block the components behind them.
+//! ## Non-interactive and disabled
+//!
+//! An entity without [`Interactable`] is not there for input: the pointer
+//! passes through it to whatever is behind. Virtual and hidden entities, and
+//! transitioning entities without `TransitionInteractionConfig::allow_pointer`,
+//! are passed through the same way.
+//!
+//! A [`Disabled`] entity is there but inert: it can be the topmost hit, and
+//! then it blocks the pointer from reaching what is behind it but receives no
+//! events itself, as a disabled control does on the web. A disabled entity
+//! that is also non-interactive passes the pointer through.
 
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
@@ -242,7 +250,7 @@ pub fn hit_test_system(
 
     // Find the topmost entity containing the pointer, by `(z, SpawnOrder)`,
     // the order `collect_instances` draws in.
-    let mut hit: Option<(Entity, f32, SpawnOrder)> = None;
+    let mut hit: Option<(Entity, f32, SpawnOrder, bool)> = None;
     for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled, spawn_order) in
         query.iter()
     {
@@ -252,9 +260,6 @@ pub fn hit_test_system(
             .map(|v| v.0)
             .unwrap_or_else(|| vis.is_none_or(|v| v.visible));
         if !visible {
-            continue;
-        }
-        if disabled {
             continue;
         }
         let transitioning = matches!(lifecycle, Some(Lifecycle::Transitioning));
@@ -275,17 +280,18 @@ pub fn hit_test_system(
             None => true,
             // `is_ge`, not `is_gt`: in an exact tie, the last one checked
             // wins.
-            Some((_, best_z, best_order)) => z
+            Some((_, best_z, best_order, _)) => z
                 .partial_cmp(&best_z)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(order.cmp(&best_order))
                 .is_ge(),
         };
         if wins {
-            hit = Some((e, z, order));
+            hit = Some((e, z, order, disabled));
         }
     }
-    let hit = hit.map(|(e, _, _)| e);
+    // A disabled entity on top absorbs the pointer: nothing is hit.
+    let hit = hit.and_then(|(e, _, _, disabled)| (!disabled).then_some(e));
 
     // Compute hover enter / exit.
     if hit != hovered.0 {

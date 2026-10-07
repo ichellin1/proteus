@@ -63,12 +63,14 @@ use dto::{
 // microtask, which runs once `tick` has returned and released the borrow.
 // Microtasks run before the next animation frame, so callbacks still happen
 // in the same frame.
+//
+// An exception thrown by a callback is logged with `report_throw`, as one
+// thrown by `update` is, rather than discarded.
 fn wrap_plain(cb: js_sys::Function) -> impl FnMut(&mut sdk::Proteus) + 'static {
     move |_app: &mut sdk::Proteus| {
         let cb = cb.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            // An error thrown by `cb` is currently discarded.
-            let _ = cb.call0(&JsValue::NULL);
+            report_throw(cb.call0(&JsValue::NULL));
         });
     }
 }
@@ -77,11 +79,11 @@ fn wrap_drag(cb: js_sys::Function) -> impl FnMut(&mut sdk::Proteus, glam::Vec2) 
     move |_app: &mut sdk::Proteus, delta: glam::Vec2| {
         let cb = cb.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = cb.call2(
+            report_throw(cb.call2(
                 &JsValue::NULL,
                 &JsValue::from_f64(delta.x as f64),
                 &JsValue::from_f64(delta.y as f64),
-            );
+            ));
         });
     }
 }
@@ -94,9 +96,17 @@ fn wrap_dropped(
         let dto = TransitionDroppedDto::from(&dropped);
         if let Ok(js_val) = serde_wasm_bindgen::to_value(&dto) {
             wasm_bindgen_futures::spawn_local(async move {
-                let _ = cb.call1(&JsValue::NULL, &js_val);
+                report_throw(cb.call1(&JsValue::NULL, &js_val));
             });
         }
+    }
+}
+
+/// Logs an exception thrown by a JavaScript callback, with its stack. The web
+/// host sends the log to the browser console.
+fn report_throw(result: Result<JsValue, JsValue>) {
+    if let Err(e) = result {
+        log::error!("proteus: a callback threw: {e:?}");
     }
 }
 

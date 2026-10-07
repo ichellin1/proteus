@@ -201,9 +201,10 @@ export interface ComponentSpec {
    *
    * Components are interactive by default, so handlers such as
    * {@link Handle.onClick} work without an opt-in. A non-interactive component
-   * is never the target of any input, whether pointer, touch, keyboard,
-   * gamepad or remote. Use it for passive elements such as backgrounds and
-   * labels. See {@link Handle.setInteractive}.
+   * is not there for input: input goes to whatever is behind it. Use it for
+   * passive elements such as backgrounds and labels. For a control that is
+   * temporarily unavailable, use {@link ComponentSpec.startDisabled}. See
+   * {@link Handle.setInteractive}.
    */
   nonInteractive?: boolean;
   /**
@@ -225,12 +226,14 @@ export interface ComponentSpec {
    */
   opacity?: number;
   /**
-   * Creates the component disabled: drawn, but ignoring all input and showing
-   * its {@link ComponentSpec.disabled} style.
+   * Creates the component disabled: drawn and blocking input from reaching
+   * what is behind it, but firing no events, and showing its
+   * {@link ComponentSpec.disabled} style.
    *
    * Use this for a control that is enabled later with
    * {@link Handle.setDisabled}. For something that is never a control, such as
-   * a background or a label, use {@link ComponentSpec.nonInteractive} instead.
+   * a background or a label, use {@link ComponentSpec.nonInteractive} instead,
+   * which lets input through.
    */
   startDisabled?: boolean;
   /** Whether the component accepts input while transitioning. Without this, it doesn't. */
@@ -565,7 +568,10 @@ export interface ComponentData {
   opacity: number;
   /** IDs of the component's direct children. Get a handle with {@link ProteusApp.handleFromId}. */
   children: number[];
-  /** The transition in progress, or `undefined` when idle. */
+  /**
+   * The transition in progress, or `undefined` when idle. A change of
+   * interaction style, such as a hover effect, isn't reported here.
+   */
   transition?: TransitionSnapshot;
 }
 

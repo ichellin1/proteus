@@ -198,8 +198,11 @@ impl Proteus {
             .map(|c| c.iter().map(|&e| Handle(e)).collect())
             .unwrap_or_default();
 
+        // A change of interaction style, such as a hover effect, isn't
+        // reported as a transition.
         let transition = world
             .get::<ActiveTransition>(handle.0)
+            .filter(|active| !active.interaction_style)
             .map(|active| TransitionData::from_active(active, geometry.clone()));
 
         Some(ComponentData {
@@ -517,5 +520,142 @@ mod tests {
             0,
             "an owned channel's handlers go when its owner does"
         );
+    }
+
+    // Like a component's handler destroying its component: an `on_dropped`
+    // handler that destroys its own channel must not have its handlers put
+    // back, or they would fire again for a request on the stale handle.
+    #[test]
+    fn an_on_dropped_handler_that_destroys_its_own_channel_does_not_resurrect_its_handlers() {
+        let mut app = Proteus::new();
+        let to = app.component(ComponentSpec::new(QuadState::default()));
+        // Hidden, so a transition from it is dropped.
+        let from = app.component(ComponentSpec::new(QuadState::default()).visible(false));
+        let channel = app.transition_channel(None);
+        let fired = std::rc::Rc::new(std::cell::Cell::new(0));
+        let clone = fired.clone();
+        channel.on_dropped(&mut app, move |app, _| {
+            clone.set(clone.get() + 1);
+            channel.destroy(app);
+        });
+
+        channel.set(
+            &mut app,
+            to,
+            from,
+            crate::TransitionConfig::default(),
+            false,
+        );
+        app.tick(0.016);
+        assert_eq!(fired.get(), 1);
+        assert_eq!(app.callback_count(), 0, "the handler went with its channel");
+
+        channel.set(
+            &mut app,
+            to,
+            from,
+            crate::TransitionConfig::default(),
+            false,
+        );
+        app.tick(0.016);
+        assert_eq!(
+            fired.get(),
+            1,
+            "and doesn't hear the stale handle's request"
+        );
+    }
+
+    // Records each warning logged on the current thread, so a test can check
+    // what was logged by the code it ran.
+    struct WarningLog;
+
+    thread_local! {
+        static WARNINGS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    impl log::Log for WarningLog {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                WARNINGS.with(|w| w.borrow_mut().push(record.args().to_string()));
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    fn take_warnings() -> Vec<String> {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            log::set_logger(&WarningLog).unwrap();
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()))
+    }
+
+    // `set` on a destroyed channel warns at once. Dispatch would drop it with
+    // `ChannelNotFound` a tick later, but `destroy` has already removed the
+    // `on_dropped` handlers that would hear it.
+    #[test]
+    fn set_on_a_destroyed_channel_is_ignored_with_a_warning() {
+        take_warnings();
+        let mut app = Proteus::new();
+        let to = app.component(ComponentSpec::new(QuadState::default()).visible(false));
+        let from = app.component(ComponentSpec::new(QuadState::default()));
+        let channel = app.transition_channel(None);
+        channel.destroy(&mut app);
+
+        channel.set(
+            &mut app,
+            to,
+            from,
+            crate::TransitionConfig::default(),
+            false,
+        );
+        let warnings = take_warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("TransitionChannel::set")),
+            "warned at the call: {warnings:?}"
+        );
+
+        app.tick(1.0);
+        assert!(!app.get(to).unwrap().visible, "and nothing ran");
+    }
+
+    // A handler registered while its event is being dispatched runs from the
+    // next dispatch on, after the handlers registered before it.
+    #[test]
+    fn handlers_keep_their_registration_order_across_dispatch() {
+        let mut app = Proteus::new();
+        let handle = app.component(ComponentSpec::new(QuadState {
+            size: glam::Vec2::new(100.0, 100.0),
+            ..Default::default()
+        }));
+        let order = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+        let log = order.clone();
+        let registered = std::rc::Rc::new(std::cell::Cell::new(false));
+        handle.on_click(&mut app, move |app| {
+            log.borrow_mut().push("a");
+            if !registered.replace(true) {
+                let log = log.clone();
+                handle.on_click(app, move |_| log.borrow_mut().push("c"));
+            }
+        });
+        let log = order.clone();
+        handle.on_click(&mut app, move |_| log.borrow_mut().push("b"));
+
+        for _ in 0..2 {
+            app.pointer_moved(Some(glam::Vec2::ZERO));
+            app.pointer_pressed();
+            app.tick(0.016);
+            app.pointer_released();
+            app.tick(0.016);
+        }
+
+        assert_eq!(*order.borrow(), ["a", "b", "a", "b", "c"]);
     }
 }

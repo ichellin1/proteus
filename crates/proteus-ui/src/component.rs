@@ -147,8 +147,9 @@ impl Default for Visibility {
 
 /// Marks an entity as disabled: drawn, but ignoring input.
 ///
-/// A disabled entity is left out of hit-testing, so it gets no hover, press,
-/// click or focus events. `interaction_style_system` applies its `disabled`
+/// A disabled entity gets no hover, press, click or focus events, but still
+/// blocks the pointer from reaching the entities behind it (see
+/// [`crate::input`]). `interaction_style_system` applies its `disabled`
 /// style, so it can look unavailable.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct Disabled;

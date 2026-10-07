@@ -18,7 +18,6 @@
 //! This crate re-exports what a host needs from the layers below it, including
 //! `wgpu` and `glam`, so a host can depend on `proteus-runtime` alone.
 //!
-// DOC-REVIEW
 //! # Examples
 //!
 //! An app with one button that grows when it's clicked. A host runs it:
