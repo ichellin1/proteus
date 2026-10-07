@@ -19,7 +19,9 @@ use crate::{FrameDriver, WebLoop};
 ///
 /// # Errors
 ///
-/// Returns an error if the canvas isn't found or the GPU can't be set up.
+/// Returns an error if the canvas isn't found, `config` doesn't fit
+/// [`crate::limits`] (the `ConfigError`'s message), or the GPU can't be set
+/// up.
 pub async fn run<A: App + 'static, S: HostServices + 'static>(
     mut app: A,
     canvas_id: &str,
@@ -37,6 +39,9 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
         .dyn_into::<web_sys::HtmlCanvasElement>()
         .map_err(|_| JsValue::from_str("element is not a canvas"))?;
 
+    config
+        .check(&crate::limits())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let render_cfg = config.render;
     let surface = WebSurface::new(&canvas, render_cfg).await?;
     let viewport = surface.viewport();

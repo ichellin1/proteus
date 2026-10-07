@@ -45,6 +45,15 @@ pub use js_app::mount;
 pub use rust_app::run;
 pub use services::PreloadedHostServices;
 
+/// The GPU limits this host requests and checks a config against:
+/// WebGL2's, `wgpu::Limits::downlevel_webgl2_defaults()`, since WebGL2 is the
+/// fallback in every browser. A WebGPU browser reports higher limits, but a
+/// config is still held to these, so it behaves the same in every browser.
+/// Pass them to `ProteusConfig::check` to test a config for this host.
+pub fn limits() -> wgpu::Limits {
+    wgpu::Limits::downlevel_webgl2_defaults()
+}
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

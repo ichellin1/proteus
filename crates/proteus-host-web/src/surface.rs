@@ -45,8 +45,7 @@ impl WebSurface {
                 size: (physical_w, physical_h),
                 power_preference: render.power_preference,
                 present_mode: render.present_mode,
-                // WebGL2 is the fallback, so the device must fit its limits.
-                limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                limits: crate::limits(),
             },
         )
         .await

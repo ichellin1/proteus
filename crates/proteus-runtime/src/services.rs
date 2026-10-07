@@ -17,6 +17,7 @@
 //! give the app its own trait with an implementation per platform, and pass
 //! the right one in where the app is created.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Identifies a [`HostServices::fetch_async`] request, so its result from
@@ -28,6 +29,55 @@ pub struct FetchId(pub u64);
 /// One result from [`HostServices::poll_fetches`]: the request's ID, and its
 /// bytes, or `None` if it failed.
 pub type FetchResult = (FetchId, Option<Arc<[u8]>>);
+
+/// Bookkeeping for a host's [`HostServices::fetch_async`] requests: which are
+/// running, which were cancelled, and which results wait for the next
+/// [`HostServices::poll_fetches`]. Both hosts use it, so they keep
+/// [`HostServices::cancel_fetch`]'s promise the same way.
+///
+/// Call [`started`](Self::started) when a fetch begins and
+/// [`finished`](Self::finished) when it ends, however it ended.
+#[derive(Debug, Default)]
+pub struct FetchTracker {
+    running: HashSet<FetchId>,
+    cancelled: HashSet<FetchId>,
+    results: Vec<FetchResult>,
+}
+
+impl FetchTracker {
+    /// Records that the fetch `id` has begun.
+    pub fn started(&mut self, id: FetchId) {
+        self.running.insert(id);
+    }
+
+    /// Records the fetch `id`'s result, which [`take`](Self::take) then
+    /// returns, unless the fetch was cancelled.
+    pub fn finished(&mut self, id: FetchId, bytes: Option<Arc<[u8]>>) {
+        self.running.remove(&id);
+        if !self.cancelled.remove(&id) {
+            self.results.push((id, bytes));
+        }
+    }
+
+    /// Cancels the fetch `id`, so [`take`](Self::take) never returns its
+    /// result: one still running is discarded when it finishes, and one
+    /// already finished is dropped now. Returns `true` if it was still
+    /// running, so a host that can abort a request knows to.
+    pub fn cancel(&mut self, id: FetchId) -> bool {
+        if self.running.contains(&id) {
+            self.cancelled.insert(id);
+            true
+        } else {
+            self.results.retain(|(done, _)| *done != id);
+            false
+        }
+    }
+
+    /// The results of fetches that finished since the last call.
+    pub fn take(&mut self) -> Vec<FetchResult> {
+        std::mem::take(&mut self.results)
+    }
+}
 
 /// Asset loading, fetching and video playback, provided by a host to the
 /// running [`App`](crate::App).
@@ -105,4 +155,59 @@ pub trait VideoStream {
     /// Stops decoding and releases the stream's resources, such as a decoder
     /// process or a network request.
     fn stop(self: Box<Self>);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bytes() -> Option<Arc<[u8]>> {
+        Some(Arc::from(vec![1u8]))
+    }
+
+    #[test]
+    fn a_finished_fetch_is_returned_once() {
+        let mut tracker = FetchTracker::default();
+        tracker.started(FetchId(1));
+        tracker.finished(FetchId(1), bytes());
+        assert_eq!(tracker.take().len(), 1);
+        assert!(tracker.take().is_empty());
+    }
+
+    #[test]
+    fn a_fetch_cancelled_while_running_is_discarded_when_it_finishes() {
+        let mut tracker = FetchTracker::default();
+        tracker.started(FetchId(1));
+        assert!(tracker.cancel(FetchId(1)), "still running");
+        tracker.finished(FetchId(1), bytes());
+        assert!(tracker.take().is_empty());
+    }
+
+    // The case the web host got wrong: the result was already waiting for the
+    // next poll when the fetch was cancelled.
+    #[test]
+    fn a_fetch_cancelled_after_it_finished_is_never_returned() {
+        let mut tracker = FetchTracker::default();
+        tracker.started(FetchId(1));
+        tracker.started(FetchId(2));
+        tracker.finished(FetchId(1), bytes());
+        tracker.finished(FetchId(2), bytes());
+
+        assert!(!tracker.cancel(FetchId(1)), "already finished");
+
+        let ids: Vec<_> = tracker.take().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, [FetchId(2)]);
+    }
+
+    // Nothing is kept for a cancelled fetch once it can't matter any more.
+    #[test]
+    fn cancelling_keeps_nothing_behind() {
+        let mut tracker = FetchTracker::default();
+        tracker.started(FetchId(1));
+        tracker.cancel(FetchId(1));
+        tracker.finished(FetchId(1), None);
+        tracker.cancel(FetchId(2)); // never started
+        assert!(tracker.running.is_empty());
+        assert!(tracker.cancelled.is_empty());
+    }
 }

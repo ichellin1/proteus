@@ -14,61 +14,6 @@ use wgpu::util::DeviceExt;
 use crate::mesh::{quad_vertex_layout, QuadInstance, QUAD_INDICES, QUAD_VERTICES};
 use crate::texture_registry::{AtlasConfig, TextureId, TextureRegistry};
 
-/// Checks that `config` fits `device.limits()`. Call it before creating a
-/// [`QuadPipeline`], which otherwise fails with an unclear wgpu validation
-/// panic.
-///
-/// Natively and on WebGL2, `device.limits()` are exactly the limits the host
-/// requested. With WebGPU in a browser, a requested limit lower than
-/// WebGPU's default is raised to the default: the web host requests WebGL2's
-/// 2048-pixel textures but gets 8192. So on the web, a config can pass with
-/// WebGPU and fail with WebGL2. To be sure a config works in every browser,
-/// keep it within WebGL2's limits.
-pub fn validate_atlas_config(device: &wgpu::Device, config: &AtlasConfig) -> Result<(), String> {
-    let limits = device.limits();
-    if config.page_size > limits.max_texture_dimension_2d {
-        return Err(format!(
-            "AtlasConfig.page_size={} exceeds this device's max_texture_dimension_2d={}",
-            config.page_size, limits.max_texture_dimension_2d
-        ));
-    }
-    if config.page_count == 0 {
-        return Err("AtlasConfig.page_count must be at least 1".to_string());
-    }
-    if config.page_count > limits.max_texture_array_layers {
-        return Err(format!(
-            "AtlasConfig.page_count={} exceeds this device's max_texture_array_layers={}",
-            config.page_count, limits.max_texture_array_layers
-        ));
-    }
-    Ok(())
-}
-
-/// Checks `transition_atlas_size` and `max_instances` against this device's
-/// limits, as [`validate_atlas_config`] does for the main atlas.
-pub fn validate_render_config(
-    device: &wgpu::Device,
-    transition_atlas_size: u32,
-    max_instances: u32,
-) -> Result<(), String> {
-    let limits = device.limits();
-    if transition_atlas_size > limits.max_texture_dimension_2d {
-        return Err(format!(
-            "transition_atlas_size={transition_atlas_size} exceeds this device's max_texture_dimension_2d={}",
-            limits.max_texture_dimension_2d
-        ));
-    }
-    let instance_buf_bytes = std::mem::size_of::<QuadInstance>() as u64 * max_instances as u64;
-    if instance_buf_bytes > limits.max_buffer_size {
-        return Err(format!(
-            "max_instances={max_instances} needs a {instance_buf_bytes}-byte instance buffer, \
-             exceeding this device's max_buffer_size={}",
-            limits.max_buffer_size
-        ));
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Default sizes
 // ---------------------------------------------------------------------------
@@ -249,8 +194,8 @@ impl QuadPipeline {
     ///
     /// # Panics
     ///
-    /// If the atlas sizes don't fit the device. Check first with
-    /// [`crate::validate_atlas_config`] and [`crate::validate_render_config`].
+    /// If the atlas sizes don't fit the device, in a wgpu validation error.
+    /// `proteus-runtime`'s `ProteusConfig::check` checks them first.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

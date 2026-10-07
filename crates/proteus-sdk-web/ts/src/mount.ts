@@ -40,9 +40,9 @@ export interface MountOptions {
    * });
    * ```
    *
-   * A misspelled field, an unknown value, or a value the device can't
-   * support, such as an atlas larger than WebGL2 allows, throws an error that
-   * names the field.
+   * A misspelled field, an unknown value, a font that can't be read, or a
+   * value the device can't support, such as an atlas larger than WebGL2
+   * allows, throws an error that names the field.
    */
   config?: ProteusConfigOverrides;
 }

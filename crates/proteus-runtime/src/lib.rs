@@ -61,18 +61,18 @@ mod services;
 mod viewport;
 
 pub use app::{App, Frame, PlayingVideo};
-pub use config::ProteusConfig;
+pub use config::{Allowed, ConfigError, ProteusConfig};
 pub use config_dto::ProteusConfigDto;
 pub use engine::Engine;
 /// Re-exported so a host can check a config before passing it to
 /// [`Renderer::new`], which panics on an invalid one. A host that takes config
 /// from outside the program, such as `mount` from JavaScript, reports an error
 /// instead.
-pub use proteus_render::{validate_atlas_config, validate_render_config};
+pub use proteus_render::FontError;
 /// Re-exported from `proteus-sdk`.
 pub use proteus_sdk::TextureRequest;
 pub use renderer::Renderer;
-pub use services::{FetchId, FetchResult, HostServices, VideoFrame, VideoStream};
+pub use services::{FetchId, FetchResult, FetchTracker, HostServices, VideoFrame, VideoStream};
 pub use viewport::{Insets, Viewport};
 
 // Re-exported so a host can depend on `proteus-runtime` alone, and uses the

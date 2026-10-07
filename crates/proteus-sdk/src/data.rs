@@ -61,7 +61,7 @@ pub struct TransitionData {
 
 impl TransitionData {
     pub(crate) fn from_active(active: &ActiveTransition, current: QuadState) -> Self {
-        let progress = (active.elapsed / active.config.duration).clamp(0.0, 1.0);
+        let progress = active.raw_t();
         Self {
             base: active.from.clone(),
             target: active.to.clone(),

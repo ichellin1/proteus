@@ -61,8 +61,8 @@ use crate::main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtla
 /// is drawn unbaked. So an image larger than 2048 pixels can't be shown at
 /// full size on the web.
 ///
-/// Check a configuration against the device with
-/// [`crate::validate_atlas_config`] before using it.
+/// `proteus-runtime`'s `ProteusConfig::check` checks a configuration against
+/// a host's limits before it is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasConfig {
     /// Width and height of each page, in pixels.

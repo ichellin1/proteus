@@ -53,20 +53,17 @@ pub async fn mount(
         dto.apply().map_err(|e| JsValue::from_str(&e))?
     };
 
+    // `Renderer::new` panics on settings that don't fit, which would stop
+    // the wasm module, so check them first and throw an error naming the
+    // setting. Against WebGL2's limits, whatever the browser's device
+    // reports, so a config behaves the same in every browser.
+    config
+        .check(&crate::limits())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
     let surface = WebSurface::new(&canvas, config.render).await?;
     let viewport = surface.viewport();
     let surface_format = surface.surface_format();
-
-    // `Renderer::new` panics on invalid settings, which would stop the wasm
-    // module, so check them here and throw an error naming the field.
-    proteus_runtime::validate_atlas_config(surface.device(), &config.memory.main_atlas)
-        .map_err(|e| JsValue::from_str(&e))?;
-    proteus_runtime::validate_render_config(
-        surface.device(),
-        config.memory.transition_atlas_size,
-        config.memory.max_instances,
-    )
-    .map_err(|e| JsValue::from_str(&e))?;
 
     let proteus = Rc::new(RefCell::new(proteus_runtime::Proteus::new()));
     let renderer = Renderer::new(

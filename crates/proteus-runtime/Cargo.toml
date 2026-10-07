@@ -21,6 +21,7 @@ bevy_ecs = { workspace = true }
 glam = { workspace = true }
 wgpu = { workspace = true }
 log = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

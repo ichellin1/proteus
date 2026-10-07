@@ -186,6 +186,24 @@ fn dispatch_hides_the_from_entity() {
     );
 }
 
+// A component transitioning into itself stays visible: the request is an
+// `animate_to` to its target, not a hide.
+#[test]
+fn dispatch_from_an_entity_into_itself_leaves_it_visible() {
+    let mut world = make_world();
+    let channel = create_channel(&mut world, None);
+    let entity = world
+        .spawn((red(), Lifecycle::Idle, Visibility::VISIBLE))
+        .id();
+
+    set(&mut world, channel, entity, entity, blue(), cfg(), false);
+    run(&mut world, channel_dispatch_system);
+    world.flush();
+
+    assert!(world.get::<Visibility>(entity).unwrap().visible);
+    assert!(world.get::<TransitionRequest>(entity).is_some());
+}
+
 // ---------------------------------------------------------------------------
 // channel::set + channel_dispatch_system — drop cases
 // ---------------------------------------------------------------------------

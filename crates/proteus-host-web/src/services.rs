@@ -3,11 +3,11 @@
 //! docs, "Loading assets".
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use proteus_runtime::{FetchId, FetchResult, HostServices, VideoStream};
+use proteus_runtime::{FetchId, FetchResult, FetchTracker, HostServices, VideoStream};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
@@ -20,12 +20,9 @@ pub struct PreloadedHostServices {
     // An `AbortController` for each fetch in progress, so `cancel_fetch` can
     // abort it. Each task removes its own entry when its fetch settles.
     controllers: Rc<RefCell<HashMap<FetchId, web_sys::AbortController>>>,
-    // Cancelled fetches. A task checks this just before delivering, so a
-    // fetch that finished before it was cancelled is still discarded.
-    cancelled: Rc<RefCell<HashSet<FetchId>>>,
-    // Results waiting for the next `poll_fetches`, written by the fetch
-    // tasks.
-    completed: Rc<RefCell<Vec<FetchResult>>>,
+    // Which fetches are running or cancelled, and the results waiting for
+    // the next `poll_fetches`, written by the fetch tasks.
+    fetches: Rc<RefCell<FetchTracker>>,
 }
 
 impl PreloadedHostServices {
@@ -53,8 +50,7 @@ impl PreloadedHostServices {
             base_url: base_url.to_string(),
             next_id: 0,
             controllers: Rc::new(RefCell::new(HashMap::new())),
-            cancelled: Rc::new(RefCell::new(HashSet::new())),
-            completed: Rc::new(RefCell::new(Vec::new())),
+            fetches: Rc::new(RefCell::new(FetchTracker::default())),
         }
     }
 
@@ -84,37 +80,40 @@ impl HostServices for PreloadedHostServices {
         let controller = web_sys::AbortController::new().expect("AbortController::new");
         let signal = controller.signal();
         self.controllers.borrow_mut().insert(id, controller);
+        self.fetches.borrow_mut().started(id);
 
         let controllers = self.controllers.clone();
-        let cancelled = self.cancelled.clone();
-        let completed = self.completed.clone();
+        let fetches = self.fetches.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let result = fetch_bytes(&url, Some(&signal)).await;
             controllers.borrow_mut().remove(&id);
-            if cancelled.borrow_mut().remove(&id) {
-                return;
-            }
             let bytes = match result {
                 Ok(bytes) => Some(Arc::<[u8]>::from(bytes)),
+                // A cancelled fetch fails with an abort error; the tracker
+                // discards it without a warning.
+                Err(_) if signal.aborted() => None,
                 Err(e) => {
                     log::warn!("fetch_async: {url}: {e:?}");
                     None
                 }
             };
-            completed.borrow_mut().push((id, bytes));
+            fetches.borrow_mut().finished(id, bytes);
         });
         id
     }
 
     fn poll_fetches(&mut self) -> Vec<FetchResult> {
-        std::mem::take(&mut *self.completed.borrow_mut())
+        self.fetches.borrow_mut().take()
     }
 
     fn cancel_fetch(&mut self, id: FetchId) {
-        if let Some(controller) = self.controllers.borrow_mut().remove(&id) {
-            controller.abort();
+        // Abort it only while it is running; a finished fetch's result is
+        // dropped from the queue instead.
+        if self.fetches.borrow_mut().cancel(id) {
+            if let Some(controller) = self.controllers.borrow_mut().remove(&id) {
+                controller.abort();
+            }
         }
-        self.cancelled.borrow_mut().insert(id);
     }
 
     // shell that builds the demo's video keys. Worth documenting publicly, or

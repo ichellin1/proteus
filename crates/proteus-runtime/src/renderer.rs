@@ -42,11 +42,11 @@ impl Renderer {
     ///
     /// # Panics
     ///
-    /// If `config`'s atlas or render settings don't fit the device's limits.
-    /// Check them first with
-    /// [`validate_atlas_config`](crate::validate_atlas_config) and
-    /// [`validate_render_config`](crate::validate_render_config) to report an
-    /// error instead.
+    /// If `config`'s memory settings don't fit `device`'s limits, with the
+    /// [`ConfigError`](crate::ConfigError)'s message. Both hosts check the
+    /// config before creating the device, with
+    /// [`ProteusConfig::check`](crate::ProteusConfig::check), so this is a
+    /// backstop for code that creates a renderer itself.
     pub fn new(
         proteus: &mut Proteus,
         device: &wgpu::Device,
@@ -56,14 +56,9 @@ impl Renderer {
         config: ProteusConfig,
     ) -> Self {
         let mem = &config.memory;
-        proteus_render::validate_atlas_config(device, &mem.main_atlas)
-            .expect("ProteusConfig.memory.main_atlas must fit the device's reported limits");
-        proteus_render::validate_render_config(
-            device,
-            mem.transition_atlas_size,
-            mem.max_instances,
-        )
-        .expect("ProteusConfig.memory sizing must fit the device's reported limits");
+        if let Err(e) = config.check(&device.limits()) {
+            panic!("{e}");
+        }
         if config.debug.validate_config {
             log::info!(
                 "ProteusConfig: ~{:.1} MiB estimated resident GPU memory (main_atlas {}×{}×{}, transition_atlas {}², {} instances)",
@@ -97,10 +92,15 @@ impl Renderer {
         world.insert_resource(pipeline);
         world.insert_resource(TransitionAtlasSize(mem.transition_atlas_size));
 
-        // Use the configured font, or the embedded one.
+        // Use the configured font, or the embedded one. Bytes that aren't a
+        // font fall back to the embedded font rather than stopping the app;
+        // `FontSource::from_bytes` lets an app catch them earlier.
         let font_atlas = match &config.text.default_font {
             FontSource::Embedded => proteus_render::FontAtlas::with_embedded_font(),
-            FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes),
+            FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes).unwrap_or_else(|e| {
+                log::error!("ProteusConfig.text.default_font: {e}; using the embedded font");
+                proteus_render::FontAtlas::with_embedded_font()
+            }),
         };
 
         Self {
