@@ -2133,6 +2133,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proteus-docs"
+version = "0.1.0"
+dependencies = [
+ "proteus-host-winit",
+ "proteus-runtime",
+ "proteus-sdk",
+]
+
+[[package]]
 name = "proteus-gpu"
 version = "0.1.0"
 dependencies = [

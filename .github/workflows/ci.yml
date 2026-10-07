@@ -39,7 +39,7 @@ jobs:
       - name: Check comments
         # Paths are added as each crate is brought up to CONTRIBUTING.md's
         # comment rules.
-        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web examples/gallery examples/video Cargo.toml
+        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs examples/gallery examples/video Cargo.toml
 
       - name: Clippy
         # proteus-shell-web / proteus-host-web are wasm32-only
@@ -178,6 +178,10 @@ jobs:
         # below can succeed.
         working-directory: crates/proteus-sdk-web/ts
         run: npm run build
+
+      - name: Snippets in docs/ type-check
+        working-directory: crates/proteus-sdk-web/ts
+        run: npm run check-snippets
 
       - name: Verify the package is in a publishable shape
         working-directory: crates/proteus-sdk-web/ts

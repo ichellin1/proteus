@@ -57,6 +57,32 @@ jobs:
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
 
+      # The API reference, beside the demo: rustdoc at api/rust/ and, for the
+      # web host, which only builds for wasm32, api/rust-web/; typedoc at
+      # api/ts/.
+      - name: API reference (Rust)
+        run: |
+          cargo doc --no-deps -p proteus-sdk -p proteus-runtime -p proteus-ui \
+            -p proteus-render -p proteus-gpu -p proteus-host-winit
+          cargo doc --no-deps --target wasm32-unknown-unknown -p proteus-host-web
+          mkdir -p crates/proteus-shell-web/www/api
+          cp -r target/doc crates/proteus-shell-web/www/api/rust
+          cp -r target/wasm32-unknown-unknown/doc crates/proteus-shell-web/www/api/rust-web
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: API reference (TypeScript)
+        run: |
+          wasm-pack build crates/proteus-sdk-web --target bundler --out-dir ts/pkg
+          wasm-pack build crates/proteus-host-web --target bundler \
+            --out-dir ../proteus-sdk-web/ts/pkg-host
+          cd crates/proteus-sdk-web/ts
+          npm ci
+          npx typedoc src/index.ts --excludeInternal --out ../../proteus-shell-web/www/api/ts
+
       - name: Disable Jekyll processing
         run: touch crates/proteus-shell-web/www/.nojekyll
 
