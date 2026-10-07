@@ -157,17 +157,26 @@ impl FontAtlas {
         // overhang at the right edge, so this walks the same pen advances as
         // the compositing loop below and tracks the rightmost ink pixel any
         // glyph reaches, not just where the pen ends up.
+        //
+        // Ink can also start left of the first pen position: a glyph with a
+        // negative left bearing, such as Inter's "j" or "Î", or a later glyph
+        // pulled left by negative letter spacing. So it tracks the leftmost
+        // ink pixel too, and the pen starts that far right.
         let mut pen_x_probe: i32 = 0;
+        let mut min_left: i32 = 0;
         let mut max_right: i32 = 0;
         for (i, (metrics, _)) in rasterized.iter().enumerate() {
             let glyph_left = pen_x_probe + metrics.xmin;
+            if metrics.width > 0 {
+                min_left = min_left.min(glyph_left);
+            }
             max_right = max_right.max(glyph_left + metrics.width as i32);
             pen_x_probe += metrics.advance_width.ceil() as i32;
             if i + 1 < glyph_count {
                 pen_x_probe += letter_spacing_px.round() as i32;
             }
         }
-        let text_width = max_right.max(0) as u32;
+        let text_width = (max_right - min_left).max(0) as u32;
         if text_width == 0 {
             return None;
         }
@@ -182,12 +191,12 @@ impl FontAtlas {
 
         let mut rgba = vec![0u8; (text_width * text_height * 4) as usize];
 
-        let mut pen_x: i32 = 0;
+        let mut pen_x: i32 = -min_left;
 
         for (i, (metrics, bitmap)) in rasterized.iter().enumerate() {
             // glyph_left: horizontal offset of the glyph's left edge from pen_x.
             // metrics.xmin is the bearing from pen position to the left edge of the
-            // visible glyph pixels. For most Latin characters this is ≥ 0.
+            // visible glyph pixels. It can be negative; see the width above.
             let glyph_left: i32 = pen_x + metrics.xmin;
 
             // glyph_top (in Y-down image coords): fontdue uses Y-up for ymin/height.
@@ -243,6 +252,23 @@ mod tests {
 
     fn atlas() -> FontAtlas {
         FontAtlas::with_embedded_font()
+    }
+
+    // A glyph whose ink starts left of the pen, like Inter's "j", keeps its
+    // left edge.
+    #[test]
+    fn a_glyph_with_a_negative_left_bearing_isnt_clipped() {
+        let mut fa = atlas();
+        let (metrics, bitmap) = fa.font.rasterize('j', 64.0);
+        assert!(metrics.xmin < 0, "sanity: Inter's j starts left of the pen");
+
+        let glyphs = fa.rasterize_text("j", 64.0, 0.0).unwrap();
+
+        assert_eq!(
+            glyphs.rgba_pixels.chunks(4).filter(|p| p[3] > 0).count(),
+            bitmap.iter().filter(|&&a| a > 0).count(),
+            "every pixel of the glyph's ink is drawn"
+        );
     }
 
     #[test]

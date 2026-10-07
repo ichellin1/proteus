@@ -8,7 +8,7 @@
 //! decode_image                   the image, as RGBA pixels
 //!         │  added to the main atlas
 //!         ▼
-//! BakedImage + TextureRef        where the image is in the atlas
+//! BakedImage + ImageTextureRef   where the image is in the atlas
 //!         │
 //!         ▼
 //! drawn as the entity's background
@@ -20,6 +20,12 @@
 //!
 //! `QuadState::color` multiplies the image's colors, so use `Vec4::ONE` to show
 //! it unchanged.
+//!
+//! An image larger than an atlas page ([`AtlasConfig::page_size`], 2048 pixels
+//! by default), after any [`Image::max_side`], is scaled down to fit the page,
+//! with a warning.
+//!
+//! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
 
 use bevy_ecs::prelude::*;
 use std::sync::Arc;
@@ -32,7 +38,8 @@ use std::sync::Arc;
 ///
 /// The renderer decodes it into the main atlas and adds a [`BakedImage`].
 /// Changing `bytes` afterwards has no effect until the `BakedImage` is
-/// removed.
+/// removed; `proteus-sdk`'s `Handle::set_image` does both. An image larger than an atlas page is scaled down to fit it; see
+/// the [module docs](self).
 #[derive(Component, Clone, Debug)]
 pub struct Image {
     /// The PNG or JPEG file's bytes. The format is detected from the data.

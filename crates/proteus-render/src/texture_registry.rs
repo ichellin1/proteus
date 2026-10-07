@@ -8,8 +8,8 @@
 //!
 //! ## Reference counting
 //!
-//! Main-atlas entries are counted by `proteus_ui::TextureRef` components. A
-//! count of zero doesn't free an entry: it makes it a candidate, freed by
+//! Main-atlas entries are counted by `proteus_ui`'s texture reference
+//! components, such as `TextTextureRef`. A count of zero doesn't free an entry: it makes it a candidate, freed by
 //! [`TextureRegistry::free`] or when space is needed. The video entry is only
 //! metadata; `QuadPipeline` owns the video texture itself.
 //!
@@ -20,8 +20,18 @@
 //! pages, until the new texture fits. It never frees a referenced one:
 //! components keep their texture coordinates, so a freed region reused by
 //! another texture would make them draw the wrong image. If freeing
-//! unreferenced entries isn't enough, registration fails and returns `None`,
-//! with a log message.
+//! unreferenced entries isn't enough, registration fails and returns `None`;
+//! the caller logs it.
+//!
+//! A texture can't be evicted in the frame it was registered or last used,
+//! even with no references. So an app can load several textures and then
+//! attach them to components, in the same frame, without the later loads
+//! evicting the earlier ones. Unattached, a texture becomes a candidate from
+//! the next frame on.
+//!
+//! A request larger than a page, on either side, can never fit, so it is
+//! rejected at once with a warning, before anything is evicted. Callers fit
+//! their content to [`TextureRegistry::max_texture_side`] first.
 //!
 //! ## Pages
 //!
@@ -46,9 +56,10 @@ use crate::main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtla
 /// GPU memory, allocated up front.
 ///
 /// No single texture can be larger than `page_size` on either side, and
-/// WebGL2 limits `page_size` to 2048. So an image larger than 2048 pixels
-/// can't be shown at full size on the web; it would need to be split across
-/// several regions.
+/// WebGL2 limits `page_size` to 2048. Larger content is fitted to a page, with
+/// a warning: text is clipped, an image is scaled down, and a baked component
+/// is drawn unbaked. So an image larger than 2048 pixels can't be shown at
+/// full size on the web.
 ///
 /// Check a configuration against the device with
 /// [`crate::validate_atlas_config`] before using it.
@@ -221,12 +232,23 @@ impl TextureRegistry {
 
     /// Allocates a `width × height` region of the main atlas for text, an
     /// image or a baked component. Returns `None` if nothing fits, even after
-    /// evicting every unreferenced texture; see the module docs.
+    /// evicting every unreferenced texture; see the module docs. A region
+    /// larger than [`TextureRegistry::max_texture_side`] returns `None` at
+    /// once, with a warning, and evicts nothing.
     ///
-    /// The reference count starts at 0; the caller adds a
-    /// `proteus_ui::TextureRef` straight away, which raises it to 1. With
+    /// The reference count starts at 0; the caller adds a texture reference
+    /// component, such as `proteus_ui::TextTextureRef`, straight away, which
+    /// raises it to 1. With
     /// `eternal`, the texture is never evicted.
     pub fn register_static(&mut self, width: u32, height: u32, eternal: bool) -> Option<TextureId> {
+        let max = self.max_texture_side();
+        if width > max || height > max {
+            log::warn!(
+                "TextureRegistry::register_static: {width}x{height} is larger than an atlas page \
+                 ({max}x{max}) and can never fit"
+            );
+            return None;
+        }
         let (page, alloc_id, region) = self
             .allocate_across_pages(width, height)
             .or_else(|| self.evict_to_make_room(width, height))?;
@@ -245,6 +267,11 @@ impl TextureRegistry {
             state: TextureState::Ready,
         });
         Some(id)
+    }
+
+    /// The largest width or height a texture can have: the page size.
+    pub fn max_texture_side(&self) -> u32 {
+        self.page_size
     }
 
     /// Tries `preferred_page`, then all the other pages in order, and records
@@ -284,20 +311,20 @@ impl TextureRegistry {
     }
 
     // -----------------------------------------------------------------------
-    // Reference counting, by `proteus_ui::TextureRef`'s hooks
+    // Reference counting, by the hooks of `proteus_ui`'s texture references
     // -----------------------------------------------------------------------
 
-    /// Adds a reference to `id`. Called by `proteus_ui::TextureRef`'s hooks,
-    /// not by apps.
+    /// Adds a reference to `id`. Called by the hooks of `proteus_ui`'s texture
+    /// references, not by apps.
     pub fn incref(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.ref_count += 1;
         }
     }
 
-    /// Removes a reference to `id`, never going below zero. Called by
-    /// `proteus_ui::TextureRef`'s hooks, not by apps. Reaching zero doesn't
-    /// free the entry; see the module docs.
+    /// Removes a reference to `id`, never going below zero. Called by the
+    /// hooks of `proteus_ui`'s texture references, not by apps. Reaching zero
+    /// doesn't free the entry; see the module docs.
     pub fn decref(&mut self, id: TextureId) {
         if let Some(e) = self.entries.get_mut(id) {
             e.ref_count = e.ref_count.saturating_sub(1);
@@ -338,14 +365,14 @@ impl TextureRegistry {
         self.free_internal(id);
     }
 
-    /// Frees every unreferenced, non-`eternal` main-atlas entry, and returns how
-    /// many. Useful before loading many new textures, rather than waiting for
-    /// space to run out.
+    /// Frees every unreferenced, non-`eternal` main-atlas entry, except those
+    /// registered or used this frame, and returns how many. Useful before
+    /// loading many new textures, rather than waiting for space to run out.
     pub fn evict_unused(&mut self) -> usize {
         let candidates: Vec<TextureId> = self
             .entries
             .iter()
-            .filter(|(_, e)| Self::is_eviction_candidate(e))
+            .filter(|(_, e)| Self::is_eviction_candidate(e, self.frame_counter))
             .map(|(id, _)| id)
             .collect();
         let freed = candidates.len();
@@ -367,7 +394,7 @@ impl TextureRegistry {
         let mut candidates: Vec<(TextureId, u64)> = self
             .entries
             .iter()
-            .filter(|(_, e)| Self::is_eviction_candidate(e))
+            .filter(|(_, e)| Self::is_eviction_candidate(e, self.frame_counter))
             .map(|(id, e)| (id, e.last_used))
             .collect();
         candidates.sort_by_key(|&(_, last_used)| last_used);
@@ -384,9 +411,12 @@ impl TextureRegistry {
         None
     }
 
-    fn is_eviction_candidate(entry: &TextureEntry) -> bool {
+    /// Unreferenced, not `eternal`, in the main atlas, and not registered or
+    /// used this frame (see the module docs).
+    fn is_eviction_candidate(entry: &TextureEntry, frame_counter: u64) -> bool {
         entry.ref_count == 0
             && !entry.eternal
+            && entry.last_used < frame_counter
             && matches!(entry.atlas_region, AtlasRegion::Main { .. })
     }
 
@@ -593,6 +623,9 @@ mod tests {
         let b = reg.register_static(64, 64, false).unwrap();
         let referenced = reg.register_static(64, 64, false).unwrap();
         reg.incref(referenced);
+        // Nothing registered this frame is evicted.
+        assert_eq!(reg.evict_unused(), 0);
+        reg.advance_frame();
 
         let freed = reg.evict_unused();
         assert_eq!(freed, 2, "only the two zero-ref entries should be freed");
@@ -663,6 +696,8 @@ mod tests {
             !unreferenced.is_empty(),
             "test setup needs an evictable entry"
         );
+        // Entries can't be evicted in the frame they were registered.
+        reg.advance_frame();
 
         // Plenty of unreferenced entries exist to evict, so this should
         // succeed by reclaiming one of those — never a referenced entry.
@@ -822,6 +857,8 @@ mod tests {
             !now_unreferenced.is_empty(),
             "test setup needs an evictable entry"
         );
+        // Entries can't be evicted in the frame they were registered.
+        reg.advance_frame();
 
         // Plenty of unreferenced entries exist to evict, spread across every page — this
         // should succeed by reclaiming one of those, never a referenced or eternal entry.
@@ -947,6 +984,53 @@ mod tests {
         );
     }
 
+    // A request that can never fit is refused before anything is evicted.
+    // Without the check, the registry would evict every unreferenced texture
+    // trying to make room, then fail anyway.
+    #[test]
+    fn a_request_larger_than_a_page_evicts_nothing() {
+        let mut reg = TextureRegistry::new(single_page(256));
+        let ids: Vec<_> = (0..10)
+            .map(|_| reg.register_static(32, 32, false).unwrap())
+            .collect();
+        // So that they could be evicted.
+        reg.advance_frame();
+
+        assert!(reg.register_static(257, 16, false).is_none());
+        assert!(reg.register_static(16, 257, false).is_none());
+
+        assert_eq!(reg.resident_static_count(), 10, "nothing was evicted");
+        assert!(ids.iter().all(|&id| reg.main_atlas_region(id).is_some()));
+    }
+
+    // A texture loaded but not yet attached survives other loads in the same
+    // frame, so an app can load several and then attach them all.
+    #[test]
+    fn an_unreferenced_texture_isnt_evicted_in_the_frame_it_was_registered() {
+        let mut reg = TextureRegistry::new(single_page(64));
+        // More than the page holds; capped, since with eviction it would
+        // never fill.
+        let loaded: Vec<_> = (0..100)
+            .map_while(|_| reg.register_static(16, 16, false))
+            .collect();
+        assert!(loaded.len() < 100, "the page filled up this frame");
+        assert!(
+            loaded.iter().all(|&id| reg.main_atlas_region(id).is_some()),
+            "rather than evicting what was loaded"
+        );
+
+        reg.advance_frame();
+        assert!(
+            reg.register_static(16, 16, false).is_some(),
+            "from the next frame on, one can be evicted"
+        );
+        let resident = loaded
+            .iter()
+            .filter(|&&id| reg.main_atlas_region(id).is_some())
+            .count();
+        assert_eq!(resident, loaded.len() - 1);
+    }
+
     #[test]
     fn page_count_is_clamped_to_at_least_one() {
         let mut reg = TextureRegistry::new(AtlasConfig {
@@ -992,7 +1076,7 @@ mod tests {
         // The demo's real working set (light and dark logo frames, tiles, backgrounds,
         // baked text, and 12 gallery images at the demo's `MAX_TILE_IMAGE_SIDE_PX`) must
         // all fit at once in the default pool. Everything stays referenced, as with real
-        // `TextureRef`s, so this only passes if the capacity, not eviction, holds it.
+        // texture references, so this only passes if the capacity, not eviction, holds it.
         let mut reg = TextureRegistry::new(AtlasConfig::default());
         let mut register = |w: u32, h: u32| {
             let id = reg

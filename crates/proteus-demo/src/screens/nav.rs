@@ -72,14 +72,16 @@ fn spawn_icon(app: &mut Proteus) -> Handle {
             rotation: 0.0,
             scale: 1.0,
             anchor: Vec2::new(0.5, 0.5),
-            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            color: Vec4::ONE,
             corner_radius: ICON_CORNER_RADIUS,
         })
         .glow(Glow {
             radius: 0.0,
             color: violet(),
             intensity: 1.0,
-        }),
+        })
+        // Faded in by `Demo::advance_nav_icons`, with its overlays.
+        .opacity(0.0),
     )
 }
 
@@ -116,9 +118,11 @@ pub fn spawn(app: &mut Proteus) -> Nav {
             rotation: 0.0,
             scale: 1.0,
             anchor: Vec2::new(0.5, 0.5),
-            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            color: Vec4::ONE,
             corner_radius: 0.0,
         })
+        // Faded in by `Demo::advance_nav_icons`, with `lockup_dark`.
+        .opacity(0.0)
         // Decorative brand mark, not a click target — deliberately no
         // `Interactable`. Its bounding box (the full `lockup.png`, including
         // the trailing whitespace `LOGO_TEXT_RIGHT_PX`'s doc mentions)

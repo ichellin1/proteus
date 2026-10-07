@@ -11,10 +11,11 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    BakedComposite, BakedImage, BakedText, ChannelRegistry, Disabled, GroupSource, GroupTarget,
-    ImageCrop, Interactable, MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState,
-    SplitStrategy, TextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
-    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry, CompositeTextureRef, Disabled,
+    GroupSource, GroupTarget, Image, ImageCrop, ImageTextureRef, Interactable, MergeLayout,
+    NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text, TextTextureRef,
+    TransitionChannelId, TransitionConfig, TransitionInteractionConfig, TransitionRequest,
+    VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -421,7 +422,7 @@ impl Handle {
         let Some(baked) = app.world.world.get::<BakedImage>(source.0).cloned() else {
             return Ok(false);
         };
-        let texture_ref = app.world.world.get::<TextureRef>(source.0).copied();
+        let texture_ref = app.world.world.get::<ImageTextureRef>(source.0).copied();
         let mut entity = entity_mut(app, self.0, "copy_baked_image_from")?;
         entity.insert(baked);
         if let Some(texture_ref) = texture_ref {
@@ -953,21 +954,59 @@ impl Handle {
         }
     }
 
-    /// Releases this component's references to its baked text, image or
-    /// content. The component itself remains.
+    /// Removes this component's text, image and baked content, and releases
+    /// their textures. The component itself remains, drawn as a plain quad in
+    /// its color. Nothing is baked again; to show new content, use
+    /// [`Handle::set_text`] or [`Handle::set_image`].
     ///
-    /// This doesn't free atlas space immediately. A texture that no component
-    /// references becomes available for reuse, and the atlas reclaims its space
-    /// when it needs room for another texture. Textures marked `eternal` are
-    /// never reclaimed. [`TextureHandle`] has no `free`.
+    /// A component made with [`ComponentSpec::bake`](crate::ComponentSpec::bake)
+    /// lost its children and its own color when it was baked, so afterwards it
+    /// is a plain white quad.
+    ///
+    /// Releasing a texture doesn't free atlas space immediately. A texture
+    /// that no component references becomes available for reuse, and the
+    /// atlas reclaims its space when it needs room for another texture.
+    /// Textures marked `eternal` are never reclaimed. [`TextureHandle`] has no
+    /// `free`.
+    ///
+    /// # Errors
     ///
     /// [`HandleError::EntityNotFound`] if this component no longer exists.
     pub fn free_resources(&self, app: &mut Proteus) -> Result<(), HandleError> {
         entity_mut(app, self.0, "free_resources")?
-            .remove::<TextureRef>()
-            .remove::<BakedImage>()
-            .remove::<BakedText>()
-            .remove::<BakedComposite>();
+            .remove::<(Text, Image, Baked)>()
+            .remove::<(TextTextureRef, ImageTextureRef, CompositeTextureRef)>()
+            .remove::<(BakedText, BakedImage, BakedComposite)>();
+        Ok(())
+    }
+
+    /// Replaces this component's text, or adds text to a component that has
+    /// none. The host bakes the new text before it next draws, and the old
+    /// text's texture is released (see [`Handle::free_resources`]).
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_text(&self, app: &mut Proteus, text: Text) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "set_text")?
+            .remove::<(BakedText, TextTextureRef)>()
+            .insert(text);
+        Ok(())
+    }
+
+    /// Replaces this component's image, or adds an image to a component that
+    /// has none. The host decodes and bakes the new image before it next
+    /// draws, and the old image's texture is released (see
+    /// [`Handle::free_resources`]). A crop set with [`Handle::crop_image`]
+    /// applied to the old image, so it is cleared.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_image(&self, app: &mut Proteus, image: Image) -> Result<(), HandleError> {
+        entity_mut(app, self.0, "set_image")?
+            .remove::<(BakedImage, ImageTextureRef)>()
+            .insert(image);
         Ok(())
     }
 
@@ -1009,7 +1048,7 @@ impl Handle {
                 uv.page,
                 [width as f32, height as f32],
             ),
-            TextureRef(texture.0),
+            ImageTextureRef(texture.0),
         ));
         Ok(true)
     }

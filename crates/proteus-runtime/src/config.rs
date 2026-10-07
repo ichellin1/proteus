@@ -345,7 +345,8 @@ impl Default for TextConfig {
 pub struct ResourceConfig {
     /// Scale images down so their longer side is at most this many pixels,
     /// unless the image sets its own
-    /// [`max_side`](proteus_ui::Image::max_side). `None` keeps full size.
+    /// [`max_side`](proteus_ui::Image::max_side). `None` keeps full size, up
+    /// to an atlas page: a larger image is scaled down to fit the page.
     pub image_max_side: Option<u32>,
     /// Whether the atlas may evict textures to make room. Not read yet:
     /// least-recently-used textures are always evicted.

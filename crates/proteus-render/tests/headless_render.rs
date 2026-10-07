@@ -444,6 +444,121 @@ fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
     );
 }
 
+// A component's opacity fades its border, drop shadow and glow along with its
+// fill. Each effect is drawn white on a transparent fill over black, and one
+// pixel of it is read at opacity 1, 0.5 and 0: full, half and nothing.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn opacity_fades_the_border_shadow_and_glow() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("headless_render: no GPU adapter available — skipping");
+        return;
+    };
+    let mut pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        FORMAT,
+        16,
+        AtlasConfig::default(),
+        DEFAULT_TRANSITION_ATLAS_SIZE,
+    );
+    pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+
+    // A 32 × 32 quad over columns and rows 16 to 48, with a transparent fill.
+    let base = QuadInstance {
+        position: [0.0, 0.0, 0.5],
+        size: [32.0, 32.0],
+        rotation: 0.0,
+        scale: 1.0,
+        anchor: [0.5, 0.5],
+        color: [0.0, 0.0, 0.0, 0.0],
+        opacity: 1.0,
+        corner_radius: 0.0,
+        uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+        uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+        atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
+        base_uv_offset: [0.0, 0.0],
+        base_uv_scale: [0.0, 0.0],
+        crossfade_t: 0.0,
+        border_width: 0.0,
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_offset: 0.0,
+        shadow_params: [0.0, 0.0, 0.0, 0.0],
+        shadow_color: [0.0, 0.0, 0.0, 0.0],
+        base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+    };
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let cases = [
+        (
+            "border",
+            // 6 px wide, inside the edge; column 19 is in the middle of it.
+            QuadInstance {
+                border_width: 6.0,
+                border_color: white,
+                border_offset: -1.0,
+                ..base
+            },
+            19,
+        ),
+        (
+            "drop shadow",
+            // Spread 6, so a solid band 6 px wide around the quad; column 51
+            // is in the middle of it, outside the quad.
+            QuadInstance {
+                shadow_params: [0.0, 0.0, 0.5, 6.0],
+                shadow_color: white,
+                ..base
+            },
+            51,
+        ),
+        (
+            "glow",
+            // Softness 10, no spread: a halo that fades out from the edge.
+            QuadInstance {
+                shadow_params: [0.0, 0.0, 10.0, 0.0],
+                shadow_color: white,
+                ..base
+            },
+            50,
+        ),
+    ];
+    let black = wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+
+    for (name, instance, col) in cases {
+        let mut red_at = |opacity: f32| -> f32 {
+            let pixels = render_and_read_back(
+                &device,
+                &queue,
+                &mut pipeline,
+                &[QuadInstance {
+                    opacity,
+                    ..instance
+                }],
+                black,
+            );
+            pixels[(HEIGHT / 2 * BYTES_PER_ROW + col * 4) as usize] as f32
+        };
+        let full = red_at(1.0);
+        let half = red_at(0.5);
+        let none = red_at(0.0);
+
+        assert!(full > 60.0, "{name}: visible at opacity 1, got {full}");
+        assert!(
+            (half - full / 2.0).abs() <= full * 0.1 + 3.0,
+            "{name}: half strength at opacity 0.5, got {half} against {full}"
+        );
+        assert!(none <= 2.0, "{name}: nothing at opacity 0, got {none}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

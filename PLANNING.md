@@ -4383,14 +4383,14 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
 
 ##### Step 5c — Rendering and textures
 
-- [ ] A component's opacity fades its border, drop shadow and glow too. Today `quad.wgsl`
+- [x] A component's opacity fades its border, drop shadow and glow too. Today `quad.wgsl`
   multiplies `in.opacity` into the fill's alpha only, so `set_opacity(0.0)`, or a fading parent,
   leaves the border, shadow and glow at full strength (confirmed on the GPU: at opacity 0 the
   fill vanished, the border and glow didn't change). Multiply the border's and the shadow's
   alpha by `in.opacity` too. GPU tests: a bordered, a shadowed and a glowing quad each draw
   nothing at opacity 0, and half strength at 0.5. Then remove the **Known issue** paragraph in
   `effects.rs`.
-- [ ] After that fix, clean up the demo's hand-written fades. It never calls `set_opacity`;
+- [x] After that fix, clean up the demo's hand-written fades. It never calls `set_opacity`;
   wherever it fades something with a border or glow, it writes the alpha of the fill, the
   border, the glow and the label separately. Replace those with `set_opacity`, which also fades
   children such as labels: `advance_gallery_button_fade` (fetch button and its label),
@@ -4399,7 +4399,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   their own right: the hover glow ramp in `advance_hovers`, and the theme and overlay
   crossfades between two images. Update the comments that describe the workaround, and check
   the demo looks the same (visual check by the human).
-- [ ] Textures larger than an atlas page. Text is one line with no length limit, so it can be
+- [x] Textures larger than an atlas page. Text is one line with no length limit, so it can be
   wider than a page ("PROTEUS" at the documented maximum, 512 px, is 2406 px; pages are 2048).
   Today such a request evicts every unreferenced texture trying to fit (50 of 50 in a test),
   then fails; the text bake skips it with no log and retries every frame, so the text never
@@ -4423,7 +4423,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
     doc's claim that a failed registration is logged (W-44).
   - Tests: an oversized request evicts nothing; too-wide text bakes clipped to the page width;
     an oversized image is scaled to fit; an oversized `.bake()` component is drawn unbaked.
-- [ ] A component keeps only one texture reference, so a second texture can be reclaimed while
+- [x] A component keeps only one texture reference, so a second texture can be reclaimed while
   it is still drawn. Baked text, an image and baked content (`.bake()`) each insert the same
   `TextureRef` (`proteus-runtime/src/bake.rs` for text and images, `proteus-ui/src/bake.rs` for
   baked content), and `Handle::set_texture` inserts it too. On a component with both text and an
@@ -4431,7 +4431,7 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   reclaimed and reused, and the component then draws another texture's pixels. The demo avoids it
   only by putting text on child components. Fix: one reference per texture kind, not per
   component. Test: a component with text and an image, then allocation pressure, keeps both.
-- [ ] `free_resources` doesn't stay freed for text or images, and is the only way to change a
+- [x] `free_resources` doesn't stay freed for text or images, and is the only way to change a
   component's text. It removes a component's baked result and its texture references, but leaves
   the `Text` or `Image` in place, so the host bakes it again on the next frame and takes new
   atlas space. The demo relies on this to update a label (`proteus-demo`, `lib.rs` around line
@@ -4443,10 +4443,10 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
   must also say that releasing references doesn't free atlas space immediately: a texture with
   no references becomes available for reuse, the atlas reclaims it when it needs room, and
   `eternal` textures are never reclaimed.
-- [ ] C-10 — a texture from `load_texture` / `bake_texture` can be evicted before it is attached.
-- [ ] C-15 — a baked component with its own text draws that text twice.
-- [ ] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
-- [ ] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
+- [x] C-10 — a texture from `load_texture` / `bake_texture` can be evicted before it is attached.
+- [x] C-15 — a baked component with its own text draws that text twice.
+- [x] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
+- [x] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
 
 ##### Step 5d — Config, loading and robustness
 
@@ -4506,6 +4506,15 @@ Breaking but mostly mechanical, so it goes first: every later fix then uses the 
 ##### Step 5e — Video, demo and shells
 
 Last, since it changes both shells and the demo.
+
+- [ ] Demo: clicking a hovered video tile makes its title label flicker instead of fading out,
+  on both shells; sometimes it fades, sometimes it flickers. Not caused by step 5c (an offscreen
+  render of the 5b commit gives the same frames). Leads from that render: on the click frame the
+  label is hidden completely, apparently drawn under the video backdrop (whose z is the midpoint
+  between the idle tiles' and the clicked tile's, so it ties with the tile at the start), then
+  reappears at 80% and fades; and the label jumps to its screen scale at once rather than growing
+  with the tile. The render didn't start real video playback, which the real app does. Check
+  with a release build too, since a debug build's frame times can look like a flicker.
 
 - [ ] The demo owns its own settings and asset list; the shells pass in only what is
   per-platform. Today both shells carry identical copies of the demo's `CLEAR_COLOR` and

@@ -66,7 +66,7 @@ pub use interaction::{
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};
-pub use texture_ref::TextureRef;
+pub use texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 pub use topology::{
     ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
     OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,

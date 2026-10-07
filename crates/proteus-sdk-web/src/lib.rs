@@ -46,8 +46,8 @@ pub use handle::{
 };
 
 use dto::{
-    ComponentDataDto, ComponentSpecDto, MergeLayoutDto, QuadStateDto, SplitStrategyDto,
-    TargetStateDto, TransitionConfigDto, TransitionDroppedDto, Vec2Dto,
+    ComponentDataDto, ComponentSpecDto, ImageDto, MergeLayoutDto, QuadStateDto, SplitStrategyDto,
+    TargetStateDto, TextDto, TransitionConfigDto, TransitionDroppedDto, Vec2Dto,
 };
 
 // ---------------------------------------------------------------------------
@@ -572,6 +572,28 @@ impl ProteusApp {
         handle
             .0
             .free_resources(&mut self.0.borrow_mut())
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::set_text`](sdk::Handle::set_text).
+    #[wasm_bindgen(js_name = setText)]
+    pub fn set_text(&mut self, handle: &Handle, text: JsValue) -> Result<(), JsValue> {
+        let dto: TextDto = serde_wasm_bindgen::from_value(text)
+            .map_err(|e| JsValue::from_str(&format!("invalid TextSpec: {e}")))?;
+        handle
+            .0
+            .set_text(&mut self.0.borrow_mut(), (&dto).into())
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::set_image`](sdk::Handle::set_image).
+    #[wasm_bindgen(js_name = setImage)]
+    pub fn set_image(&mut self, handle: &Handle, image: JsValue) -> Result<(), JsValue> {
+        let dto: ImageDto = serde_wasm_bindgen::from_value(image)
+            .map_err(|e| JsValue::from_str(&format!("invalid ImageSpec: {e}")))?;
+        handle
+            .0
+            .set_image(&mut self.0.borrow_mut(), (&dto).into())
             .map_err(handle_err)
     }
 

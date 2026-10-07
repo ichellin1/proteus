@@ -19,12 +19,14 @@ import {
 
 import type {
   ImageCrop,
+  ImageSpec,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
   Geometry,
   MergeLayout,
   SplitStrategy,
+  TextSpec,
   TextureRequest,
   TextureState,
   TransitionInteractionConfig,
@@ -251,22 +253,55 @@ export class Handle {
     this.app.wasmApp.destroy(this.wasmHandle);
   }
 
-  // check accuracy. Matches the Rust doc; the step 5 fixes to
-  // freeResources (re-baking of text and images) will change it.
   /**
-   * Releases this component's references to its baked text, image or
-   * content. The component itself remains.
+   * Removes this component's text, image and baked content, and releases
+   * their textures. The component itself remains, drawn as a plain quad in
+   * its color. Nothing is baked again; to show new content, use
+   * {@link Handle.setText} or {@link Handle.setImage}.
    *
-   * This doesn't free atlas space immediately. A texture that no component
-   * references becomes available for reuse, and the atlas reclaims its space
-   * when it needs room for another texture. Textures marked `eternal` are
-   * never reclaimed.
+   * A component made with {@link ComponentSpec.bake} lost its children and
+   * its own color when it was baked, so afterwards it is a plain white quad.
    *
-   * A component with text or an image keeps it, and the host bakes it again
-   * the next time it renders a frame.
+   * Releasing a texture doesn't free atlas space immediately. A texture that
+   * no component references becomes available for reuse, and the atlas
+   * reclaims its space when it needs room for another texture. Textures
+   * marked `eternal` are never reclaimed.
+   *
+   * @throws if this component no longer exists.
    */
   freeResources(): void {
     this.app.wasmApp.freeResources(this.wasmHandle);
+  }
+
+  /**
+   * Replaces this component's text, or adds text to a component that has
+   * none. The host bakes the new text before it next draws, and the old
+   * text's texture is released (see {@link Handle.freeResources}).
+   *
+   * @example
+   * ```ts
+   * score.setText({ content: `Score: ${points}`, sizePx: 24 });
+   * ```
+   *
+   * @throws if this component no longer exists, or `text` isn't a valid
+   * {@link TextSpec}.
+   */
+  setText(text: TextSpec): void {
+    this.app.wasmApp.setText(this.wasmHandle, text);
+  }
+
+  /**
+   * Replaces this component's image, or adds an image to a component that
+   * has none. The host decodes and bakes the new image before it next draws,
+   * and the old image's texture is released (see
+   * {@link Handle.freeResources}). A crop set with {@link Handle.cropImage}
+   * applied to the old image, so it is cleared.
+   *
+   * @throws if this component no longer exists, or `image` isn't a valid
+   * {@link ImageSpec}.
+   */
+  setImage(image: ImageSpec): void {
+    this.app.wasmApp.setImage(this.wasmHandle, image);
   }
 
   /**
@@ -628,8 +663,10 @@ export class ProteusApp {
    * if (tex) tile.setTexture(tex);
    * ```
    *
-   * Show the texture on a component right away: until a component uses it,
-   * it may be evicted to make room.
+   * Show the texture on a component in the same frame. From the next frame
+   * on, a texture that no component uses may be evicted to make room.
+   * Several textures can be loaded and then shown: none is evicted in the
+   * frame it was loaded.
    *
    * Returns `undefined` if the bytes can't be decoded. An image that decodes
    * but doesn't fit the atlas returns a handle to no texture, which draws
@@ -648,9 +685,9 @@ export class ProteusApp {
    * `width * height * 4` bytes. For PNG or JPEG data, use
    * {@link ProteusApp.loadTexture}.
    *
-   * Show the texture on a component right away: until a component uses it, it
-   * may be evicted to make room. If the atlas is full, the handle refers to no
-   * texture and draws nothing.
+   * Show the texture on a component in the same frame: from the next frame
+   * on, a texture that no component uses may be evicted to make room. If the
+   * atlas is full, the handle refers to no texture and draws nothing.
    */
   bakeTexture(
     width: number,

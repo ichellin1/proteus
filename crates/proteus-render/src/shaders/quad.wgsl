@@ -282,6 +282,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // and leaves the outside unchanged.
     shadow_alpha *= smoothstep(-1.0, 1.0, dist);
 
+    // Opacity fades the whole component: the fill below, the border, and the
+    // shadow or glow here.
+    shadow_alpha *= in.opacity;
+
     // Discard fragments where neither the shadow nor the main shape contribute.
     if edge_alpha <= 0.0 && shadow_alpha <= 0.0 {
         discard;
@@ -387,13 +391,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let border_dist   = abs(dist - border_center) - half_w;
             let border_alpha  = (1.0 - smoothstep(-1.0, 1.0, border_dist)) * edge_alpha;
 
-            // Composite border over fill using standard alpha blending.
-            let b      = in.border_color;
-            let b_a    = b.a * border_alpha;
-            main_color = vec4(
-                mix(main_color.rgb, b.rgb, b_a),
-                max(main_color.a, b_a),
-            );
+            // Composite the border over the fill: Porter-Duff "over", straight
+            // alpha, as for the shadow below. Over an opaque fill this is
+            // `mix(fill, border, b_a)`; over a transparent or translucent
+            // fill, the border keeps its own alpha.
+            let b     = in.border_color;
+            let b_a   = b.a * border_alpha * in.opacity;
+            let fill  = main_color;
+            let out_a = b_a + fill.a * (1.0 - b_a);
+            var out_rgb = vec3<f32>(0.0);
+            if out_a > 0.0 {
+                out_rgb = (b.rgb * b_a + fill.rgb * fill.a * (1.0 - b_a)) / out_a;
+            }
+            main_color = vec4(out_rgb, out_a);
         }
     }
 
