@@ -35,6 +35,10 @@
  *     react to a finished transition with `onTransitionComplete` rather
  *     than a timer.
  *
+ *   - While the new grid downloads, a loader over the large view shows that
+ *     something is happening. Its text is left-aligned with the anchor, so
+ *     the words stay still as the arrow after them grows.
+ *
  * To keep the example short, the layout is computed once from the canvas
  * size at load and doesn't reflow when the window is resized.
  */
@@ -97,6 +101,8 @@ let vh = 0;
 let screen: Screen = "grid";
 let gridSlots: GridSlot[] = [];
 let hero: Handle | null = null;
+/** Whether the transition into the large view has finished. */
+let heroOpened = false;
 
 let backBtn: Handle | null = null;
 let caption: Handle | null = null;
@@ -178,22 +184,6 @@ async function fetchImageBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/**
- * Fetch an image and pack it into the atlas, giving back a texture any
- * component can wear via `setTexture`.
- *
- * `app.loadTexture` is synchronous — the pixels are on the GPU when it
- * returns — so the only asynchrony here is the network. Nothing polls, and
- * no component is spawned just to carry the bytes.
- */
-async function fetchTexture(url: string): Promise<TextureHandle> {
-  const bytes = await fetchImageBytes(url);
-  const texture = app.loadTexture(bytes);
-  if (!texture) {
-    throw new Error(`could not decode image: ${url}`);
-  }
-  return texture;
-}
 
 /**
  * Run `fn` the first time a transition targeting `handle` completes.
@@ -261,25 +251,40 @@ interface GridSlot {
   photo: Photo;
 }
 
-async function buildGrid(offset: number): Promise<GridSlot[]> {
-  const photos = pickPhotos(COLS * ROWS, offset);
+interface DownloadedPhoto {
+  photo: Photo;
+  bytes: Uint8Array;
+}
+
+/** Downloads a grid's photos, all at once. */
+async function downloadGrid(offset: number): Promise<DownloadedPhoto[]> {
+  return Promise.all(
+    pickPhotos(COLS * ROWS, offset).map(async (photo) => {
+      const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
+      return { photo, bytes: await fetchImageBytes(photoUrl(photo.id, w, h)) };
+    }),
+  );
+}
+
+/**
+ * Builds the grid from downloaded photos. Each photo is loaded as a texture
+ * here, and given to its tile at once: a texture must be given to a component
+ * in the frame it's loaded.
+ */
+function buildGrid(downloaded: DownloadedPhoto[]): GridSlot[] {
   const startX = (vw - (COLS * TILE + (COLS - 1) * GAP)) / 2;
   const startY = TITLE_H + (vh - TITLE_H - (ROWS * TILE + (ROWS - 1) * GAP)) / 2;
 
-  const loaded = await Promise.all(
-    photos.map(async (photo) => {
-      const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
-      const full = await fetchTexture(photoUrl(photo.id, w, h));
-      return { photo, full };
-    }),
-  );
-
-  return loaded.map(({ photo, full }, i) => {
+  return downloaded.map(({ photo, bytes }, i) => {
     const col = i % COLS;
     const row = Math.floor(i / COLS);
     const cx = startX + col * (TILE + GAP) + TILE / 2;
     const cy = startY + row * (TILE + GAP) + TILE / 2;
 
+    const full = app.loadTexture(bytes);
+    if (!full) {
+      throw new Error(`could not decode photo ${photo.id}`);
+    }
     const handle = app.component({ geometry: geom(cx, cy, TILE, TILE), hover: { scale: 1.06 } });
     handle.setTexture(full);
     handle.cropImage({ kind: "centeredSquare" });
@@ -343,6 +348,12 @@ async function enterDetail(
   startTransition(heroHandle);
 
   hero = heroHandle;
+  heroOpened = false;
+  void whenSettled(heroHandle).then(() => {
+    if (hero === heroHandle) {
+      heroOpened = true;
+    }
+  });
   buildDetailUi(photo.id);
 
   // Both the hi-res fetch and the transition have to finish before the
@@ -351,11 +362,16 @@ async function enterDetail(
   // waits for the real completion rather than a timer set to the
   // transition's duration.
   const [w, h] = fetchDimensions(photo.width, photo.height, 900);
-  const [hiRes] = await Promise.all([
-    fetchTexture(photoUrl(photo.id, w, h)),
+  const [hiResBytes] = await Promise.all([
+    fetchImageBytes(photoUrl(photo.id, w, h)),
     whenSettled(heroHandle),
   ]);
   if (hero !== heroHandle) return;
+
+  // Loaded only now, as it's given to the overlay below: a texture must be
+  // given to a component in the frame it's loaded.
+  const hiRes = app.loadTexture(hiResBytes);
+  if (!hiRes) return;
 
   const heroData = heroHandle.get();
   if (!heroData) return;
@@ -379,19 +395,24 @@ async function enterDetail(
 // ---------------------------------------------------------------------------
 
 async function backToGrid() {
-  if (screen !== "detail" || !hero) return;
+  // Wait until the large view has opened: it can't split while it's still
+  // moving.
+  if (screen !== "detail" || !hero || !heroOpened) return;
   const heroSource = hero;
   hero = null;
   screen = "grid";
   destroyUiChrome();
 
-  const slots = await buildGrid(Math.floor(Math.random() * PHOTOS.length));
-  if (screen !== "grid") {
-    for (const s of slots) {
-      s.handle.destroy();
-    }
-    return;
-  }
+  // The loader shows that the new grid is downloading, and plays through at
+  // least once.
+  const playedOnce = showLoader(heroSource);
+  const [downloaded] = await Promise.all([
+    downloadGrid(Math.floor(Math.random() * PHOTOS.length)),
+    playedOnce,
+  ]);
+  removeLoader();
+  if (screen !== "grid") return;
+  const slots = buildGrid(downloaded);
   wireGridTiles(slots);
 
   heroSource.splitTo(
@@ -403,6 +424,108 @@ async function backToGrid() {
   // target has arrived — so the hero tidies itself up the moment the last
   // tile lands.
   afterTransition(heroSource, () => heroSource.destroy());
+}
+
+// ---------------------------------------------------------------------------
+// Loader
+// ---------------------------------------------------------------------------
+
+/** The loader's text, one after another, each for a quarter of a second. */
+const LOADER_FRAMES = [
+  "Fetching Images ->",
+  "Fetching Images -->",
+  "Fetching Images --->",
+  "Fetching Images ---->",
+];
+const LOADER_FRAME_SECONDS = 0.25;
+const LOADER_W = 250;
+const LOADER_H = 44;
+const LOADER_TEXT_SIZE = 18;
+
+/**
+ * "Fetching Images" over the large view, with an arrow that grows in steps,
+ * so the wait for the new grid's photos doesn't look like the app has
+ * stopped. `update` plays it.
+ */
+interface Loader {
+  /** The dark box the text sits on. */
+  panel: Handle;
+  /** The text, a child of `panel`. */
+  label: Handle;
+  /** Seconds since the loader appeared. */
+  elapsed: number;
+  /** Which of `LOADER_FRAMES` is showing. */
+  frame: number;
+  /** Called once the loader has played through once. */
+  onPlayedOnce: () => void;
+}
+
+let loader: Loader | null = null;
+
+/**
+ * Shows the loader in the middle of `view`. The promise resolves once it has
+ * played through once.
+ */
+function showLoader(view: Handle): Promise<void> {
+  const center = view.get()?.geometry.position ?? { x: 0, y: 0, z: 0 };
+  const panel = app.component({
+    geometry: {
+      position: center,
+      size: { width: LOADER_W, height: LOADER_H },
+      rotation: 0,
+      scale: 1,
+      anchor: { x: 0.5, y: 0.5 },
+      color: colorFrom("#00000099"),
+      cornerRadius: LOADER_H / 2,
+    },
+    nonInteractive: true,
+  });
+  // The text is left-aligned, so the words stay still as the arrow grows: the
+  // label's anchor, which places its text, is its left edge. A child is
+  // placed from its parent's anchor, the panel's center.
+  const label = app.component({
+    geometry: {
+      position: { x: -LOADER_W / 2 + 24, y: 0, z: 0 },
+      size: { width: LOADER_W - 48, height: LOADER_H },
+      rotation: 0,
+      scale: 1,
+      anchor: { x: 0, y: 0.5 },
+      color: colorFrom("transparent"),
+      cornerRadius: 0,
+    },
+    nonInteractive: true,
+    text: { content: LOADER_FRAMES[0], sizePx: LOADER_TEXT_SIZE, color: CARD_COLOR },
+  });
+  panel.addChild(label);
+  return new Promise((resolve) => {
+    loader = { panel, label, elapsed: 0, frame: 0, onPlayedOnce: resolve };
+  });
+}
+
+/** Moves the loader on by `dt` seconds. */
+function advanceLoader(dt: number) {
+  if (!loader) return;
+  const before = loader.elapsed;
+  loader.elapsed += dt;
+  const once = LOADER_FRAMES.length * LOADER_FRAME_SECONDS;
+  if (before < once && loader.elapsed >= once) {
+    loader.onPlayedOnce();
+  }
+  const frame = Math.floor(loader.elapsed / LOADER_FRAME_SECONDS) % LOADER_FRAMES.length;
+  if (frame !== loader.frame) {
+    loader.frame = frame;
+    loader.label.setText({
+      content: LOADER_FRAMES[frame],
+      sizePx: LOADER_TEXT_SIZE,
+      color: CARD_COLOR,
+    });
+  }
+}
+
+function removeLoader() {
+  // Destroying the panel destroys the label, its child, too.
+  loader?.panel.destroy();
+  loader = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -428,8 +551,7 @@ async function main(proteusApp: ProteusApp) {
     text: { content: "Gallery", sizePx: 26, color: TEXT_COLOR },
   });
 
-  const slots = await buildGrid(0);
-  wireGridTiles(slots);
+  wireGridTiles(buildGrid(await downloadGrid(0)));
 
   console.log("[example] ready");
 }
@@ -437,5 +559,8 @@ async function main(proteusApp: ProteusApp) {
 await mount("app", {
   setup(proteusApp) {
     void main(proteusApp);
+  },
+  update(deltaSeconds) {
+    advanceLoader(deltaSeconds);
   },
 });

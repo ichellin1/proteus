@@ -4,9 +4,11 @@ A grid of photos downloaded from picsum.photos. Clicking a photo transforms its 
 large view of it (1→1, with a transition channel). Going back splits the large view into a new
 grid of photos (1→N, with `split_to`).
 
-Techniques worth copying are described at the top of the source,
-[`typescript/src/main.ts`](./typescript/src/main.ts): loading a batch of images at once, giving
-the large view its image before it opens, and crossfading from a small image to a large one.
+Techniques worth copying are described at the top of each version's source:
+[`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).
+They include giving the large view its image before it opens, and crossfading from a small image
+to a large one. The Rust version also shows how callbacks hand events to the app's `update`, and
+how to collect downloads with `fetch_async` and `poll_fetches`.
 
 To keep the example short, the layout is worked out once, when it starts, and doesn't follow the
 window when it's resized.
@@ -14,6 +16,27 @@ window when it's resized.
 ## Run it
 
 You need the tools in [What you need](../README.md#what-you-need).
+
+### Rust
+
+In a desktop window, from the repository's root:
+
+```bash
+cargo run -p gallery
+```
+
+In a browser:
+
+```bash
+make example-gallery-web
+```
+
+Then open <http://localhost:8080>. Without make, build it for the web, then serve its folder:
+
+```bash
+wasm-pack build examples/gallery/rust --target web --release
+python3 -m http.server 8080 --directory examples/gallery/rust
+```
 
 ### TypeScript
 

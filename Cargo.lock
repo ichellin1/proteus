@@ -991,6 +991,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gallery"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "proteus-host-web",
+ "proteus-host-winit",
+ "proteus-runtime",
+ "proteus-sdk",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
+]
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
