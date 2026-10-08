@@ -20,7 +20,7 @@ fmt:
 ## pass and checked separately against their real target. Mirrors ci.yml.
 clippy:
 	cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
-	cargo clippy -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 test:
 	cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web

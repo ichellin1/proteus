@@ -4718,6 +4718,11 @@ load-bearing — this section tracks their *implementation*, which is deferred t
 via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
 not V1.**
 
+- Where (0, 0) is. Today it is the center of the window, with y up, for top-level components;
+  a child's position is relative to its parent. Many developers, on the web especially, expect
+  (0, 0) at the top-left with y down. TypeScript has `topLeftToWorld` to convert, but positions
+  are still center-based. To decide in V2: a top-left origin, or leaving positions as they are
+  and giving developers layouts that place components for them.
 - Image fit: an image fills its component's shape and the crop follows the component's size as
   it changes, like CSS `object-fit: cover`. During a transition from a square tile to a wide
   view, the crop would widen with it. Needs the crop recomputed from the in-progress size each

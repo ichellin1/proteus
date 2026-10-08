@@ -167,7 +167,8 @@ catches the rest.
   `lib.rs`, or a test fails. TypeScript snippets are type-checked against the SDK
   (`npm run check-snippets` in `crates/proteus-sdk-web/ts`, after `make build-sdk-web`).
 - Label every code block. rustdoc tests a block with no language as Rust, so a shell command
-  is `bash`, output is `text`, and TypeScript is `ts`.
+  is `bash`, output is `text`, and TypeScript is `ts`. A TypeScript block that can't be checked
+  against the SDK alone, such as a Vite config, is `ts no-check`.
 - Keep snippets short. A Rust snippet hides its setup behind `# ` lines, and is `no_run` if it
   opens a window. A TypeScript snippet can use the names that
   `scripts/ts-snippet-prelude.ts` declares, such as `app` and `button`, without declaring them,

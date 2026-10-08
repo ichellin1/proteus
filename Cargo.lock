@@ -2136,9 +2136,12 @@ dependencies = [
 name = "proteus-docs"
 version = "0.1.0"
 dependencies = [
+ "proteus-host-web",
  "proteus-host-winit",
  "proteus-runtime",
  "proteus-sdk",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

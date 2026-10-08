@@ -5,6 +5,10 @@
 //! code block with no language is tested as Rust too, so a page labels every
 //! other block, such as `bash`, `text` or `ts`. A test checks that every page
 //! in `docs/` is included.
+//!
+//! The snippets that use the web host only build for wasm32, so natively they
+//! compile to nothing. `build.rs` collects them into `web_snippets`, which is
+//! compiled for wasm32 only.
 
 /// Includes each page, and lists them in [`PAGES`].
 macro_rules! pages {
@@ -21,6 +25,15 @@ macro_rules! pages {
 
 pages! {
     index => "README.md",
+    getting_started_rust => "getting-started/rust.md",
+    getting_started_typescript => "getting-started/typescript.md",
+}
+
+/// The snippets that use the web host; see `build.rs`.
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code, clippy::all)]
+mod web_snippets {
+    include!(concat!(env!("OUT_DIR"), "/web_snippets.rs"));
 }
 
 #[cfg(test)]

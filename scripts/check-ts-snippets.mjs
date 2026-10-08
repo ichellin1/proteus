@@ -51,4 +51,4 @@ try {
   console.error("check-ts-snippets: a snippet failed; the file names give its page and block number");
   process.exit(1);
 }
-console.log(`check-ts-snippets: ${count} snippets ok`);
+console.log(`check-ts-snippets: ${count} ${count === 1 ? "snippet" : "snippets"} ok`);
