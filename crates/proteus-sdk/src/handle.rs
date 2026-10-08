@@ -12,10 +12,10 @@ use glam::Vec2;
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
     Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry, CompositeTextureRef, Disabled,
-    GroupSource, GroupTarget, Image, ImageCrop, ImageTextureRef, Interactable, MergeLayout,
-    NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text, TextTextureRef,
-    TransitionChannelId, TransitionConfig, TransitionInteractionConfig, TransitionRequest,
-    VideoCrossfade, VideoPlayer, Visibility,
+    GroupSource, GroupTarget, Image, ImageCrop, ImageTextureRef, Interactable, InteractionDef,
+    MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text,
+    TextTextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
+    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -197,15 +197,39 @@ fn forget_subtree(app: &mut Proteus, root: Entity) {
     }
 }
 
-/// Where a transition into `entity` should end: its declared geometry, or
-/// its current geometry if it has none.
-fn declared_geometry(app: &Proteus, entity: Entity) -> QuadState {
-    app.world
+/// How `entity` looks at rest: its declared geometry, or its current
+/// geometry if it has none, in the style it shows whatever the pointer does.
+/// A transition into it ends here, and a merge out of it starts here.
+fn resting_look(app: &Proteus, entity: Entity) -> QuadState {
+    let declared = app
+        .world
         .world
         .get::<DeclaredGeometry>(entity)
         .map(|d| d.0.clone())
         .or_else(|| app.world.world.get::<QuadState>(entity).cloned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    styled(app, entity, declared)
+}
+
+/// `geometry` in the style `entity` shows whatever the pointer does: its
+/// disabled style if it's disabled. Otherwise unchanged: the hover and
+/// pressed styles depend on the pointer, so they aren't known ahead, and
+/// they animate in after a transition ends.
+///
+/// Without this, a transition into a disabled component would end in its
+/// enabled look, and its disabled style would only appear afterwards.
+fn styled(app: &Proteus, entity: Entity, geometry: QuadState) -> QuadState {
+    let world = &app.world.world;
+    if world.get::<Disabled>(entity).is_none() {
+        return geometry;
+    }
+    match world
+        .get::<InteractionDef>(entity)
+        .and_then(|def| def.disabled.as_ref())
+    {
+        Some(style) => style.resolve(&geometry),
+        None => geometry,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -310,8 +334,10 @@ impl Handle {
         to: QuadState,
         config: TransitionConfig,
     ) -> Result<(), HandleError> {
+        check_alive(app, self.0, "animate_to")?;
+        let end = styled(app, self.0, to.clone());
         entity_mut(app, self.0, "animate_to")?.insert(TransitionRequest {
-            to: to.clone(),
+            to: end,
             config,
             from_state: None,
         });
@@ -692,7 +718,7 @@ impl Handle {
             .iter()
             .map(|h| GroupTarget {
                 entity: h.0,
-                state: declared_geometry(app, h.0),
+                state: resting_look(app, h.0),
             })
             .collect();
         entity_mut(app, self.0, "split_to")?.insert(OneToNRequest {
@@ -756,7 +782,7 @@ impl Handle {
             .iter()
             .map(|h| GroupTarget {
                 entity: h.0,
-                state: declared_geometry(app, h.0),
+                state: resting_look(app, h.0),
             })
             .collect();
         entity_mut(app, self.0, "split_to_with_behavior")?.insert(OneToNRequest {
@@ -843,7 +869,7 @@ impl Handle {
             .iter()
             .map(|h| GroupSource {
                 entity: h.0,
-                state: declared_geometry(app, h.0),
+                state: resting_look(app, h.0),
             })
             .collect();
         entity_mut(app, self.0, "merge_from_with_behavior")?.insert(NToOneRequest {
@@ -881,7 +907,7 @@ impl Handle {
             .iter()
             .map(|h| GroupSource {
                 entity: h.0,
-                state: declared_geometry(app, h.0),
+                state: resting_look(app, h.0),
             })
             .collect();
         entity_mut(app, self.0, "merge_from")?.insert(NToOneRequest {
@@ -1112,13 +1138,7 @@ impl TransitionChannel {
             );
             return;
         }
-        let target = app
-            .world
-            .world
-            .get::<DeclaredGeometry>(to.0)
-            .map(|d| d.0.clone())
-            .or_else(|| app.world.world.get::<proteus_ui::QuadState>(to.0).cloned())
-            .unwrap_or_default();
+        let target = resting_look(app, to.0);
         proteus_ui::set_channel(
             &mut app.world.world,
             self.0,

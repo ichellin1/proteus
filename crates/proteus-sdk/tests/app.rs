@@ -1607,6 +1607,61 @@ fn with_behavior_on_a_destroyed_handle_is_an_error_not_a_panic() {
 // split_to() / merge_from(): group transitions
 // ---------------------------------------------------------------------------
 
+/// A disabled component whose disabled style turns it gray.
+fn disabled_gray(at: QuadState) -> ComponentSpec {
+    ComponentSpec::new(at)
+        .disabled(StyleOverride {
+            color: Some(GRAY),
+            ..Default::default()
+        })
+        .start_disabled()
+}
+
+const GRAY: Vec4 = Vec4::new(0.5, 0.5, 0.5, 1.0);
+
+// A transition into a disabled component ends in its disabled style, not in
+// its enabled look with the disabled style fading in after.
+#[test]
+fn animate_to_on_a_disabled_component_ends_in_its_disabled_style() {
+    let mut app = Proteus::new();
+    let button = app.component(disabled_gray(quad_at(0.0, 0.0)));
+    app.tick(0.0);
+    app.tick(1.0);
+    assert_eq!(app.get(button).unwrap().geometry.color, GRAY);
+
+    button
+        .animate_to(&mut app, quad_at(200.0, 0.0), cfg(0.1))
+        .unwrap();
+    app.tick(0.0);
+    app.tick(0.1);
+    let data = app.get(button).unwrap();
+    assert!(
+        data.transition.is_none(),
+        "the transition should have ended"
+    );
+    assert_eq!(data.geometry.position.x, 200.0);
+    assert_eq!(data.geometry.color, GRAY, "it ends gray, not red then gray");
+}
+
+#[test]
+fn a_split_into_a_disabled_target_ends_in_its_disabled_style() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let target = app.component(disabled_gray(quad_at(300.0, 0.0)).visible(false));
+    app.tick(0.0);
+
+    source
+        .split_to(&mut app, &[target], cfg(0.1), SplitStrategy::PerTarget)
+        .unwrap();
+    app.tick(0.0);
+    app.tick(0.1);
+    let data = app.get(target).unwrap();
+    assert!(data.transition.is_none(), "the split should have ended");
+    assert_eq!(data.geometry.color, GRAY, "it ends gray, not red then gray");
+}
+
 #[test]
 fn split_to_per_target_hides_source_and_settles_targets_to_their_declared_geometry() {
     use proteus_sdk::SplitStrategy;
