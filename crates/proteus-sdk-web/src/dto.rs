@@ -9,13 +9,26 @@
 //! exact up to 2^53, which only fails after about two million reuses of one
 //! entity index: not a concern for a UI app.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use proteus_sdk::{
     ComponentData, ComponentSpec, DropReason, Easing, InteractionStateKind, QuadState,
     StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
+
+/// Reads a field given as `undefined` or `null` as its default, as if it had
+/// been left out. serde's `default` only covers a missing key, but TypeScript
+/// code often passes an optional value straight through, as in
+/// `{ startDisabled: soon }` with `soon` undefined, and `serde-wasm-bindgen`
+/// reads that as a value, which a `bool` or `f32` can't be.
+fn or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
 
 // ---------------------------------------------------------------------------
 // Shared value types
@@ -171,7 +184,7 @@ pub struct TextDto {
     pub size_px: f32,
     #[serde(default)]
     pub color: Option<ColorDto>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub letter_spacing_px: f32,
 }
 
@@ -279,9 +292,9 @@ pub struct ComponentSpecDto {
     #[serde(default)]
     pub disabled: Option<StyleOverrideDto>,
     /// Children, as `Entity::to_bits()` values.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub children: Vec<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub bake: bool,
     #[serde(default)]
     pub text: Option<TextDto>,
@@ -293,14 +306,14 @@ pub struct ComponentSpecDto {
     pub glow: Option<GlowDto>,
     #[serde(default)]
     pub drop_shadow: Option<DropShadowDto>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub non_interactive: bool,
     /// Defaults to `true`: an omitted `visible` means shown.
-    #[serde(default = "default_visible")]
+    #[serde(default = "default_visible", deserialize_with = "or_visible")]
     pub visible: bool,
     #[serde(default)]
     pub opacity: Option<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub start_disabled: bool,
     #[serde(default)]
     pub transition_interaction: Option<TransitionInteractionConfigDto>,
@@ -312,7 +325,7 @@ pub struct ComponentSpecDto {
 pub struct TextureRequestDto {
     #[serde(default)]
     pub max_side: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub eternal: bool,
 }
 
@@ -331,9 +344,9 @@ impl From<&TextureRequestDto> for proteus_sdk::TextureRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransitionInteractionConfigDto {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub allow_pointer: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub allow_navigation: bool,
 }
 
@@ -348,6 +361,12 @@ impl From<&TransitionInteractionConfigDto> for proteus_ui::TransitionInteraction
 
 fn default_visible() -> bool {
     true
+}
+
+/// [`default_visible`], for a field given as `undefined` or `null`; see
+/// [`or_default`].
+fn or_visible<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(Option::<bool>::deserialize(d)?.unwrap_or_else(default_visible))
 }
 
 impl ComponentSpecDto {
@@ -410,10 +429,10 @@ impl ComponentSpecDto {
 #[serde(rename_all = "camelCase")]
 pub struct TransitionConfigDto {
     pub duration: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub delay: f32,
     /// Defaults to `easeInOutQuad`, as in Rust.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub easing: EasingDto,
 }
 
@@ -721,6 +740,39 @@ impl TextureStateDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // TypeScript code often passes an optional value through as `undefined`.
+    // `serde-wasm-bindgen` gives `undefined` to serde as JSON gives `null`,
+    // so `null` here stands for it. Each field must read as its default.
+    #[test]
+    fn undefined_fields_read_as_their_defaults() {
+        let geometry = r#"{"position": {"x": 0, "y": 0, "z": 0}, "size": {"width": 1, "height": 1},
+            "rotation": 0, "scale": 1, "anchor": {"x": 0.5, "y": 0.5},
+            "color": {"r": 1, "g": 1, "b": 1, "a": 1}, "cornerRadius": 0}"#;
+        let spec: ComponentSpecDto = serde_json::from_str(&format!(
+            r#"{{"geometry": {geometry}, "children": null, "bake": null, "nonInteractive": null,
+                "visible": null, "startDisabled": null,
+                "text": {{"content": "a", "sizePx": 10, "letterSpacingPx": null}}}}"#
+        ))
+        .unwrap();
+        assert!(spec.children.is_empty() && !spec.bake && !spec.non_interactive);
+        assert!(
+            spec.visible,
+            "a component is visible unless it says otherwise"
+        );
+        assert!(!spec.start_disabled);
+        assert_eq!(spec.text.unwrap().letter_spacing_px, 0.0);
+
+        let request: TextureRequestDto = serde_json::from_str(r#"{"eternal": null}"#).unwrap();
+        assert!(!request.eternal);
+        let interaction: TransitionInteractionConfigDto =
+            serde_json::from_str(r#"{"allowPointer": null, "allowNavigation": null}"#).unwrap();
+        assert!(!interaction.allow_pointer && !interaction.allow_navigation);
+
+        let config = config(r#"{"duration": 0.3, "delay": null, "easing": null}"#).unwrap();
+        assert_eq!(config.delay, 0.0);
+        assert!(matches!(config.easing, Easing::EaseInOutQuad));
+    }
 
     fn config(json: &str) -> Result<TransitionConfig, serde_json::Error> {
         serde_json::from_str::<TransitionConfigDto>(json).map(|d| (&d).into())
