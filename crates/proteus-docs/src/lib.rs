@@ -30,6 +30,10 @@ pages! {
     guides_components => "guides/components.md",
     guides_transitions => "guides/transitions.md",
     guides_splits_and_merges => "guides/splits-and-merges.md",
+    guides_interaction => "guides/interaction.md",
+    guides_content => "guides/content.md",
+    guides_configuration => "guides/configuration.md",
+    guides_hosts => "guides/hosts.md",
 }
 
 /// The snippets that use the web host; see `build.rs`.

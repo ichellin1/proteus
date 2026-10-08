@@ -4566,6 +4566,10 @@ is deployed to GitHub Pages alongside the demo.
   app's own trait with an implementation per platform, passed in where the app is created (as
   `DemoApp::new` takes each platform's video keys). Linked from the `HostServices` docs and the
   hosts and platforms guide.
+- [ ] A "Proteus tricks" page: other ways to bring content into an app. For example, draw
+  anything the platform can draw, such as text in a CSS font on a 2D canvas, read its pixels,
+  and show it with `bake_texture` and `set_texture`. Not specific to fonts, and kept out of the
+  concept guides, which describe what Proteus itself does.
 - [ ] API reference builds in CI and deploys to GitHub Pages.
 - [ ] `GETTING_STARTED.md`'s build-from-source content moves into `CONTRIBUTING.md` (R-05).
 - [ ] Every code snippet in the guides compiles or type-checks in CI.
@@ -4735,6 +4739,11 @@ not V1.**
 - Masking: shape a component's content with a mask (a shape, or another image's alpha). Its own
   method, separate from `crop_image`, so a crop and a mask can be used together: the crop picks
   which part of the image to show, and the mask shapes it.
+- Multiple fonts. V1 has one font per app, set once in `ProteusConfig.text.default_font`; `Text`
+  has no font field, and the renderer holds a single `FontAtlas`. Planned: a font per text,
+  several weights of one family (regular and bold, say), and falling back to another font for
+  characters the first doesn't have. The configuration guide states the V1 limit and says
+  several fonts are planned.
 - An `on_destroy` callback for components and transition channels. Most destruction is started
   by the app, so it already knows, but two cases happen as side effects: destroying a parent
   destroys its children, and destroying a component destroys the channels it owns. An app holding
