@@ -81,4 +81,99 @@ mod tests {
             "add the missing pages to `pages!` in lib.rs"
         );
     }
+
+    /// The page's lines outside code blocks.
+    fn prose(page: &str) -> Vec<&str> {
+        let mut in_code = false;
+        page.lines()
+            .filter(|line| {
+                if line.trim_start().starts_with("```") {
+                    in_code = !in_code;
+                    return false;
+                }
+                !in_code
+            })
+            .collect()
+    }
+
+    /// The anchor GitHub gives a heading: lowercase, punctuation dropped,
+    /// spaces as hyphens.
+    fn anchor(heading: &str) -> String {
+        heading
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+            .map(|c| if c == ' ' { '-' } else { c })
+            .collect()
+    }
+
+    fn anchors(page: &str) -> Vec<String> {
+        prose(page)
+            .into_iter()
+            .filter_map(|line| line.strip_prefix('#'))
+            .map(|heading| anchor(heading.trim_start_matches('#')))
+            .collect()
+    }
+
+    /// Every `](target)` in the page's prose.
+    fn links(page: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for line in prose(page) {
+            let mut rest = line;
+            while let Some(start) = rest.find("](") {
+                rest = &rest[start + 2..];
+                if let Some(end) = rest.find(')') {
+                    found.push(rest[..end].to_string());
+                    rest = &rest[end..];
+                }
+            }
+        }
+        found
+    }
+
+    // A link to a page that moved, or to a heading that was renamed, would
+    // otherwise only be found by a reader.
+    #[test]
+    fn every_link_in_docs_resolves() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let mut broken = Vec::new();
+        for page in PAGES {
+            let path = root.join(page);
+            let text = std::fs::read_to_string(&path).unwrap();
+            for link in links(&text) {
+                if link.starts_with("http://") || link.starts_with("https://") {
+                    continue;
+                }
+                if link.contains("PLANNING") {
+                    broken.push(format!("{page}: {link} links to PLANNING"));
+                    continue;
+                }
+                let (file, heading) = link.split_once('#').unwrap_or((&link, ""));
+                let target = if file.is_empty() {
+                    path.clone()
+                } else {
+                    path.parent().unwrap().join(file)
+                };
+                if !target.exists() {
+                    broken.push(format!("{page}: {link} has no file"));
+                    continue;
+                }
+                if !heading.is_empty() {
+                    let target_text = std::fs::read_to_string(&target).unwrap();
+                    if !anchors(&target_text).iter().any(|a| a == heading) {
+                        broken.push(format!("{page}: {link} has no such heading"));
+                    }
+                }
+            }
+        }
+        assert!(broken.is_empty(), "broken links:\n{}", broken.join("\n"));
+    }
+
+    #[test]
+    fn anchors_follow_github() {
+        assert_eq!(anchor("Where a component rests"), "where-a-component-rests");
+        assert_eq!(anchor("1→1 transitions"), "11-transitions");
+        assert_eq!(anchor("`on_drag` and friends"), "on_drag-and-friends");
+    }
 }

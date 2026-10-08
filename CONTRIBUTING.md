@@ -161,11 +161,14 @@ catches the rest.
 ### Guides in `docs/`
 
 - Rust is the first-class language: each page shows Rust first, then TypeScript, explaining
-  the concept once.
+  the concept once. Each example sits under a heading that names its language, `#### Rust` or
+  `#### TypeScript`, or a variant such as `#### Rust, web host`.
 - Every code snippet is checked in CI. Rust snippets run as doctests through the
   `proteus-docs` crate (`cargo test -p proteus-docs`); add each new page to `pages!` in its
   `lib.rs`, or a test fails. TypeScript snippets are type-checked against the SDK
-  (`npm run check-snippets` in `crates/proteus-sdk-web/ts`, after `make build-sdk-web`).
+  (`npm run check-snippets` in `crates/proteus-sdk-web/ts`, after `make build-sdk-web`). A
+  Rust snippet that uses `proteus_host_web` in its code, not just a comment, only builds for
+  wasm32, so it is checked by the wasm32 clippy run instead.
 - Label every code block. rustdoc tests a block with no language as Rust, so a shell command
   is `bash`, output is `text`, and TypeScript is `ts`. A TypeScript block that can't be checked
   against the SDK alone, such as a Vite config, is `ts no-check`.
@@ -174,7 +177,8 @@ catches the rest.
   `scripts/ts-snippet-prelude.d.ts` declares, such as `app`, `button` and `items`, without
   declaring them.
 - Link to the API reference for details rather than repeating them, and never to
-  `PLANNING.md`.
+  `PLANNING.md`. `cargo test -p proteus-docs` also checks that every link between pages, and
+  every heading a link names, exists.
 
 ### Terminology
 

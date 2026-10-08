@@ -35,7 +35,12 @@ fn main() {
                 None if line.starts_with("```rust") => block = Some(String::new()),
                 None => {}
                 Some(code) if line == "```" => {
-                    if code.contains("proteus_host_web") {
+                    // A comment that names the web host doesn't make a
+                    // snippet one that uses it.
+                    let uses_web_host = code.lines().any(|line| {
+                        !line.trim_start().starts_with("//") && line.contains("proteus_host_web")
+                    });
+                    if uses_web_host {
                         n += 1;
                         let name = page.strip_prefix(&docs).unwrap().display();
                         out.push_str(&format!("// {name}\npub mod snippet_{n} {{\n{code}}}\n"));
