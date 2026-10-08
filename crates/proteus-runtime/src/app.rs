@@ -1,52 +1,46 @@
-//! [`App`] — what an application implements, and [`Frame`], the per-call
-//! context it receives.
+//! [`App`], what an application implements, and [`Frame`], what it is given
+//! on each call.
 
 use std::sync::Arc;
 
-use proteus_render::{GpuContext, QuadPipeline, TextureId};
 use proteus_sdk::{Proteus, TextureHandle};
 
-use crate::services::{FetchId, FetchResult, HostServices, VideoStream};
+use crate::services::{FetchId, FetchResult, HostServices};
 use crate::viewport::Viewport;
 use proteus_sdk::TextureRequest;
 
-/// The per-call context handed to [`App::setup`] and [`App::update`].
-///
-/// Bundles the three things application code touches: the headless
-/// [`Proteus`] world, the host's asset [`services`](HostServices), and the
-/// current [`Viewport`]. Held by the [`Engine`] and borrowed out for the
-/// duration of each `App` call.
-///
-/// [`Engine`]: crate::Engine
+/// What [`App::setup`] and [`App::update`] are given: the app's [`Proteus`]
+/// state, the host's [`HostServices`], and the current [`Viewport`].
 pub struct Frame<'a> {
+    /// The app's components, channels and callbacks.
     pub proteus: &'a mut Proteus,
+    /// Asset loading and fetching, provided by the host.
     pub services: &'a mut dyn HostServices,
+    /// The current drawable area.
     pub viewport: Viewport,
 }
 
 impl Frame<'_> {
-    /// Fetch an asset's raw bytes by key (see [`HostServices::load_asset`]).
-    /// Convenience for attaching an [`Image`](proteus_ui::Image) component;
-    /// the [`Renderer`](crate::Renderer) bakes those each frame.
+    /// Loads an asset's bytes by key; see [`HostServices::load_asset`]. Useful
+    /// for a component's image, which the host bakes on the next frame.
     pub fn load_asset(&mut self, key: &str) -> Option<Arc<[u8]>> {
         self.services.load_asset(key)
     }
 
-    /// Fetch an asset, decode + downscale it, upload it to `main_atlas`, and
-    /// return a [`TextureHandle`] — for a texture shown on more than one
-    /// entity or frame-swapped (an animation set), where an `Image`
-    /// component per use won't do. A missing or undecodable asset yields a
-    /// null handle that renders as nothing.
+    /// Loads an image asset by key, decodes it, adds it to the atlas and
+    /// returns a handle to it. Use this for a texture shown on several
+    /// components, or swapped frame by frame.
+    ///
+    /// A missing or undecodable asset gives a null handle, which draws
+    /// nothing. Attach the texture in the same frame; see
+    /// [`Proteus::bake_texture`].
     pub fn load_texture(&mut self, key: &str, req: TextureRequest) -> TextureHandle {
         crate::bake::load_texture(self.proteus, self.services, key, req)
     }
 
-    /// Bake already-decoded RGBA pixels (`rgba.len() == width * height * 4`)
-    /// directly into `main_atlas` and return a [`TextureHandle`] — the
-    /// bake-alone half of [`Self::load_texture`], for a caller that already
-    /// has bytes in hand (e.g. procedurally generated content) rather than
-    /// an asset key to fetch (M13.4). A full atlas yields a null handle,
-    /// same graceful degradation as [`Self::load_texture`].
+    /// Adds RGBA pixels to the atlas and returns a handle to them; see
+    /// [`Proteus::bake_texture`]. `rgba` holds `width * height * 4` bytes. A
+    /// full atlas gives a null handle. Attach the texture in the same frame.
     pub fn bake_texture(
         &mut self,
         width: u32,
@@ -57,122 +51,55 @@ impl Frame<'_> {
         crate::bake::bake_texture(self.proteus, width, height, rgba, req)
     }
 
-    /// Start an async fetch (see [`HostServices::fetch_async`]). Thin
-    /// pass-through so app code never needs to reach past `Frame` into
-    /// `self.services` directly.
+    /// Starts an asynchronous fetch; see [`HostServices::fetch_async`].
     pub fn fetch_async(&mut self, key_or_url: &str) -> FetchId {
         self.services.fetch_async(key_or_url)
     }
 
-    /// Drain completed fetches (see [`HostServices::poll_fetches`]). Call
-    /// once per frame.
+    /// Returns the fetches that have completed; see
+    /// [`HostServices::poll_fetches`]. Call once per frame.
     pub fn poll_fetches(&mut self) -> Vec<FetchResult> {
         self.services.poll_fetches()
     }
 
-    /// Cancel an in-flight fetch (see [`HostServices::cancel_fetch`]).
+    /// Cancels a fetch; see [`HostServices::cancel_fetch`].
     pub fn cancel_fetch(&mut self, id: FetchId) {
         self.services.cancel_fetch(id)
     }
-
-    /// Start playing video `key` (see [`HostServices::open_video`]). `None`
-    /// if the host couldn't open it. No GPU texture is allocated yet — the
-    /// first [`Self::poll_video`] call that actually receives a frame does
-    /// that lazily, from that frame's own reported dimensions (sound
-    /// whether the host knows dimensions synchronously, e.g. native's
-    /// `ffprobe`, or only learns them asynchronously, e.g. the web host's
-    /// `<video>` `loadedmetadata`).
-    pub fn play_video(&mut self, key: &str) -> Option<PlayingVideo> {
-        let stream = self.services.open_video(key)?;
-        Some(PlayingVideo {
-            stream,
-            texture_id: None,
-        })
-    }
-
-    /// Poll `playing` for a new frame and upload it if one landed. Returns
-    /// `true` iff a frame was actually uploaded this call — e.g. to drive a
-    /// loading indicator until the first real frame shows. Call once per
-    /// frame while `playing` is live.
-    pub fn poll_video(&mut self, playing: &mut PlayingVideo) -> bool {
-        let Some(frame) = playing.stream.poll_frame() else {
-            return false;
-        };
-        let world = self.proteus.world_mut();
-        let (device, queue) = {
-            let gpu = world.resource::<GpuContext>();
-            (gpu.device.clone(), gpu.queue.clone())
-        };
-        let mut pipeline = world.resource_mut::<QuadPipeline>();
-        if playing.texture_id.is_none() {
-            // Lazily, from the first frame's own dimensions — see
-            // `play_video`'s doc for why this can't happen at open time.
-            playing.texture_id =
-                Some(pipeline.init_video(&device, &queue, frame.width, frame.height));
-        }
-        pipeline.upload_video_frame(&queue, &frame.rgba);
-        true
-    }
-
-    /// Best-effort: abort `playing`'s *initial* load without fully stopping
-    /// (see [`VideoStream::cancel_load`]).
-    pub fn cancel_video_load(&mut self, playing: &mut PlayingVideo) {
-        playing.stream.cancel_load();
-    }
-
-    /// Stop `playing`: releases the decode stream and, if a GPU texture was
-    /// ever allocated for it, suspends it via `QuadPipeline::suspend_video`.
-    pub fn stop_video(&mut self, playing: PlayingVideo) {
-        playing.stream.stop();
-        if let Some(texture_id) = playing.texture_id {
-            let world = self.proteus.world_mut();
-            let device = world.resource::<GpuContext>().device.clone();
-            let mut pipeline = world.resource_mut::<QuadPipeline>();
-            pipeline.suspend_video(&device, texture_id);
-            // `suspend_video` only marks the entry `Evicted` — it's built to be
-            // resumable. This video is finished, so drop the registry entry too;
-            // otherwise every play leaves a permanent record behind, and since
-            // eviction only ever considers `main_atlas` entries nothing would
-            // ever reclaim them.
-            pipeline.texture_registry.free(texture_id);
-        }
-    }
-}
-
-/// A video stream handed to the app by [`Frame::play_video`] — advance it
-/// each frame via [`Frame::poll_video`]. Opaque: the only thing an app does
-/// with one is pass it back into `Frame`'s own video methods.
-pub struct PlayingVideo {
-    stream: Box<dyn VideoStream>,
-    /// `None` until the first frame lands and `Frame::poll_video` allocates
-    /// the GPU texture from its dimensions.
-    texture_id: Option<TextureId>,
 }
 
 /// A Proteus application.
 ///
-/// The [`Engine`] owns [`Proteus`] and the frame loop; an `App` is a
-/// `dyn App` the engine calls into. This replaces the M12 pattern where
-/// `proteus-demo`'s `Demo` owned `Proteus` and each shell owned a concrete
-/// `Demo` field.
+/// A host runs it: it calls [`App::setup`] once, then [`App::update`] every
+/// frame. The app keeps its own data; the components live in [`Proteus`],
+/// which each call receives through [`Frame`].
 ///
-/// [`Engine`]: crate::Engine
+/// # Examples
+///
+/// ```no_run
+/// use proteus_runtime::{App, Frame};
+/// use proteus_sdk::{ComponentSpec, QuadState};
+///
+/// struct Hello;
+///
+/// impl App for Hello {
+///     fn setup(&mut self, f: &mut Frame) {
+///         f.proteus.component(ComponentSpec::new(QuadState::default()));
+///     }
+/// }
+/// ```
 pub trait App {
-    /// Build the initial component tree. Called once by [`Engine::new`],
-    /// after the world and renderer exist. `proteus-demo`'s `Demo::new` body
-    /// moves here.
-    ///
-    /// [`Engine::new`]: crate::Engine::new
+    /// Creates the app's initial components. Called once, before the first
+    /// frame.
     fn setup(&mut self, f: &mut Frame);
 
-    /// Per-frame application logic, run **after** [`Proteus::tick`] has
-    /// advanced the schedule and before the frame is rendered — a "late
-    /// update". React to this frame's interaction / transition events here,
-    /// and mutate the world directly if needed; the engine re-runs the
-    /// Visibility/Opacity cascade afterwards. Signals fired here are
-    /// dispatched on the next frame. Optional — an app that wires everything
-    /// with signals and callbacks in [`setup`](App::setup) never needs it.
-    /// `proteus-demo`'s `advance_*` steps land here.
+    /// Runs every frame, after [`Proteus::tick`] and before drawing. `dt` is
+    /// the time since the previous frame, in seconds.
+    ///
+    /// React to this frame's events here. Changes to visibility and opacity
+    /// are drawn this frame; a transition started here begins on the next.
+    /// Optional: an app that does everything with callbacks set up in
+    /// [`setup`](App::setup) doesn't need it.
     ///
     /// [`Proteus::tick`]: proteus_sdk::Proteus::tick
     fn update(&mut self, f: &mut Frame, dt: f32) {
@@ -181,54 +108,14 @@ pub trait App {
 }
 
 #[cfg(test)]
-mod video_tests {
-    use super::*;
-    use proteus_render::{AtlasConfig, QuadPipeline, DEFAULT_TRANSITION_ATLAS_SIZE};
+pub(crate) mod gpu_tests {
+    use std::sync::Arc;
+
     use proteus_sdk::Proteus;
 
-    use crate::services::{FetchId, FetchResult, VideoFrame};
-    use crate::viewport::Viewport;
-
-    /// One frame, then nothing — enough to make `poll_video` allocate the GPU
-    /// texture and register it, which is the state `stop_video` has to clean up.
-    struct OneFrameStream {
-        delivered: bool,
-    }
-
-    impl VideoStream for OneFrameStream {
-        fn poll_frame(&mut self) -> Option<VideoFrame> {
-            if self.delivered {
-                return None;
-            }
-            self.delivered = true;
-            Some(VideoFrame {
-                width: 4,
-                height: 4,
-                rgba: Arc::from(vec![255u8; 4 * 4 * 4]),
-            })
-        }
-        fn stop(self: Box<Self>) {}
-    }
-
-    struct VideoServices;
-
-    impl HostServices for VideoServices {
-        fn load_asset(&mut self, _key: &str) -> Option<Arc<[u8]>> {
-            None
-        }
-        fn fetch_async(&mut self, _key_or_url: &str) -> FetchId {
-            FetchId(0)
-        }
-        fn poll_fetches(&mut self) -> Vec<FetchResult> {
-            Vec::new()
-        }
-        fn cancel_fetch(&mut self, _id: FetchId) {}
-        fn open_video(&mut self, _key: &str) -> Option<Box<dyn VideoStream>> {
-            Some(Box::new(OneFrameStream { delivered: false }))
-        }
-    }
-
-    async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    /// A GPU device with no surface, or `None` without an adapter. Shared
+    /// with the other modules' GPU tests.
+    pub(crate) async fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -243,7 +130,7 @@ mod video_tests {
             .ok()?;
         adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("proteus-runtime-video-test"),
+                label: Some("proteus-runtime-test"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: Default::default(),
@@ -253,74 +140,50 @@ mod video_tests {
             .ok()
     }
 
-    /// Stopping a video must drop its `TextureRegistry` entry, not just mark it
-    /// evicted.
-    ///
-    /// `suspend_video` is deliberately resumable — it swaps the texture for a
-    /// 1×1 placeholder and sets the state to `Evicted`, leaving the entry in
-    /// place. That's right for backgrounding, wrong for "this video is over":
-    /// nothing else ever reclaims a `Video` entry, because eviction only
-    /// considers `main_atlas` ones (`is_eviction_candidate` requires
-    /// `AtlasRegion::Main`). Every play therefore left a permanent row behind.
+    // A font that can't be read doesn't stop the renderer: it logs an error
+    // and draws text in the embedded font instead.
     #[test]
-    fn stopping_a_video_frees_its_registry_entry() {
+    fn a_font_that_cant_be_read_falls_back_to_the_embedded_font() {
         let Some((device, queue)) = pollster::block_on(headless_device()) else {
             eprintln!("proteus-runtime: no GPU adapter available — skipping");
             return;
         };
+        assert!(crate::config::FontSource::from_bytes(vec![1u8, 2, 3]).is_err());
 
         let mut proteus = Proteus::new();
-        proteus.world_mut().insert_resource(GpuContext {
-            device: device.clone(),
-            queue: queue.clone(),
-        });
-        proteus.world_mut().insert_resource(QuadPipeline::new(
+        let mut config = crate::ProteusConfig::default();
+        config.text.default_font = crate::config::FontSource::Bytes(Arc::from(vec![1u8, 2, 3]));
+        let mut renderer = crate::Renderer::new(
+            &mut proteus,
             &device,
             &queue,
             wgpu::TextureFormat::Rgba8Unorm,
-            16,
-            AtlasConfig::default(),
-            DEFAULT_TRANSITION_ATLAS_SIZE,
-        ));
-
-        let mut services = VideoServices;
-        let mut frame = Frame {
-            proteus: &mut proteus,
-            services: &mut services,
-            viewport: Viewport::new(glam::Vec2::new(64.0, 64.0), 1.0),
-        };
-
-        let mut playing = frame
-            .play_video("anything")
-            .expect("host opened the stream");
-        assert!(
-            frame.poll_video(&mut playing),
-            "the stream's one frame should upload, allocating the texture"
+            crate::Viewport::new(glam::Vec2::new(64.0, 64.0), 1.0),
+            config,
         );
-        let texture_id = playing.texture_id.expect("poll_video allocated a texture");
-
-        assert!(
-            frame
-                .proteus
-                .world()
-                .resource::<QuadPipeline>()
-                .texture_registry
-                .info(texture_id)
-                .is_some(),
-            "registered while playing"
+        let label = proteus.component(
+            proteus_sdk::ComponentSpec::new(proteus_ui::QuadState::default())
+                .text(proteus_ui::Text::new("Hi", 16.0)),
         );
-
-        frame.stop_video(playing);
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        renderer.render(&mut proteus, &target.create_view(&Default::default()));
 
         assert!(
-            frame
-                .proteus
-                .world()
-                .resource::<QuadPipeline>()
-                .texture_registry
-                .info(texture_id)
-                .is_none(),
-            "a stopped video's registry entry must be freed, not left marked evicted"
+            label.baked_text_size(&proteus).is_some(),
+            "the text was drawn, in the embedded font"
         );
     }
 }

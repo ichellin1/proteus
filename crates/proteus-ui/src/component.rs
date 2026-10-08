@@ -16,8 +16,9 @@ use glam::{Vec2, Vec3, Vec4};
 /// each frame to build a `QuadInstance` for the GPU instance buffer.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct QuadState {
-    /// World-space position (x, y, z). Z is reserved for future depth sorting;
-    /// draw order currently determines stacking (last uploaded = on top).
+    /// Position in world units, or relative to the parent for a child. Among
+    /// overlapping top-level entities, higher `z` is drawn on top; with equal
+    /// `z`, the one created last is.
     pub position: Vec3,
     /// Size in pixels (width, height).
     pub size: Vec2,
@@ -35,21 +36,28 @@ pub struct QuadState {
 }
 
 impl QuadState {
-    /// Linearly interpolate between `self` (from-state) and `other` (to-state).
+    /// Interpolates linearly from `self` to `other`: `t = 0.0` returns `self`,
+    /// and `t = 1.0` returns `other`.
     ///
-    /// `t = 0.0` returns `self`, `t = 1.0` returns `other`.
-    /// Rotation uses a direct lerp — it takes the long way around for angular
-    /// differences exceeding 180°. Sufficient for typical UI ranges; use a
-    /// dedicated slerp wrapper for full-circle animations.
+    /// Rotation is interpolated directly, not by the shortest way round, so a
+    /// change of more than half a turn goes the long way.
+    ///
+    /// A `t` outside `0`–`1`, from an easing curve that overshoots,
+    /// extrapolates, but sizes, corner radii and scale don't go below zero and
+    /// colors stay within `0`–`1`.
     pub fn lerp(&self, other: &Self, t: f32) -> Self {
+        // `t` can go past 0 or 1 with an easing curve that overshoots. Keep
+        // the result drawable: no negative sizes, corner radii or scale, and
+        // colors within 0..=1.
         Self {
             position: self.position.lerp(other.position, t),
-            size: self.size.lerp(other.size, t),
+            size: self.size.lerp(other.size, t).max(Vec2::ZERO),
             rotation: self.rotation + (other.rotation - self.rotation) * t,
-            scale: self.scale + (other.scale - self.scale) * t,
+            scale: (self.scale + (other.scale - self.scale) * t).max(0.0),
             anchor: self.anchor.lerp(other.anchor, t),
-            color: self.color.lerp(other.color, t),
-            corner_radius: self.corner_radius + (other.corner_radius - self.corner_radius) * t,
+            color: self.color.lerp(other.color, t).clamp(Vec4::ZERO, Vec4::ONE),
+            corner_radius: (self.corner_radius + (other.corner_radius - self.corner_radius) * t)
+                .max(0.0),
         }
     }
 }
@@ -87,7 +95,7 @@ pub enum Lifecycle {
 }
 
 // ---------------------------------------------------------------------------
-// TransitionRequest — signals intent to start a transition
+// TransitionRequest — a request to start a transition
 // ---------------------------------------------------------------------------
 
 /// Added to an entity to request a transition to a new `QuadState`.
@@ -96,17 +104,12 @@ pub enum Lifecycle {
 /// sets `Lifecycle::Transitioning`, and removes the request.
 #[derive(Component, Debug, Clone, Default)]
 pub struct TransitionRequest {
+    /// The geometry to end at.
     pub to: QuadState,
+    /// How the transition is timed.
     pub config: crate::transition::TransitionConfig,
-    /// Explicit from-state override.
-    ///
-    /// When `Some`, the transition starts from this geometry rather than the
-    /// entity's current `QuadState`. Used in signal-driven transitions where
-    /// the destination entity should appear to originate from the source
-    /// entity's position — e.g., a 1→1 morph where the "to" entity starts
-    /// animating from the "from" entity's geometry.
-    ///
-    /// When `None` (default), the entity's current `QuadState` is used.
+    /// Where to start, if not the entity's current geometry. A channel uses it
+    /// so that the `to` entity starts from the `from` entity's geometry.
     pub from_state: Option<QuadState>,
 }
 
@@ -114,16 +117,14 @@ pub struct TransitionRequest {
 // Visibility — ECS activation flag
 // ---------------------------------------------------------------------------
 
-/// ECS activation flag.
+/// Whether an entity is visible.
 ///
-/// When `visible = false`, the entity is present in the ECS but the render,
-/// input, and navigation systems should skip it. Invisible entities are the
-/// mechanism for hiding sources and targets during group transitions without
-/// destroying them.
-///
-/// Defaults to `true` (visible) when constructed with `Visibility::default()`.
+/// A hidden entity still exists, but isn't drawn or hit-tested, and neither
+/// are its descendants. Splits and merges hide their sources and targets this
+/// way. The default is visible.
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct Visibility {
+    /// `true` if the entity is visible.
     pub visible: bool,
 }
 
@@ -141,35 +142,27 @@ impl Default for Visibility {
 }
 
 // ---------------------------------------------------------------------------
-// Disabled / TransitioningConfig — M12.2 interaction gating
+// Disabled / TransitionInteractionConfig: when an entity accepts input
 // ---------------------------------------------------------------------------
 
-/// Marks an entity as disabled: present but not interactive.
+/// Marks an entity as disabled: drawn, but ignoring input.
 ///
-/// `hit_test_system` (`input.rs`) excludes `Disabled` entities from hit-testing
-/// entirely — no hover/press/click/focus events fire for them, regardless of
-/// `TransitioningConfig`. `interaction::interaction_style_system` separately
-/// resolves the `disabled` style from `InteractionDef` whenever this marker is
-/// present, independent of hit-testing — so a disabled control can still show
-/// its dimmed/disabled look.
+/// A disabled entity gets no hover, press, click or focus events, but still
+/// blocks the pointer from reaching the entities behind it (see
+/// [`crate::input`]). `interaction_style_system` applies its `disabled`
+/// style, so it can look unavailable.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct Disabled;
 
-/// Per-entity opt-in to receiving input/navigation events while `Transitioning`.
+/// Whether an entity accepts input while it is transitioning.
 ///
-/// Both default to `false` (Phase B: "Both default off" — the framework's safe
-/// default is no interaction mid-morph, customizable by the application
-/// designer). An entity that is `Lifecycle::Transitioning` and either lacks
-/// this component or has `allow_input: false` is excluded entirely from
-/// `hit_test_system`'s candidate loop, same as `Virtual`/hidden entities.
-///
-/// `allow_navigation` is accepted here for forward-compatibility with the
-/// full Phase B design but has no behavioral effect yet — directional/tab
-/// navigation is still `stub_navigation_system` (`schedule.rs`), so nothing
-/// consults this field today.
+/// Without this, or with `allow_pointer: false`, a transitioning entity is left
+/// out of hit-testing.
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub struct TransitioningConfig {
-    pub allow_input: bool,
+pub struct TransitionInteractionConfig {
+    /// Accept pointer input during a transition. Defaults to `false`.
+    pub allow_pointer: bool,
+    /// Not read yet; reserved for keyboard navigation. Defaults to `false`.
     pub allow_navigation: bool,
 }
 

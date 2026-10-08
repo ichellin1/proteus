@@ -1,11 +1,6 @@
 //! The Home screen — the demo's navigation hub. Three nav buttons, laid out
 //! as one horizontal row, each leading to a further screen (`VideoTiles`,
 //! `Loading`/`Gallery`, `ExamplesHome`).
-//!
-//! Design-System treatment: fully transparent fill (border+glow only —
-//! `Demo::start_screen_to_home` reasserts this every Home entry, holding the
-//! "no fill ever" convention), violet border/glow/label, sized from each
-//! label's own baked width (`+2×PADDING_PX`) rather than a fixed size.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -17,9 +12,7 @@ const LABEL_SIZE_PX: f32 = 24.0;
 const LABEL_LETTER_SPACING_PX: f32 = LABEL_SIZE_PX * 0.02;
 const PADDING_PX: f32 = 15.0;
 const GAP_PX: f32 = 50.0;
-/// Also the theme-blend target in `Demo::advance_theme` — the dark-theme
-/// counterpart is numerically identical (`NAV_BUTTON_CORNER_RADIUS_DARK`),
-/// so this is the one value used for both.
+// Public to suport dark theme that uses the same value. probably should clean up.
 pub const CORNER_RADIUS: f32 = 20.0;
 const BORDER_WIDTH: f32 = 3.0;
 const FALLBACK_SIZE: Vec2 = Vec2::new(150.0, 46.0);
@@ -50,8 +43,7 @@ pub fn spawn(app: &mut Proteus) -> Home {
                 rotation: 0.0,
                 scale: 1.0,
                 anchor: Vec2::new(0.5, 0.5),
-                // Transparent — border+glow only, Design System spec. See
-                // this module's doc.
+                // Transparent: the button shows only its border and glow.
                 color: Vec4::new(1.0, 1.0, 1.0, 0.0),
                 corner_radius: CORNER_RADIUS,
             })
@@ -96,20 +88,19 @@ pub fn spawn(app: &mut Proteus) -> Home {
     }
 }
 
-/// One horizontal row, centered on both axes, `GAP_PX` between buttons —
-/// each sized from its own baked label (`+2×PADDING_PX`), or
-/// `FALLBACK_SIZE` outright (not "baked size + padding" — the flat
-/// constant, unpadded, same as the original) for whichever label hasn't
-/// baked yet. Always returns a full result — never gated on "every label
-/// baked," since even an all-fallback row still spreads its 3 (identically
-/// sized, in that case) buttons out via the same cumulative-width math, not
-/// stacked on top of each other. Call once, right before
-/// `Handle::split_to`, same as `Demo::start_examples_to_detail`'s own
-/// "compute the real target geometry immediately before the transition
-/// starts" ordering — *not* on some earlier recurring gate, which is the
-/// bug an earlier version of this function had (see the M12.5.5 plan's own
-/// notes on that regression). The fallback is per-label, not
-/// all-or-nothing: one unbaked label doesn't stall the other two.
+/// One horizontal row, centered on both axes, `GAP_PX` between buttons.
+/// Each button is sized from its own baked label (`+2×PADDING_PX`), or is
+/// `FALLBACK_SIZE` exactly (unpadded) if its label hasn't baked yet. The
+/// fallback is per label, so one unbaked label doesn't hold up the other
+/// two.
+///
+/// Always returns a full row, never waiting until every label has baked:
+/// even an all-fallback row spreads its 3 (identically sized) buttons out
+/// with the same cumulative-width math, rather than stacking them. Call it
+/// once, right before `Handle::split_to`, as
+/// `Demo::start_examples_to_detail` computes its target geometry right
+/// before its transition starts; an earlier call would use stale label
+/// sizes.
 pub fn layout(app: &Proteus, home: &Home) -> [QuadState; 3] {
     let sizes: [Vec2; 3] = std::array::from_fn(|i| {
         home.nav_labels[i]

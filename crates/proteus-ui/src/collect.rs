@@ -1,10 +1,8 @@
-//! Instance collection — bridges ECS `QuadState` to GPU-ready `QuadInstance` data.
+//! Turns the ECS world into the list of quads to draw.
 //!
-//! The render loop's job is a two-step bridge:
-//!
-//! 1. [`collect_instances`] — reads the ECS world and returns a `Vec<QuadInstance>`
-//!    that represents every visible entity, ready for the GPU.
-//! 2. The shell passes that vec to `QuadPipeline::upload_instances` and then draws.
+//! [`collect_instances`] reads every visible entity and returns a
+//! `Vec<QuadInstance>`, which the renderer uploads with
+//! `QuadPipeline::upload_instances` and draws.
 //!
 //! ## Two instances per text entity
 //!
@@ -15,91 +13,57 @@
 //! | Background | `WHITE_PIXEL_UV` | `QuadState::color` (solid fill) |
 //! | Text overlay | `BakedText::uv_offset / uv_scale` | `Text::color` (defaults to white) |
 //!
-//! Plain quads (no `BakedText`) emit one instance: the solid-color background only.
-//! Virtual entities created during group transitions may have a `BakedText` component
-//! propagated from their source entity.  In that case the text overlay instance has its
-//! `opacity` reduced proportionally to the transition progress so the source text
-//! dissolves smoothly rather than snapping off at the end.
+//! An entity without `BakedText` emits only the background. A virtual piece of a
+//! split or merge may carry its source's `BakedText`; its text fades out as the
+//! transition progresses, rather than vanishing at the end.
 //!
 //! ## Drop shadow
 //!
-//! When a [`DropShadow`] component is present on an entity it is applied to the
-//! **background** instance only.  The text overlay instance always has
-//! `shadow_color.a = 0` (no shadow) so that the shadow does not double-render
-//! beneath the glyph layer.
+//! A [`DropShadow`] applies to the background instance only, so the shadow isn't
+//! drawn twice beneath the text.
 //!
-//! ## Glow (M8.6)
+//! ## Glow
 //!
-//! When a [`Glow`] component is present and no [`DropShadow`] is present,
-//! the glow is encoded into the same `shadow_params`/`shadow_color` slots with
-//! a zero offset (producing a symmetric halo).  If both are present, `DropShadow`
-//! takes precedence.
+//! A [`Glow`] uses the same shadow fields with no offset, which gives an even
+//! halo. If an entity has both, the drop shadow is drawn.
 //!
 //! ## Border
 //!
-//! When a [`Border`] component is present its `width`/`color`/`offset` are copied
-//! directly into the instance's `border_width`/`border_color`/`border_offset`
-//! fields — independent of shadow/glow, so all three can be present at once.
+//! A [`Border`]'s fields are copied into the instance's border fields. It is
+//! independent of shadows and glows, so an entity can have all three.
 //!
-//! ## Baked texture crossfade (two-sided)
+//! ## Fading between two bakes
 //!
-//! When a [`BakedTexture`] component is present, its `from_*` fields become
-//! the background instance's `base_uv_offset`/`base_uv_scale` and its `to_*`
-//! fields become `uv_offset`/`uv_scale` (with `atlas_page` set to the
-//! `transition_atlas` selector via `pack_atlas_page` — `transition_atlas` is a
-//! single-layer atlas holding both sides, so its packed page is always `0`).
-//! `crossfade_t` is driven from the
-//! entity's own [`ActiveTransition`] progress each frame. Used by
-//! transition-bake virtual slices (see `topology`) so a slice crossfades
-//! texel-for-texel from an actual cropped snapshot of the source entity's
-//! rendered appearance to an actual snapshot of its target's rendered
-//! appearance — shape, border, *and* text on both ends — rather than a
-//! flat-color approximation on either side.
+//! A [`BakedTexture`] gives the background two images in the transition atlas,
+//! and `crossfade_t`, from the entity's [`ActiveTransition`], fades from one to
+//! the other. Pieces of a split or merge use it to fade from a slice of the
+//! source's appearance to the target's, including shape, border and text.
 //!
-//! ## Video (M9)
+//! ## Video
 //!
-//! When a [`crate::VideoPlayer`] component is present the background instance's
-//! `atlas_page` is set to the `video_atlas` selector (via `pack_atlas_page` —
-//! `video_atlas` is single-layer, so its packed page is always `0`) and the UV
-//! is set to cover the full `video_atlas` texture.  The entity's
-//! `QuadState::color` acts as a tint; use `Vec4::ONE`
-//! (white) for unfiltered video.  Any `BakedText` overlay is still emitted on
-//! top as a second instance so labels can float above the video.
+//! A [`crate::VideoPlayer`] makes the background show the whole video
+//! texture. `QuadState::color` tints it; use `Vec4::ONE` for none. Text is still
+//! drawn on top.
 //!
-//! ## Static image (M9.7)
+//! ## Image
 //!
-//! When a [`crate::BakedImage`] component is present, its `uv_offset`/`uv_scale`
-//! (into `main_atlas`, on whichever page `BakedImage::page` names — `main_atlas`
-//! is a multi-page pool (M11.2), so this is packed via `pack_atlas_page` rather
-//! than assumed to be page 0) replace the background instance's
-//! white-pixel-sentinel UV. Unlike video/
-//! baked-texture, this is a one-time static mapping — no per-frame recompute.
-//! `QuadState::color` still tints the image; use `Vec4::ONE` for unfiltered.
+//! A [`crate::BakedImage`] makes the background show its region of the main
+//! atlas, on its page. `QuadState::color` tints it; use `Vec4::ONE` for none.
 //!
-//! **When both are present on the same entity** (e.g. a tile carrying its
-//! permanent box-cover `BakedImage` that also gets a `VideoPlayer` once
-//! activated), see [`crate::VideoCrossfade`] (M9.8) — it drives a live blend
-//! between the two rather than either flatly overriding the other. Their
-//! UVs point at different atlases (`main_atlas` vs `video_atlas`), so naively
-//! applying both without going through `VideoCrossfade` is a bug, not an
-//! effect: the video texture gets sampled through a UV window sized for the
-//! image, showing a small, blown-up fragment instead of the full frame.
+//! An entity with both an image and video fades between them with
+//! [`crate::VideoCrossfade`]. The two are in different atlases, so without it
+//! the video would be sampled through the image's coordinates and show only a
+//! fragment.
 //!
-//! ## Static component baking (M10.5)
+//! ## Baked components
 //!
-//! When a [`crate::bake::BakedComposite`] component is present, its `uv_offset`/`uv_scale`
-//! (into `main_atlas`, on whichever page `BakedComposite::page` names) replace
-//! the background instance's UV, same handling as
-//! `BakedImage` — a one-time static mapping written once by `bake_system`
-//! when the entity's `Baked` subtree was rendered into the atlas. Unlike
-//! `BakedImage`, `bake_system` also neutralizes the entity's own
-//! `color`/`corner_radius`/`Border`/`Glow`/`DropShadow` at bake time, so there
-//! is no double-render risk here the way there could be for video+image.
+//! A [`crate::bake::BakedComposite`] makes the background show the baked
+//! component, like an image. Baking also removed the entity's own color,
+//! corner radius, border, glow and shadow, so nothing is drawn twice.
 //!
 //! ## Visibility
 //!
-//! Entities with [`Visibility::HIDDEN`] are excluded from the output. Entities with
-//! no `Visibility` component at all are treated as visible (the default).
+//! Hidden entities are left out. An entity with no `Visibility` is visible.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
@@ -112,6 +76,7 @@ use proteus_render::{
 
 use crate::{
     bake::BakedComposite,
+    draw_order::rank_cmp,
     effects::{Border, DropShadow, Glow},
     hierarchy::{compose_with_parent, EffectiveOpacity, EffectiveVisibility, Opacity},
     spawn_order::SpawnOrder,
@@ -123,37 +88,27 @@ use crate::{
 // BakedTexture
 // ---------------------------------------------------------------------------
 
-/// A two-sided background-instance crossfade: UV regions within
-/// `transition_atlas` holding baked snapshots of *both* a virtual slice's
-/// origin and its destination appearance.
+/// The two images a virtual piece of a split or merge fades between, as
+/// regions of the transition atlas.
 ///
-/// Used by transition-bake virtual slices (see `topology::one_to_n_setup_system`
-/// / `n_to_one_setup_system`): the source entity is baked once and sliced into
-/// N thirds (the `from_*` side, different per slice), and each target entity is
-/// baked once in full (the `to_*` side, one whole snapshot per slice — shape,
-/// border, *and* text). Each frame, `push_entity_instances` reads the
-/// entity's own [`ActiveTransition`] to compute `crossfade_t`, so the slice
-/// crossfades texel-for-texel from the source's cropped appearance to the
-/// target's real appearance — not just geometry, and not a flat-color
-/// approximation on either end.
+/// For a split, `from_*` is the piece's slice of the source's bake, and `to_*`
+/// is its target's whole bake; a merge is the reverse. The piece fades from one
+/// to the other as its transition progresses.
 ///
-/// `own_alloc` is whichever side of the bake is unique to this specific
-/// virtual (the target bake for 1→N, the source bake for N→1) — freed when
-/// this virtual despawns. The side shared across all virtuals in the group
-/// (the one common source bake for 1→N, the one common destination bake for
-/// N→1) is *not* stored here — see `ActiveGroupTransition::shared_alloc`,
-/// freed once when the whole group completes.
+/// `own_alloc` is the bake that belongs to this piece alone, freed when it is
+/// removed. The bake all the pieces share is
+/// `ActiveGroupTransition::shared_alloc`.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct BakedTexture {
-    /// Normalised UV origin of the from-side, within `transition_atlas`.
+    /// Texture coordinates of the start image's top-left.
     pub from_uv_offset: [f32; 2],
-    /// Normalised UV extent of the from-side, within `transition_atlas`.
+    /// Size of the start image, in texture coordinates.
     pub from_uv_scale: [f32; 2],
-    /// Normalised UV origin of the to-side, within `transition_atlas`.
+    /// Texture coordinates of the end image's top-left.
     pub to_uv_offset: [f32; 2],
-    /// Normalised UV extent of the to-side, within `transition_atlas`.
+    /// Size of the end image, in texture coordinates.
     pub to_uv_scale: [f32; 2],
-    /// This virtual's own bake allocation — freed on despawn.
+    /// The bake that belongs to this piece alone, freed when it is removed.
     pub own_alloc: proteus_render::TransitionAllocId,
 }
 
@@ -161,25 +116,18 @@ pub struct BakedTexture {
 // quad_state_to_instance
 // ---------------------------------------------------------------------------
 
-/// Convert a [`QuadState`], optional [`BakedText`], optional [`DropShadow`],
-/// optional [`Glow`], and optional [`Border`] into a [`QuadInstance`].
+/// Converts a [`QuadState`] and its optional text, drop shadow, glow and border
+/// into a [`QuadInstance`].
 ///
-/// - If `baked` is `None` the UV fields address the white-pixel sentinel in
-///   `main_atlas`, so the quad renders as a solid colour.
-/// - If `baked` is `Some` the UV fields address the text glyph region in
-///   `main_atlas`, so the quad renders the baked text overlay.
-/// - If `shadow` is `Some` the shadow fields are populated from it; `glow` is
-///   ignored (DropShadow takes precedence).
-/// - If `shadow` is `None` and `glow` is `Some`, the glow is encoded into the
-///   same shadow slots with a zero offset, producing a symmetric halo.  The halo
-///   color is taken from `Glow::color` and is independent of the entity's fill.
-/// - If `border` is `Some` its fields are copied straight into the instance's
-///   border slots, independent of shadow/glow.
+/// - Without `baked`, the quad samples the atlas's white pixel, so it draws as
+///   a solid color. With it, the quad draws the text.
+/// - A `shadow` fills the shadow fields, and `glow` is then ignored.
+/// - Without a `shadow`, a `glow` fills the same fields with no offset, an even
+///   halo in `Glow::color`.
+/// - A `border` fills the border fields, independent of the others.
 ///
-/// In the two-instance model this is called **twice** per text entity:
-/// once with `baked = None, shadow = Some(...), glow = Some(...)` for the
-/// background, and once with `baked = Some, shadow = None, glow = None` for
-/// the text overlay.
+/// For an entity with text, it is called twice: once for the background, with
+/// its shadow or glow, and once for the text, with neither.
 pub fn quad_state_to_instance(
     qs: &QuadState,
     baked: Option<&BakedText>,
@@ -196,8 +144,7 @@ pub fn quad_state_to_instance(
         None => (
             QuadPipeline::WHITE_PIXEL_UV_OFFSET,
             QuadPipeline::WHITE_PIXEL_UV_SCALE,
-            // The 1×1 white-pixel sentinel is written once at init to main_atlas
-            // layer 0 only.
+            // The white pixel is on page 0 of the main atlas only.
             pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
         ),
     };
@@ -210,8 +157,7 @@ pub fn quad_state_to_instance(
         None => match glow {
             Some(g) => (
                 [0.0, 0.0, g.radius, 0.0],
-                // Clamp effective alpha to [0, 1]: values above 1.0 would invert
-                // alpha blending in the shader (perceived negative transparency).
+                // Clamp to 0..=1: alpha above 1 would invert blending.
                 [
                     g.color.x,
                     g.color.y,
@@ -243,11 +189,9 @@ pub fn quad_state_to_instance(
         base_uv_offset: [0.0, 0.0],
         base_uv_scale: [0.0, 0.0],
         crossfade_t: 0.0,
-        // Matches every crossfade user before this field existed — the only
-        // one is BakedTexture, whose from-side always lives in
-        // transition_atlas. push_entity_instances overrides this for the
-        // video+image live-crossfade case (see its VideoPlayer/BakedImage
-        // handling below).
+        // The transition atlas, where a `BakedTexture`'s start image is.
+        // `push_entity_instances` changes it for fading between an image and
+        // video.
         base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
         border_width,
         border_color,
@@ -261,39 +205,26 @@ pub fn quad_state_to_instance(
 // collect_instances
 // ---------------------------------------------------------------------------
 
-/// Append one entity's instance(s) — background, plus a text overlay if it
-/// has baked glyph data — to `out`. Called by [`collect_instances`], which
-/// already has `qs` from its batched query, and by `collect_subtree` for
-/// descendants.
+/// Appends one entity's instances to `out`: its background, and its text if it
+/// has any.
 fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec<QuadInstance>) {
-    // Cascaded opacity (M10). Prefers the cascaded `EffectiveOpacity` (written
-    // by `opacity_system` when the full schedule runs); falls back to the
-    // entity's own raw `Opacity` for callers that build a bare `World` and
-    // invoke `collect_instances` without running the schedule (existing test
-    // convention throughout this crate), and finally to fully opaque.
+    // The cascaded opacity if computed, else the entity's own, for tests that
+    // skip the schedule, else opaque.
     let effective_opacity = world
         .get::<EffectiveOpacity>(e)
         .map(|o| o.0)
         .unwrap_or_else(|| world.get::<Opacity>(e).map(|o| o.0).unwrap_or(1.0));
 
-    // (a) Solid-color (or video/baked-texture) background quad — shadow or
-    //     glow applied here. DropShadow takes precedence over Glow when both
-    //     are present.
+    // The background, with the shadow or glow. A drop shadow wins over a
+    // glow.
     let shadow = world.get::<DropShadow>(e);
     let glow = world.get::<Glow>(e);
     let border = world.get::<Border>(e);
     let mut bg_inst = quad_state_to_instance(qs, None, shadow, glow, border);
     bg_inst.opacity = effective_opacity;
-    // Video and static-image UV routing. When only one of VideoPlayer/
-    // BakedImage is present it's a flat assignment (no blending). When both
-    // are present (M9.8 — e.g. a tile with permanent box-cover art that also
-    // gets a VideoPlayer once activated), VideoCrossfade's video_t drives a
-    // live blend between them: the "to"/"from" sides swap depending on which
-    // way video_t is headed, so playing forward (image → video) and reverse
-    // (video → image) both use the same crossfade_t = video_t formula rather
-    // than needing an inverted easing curve for one direction. The caller
-    // (not collect_instances) decides video_t each frame — only it knows
-    // whether a transition is running forward or backward.
+    // Video, an image, or both. With both, `VideoCrossfade::video_t` blends
+    // them, from the image at 0 to the video at 1. The app sets `video_t`,
+    // since only it knows which way it is fading.
     match (
         world.get::<VideoPlayer>(e).is_some(),
         world.get::<BakedImage>(e),
@@ -302,7 +233,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
             let video_t = world
                 .get::<VideoCrossfade>(e)
                 .map(|c| c.video_t.clamp(0.0, 1.0))
-                .unwrap_or(1.0); // no VideoCrossfade — show video fully, as before M9.8
+                .unwrap_or(1.0); // no VideoCrossfade: only the video
             if video_t >= 0.9999 {
                 bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0);
                 bg_inst.uv_offset = [0.0, 0.0];
@@ -312,7 +243,7 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
                 bg_inst.uv_offset = image.uv_offset;
                 bg_inst.uv_scale = image.uv_scale;
             } else {
-                // to-side: video (video_atlas); from-side: box art (main_atlas).
+                // End: the video. Start: the image.
                 bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_VIDEO, 0);
                 bg_inst.uv_offset = [0.0, 0.0];
                 bg_inst.uv_scale = [1.0, 1.0];
@@ -328,35 +259,23 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
             bg_inst.uv_scale = [1.0, 1.0];
         }
         (false, Some(image)) => {
-            // A static image is a one-time UV mapping into main_atlas — no
-            // per-frame recompute, unlike video. atlas_page must be set
-            // explicitly (M11.2): main_atlas is a multi-page pool, so this
-            // image's page isn't always the default 0.
+            // The image's region of the main atlas, on its page.
             bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, image.page);
             bg_inst.uv_offset = image.uv_offset;
             bg_inst.uv_scale = image.uv_scale;
         }
         (false, None) => {}
     }
-    // A BakedComposite (M10.5 — static component baking) is a one-time UV
-    // mapping into main_atlas, same handling as BakedImage — the entity's
-    // subtree was rendered into this region once by bake_system, which also
-    // neutralized the entity's own color/corner_radius/Border/Glow/DropShadow
-    // so nothing here double-renders on top of the baked pixels.
+    // A baked component: its region of the main atlas, like an image. Baking
+    // removed the entity's own color and effects, so nothing is drawn twice.
     if let Some(bc) = world.get::<BakedComposite>(e) {
         bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, bc.page);
         bg_inst.uv_offset = bc.uv_offset;
         bg_inst.uv_scale = bc.uv_scale;
     }
-    // A BakedTexture drives a two-sided crossfade: base_uv/scale point at the
-    // source's baked snapshot, uv/scale (transition_atlas) point at the target's
-    // own baked snapshot, and crossfade_t tracks this entity's own
-    // ActiveTransition progress (mirrors the eased-t computation used for the
-    // text-overlay fade below). Clamped to a tiny epsilon above zero rather
-    // than allowed to land on exactly 0.0 — the shader skips the crossfade
-    // branch entirely at crossfade_t == 0.0 (a zero-cost fast path when no
-    // bake is in play), which would otherwise show the to-side for one frame
-    // before any elapsed time has accumulated.
+    // A BakedTexture: fade from the start image to the end image with the
+    // transition's eased progress. Never exactly 0, since the shader skips
+    // fading entirely at 0 and would show the end image for a frame.
     if let Some(bt) = world.get::<BakedTexture>(e) {
         bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0); // transition_atlas — holds both baked snapshots
         bg_inst.uv_offset = bt.to_uv_offset;
@@ -366,51 +285,36 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
         bg_inst.crossfade_t = world
             .get::<ActiveTransition>(e)
             .map(|active| {
-                let raw_t = if active.delay_remaining > 0.0 {
-                    0.0
-                } else {
-                    (active.elapsed / active.config.duration).min(1.0)
-                };
-                (active.config.easing)(raw_t).max(0.0001)
+                // Clamped: an overshooting curve would otherwise fade past
+                // the end image.
+                active
+                    .config
+                    .easing
+                    .apply(active.raw_t())
+                    .clamp(0.0001, 1.0)
             })
             .unwrap_or(1.0); // no active transition — show the to-side fully
     }
     out.push(bg_inst);
 
-    // (b) Text overlay — only for entities with baked glyph data.
-    //     No shadow/glow on the overlay: it sits on top of the background (which
-    //     already casts the shadow/glow), so doubling it would look wrong.
+    // The text, with no shadow or glow: the background already has them.
     if let Some(b) = world.get::<BakedText>(e) {
         let text_color = world.get::<Text>(e).map(|t| t.color).unwrap_or(Vec4::ONE);
         let mut text_qs = qs.clone();
         text_qs.color = text_color;
-        // Size the overlay to the glyph run's actual footprint (centered on
-        // the parent, since anchor is unchanged) rather than stretching it
-        // to fill the parent's full geometry.
+        // Size the text quad to the text, not to the whole entity.
         text_qs.size = b.pixel_size.into();
-        // The parent's corner_radius doesn't apply to the overlay — it was
-        // harmless when the overlay matched the parent's size, but on the
-        // overlay's now much smaller glyph-sized quad an inherited radius
-        // (e.g. a circular button's) can exceed the quad's own half-size,
-        // collapsing the rounded-rect SDF down to a sliver around the
-        // center and clipping away most of the text.
+        // No corner radius: a round button's radius is larger than the text
+        // quad, and would clip most of the text away.
         text_qs.corner_radius = 0.0;
         let mut text_inst = quad_state_to_instance(&text_qs, Some(b), None, None, None);
         text_inst.opacity = effective_opacity;
 
-        // Virtual entities carry the *source* entity's text during a group
-        // transition.  Fade it out in sync with the geometry so that the
-        // texels dissolve rather than snapping off at completion.
-        // We mirror the same eased-t computation that transition_tick_system
-        // uses so the text fade tracks the geometry exactly.
+        // A virtual piece shows its source's text. Fade it out with the same
+        // eased progress as the geometry, so it doesn't vanish at the end.
         if world.get::<Virtual>(e).is_some() {
             if let Some(active) = world.get::<ActiveTransition>(e) {
-                let raw_t = if active.delay_remaining > 0.0 {
-                    0.0
-                } else {
-                    (active.elapsed / active.config.duration).min(1.0)
-                };
-                let eased_t = (active.config.easing)(raw_t);
+                let eased_t = active.config.easing.apply(active.raw_t()).clamp(0.0, 1.0);
                 text_inst.opacity *= 1.0 - eased_t;
             }
         }
@@ -419,48 +323,29 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
     }
 }
 
-/// Collect all visible [`QuadInstance`]s from the ECS world.
-///
-/// Call this once per frame after `ProteusWorld::update()`, then pass the
-/// returned vec to [`QuadPipeline::upload_instances`].
-///
-/// ## Draw order (M10; tie-break corrected M13.8)
-///
-/// Instances are collected via an explicit depth-first walk starting from
-/// **root** entities (no [`ChildOf`]), each root's own instance(s) pushed
-/// before recursing into its children in [`Children`] order — so a child
-/// always draws on top of its parent, and root entities layer by
-/// `QuadState::position.z` ascending (lower z = further back), tied entities
-/// broken by [`SpawnOrder`] ascending (earlier-created = further back).
-///
-/// The child-before-parent walk is deliberately explicit rather than relying
-/// on however `World`'s own archetype storage happens to iterate entities —
-/// see this function's own module doc for why a flat query alone can't
-/// guarantee that.
-///
-/// Root-level *ties* (equal `z`, the common case: most callers never set a
-/// nonzero `z` at all) used to fall back to raw query iteration order with
-/// no further tie-break — silently assumed to approximate spawn order, but
-/// actually just "whichever archetype `bevy_ecs` happens to iterate first,"
-/// which has no defined relationship to spawn order across two *different*
-/// archetypes (confirmed by a from-scratch repro: a non-interactive entity
-/// spawned first, then an interactive one spawned second, iterated in the
-/// *wrong* relative order from the very first frame — see
-/// `proteus-ui/tests/render_instances.rs`'s
-/// `spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype`
-/// and PLANNING.md's M13.8 section). [`SpawnOrder`] fixes this: an explicit,
-/// archetype-independent stamp, so "last spawned = on top" is an actual
-/// guarantee again, not an accident of ECS storage layout.
-/// One snapshotted root entity's data, collected up front (see
-/// [`collect_instances`]'s own doc for why): its own `QuadState`, its raw
-/// `Visibility`/`EffectiveVisibility` (both `None` = absent, matching the
-/// components' own optionality), and its draw-order tie-break.
+/// A top-level entity's data, read before drawing starts: its `QuadState`, its
+/// own and cascaded visibility (`None` if absent), and its `SpawnOrder`.
 type RootSnapshot = (Entity, QuadState, Option<bool>, Option<bool>, SpawnOrder);
 
+/// Returns every visible entity as [`QuadInstance`]s, in drawing order.
+///
+/// Call it once per frame after the tick, and pass the result to
+/// [`QuadPipeline::upload_instances`].
+///
+/// ## Drawing order
+///
+/// Each top-level entity (one without a [`ChildOf`]) is drawn, then its
+/// children, depth first, so a child is always drawn over its parent.
+/// Top-level entities are drawn in order of `QuadState::position.z`, lowest
+/// first, and then of [`SpawnOrder`], earliest first, so among entities with
+/// the same `z`, the one created last is on top. Each entity's children are
+/// ordered the same way, by their own `z`. See `crate::draw_order`.
+///
+/// The order is worked out explicitly rather than taken from how `bevy_ecs`
+/// stores entities, which has no reliable relationship to creation order.
 pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
-    // Root = has QuadState, has no ChildOf. Snapshotted while holding the
-    // query borrow, then dropped before the recursive world.get() calls in
-    // collect_subtree/push_entity_instances.
+    // Top-level entities: a QuadState and no ChildOf. Read them all first, so
+    // the query's borrow ends before the recursive walk reads the world.
     let mut roots: Vec<RootSnapshot> = {
         let mut q = world.query_filtered::<(
             Entity,
@@ -476,36 +361,25 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
                     qs.clone(),
                     vis.map(|v| v.visible),
                     eff_vis.map(|v| v.0),
-                    // Entities that never went through `Proteus::component()`
-                    // (e.g. a bare `World::new()` in a test that doesn't
-                    // register `spawn_order`'s hook) have no `SpawnOrder` —
-                    // sort them last among ties rather than reintroducing the
-                    // undefined-order bug for just that case.
+                    // An entity without a SpawnOrder, such as one in a test
+                    // world with no hooks, sorts last among equals.
                     spawn_order.copied().unwrap_or(SpawnOrder(u64::MAX)),
                 )
             })
             .collect()
     };
-    roots.sort_by(|a, b| {
-        a.1.position
-            .z
-            .partial_cmp(&b.1.position.z)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.4.cmp(&b.4))
-    });
+    roots.sort_by(|a, b| rank_cmp((a.1.position.z, a.4), (b.1.position.z, b.4)));
 
     let mut out = Vec::new();
     for (e, local_qs, vis, eff_vis, _spawn_order) in roots {
-        // Root: local QuadState *is* world QuadState (no ancestor to compose with).
+        // A top-level entity's QuadState is already in world space.
         collect_subtree(world, e, &local_qs, vis, eff_vis, false, &mut out);
     }
     out
 }
 
-/// Depth-first: push `entity`'s own instance(s) (subject to `force_visible`),
-/// then recurse into each child in [`Children`] order, composing each
-/// child's world state via [`compose_with_parent`]. See [`collect_instances`]
-/// for why this ordering is explicit rather than incidental.
+/// Appends `entity`'s instances, then each child's in drawing order, with
+/// each child placed in the world by [`compose_with_parent`].
 fn collect_subtree(
     world: &World,
     entity: Entity,
@@ -515,11 +389,8 @@ fn collect_subtree(
     force_visible: bool,
     out: &mut Vec<QuadInstance>,
 ) {
-    // Prefer the cascaded EffectiveVisibility (written by visibility_system
-    // when the full schedule runs); fall back to the entity's own raw
-    // Visibility for callers that build a bare World and invoke
-    // collect_instances directly without running the schedule (existing test
-    // convention throughout this crate); default to visible.
+    // The cascaded visibility if computed, else the entity's own, for tests
+    // that skip the schedule, else visible.
     let visible = force_visible || eff_vis.unwrap_or_else(|| vis.unwrap_or(true));
     if visible {
         push_entity_instances(world, entity, world_qs, out);
@@ -528,7 +399,19 @@ fn collect_subtree(
     let Some(children) = world.get::<Children>(entity) else {
         return;
     };
-    for child in children.iter() {
+    // Siblings are drawn by their own `z`, then creation order, like
+    // top-level entities; see `crate::draw_order`.
+    let mut children: Vec<Entity> = children.iter().collect();
+    let rank = |e: Entity| {
+        let z = world.get::<QuadState>(e).map_or(0.0, |qs| qs.position.z);
+        let spawn = world
+            .get::<SpawnOrder>(e)
+            .copied()
+            .unwrap_or(SpawnOrder(u64::MAX));
+        (z, spawn)
+    };
+    children.sort_by(|a, b| rank_cmp(rank(*a), rank(*b)));
+    for child in children {
         let Some(child_local) = world.get::<QuadState>(child) else {
             continue;
         };

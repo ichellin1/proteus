@@ -2,7 +2,7 @@
 //! `Loading` once every tile has an image (`Demo::advance_gallery_fetch`).
 //! Clicking "Fetch New Images" goes back through `Loading` for a refetch;
 //! clicking a tile opens `enlarged`, an enlarged single-image view
-//! (`AppState::GalleryImage`, M12.5 Step 8) — a dedicated coordinator
+//! (`AppState::GalleryImage`) — a dedicated coordinator
 //! entity, deliberately not one of the 12 `tiles` (see its doc for why).
 //!
 //! Unlike `screens::video_tiles`' fixed 3-tile row, this grid is fully
@@ -12,18 +12,13 @@
 //! different) and theme-color/corner-radius wiring both live in `Demo`
 //! (`Demo::new`'s `register_hover` calls, `Demo::advance_theme`) — this
 //! module only owns the static geometry/spawn shape. `GALLERY_CORNER_
-//! RADIUS`'s dark counterpart is a genuine, verified no-op (both `20.0` in
-//! source) — wired anyway per this pass's "match actual behavior, not just
-//! currently-visible differences" design decision.
+//! RADIUS`'s dark counterpart currently equals the light one (both
+//! `20.0`), and is blended anyway, so changing it just works.
 //!
-//! Fidelity note: an empty tile (before its fetch resolves) is a plain
-//! white rounded square with a violet border — the original's own resting
-//! appearance too (see that file's `gallery_cell_quad` doc: color is
-//! unconditionally white regardless of load state). A fetched photo's own
-//! real aspect ratio is essentially never square, so — mirroring the
-//! original exactly, not simplifying it away — each tile's baked image
-//! gets center-cropped to a centered square in place
-//! (`Handle::center_crop_to_square`, driven by
+//! An empty tile (before its fetch resolves) is a plain white rounded
+//! square with a violet border. A fetched photo's real aspect ratio is
+//! essentially never square, so each tile's baked image gets center-cropped
+//! to a centered square in place (`Handle::crop_image`, driven by
 //! `Demo::advance_gallery_tile_crop`) once it lands, so the grid cell shows
 //! a crop, never a stretch. The *uncropped* frame is stashed on a separate,
 //! hidden `tile_full[idx]` entity first (see that field's doc) — the
@@ -59,10 +54,9 @@ const FETCH_BUTTON_TOP_MARGIN_PX: f32 = 65.0;
 const FETCH_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(220.0, 46.0);
 const FETCH_BUTTON_PADDING_PX: f32 = 15.0;
 /// The fetch button blends its corner radius against the *nav button's*
-/// pair, not the gallery's — numerically identical either way (every one of
-/// these pairs happens to be `20.0`/`20.0`), but `Demo::advance_theme` uses this
-/// pair specifically to match source's own semantic pairing, not just its
-/// current numeric output.
+/// pair, not the gallery's, since it's a button like the nav buttons. The
+/// values are the same either way today (every one of these pairs is
+/// `20.0`/`20.0`).
 pub const FETCH_BUTTON_CORNER_RADIUS: f32 = 20.0;
 pub const FETCH_BUTTON_CORNER_RADIUS_DARK: f32 = 20.0;
 const LABEL_SIZE_PX: f32 = 24.0;
@@ -89,7 +83,7 @@ pub struct Gallery {
     /// The hires upgrade's crossfade overlay — kept glued to `enlarged`'s
     /// position/size/scale/corner_radius every frame
     /// (`Demo::advance_gallery_hires_overlay`), fading in only once it has
-    /// a real baked image *and* `enlarged` has fully settled (not mid-morph
+    /// a real baked image *and* `enlarged` has fully settled (not mid-transition
     /// — see that function's doc). A fixed z (0.6) just ahead of
     /// `enlarged`'s own (0.5) so it draws on top once its alpha ramps up.
     /// Kept as a genuinely separate entity/overlay, not a swap-in-place on
@@ -319,10 +313,10 @@ pub fn column_group_tiles(start_col: usize, width: usize) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    /// `Demo::start_gallery_to_home`'s three groups — `(0,1)`, `(1,2)`,
-    /// `(3,1)` — must partition all 12 tiles with no overlaps and no gaps,
-    /// or some tile would either merge into two nav buttons at once or
-    /// never converge anywhere.
+    // `Demo::start_gallery_to_home`'s three groups — `(0,1)`, `(1,2)`,
+    // `(3,1)` — must partition all 12 tiles with no overlaps and no gaps,
+    // or some tile would either merge into two nav buttons at once or
+    // never converge anywhere.
     #[test]
     fn start_gallery_to_home_groups_partition_every_tile_exactly_once() {
         let mut covered: Vec<usize> = [(0, 1), (1, 2), (3, 1)]
@@ -333,9 +327,9 @@ mod tests {
         assert_eq!(covered, (0..TILE_COUNT).collect::<Vec<_>>());
     }
 
-    /// Row-major order (`MergeLayout::Grid`'s expectation): within one
-    /// group, indices must increase strictly — a group spanning columns
-    /// 1–2 should yield `[1, 2, 5, 6, 9, 10]`, not row/column-swapped.
+    // Row-major order (`MergeLayout::Grid`'s expectation): within one
+    // group, indices must increase strictly — a group spanning columns
+    // 1–2 should yield `[1, 2, 5, 6, 9, 10]`, not row/column-swapped.
     #[test]
     fn column_group_tiles_is_row_major() {
         assert_eq!(column_group_tiles(1, 2), vec![1, 2, 5, 6, 9, 10]);
@@ -343,9 +337,9 @@ mod tests {
         assert_eq!(column_group_tiles(3, 1), vec![3, 7, 11]);
     }
 
-    /// The grid must fit within the viewport (margins/gaps respected on
-    /// both axes) at a representative size, and every cell must be a
-    /// positive square.
+    // The grid must fit within the viewport (margins/gaps respected on
+    // both axes) at a representative size, and every cell must be a
+    // positive square.
     #[test]
     fn layout_produces_a_grid_that_fits_the_viewport() {
         let viewport = Vec2::new(1280.0, 800.0);

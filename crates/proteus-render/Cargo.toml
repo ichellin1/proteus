@@ -1,6 +1,6 @@
 [package]
 name = "proteus-render"
-description = "Layer 1: instanced render pipeline, atlases, and the offscreen bake pipeline"
+description = "Proteus's GPU renderer: the instanced quad pipeline, its shader and the texture atlases."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -5,12 +5,12 @@ How to ship a change to the web build of the reference demo, viewed at
 staging, merge.
 
 *Native has no release path — it's `cargo run -p
-proteus-shell-native` from source (see [GETTING_STARTED.md](./GETTING_STARTED.md)), nothing
+proteus-shell-native` from source (see [CONTRIBUTING.md](./CONTRIBUTING.md#building-from-source)), nothing
 gets deployed.*
 
 ## 1. Review locally
 
-See [GETTING_STARTED.md](./GETTING_STARTED.md) for one-time dependency setup (Rust, wasm-pack,
+See [CONTRIBUTING.md](./CONTRIBUTING.md#dependencies) for one-time dependency setup (Rust, wasm-pack,
 Python 3). Then, from the repo root:
 
 ```bash

@@ -1,33 +1,34 @@
-//! JS-facing DTOs and their conversions to/from `proteus-sdk`/`proteus-ui`
-//! types, crossing the wasm boundary via `serde-wasm-bindgen`.
+//! The JavaScript shapes of `proteus-sdk`'s types, and conversions between
+//! them, for values that cross into wasm through `serde-wasm-bindgen`.
 //!
-//! Defined here rather than adding `Serialize`/`Deserialize` to `QuadState`/
-//! `StyleOverride`/`ComponentSpec`/`ComponentData` directly: those types
-//! don't derive it today, and `TransitionConfig::easing` (a raw
-//! `fn(f32) -> f32`) can't derive it at all. Keeping the DTOs local to this
-//! crate means M12.1–3's shipped code needs no changes. `easing` becomes a
-//! string naming one of `proteus_ui`'s five existing, already-tested easing
-//! functions (`linear`/`easeInQuad`/`easeOutQuad`/`easeInOutQuad`/
-//! `easeOutCubic`) — wiring through what already works, not new
-//! interpolation logic. A genuinely different thing — letting a caller
-//! register an arbitrary *custom* easing function — is M13's job
-//! ("pluggable interpolation interface"), not this.
+//! They are separate types because `proteus-sdk`'s types aren't serializable,
+//! and `TransitionConfig::easing`, a function pointer, can't be. Easing crosses
+//! as the name of a built-in curve. Field names must match `ts/src/types.ts`.
 //!
-//! An entity handle crosses as `Entity::to_bits(): u64` cast to `f64` (both
-//! `to_bits`/`from_bits` are `proteus-ui`'s own public round-trip pair, not
-//! feature-gated). `f64` can represent every integer up to 2^53 exactly;
-//! `to_bits` packs a small generation counter into the high bits, so this
-//! only loses precision past roughly two million generations reused on a
-//! single entity index — not realistic for a UI app. Documented rather than
-//! solved with a custom index/generation struct.
+//! An entity crosses as its `Entity::to_bits()` value, as an `f64`. That is
+//! exact up to 2^53, which only fails after about two million reuses of one
+//! entity index: not a concern for a UI app.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use proteus_sdk::{
-    ComponentData, ComponentSpec, DropReason, InteractionStateKind, QuadState, StyleOverride,
-    TransitionConfig, TransitionData, TransitionDropped,
+    ComponentData, ComponentSpec, DropReason, Easing, InteractionStateKind, QuadState,
+    StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
+
+/// Reads a field given as `undefined` or `null` as its default, as if it had
+/// been left out. serde's `default` only covers a missing key, but TypeScript
+/// code often passes an optional value straight through, as in
+/// `{ startDisabled: soon }` with `soon` undefined, and `serde-wasm-bindgen`
+/// reads that as a value, which a `bool` or `f32` can't be.
+fn or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
 
 // ---------------------------------------------------------------------------
 // Shared value types
@@ -57,6 +58,28 @@ pub struct ColorDto {
     pub a: f32,
 }
 
+/// A size: TypeScript's `Size`, `{ width, height }`, where Rust has a `Vec2`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SizeDto {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl From<glam::Vec2> for SizeDto {
+    fn from(v: glam::Vec2) -> Self {
+        Self {
+            width: v.x,
+            height: v.y,
+        }
+    }
+}
+
+impl From<SizeDto> for glam::Vec2 {
+    fn from(s: SizeDto) -> Self {
+        glam::Vec2::new(s.width, s.height)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // QuadState
 // ---------------------------------------------------------------------------
@@ -65,7 +88,7 @@ pub struct ColorDto {
 #[serde(rename_all = "camelCase")]
 pub struct QuadStateDto {
     pub position: Vec3Dto,
-    pub size: Vec2Dto,
+    pub size: SizeDto,
     pub rotation: f32,
     pub scale: f32,
     pub anchor: Vec2Dto,
@@ -81,10 +104,7 @@ impl From<&QuadState> for QuadStateDto {
                 y: q.position.y,
                 z: q.position.z,
             },
-            size: Vec2Dto {
-                x: q.size.x,
-                y: q.size.y,
-            },
+            size: q.size.into(),
             rotation: q.rotation,
             scale: q.scale,
             anchor: Vec2Dto {
@@ -106,7 +126,7 @@ impl From<&QuadStateDto> for QuadState {
     fn from(d: &QuadStateDto) -> Self {
         Self {
             position: glam::Vec3::new(d.position.x, d.position.y, d.position.z),
-            size: glam::Vec2::new(d.size.x, d.size.y),
+            size: d.size.into(),
             rotation: d.rotation,
             scale: d.scale,
             anchor: glam::Vec2::new(d.anchor.x, d.anchor.y),
@@ -126,7 +146,7 @@ pub struct StyleOverrideDto {
     #[serde(default)]
     pub position: Option<Vec3Dto>,
     #[serde(default)]
-    pub size: Option<Vec2Dto>,
+    pub size: Option<SizeDto>,
     #[serde(default)]
     pub rotation: Option<f32>,
     #[serde(default)]
@@ -143,7 +163,7 @@ impl From<&StyleOverrideDto> for StyleOverride {
     fn from(d: &StyleOverrideDto) -> Self {
         Self {
             position: d.position.map(|p| glam::Vec3::new(p.x, p.y, p.z)),
-            size: d.size.map(|s| glam::Vec2::new(s.x, s.y)),
+            size: d.size.map(Into::into),
             rotation: d.rotation,
             scale: d.scale,
             anchor: d.anchor.map(|a| glam::Vec2::new(a.x, a.y)),
@@ -154,8 +174,7 @@ impl From<&StyleOverrideDto> for StyleOverride {
 }
 
 // ---------------------------------------------------------------------------
-// Text / Image / Border / Glow / DropShadow (M13.8 — TS/JS parity audit;
-// previously only reachable from Rust)
+// Text / Image / Border / Glow / DropShadow
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +184,7 @@ pub struct TextDto {
     pub size_px: f32,
     #[serde(default)]
     pub color: Option<ColorDto>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub letter_spacing_px: f32,
 }
 
@@ -180,10 +199,8 @@ impl From<&TextDto> for Text {
     }
 }
 
-/// `bytes` is raw PNG/JPEG file bytes (format sniffed from the data, not a
-/// file extension — see `proteus_ui::Image`'s own doc), e.g. straight from a
-/// `fetch()` response's `Uint8Array`, not decoded pixels — decoding happens
-/// during baking, same as the Rust-only path.
+/// An image as encoded PNG or JPEG bytes. The format is detected from the
+/// data, and decoding happens when the host bakes it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageDto {
@@ -274,11 +291,10 @@ pub struct ComponentSpecDto {
     pub focused: Option<StyleOverrideDto>,
     #[serde(default)]
     pub disabled: Option<StyleOverrideDto>,
-    /// Child entity handles, as `Entity::to_bits()` values — see this
-    /// module's top doc.
-    #[serde(default)]
+    /// Children, as `Entity::to_bits()` values.
+    #[serde(default, deserialize_with = "or_default")]
     pub children: Vec<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub bake: bool,
     #[serde(default)]
     pub text: Option<TextDto>,
@@ -290,27 +306,26 @@ pub struct ComponentSpecDto {
     pub glow: Option<GlowDto>,
     #[serde(default)]
     pub drop_shadow: Option<DropShadowDto>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub non_interactive: bool,
-    /// Defaults to `true` — an omitted `visible` must mean "shown", not
-    /// `bool::default()`.
-    #[serde(default = "default_visible")]
+    /// Defaults to `true`: an omitted `visible` means shown.
+    #[serde(default = "default_visible", deserialize_with = "or_visible")]
     pub visible: bool,
     #[serde(default)]
     pub opacity: Option<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub start_disabled: bool,
     #[serde(default)]
-    pub transitioning: Option<TransitioningConfigDto>,
+    pub transition_interaction: Option<TransitionInteractionConfigDto>,
 }
 
-/// `{maxSide?, eternal?}` — how a texture should be packed.
+/// `{ maxSide?, eternal? }`: how to add a texture to the atlas.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextureRequestDto {
     #[serde(default)]
     pub max_side: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub eternal: bool,
 }
 
@@ -323,21 +338,22 @@ impl From<&TextureRequestDto> for proteus_sdk::TextureRequest {
     }
 }
 
-/// Per-entity opt-in to input while mid-transition. Both flags default to
-/// `false`; `allowNavigation` is accepted but inert until navigation exists.
+/// Whether a component accepts input while transitioning. Both default to
+/// `false`. `allowNavigation` is not read yet; it is reserved for keyboard
+/// navigation.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TransitioningConfigDto {
-    #[serde(default)]
-    pub allow_input: bool,
-    #[serde(default)]
+pub struct TransitionInteractionConfigDto {
+    #[serde(default, deserialize_with = "or_default")]
+    pub allow_pointer: bool,
+    #[serde(default, deserialize_with = "or_default")]
     pub allow_navigation: bool,
 }
 
-impl From<&TransitioningConfigDto> for proteus_ui::TransitioningConfig {
-    fn from(d: &TransitioningConfigDto) -> Self {
+impl From<&TransitionInteractionConfigDto> for proteus_ui::TransitionInteractionConfig {
+    fn from(d: &TransitionInteractionConfigDto) -> Self {
         Self {
-            allow_input: d.allow_input,
+            allow_pointer: d.allow_pointer,
             allow_navigation: d.allow_navigation,
         }
     }
@@ -347,10 +363,15 @@ fn default_visible() -> bool {
     true
 }
 
+/// [`default_visible`], for a field given as `undefined` or `null`; see
+/// [`or_default`].
+fn or_visible<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(Option::<bool>::deserialize(d)?.unwrap_or_else(default_visible))
+}
+
 impl ComponentSpecDto {
-    /// Consumes `self`, building a real `ComponentSpec`. `children` still
-    /// needs the caller to resolve each bits-value into a `proteus_sdk::Handle`
-    /// (this DTO alone can't do that — it has no access to the live world).
+    /// Builds a `ComponentSpec` from everything except `children`, which are
+    /// returned separately for the caller to attach.
     pub fn into_spec_without_children(self) -> (ComponentSpec, Vec<f64>) {
         let mut spec = ComponentSpec::new((&self.geometry).into());
         if let Some(hover) = &self.hover {
@@ -393,8 +414,8 @@ impl ComponentSpecDto {
         if self.start_disabled {
             spec = spec.start_disabled();
         }
-        if let Some(transitioning) = &self.transitioning {
-            spec = spec.transitioning(transitioning.into());
+        if let Some(interaction) = &self.transition_interaction {
+            spec = spec.transition_interaction(interaction.into());
         }
         (spec, self.children)
     }
@@ -408,101 +429,185 @@ impl ComponentSpecDto {
 #[serde(rename_all = "camelCase")]
 pub struct TransitionConfigDto {
     pub duration: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub delay: f32,
-    #[serde(default = "default_easing")]
-    pub easing: String,
-}
-
-fn default_easing() -> String {
-    "linear".to_string()
+    /// Defaults to `easeInOutQuad`, as in Rust.
+    #[serde(default, deserialize_with = "or_default")]
+    pub easing: EasingDto,
 }
 
 impl From<&TransitionConfigDto> for TransitionConfig {
     fn from(d: &TransitionConfigDto) -> Self {
-        let easing = match d.easing.as_str() {
-            "easeInQuad" => proteus_sdk::ease_in_quad,
-            "easeOutQuad" => proteus_sdk::ease_out_quad,
-            "easeInOutQuad" => proteus_sdk::ease_in_out_quad,
-            "easeOutCubic" => proteus_sdk::ease_out_cubic,
-            _ => proteus_sdk::linear,
-        };
         Self {
             duration: d.duration,
             delay: d.delay,
-            easing,
+            easing: d.easing.0,
+        }
+    }
+}
+
+/// The built-in easing names TypeScript accepts, in TypeScript's spelling.
+const EASING_NAMES: &[&str] = &[
+    "linear",
+    "easeInQuad",
+    "easeOutQuad",
+    "easeInOutQuad",
+    "easeOutCubic",
+];
+
+/// An easing from JavaScript: a built-in name such as `"easeOutCubic"`, or
+/// `{ cubicBezier: [x1, y1, x2, y2] }`. Anything else is an error that names
+/// the bad value, so a mistyped name fails the call instead of quietly
+/// becoming a different curve.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EasingDto(pub Easing);
+
+impl<'de> Deserialize<'de> for EasingDto {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EasingVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EasingVisitor {
+            type Value = EasingDto;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an easing name or { cubicBezier: [x1, y1, x2, y2] }")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<EasingDto, E> {
+                let easing = match name {
+                    "linear" => Easing::Linear,
+                    "easeInQuad" => Easing::EaseInQuad,
+                    "easeOutQuad" => Easing::EaseOutQuad,
+                    "easeInOutQuad" => Easing::EaseInOutQuad,
+                    "easeOutCubic" => Easing::EaseOutCubic,
+                    _ => return Err(E::unknown_variant(name, EASING_NAMES)),
+                };
+                Ok(EasingDto(easing))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<EasingDto, A::Error> {
+                let mut points: Option<[f32; 4]> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "cubicBezier" {
+                        points = Some(map.next_value()?);
+                    } else {
+                        return Err(serde::de::Error::unknown_field(&key, &["cubicBezier"]));
+                    }
+                }
+                let [x1, y1, x2, y2] =
+                    points.ok_or_else(|| serde::de::Error::missing_field("cubicBezier"))?;
+                Ok(EasingDto(Easing::CubicBezier { x1, y1, x2, y2 }))
+            }
+        }
+
+        deserializer.deserialize_any(EasingVisitor)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ImageCrop
+// ---------------------------------------------------------------------------
+
+/// `{ kind: "none" | "centeredSquare" }`, `{ kind: "aspect", ratio, anchor? }`
+/// (the anchor defaults to the center) or `{ kind: "rect", x, y, width, height }`.
+/// An unknown `kind`, or a missing field, is an error that names it.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ImageCropDto {
+    None,
+    CenteredSquare,
+    Aspect {
+        ratio: f32,
+        #[serde(default)]
+        anchor: Option<Vec2Dto>,
+    },
+    Rect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
+impl From<&ImageCropDto> for proteus_sdk::ImageCrop {
+    fn from(d: &ImageCropDto) -> Self {
+        match d {
+            ImageCropDto::None => proteus_sdk::ImageCrop::None,
+            ImageCropDto::CenteredSquare => proteus_sdk::ImageCrop::CenteredSquare,
+            ImageCropDto::Aspect { ratio, anchor } => proteus_sdk::ImageCrop::Aspect {
+                ratio: *ratio,
+                anchor: anchor
+                    .map(|a| glam::Vec2::new(a.x, a.y))
+                    .unwrap_or(glam::Vec2::splat(0.5)),
+            },
+            ImageCropDto::Rect {
+                x,
+                y,
+                width,
+                height,
+            } => proteus_sdk::ImageCrop::Rect {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// SplitStrategy / MergeLayout (M13.8 — group transitions, previously
-// Rust-only)
+// SplitStrategy / MergeLayout
 // ---------------------------------------------------------------------------
 
-/// Same flat `{kind, ...}` shape convention `easing` already uses above
-/// (a string tag instead of a nested JSON tagged-union) — `kind` is one of
-/// `"perTarget"` / `"slice"` / `"gridSlice"`; `cols`/`rows` only matter for
-/// `"gridSlice"`. An unrecognized `kind` falls back to `Slice` and logs,
-/// keeping `TransitionConfigDto::easing`'s "unknown string → sane default"
-/// leniency rather than erroring. It used to fall back to `PerTarget`, which
-/// meant a typo silently selected the experimental strategy.
+/// `{ kind: "perTarget" | "row" | "column" }` or
+/// `{ kind: "grid", cols, rows }`. An unknown `kind`, or a grid without `cols`
+/// and `rows`, is an error that names the problem.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SplitStrategyDto {
-    pub kind: String,
-    #[serde(default)]
-    pub cols: usize,
-    #[serde(default)]
-    pub rows: usize,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SplitStrategyDto {
+    PerTarget,
+    Row,
+    Column,
+    Grid { cols: usize, rows: usize },
 }
 
 impl From<&SplitStrategyDto> for proteus_ui::SplitStrategy {
     fn from(d: &SplitStrategyDto) -> Self {
-        match d.kind.as_str() {
-            "slice" => proteus_ui::SplitStrategy::Slice,
-            "gridSlice" => proteus_ui::SplitStrategy::GridSlice {
-                cols: d.cols.max(1),
-                rows: d.rows.max(1),
-            },
-            "perTarget" => proteus_ui::SplitStrategy::PerTarget,
-            other => {
-                log::warn!("unknown splitTo strategy {other:?} — falling back to \"slice\"");
-                proteus_ui::SplitStrategy::Slice
-            }
+        match *d {
+            SplitStrategyDto::PerTarget => proteus_ui::SplitStrategy::PerTarget,
+            SplitStrategyDto::Row => proteus_ui::SplitStrategy::Row,
+            SplitStrategyDto::Column => proteus_ui::SplitStrategy::Column,
+            SplitStrategyDto::Grid { cols, rows } => proteus_ui::SplitStrategy::Grid { cols, rows },
         }
     }
 }
 
-/// `kind` is `"horizontal"` / `"grid"`; `cols`/`rows` only matter for
-/// `"grid"`. Unrecognized `kind` falls back to `Horizontal` — same
-/// leniency convention as [`SplitStrategyDto`].
+/// `{ kind: "row" | "column" }` or `{ kind: "grid", cols, rows }`. An unknown
+/// `kind`, or a grid without `cols` and `rows`, is an error that names the
+/// problem.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeLayoutDto {
-    pub kind: String,
-    #[serde(default)]
-    pub cols: usize,
-    #[serde(default)]
-    pub rows: usize,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MergeLayoutDto {
+    Row,
+    Column,
+    Grid { cols: usize, rows: usize },
 }
 
 impl From<&MergeLayoutDto> for proteus_ui::MergeLayout {
     fn from(d: &MergeLayoutDto) -> Self {
-        match d.kind.as_str() {
-            "grid" => proteus_ui::MergeLayout::Grid {
-                cols: d.cols.max(1),
-                rows: d.rows.max(1),
-            },
-            _ => proteus_ui::MergeLayout::Horizontal,
+        match *d {
+            MergeLayoutDto::Row => proteus_ui::MergeLayout::Row,
+            MergeLayoutDto::Column => proteus_ui::MergeLayout::Column,
+            MergeLayoutDto::Grid { cols, rows } => proteus_ui::MergeLayout::Grid { cols, rows },
         }
     }
 }
 
-/// One entry of `splitToWithStates`'s target list — `id` is a `Handle.id()`
-/// value (see this module's top doc), `state` the explicit rest geometry to
-/// use instead of resolving it from the target's own declared/live
-/// `QuadState` (mirrors `proteus-sdk`'s `Handle::split_to_with_states`).
+/// One target of `splitToWithStates`: its handle ID and the geometry it should
+/// end at.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetStateDto {
@@ -543,6 +648,9 @@ fn interaction_state_str(state: InteractionStateKind) -> &'static str {
         InteractionStateKind::Pressed => "pressed",
         InteractionStateKind::Focused => "focused",
         InteractionStateKind::Disabled => "disabled",
+        // A state added to `proteus-ui` must be added here and to TypeScript's
+        // `InteractionState`; until then it reads as the default style.
+        _ => "default",
     }
 }
 
@@ -572,7 +680,7 @@ impl From<&TransitionData> for TransitionDataDto {
 }
 
 // ---------------------------------------------------------------------------
-// TransitionDropped (SignalHandle::on_dropped payload)
+// TransitionDropped (TransitionChannel::on_dropped payload)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -585,7 +693,7 @@ pub struct TransitionDroppedDto {
 
 fn drop_reason_str(reason: DropReason) -> &'static str {
     match reason {
-        DropReason::SignalNotFound => "signalNotFound",
+        DropReason::ChannelNotFound => "channelNotFound",
         DropReason::EntityNotFound => "entityNotFound",
         DropReason::AlreadyTransitioning => "alreadyTransitioning",
         DropReason::EntityNotVisible => "entityNotVisible",
@@ -626,5 +734,120 @@ impl TextureStateDto {
             width,
             height,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TypeScript code often passes an optional value through as `undefined`.
+    // `serde-wasm-bindgen` gives `undefined` to serde as JSON gives `null`,
+    // so `null` here stands for it. Each field must read as its default.
+    #[test]
+    fn undefined_fields_read_as_their_defaults() {
+        let geometry = r#"{"position": {"x": 0, "y": 0, "z": 0}, "size": {"width": 1, "height": 1},
+            "rotation": 0, "scale": 1, "anchor": {"x": 0.5, "y": 0.5},
+            "color": {"r": 1, "g": 1, "b": 1, "a": 1}, "cornerRadius": 0}"#;
+        let spec: ComponentSpecDto = serde_json::from_str(&format!(
+            r#"{{"geometry": {geometry}, "children": null, "bake": null, "nonInteractive": null,
+                "visible": null, "startDisabled": null,
+                "text": {{"content": "a", "sizePx": 10, "letterSpacingPx": null}}}}"#
+        ))
+        .unwrap();
+        assert!(spec.children.is_empty() && !spec.bake && !spec.non_interactive);
+        assert!(
+            spec.visible,
+            "a component is visible unless it says otherwise"
+        );
+        assert!(!spec.start_disabled);
+        assert_eq!(spec.text.unwrap().letter_spacing_px, 0.0);
+
+        let request: TextureRequestDto = serde_json::from_str(r#"{"eternal": null}"#).unwrap();
+        assert!(!request.eternal);
+        let interaction: TransitionInteractionConfigDto =
+            serde_json::from_str(r#"{"allowPointer": null, "allowNavigation": null}"#).unwrap();
+        assert!(!interaction.allow_pointer && !interaction.allow_navigation);
+
+        let config = config(r#"{"duration": 0.3, "delay": null, "easing": null}"#).unwrap();
+        assert_eq!(config.delay, 0.0);
+        assert!(matches!(config.easing, Easing::EaseInOutQuad));
+    }
+
+    fn config(json: &str) -> Result<TransitionConfig, serde_json::Error> {
+        serde_json::from_str::<TransitionConfigDto>(json).map(|d| (&d).into())
+    }
+
+    #[test]
+    fn the_default_easing_matches_rust() {
+        let c = config(r#"{"duration": 0.3}"#).unwrap();
+        assert!(matches!(c.easing, Easing::EaseInOutQuad));
+    }
+
+    #[test]
+    fn built_in_names_map_to_their_easing() {
+        let c = config(r#"{"duration": 0.3, "easing": "easeOutCubic"}"#).unwrap();
+        assert!(matches!(c.easing, Easing::EaseOutCubic));
+    }
+
+    #[test]
+    fn a_cubic_bezier_is_read_in_order() {
+        let c = config(r#"{"duration": 0.3, "easing": {"cubicBezier": [0.1, 0.2, 0.3, 0.4]}}"#)
+            .unwrap();
+        match c.easing {
+            Easing::CubicBezier { x1, y1, x2, y2 } => {
+                assert_eq!([x1, y1, x2, y2], [0.1, 0.2, 0.3, 0.4])
+            }
+            other => panic!("expected a cubic Bézier, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unknown_name_is_an_error_naming_it() {
+        let err = config(r#"{"duration": 0.3, "easing": "easeOutQuart"}"#).unwrap_err();
+        assert!(err.to_string().contains("easeOutQuart"), "{err}");
+    }
+
+    #[test]
+    fn layouts_parse_by_kind() {
+        let row: SplitStrategyDto = serde_json::from_str(r#"{"kind": "row"}"#).unwrap();
+        assert!(matches!((&row).into(), proteus_ui::SplitStrategy::Row));
+        let grid: MergeLayoutDto =
+            serde_json::from_str(r#"{"kind": "grid", "cols": 3, "rows": 2}"#).unwrap();
+        assert!(matches!(
+            (&grid).into(),
+            proteus_ui::MergeLayout::Grid { cols: 3, rows: 2 }
+        ));
+    }
+
+    #[test]
+    fn an_unknown_layout_kind_or_a_grid_without_dimensions_is_an_error() {
+        let err = serde_json::from_str::<SplitStrategyDto>(r#"{"kind": "slice"}"#).unwrap_err();
+        assert!(err.to_string().contains("slice"), "{err}");
+        assert!(serde_json::from_str::<MergeLayoutDto>(r#"{"kind": "horizontal"}"#).is_err());
+        assert!(serde_json::from_str::<MergeLayoutDto>(r#"{"kind": "grid"}"#).is_err());
+    }
+
+    #[test]
+    fn image_crops_parse_by_kind_and_aspect_defaults_to_centered() {
+        let crop: ImageCropDto =
+            serde_json::from_str(r#"{"kind": "aspect", "ratio": 2.0}"#).unwrap();
+        match (&crop).into() {
+            proteus_sdk::ImageCrop::Aspect { ratio, anchor } => {
+                assert_eq!(ratio, 2.0);
+                assert_eq!(anchor, glam::Vec2::splat(0.5));
+            }
+            other => panic!("expected an aspect crop, got {other:?}"),
+        }
+        assert!(serde_json::from_str::<ImageCropDto>(r#"{"kind": "square"}"#).is_err());
+        assert!(serde_json::from_str::<ImageCropDto>(r#"{"kind": "rect", "x": 0.1}"#).is_err());
+    }
+
+    #[test]
+    fn a_malformed_bezier_is_an_error() {
+        assert!(config(r#"{"duration": 0.3, "easing": {"cubicBezier": [0.1, 0.2]}}"#).is_err());
+        assert!(
+            config(r#"{"duration": 0.3, "easing": {"bezier": [0.1, 0.2, 0.3, 0.4]}}"#).is_err()
+        );
     }
 }

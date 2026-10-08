@@ -1,23 +1,18 @@
-//! Integration tests for the M4 text rendering pipeline.
-//!
-//! These tests exercise `FontAtlas` end-to-end — rasterization and pixel buffer integrity —
-//! without requiring a GPU device. Atlas packing/placement (once part of `FontAtlas` itself) moved
-//! to `TextureRegistry`/`MainAtlasAllocator` in M11 — see `texture_registry.rs`'s and
-//! `main_atlas_allocator.rs`'s own unit tests for that coverage. GPU-dependent tests
-//! (write_to_main_atlas) live in `headless_render.rs`.
+// Tests of `FontAtlas`: rasterizing text and the resulting pixels, without a
+// GPU. Atlas placement is tested in `texture_registry.rs` and
+// `main_atlas_allocator.rs`, and uploading in `headless_render.rs`.
 
-// This is a separate crate root (integration tests compile independently
-// of the library) — see proteus_render::lib.rs's own doc for why
-// chunks_exact_to_as_chunks/unknown_lints are allowed here too.
+// A separate crate root from the library, so the lint allowance in lib.rs is
+// repeated here.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
-use proteus_render::{FontAtlas, DEFAULT_MAIN_ATLAS_SIZE, EMBEDDED_FONT_BYTES};
+use proteus_render::{FontAtlas, EMBEDDED_FONT_BYTES};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Create a `FontAtlas` backed by the embedded Inter Bold font.
+// Create a `FontAtlas` backed by the embedded Inter Bold font.
 fn atlas() -> FontAtlas {
     FontAtlas::with_embedded_font()
 }
@@ -56,8 +51,14 @@ fn font_atlas_constructs_with_embedded_font() {
 
 #[test]
 fn font_atlas_constructs_with_custom_bytes() {
-    // Verify the `new` constructor with explicit bytes works too.
-    let _fa = FontAtlas::new(EMBEDDED_FONT_BYTES);
+    assert!(FontAtlas::new(EMBEDDED_FONT_BYTES).is_ok());
+}
+
+// Bytes that aren't a font are an error the caller can handle, not a panic.
+#[test]
+fn font_atlas_rejects_bytes_that_arent_a_font() {
+    assert!(FontAtlas::new(b"not a font").is_err());
+    assert!(FontAtlas::new(&[]).is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ fn font_atlas_constructs_with_custom_bytes() {
 #[test]
 fn rasterize_ascii_string_succeeds() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("Hello, World!", 24.0);
+    let r = fa.rasterize_text("Hello, World!", 24.0, 0.0);
     assert!(
         r.is_some(),
         "rasterize_text returned None for a simple ASCII string"
@@ -78,7 +79,7 @@ fn rasterize_ascii_string_succeeds() {
 fn rasterize_empty_string_returns_none() {
     let mut fa = atlas();
     assert!(
-        fa.rasterize_text("", 24.0).is_none(),
+        fa.rasterize_text("", 24.0, 0.0).is_none(),
         "expected None for empty string"
     );
 }
@@ -86,7 +87,7 @@ fn rasterize_empty_string_returns_none() {
 #[test]
 fn rasterize_single_character_succeeds() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("A", 32.0);
+    let r = fa.rasterize_text("A", 32.0, 0.0);
     assert!(
         r.is_some(),
         "rasterize_text returned None for single character 'A'"
@@ -103,7 +104,7 @@ fn rasterize_single_character_succeeds() {
 #[test]
 fn pixel_buffer_length_matches_dimensions() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("Test", 20.0).unwrap();
+    let r = fa.rasterize_text("Test", 20.0, 0.0).unwrap();
     assert_eq!(
         r.rgba_pixels.len(),
         (r.width * r.height * 4) as usize,
@@ -114,7 +115,7 @@ fn pixel_buffer_length_matches_dimensions() {
 #[test]
 fn pixel_buffer_rgb_channels_are_white_where_alpha_nonzero() {
     let mut fa = atlas();
-    let r = fa.rasterize_text("Xx", 32.0).unwrap();
+    let r = fa.rasterize_text("Xx", 32.0, 0.0).unwrap();
     for (i, chunk) in r.rgba_pixels.chunks_exact(4).enumerate() {
         let (r_ch, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
         if a > 0 {
@@ -138,7 +139,7 @@ fn pixel_buffer_rgb_channels_are_white_where_alpha_nonzero() {
 fn pixel_buffer_has_visible_coverage() {
     // At least some pixels must be non-transparent for any renderable character.
     let mut fa = atlas();
-    let r = fa.rasterize_text("Proteus", 24.0).unwrap();
+    let r = fa.rasterize_text("Proteus", 24.0, 0.0).unwrap();
     let has_visible = r.rgba_pixels.chunks_exact(4).any(|c| c[3] > 0);
     assert!(
         has_visible,
@@ -147,14 +148,14 @@ fn pixel_buffer_has_visible_coverage() {
 }
 
 // ---------------------------------------------------------------------------
-// Sizes 12 – 48 px (M4 DoD requirement)
+// Sizes from 12 to 48 pixels
 // ---------------------------------------------------------------------------
 
 #[test]
 fn rasterize_succeeds_at_all_required_sizes() {
     let mut fa = atlas();
     for size_px in [12.0_f32, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0] {
-        let r = fa.rasterize_text("Ag", size_px);
+        let r = fa.rasterize_text("Ag", size_px, 0.0);
         assert!(r.is_some(), "rasterize_text returned None at {size_px}px");
         let r = r.unwrap();
         assert!(
@@ -167,8 +168,8 @@ fn rasterize_succeeds_at_all_required_sizes() {
 #[test]
 fn larger_size_produces_larger_glyphs() {
     let mut fa = atlas();
-    let small = fa.rasterize_text("A", 12.0).unwrap();
-    let large = fa.rasterize_text("A", 48.0).unwrap();
+    let small = fa.rasterize_text("A", 12.0, 0.0).unwrap();
+    let large = fa.rasterize_text("A", 48.0, 0.0).unwrap();
     // Larger font size must produce a taller (or equal) glyph run.
     assert!(
         large.height >= small.height,
@@ -187,39 +188,12 @@ fn larger_size_produces_larger_glyphs() {
 #[test]
 fn wider_string_produces_wider_glyph_run() {
     let mut fa = atlas();
-    let single = fa.rasterize_text("I", 24.0).unwrap();
-    let wide = fa.rasterize_text("WWWWWWWW", 24.0).unwrap();
+    let single = fa.rasterize_text("I", 24.0, 0.0).unwrap();
+    let wide = fa.rasterize_text("WWWWWWWW", 24.0, 0.0).unwrap();
     assert!(
         wide.width > single.width,
         "wide string width ({}) should be > single char width ({})",
         wide.width,
         single.width
     );
-}
-
-// ---------------------------------------------------------------------------
-// DEFAULT_MAIN_ATLAS_SIZE constant
-// ---------------------------------------------------------------------------
-
-#[test]
-fn main_atlas_size_is_positive() {
-    // Constant assertion — evaluated at compile time.
-    const {
-        assert!(
-            DEFAULT_MAIN_ATLAS_SIZE > 0,
-            "DEFAULT_MAIN_ATLAS_SIZE must be positive"
-        )
-    };
-}
-
-#[test]
-fn main_atlas_size_is_power_of_two() {
-    // Constant assertion — evaluated at compile time.
-    // (Format args are not allowed in const context; message is a static literal.)
-    const {
-        assert!(
-            DEFAULT_MAIN_ATLAS_SIZE.is_power_of_two(),
-            "DEFAULT_MAIN_ATLAS_SIZE must be a power of two for GPU compatibility",
-        )
-    };
 }

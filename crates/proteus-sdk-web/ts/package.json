@@ -1,7 +1,7 @@
 {
   "name": "proteus-sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for Proteus, a metamorphic-component UI framework rendered GPU-native via WebGL2/WebGPU — components transform continuously into other components instead of loading new screens.",
+  "description": "TypeScript SDK for Proteus, a UI framework whose components transform into other components instead of loading new screens. Draws with WebGPU or WebGL2.",
   "type": "module",
   "license": "MIT OR Apache-2.0",
   "repository": {
@@ -39,9 +39,12 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "prepack": "rm -f pkg/.gitignore pkg-host/.gitignore"
+    "prepack": "rm -f pkg/.gitignore pkg-host/.gitignore",
+    "check-docs": "typedoc src/index.ts --emit none --excludeInternal --validation.notDocumented --validation.invalidLink --treatValidationWarningsAsErrors",
+    "check-snippets": "node ../../../scripts/check-ts-snippets.mjs"
   },
   "devDependencies": {
+    "typedoc": "^0.28.20",
     "typescript": "^5.6.0"
   }
 }

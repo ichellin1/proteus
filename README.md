@@ -4,10 +4,12 @@ Proteus is a cross-platform UI framework written in Rust. Its defining idea: **U
 
 ## Read First
 
+→ [Guides](./docs/README.md) — getting started, concepts and how-tos, in Rust and TypeScript
+→ API reference — [Rust](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/) and
+  [TypeScript](https://ichellin1.github.io/proteus/api/ts/)
 → [VISION.md](./VISION.md) — the philosophy and principles
 → [ROADMAP.md](./ROADMAP.md) — milestones and sequencing
-→ [PLANNING.md](./PLANNING.md) — full architecture decisions and definitions of done
-→ [GETTING_STARTED.md](./GETTING_STARTED.md) — dependencies, demo assets, build & run instructions
+→ [CONTRIBUTING.md](./CONTRIBUTING.md) — building from source, and how code and docs are written
 → [RELEASING.md](./RELEASING.md) — release strategy and deploy steps for the web reference demo
 
 ## Crate Structure
@@ -17,16 +19,17 @@ crates/
   proteus-gpu/          # Layer 0: surface + device/queue/swap-chain setup, shared by both hosts
   proteus-render/       # Layer 1: instanced render pipeline, atlases, offscreen bake pipeline
   proteus-ui/           # Layer 2: metamorphic component model, transition topologies
-  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/signal/texture) — headless
+  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/transition channel/texture) — headless
   proteus-sdk-web/      # Layer 2.5 (web): wasm-bindgen bridge + npm-publishable TypeScript SDK (ts/)
   proteus-runtime/      # Layer 2.75: Renderer + Engine + the App / HostServices contracts
   proteus-host-winit/   # Layer 3: native host — winit window, frame loop, file-backed assets
-  proteus-host-web/     # Layer 3: wasm host — canvas, rAF loop, fetched assets, HLS video
+  proteus-host-web/     # Layer 3: wasm host — canvas, rAF loop, fetched assets
   proteus-demo/         # the reference demo, written once as an App
   proteus-shell-native/ # Layer 4: a `main()` that hands the demo to proteus-host-winit
   proteus-shell-web/    # Layer 4: a wasm entry point that hands it to proteus-host-web
 examples/
   gallery/              # the TypeScript front door — the SDK driven from TS, no Rust
+  video/                # video from the browser's own <video> player, in TypeScript
 ```
 
 **Writing an app** means implementing `proteus_runtime::App` (`setup` once, `update` per frame)
@@ -34,7 +37,14 @@ and handing it to a host's `run()`. The host owns the window or canvas, the GPU 
 frame loop and input; `Engine` owns `Proteus` and calls into the app. Nothing forks a shell, and
 the same app runs on both platforms — `proteus-demo` is exactly this, and the two `proteus-shell-*`
 crates below it are thin entry points. From TypeScript, `mount()` plays the host's role instead;
-see `examples/gallery`.
+see `examples/gallery/typescript`.
+
+## Video
+
+Video is currently **experimental**. Proteus shows video but doesn't play it: you bring your own
+player, such as the browser's `<video>` element, `ffmpeg` or a hardware decoder, and upload its
+frames to a `VideoHandle`, which components show. The current version of Proteus supports one video at a time, with frames supplied by the app; playback controls are the player's own. See `examples/video` for `ffmpeg`
+on the desktop and a `<video>` element in a browser, in Rust and TypeScript.
 
 ## Reference Demo
 
@@ -46,9 +56,9 @@ framework examples (effects, text, transforms, stress tests).
 
 One `proteus-demo` crate drives both platforms; each shell just picks the host.
 
-See **[GETTING_STARTED.md](./GETTING_STARTED.md)** for dependency installation, demo-asset
-setup, and full run/test instructions for both shells. Quick version, once dependencies and
-assets are in place:
+See **[CONTRIBUTING.md](./CONTRIBUTING.md#building-from-source)** for dependencies, demo
+assets, and full run and test instructions for both shells. Quick version, once the
+dependencies are installed:
 
 ```
 cargo run -p proteus-shell-native   # native

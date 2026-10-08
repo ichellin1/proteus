@@ -1,45 +1,29 @@
-//! CPU-side font rasterizer for pre-baked text rendering.
+//! Rasterizing text into pixels, on the CPU.
 //!
-//! [`FontAtlas`] rasterizes text strings into RGBA pixel buffers using [`fontdue`]. The caller
-//! registers a `main_atlas` region for those pixels via
-//! [`crate::TextureRegistry::register_static`], then uploads them via
+//! [`FontAtlas`] rasterizes a line of text into an RGBA image with `fontdue`.
+//! The caller then allocates a main-atlas region for it with
+//! [`crate::TextureRegistry::register_static`] and uploads it with
 //! [`crate::QuadPipeline::write_to_main_atlas`].
 //!
-//! ## Approach — text-as-texture
+//! ## Text as a texture
 //!
-//! A complete text string (e.g. "Hello World") is rasterized at its declared pixel size into a
-//! single RGBA image:
-//! - R=G=B=255 throughout (white — enables color tinting via `QuadInstance::color`)
-//! - A = per-pixel glyph coverage from fontdue's anti-aliased rasterizer
+//! The whole string becomes one image, at its size in pixels:
+//! - red, green and blue are 255 everywhere, so the text can take any color;
+//! - alpha is each pixel's glyph coverage, antialiased.
 //!
-//! That image is written into a `main_atlas` region and the entity's `QuadInstance` UV fields are
-//! pointed at that region. The result is treated identically to any other textured quad —
-//! transitions, color tinting, and corner-radius rounding all work without special-casing text.
-//!
-//! ## No allocation here (M11)
-//!
-//! Before M11, `FontAtlas` owned an append-only shelf packer and allocated its own `main_atlas`
-//! regions (`bake_text`/`bake_image`/`reserve_region`) — the only reason `bake_image`, which
-//! decodes nothing itself, existed at all was to share that one packer's cursor with `bake_text`
-//! so the two never silently overlapped. M11 replaced that packer with
-//! [`crate::TextureRegistry`]'s real etagere-backed allocator, so `FontAtlas` narrows to what it's
-//! actually unique at — font rasterization — and `bake_image` is gone: a decoded image's pixels go
-//! straight from [`crate::decode_image`] to `TextureRegistry::register_static`, no `FontAtlas`
-//! involvement needed.
+//! The text is then drawn like any other texture: it transitions, takes a
+//! color, and is clipped by rounded corners, with no special handling.
 //!
 //! ## Embedded font
 //!
-//! [`EMBEDDED_FONT_BYTES`] holds Inter Bold (SIL Open Font License 1.1) embedded at compile time —
-//! the same family and weight the Brand Spec calls for on the "PROTEUS" wordmark, used as the
-//! app's one and only font rather than maintaining a separate brand font alongside a generic one.
-//! Callers can supply their own font bytes to [`FontAtlas::new`] for custom typography.
+//! [`EMBEDDED_FONT_BYTES`] is Inter Bold (SIL Open Font License 1.1). To use
+//! another font, pass its bytes to [`FontAtlas::new`], which returns a
+//! [`FontError`] if they aren't a font it can read.
 //!
-//! Google Fonts only distributes Inter as a variable font (`wght`/`opsz` axes) — `fontdue` has no
-//! OpenType Font Variations (`fvar`/`gvar`) support, so it would always rasterize the font's
-//! default instance (Regular), never a requested weight. `assets/Inter-Bold.ttf` is a static `wght
-//! 700, opsz 14` instance produced from Google Fonts' `Inter[opsz,wght].ttf` via `fonttools`
-//! (`fonttools varLib.instancer --update-name-table Inter-Variable.ttf wght=700 opsz=14`) — a
-//! standard, lossless way to derive a static weight from a variable font, not a redraw.
+//! `fontdue` can't use a variable font's weight axis, and Google Fonts only
+//! ships Inter as a variable font. So `assets/Inter-Bold.ttf` is a static
+//! instance at weight 700 and optical size 14, made with `fonttools`:
+//! `fonttools varLib.instancer --update-name-table Inter-Variable.ttf wght=700 opsz=14`.
 
 // ---------------------------------------------------------------------------
 // Embedded font
@@ -55,17 +39,18 @@ pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/Inter-Bold.ttf"
 // RasterizedGlyphs
 // ---------------------------------------------------------------------------
 
-/// The result of one [`FontAtlas::rasterize_text`] call — just pixels, no atlas placement.
-/// Register a `main_atlas` region for them via [`crate::TextureRegistry::register_static`], then
-/// upload via [`crate::QuadPipeline::write_to_main_atlas`].
+/// The pixels from one [`FontAtlas::rasterize_text`] call, with no atlas
+/// position yet. Allocate a region with
+/// [`crate::TextureRegistry::register_static`], then upload with
+/// [`crate::QuadPipeline::write_to_main_atlas`].
 #[derive(Debug, Clone)]
 pub struct RasterizedGlyphs {
     /// Width of the rasterized text image in pixels.
     pub width: u32,
     /// Height of the rasterized text image in pixels.
     pub height: u32,
-    /// RGBA pixel data. Length is `width * height * 4`.
-    /// Premultiplied-alpha is NOT used — alpha is the raw glyph coverage.
+    /// RGBA pixels, `width * height * 4` bytes. Alpha is the glyph coverage,
+    /// not premultiplied.
     pub rgba_pixels: Vec<u8>,
 }
 
@@ -73,56 +58,50 @@ pub struct RasterizedGlyphs {
 // FontAtlas
 // ---------------------------------------------------------------------------
 
-/// CPU-side glyph rasterizer — no atlas allocation (see the module docs).
+/// Rasterizes text with one font, on the CPU. It doesn't allocate atlas space
+/// (see the module docs).
 ///
-/// Create one per application session; share it across all text entities. A real bevy ECS
-/// `Resource` (see the impl below) — inserted into the `World` once at shell startup rather than
-/// kept as a plain shell-owned field — so `bake_pending_text`/`bake_system` can reach it from
-/// inside the ECS schedule the same way `GpuContext`/`QuadPipeline` already can.
-///
-/// Call [`rasterize_text`] for each unique (string, size) pair, register a `main_atlas` region for
-/// the result via `TextureRegistry::register_static`, then upload via
-/// `QuadPipeline::write_to_main_atlas`.
+/// One is enough for an app: the renderer owns one and uses it for all text.
+/// Call [`rasterize_text`] for each string and size, allocate a main-atlas
+/// region for the result with `TextureRegistry::register_static`, then upload
+/// it with `QuadPipeline::write_to_main_atlas`.
 ///
 /// [`rasterize_text`]: FontAtlas::rasterize_text
 pub struct FontAtlas {
     font: fontdue::Font,
 }
 
-impl bevy_ecs::prelude::Resource for FontAtlas {}
+/// Font bytes that [`FontAtlas::new`] couldn't read as a TTF or OTF font.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("not a TTF or OTF font that can be read: {0}")]
+pub struct FontError(String);
 
 impl FontAtlas {
-    /// Create a new [`FontAtlas`] backed by the given TTF/OTF bytes.
+    /// Creates a [`FontAtlas`] for the TTF or OTF font in `font_bytes`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `font_bytes` cannot be parsed as a valid TTF or OTF file.
-    pub fn new(font_bytes: &[u8]) -> Self {
+    /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
+    pub fn new(font_bytes: &[u8]) -> Result<Self, FontError> {
         let font = fontdue::Font::from_bytes(font_bytes, fontdue::FontSettings::default())
-            .expect("FontAtlas: failed to parse font bytes — ensure the data is a valid TTF/OTF");
-        Self { font }
+            .map_err(|e| FontError(e.to_string()))?;
+        Ok(Self { font })
     }
 
-    /// Create a [`FontAtlas`] using the [`EMBEDDED_FONT_BYTES`] (Inter Bold).
+    /// Creates a [`FontAtlas`] for the embedded font, [`EMBEDDED_FONT_BYTES`]
+    /// (Inter Bold).
     pub fn with_embedded_font() -> Self {
-        Self::new(EMBEDDED_FONT_BYTES)
+        Self::new(EMBEDDED_FONT_BYTES).expect("the embedded font is a valid TTF")
     }
 
-    /// Rasterize `text` at `size_px` into an RGBA pixel buffer.
+    /// Rasterizes `text` at `size_px` into an RGBA pixel buffer, with
+    /// `letter_spacing_px` of extra space between glyphs (`0.0` for the font's
+    /// normal spacing). No space is added after the last glyph, so the result
+    /// has no trailing padding.
     ///
-    /// Returns `None` if:
-    /// - `text` is empty (or contains only whitespace that contributes no pixels).
-    /// - The font has no usable line metrics at `size_px` (should not happen for valid fonts).
-    pub fn rasterize_text(&mut self, text: &str, size_px: f32) -> Option<RasterizedGlyphs> {
-        self.rasterize_text_tracked(text, size_px, 0.0)
-    }
-
-    /// Same as [`rasterize_text`](Self::rasterize_text), with `letter_spacing_px` of extra
-    /// tracking inserted *between* glyphs (not after the last one, so the bounding box doesn't
-    /// include trailing padding). `0.0` behaves identically to `rasterize_text` — used for the
-    /// Brand Spec's "letter-spacing 0.06em" wordmark requirement, which `rasterize_text` alone
-    /// has no way to express.
-    pub fn rasterize_text_tracked(
+    /// Returns `None` if `text` draws no pixels (it's empty, or only
+    /// whitespace), or if the font has no line height at `size_px`.
+    pub fn rasterize_text(
         &mut self,
         text: &str,
         size_px: f32,
@@ -145,13 +124,12 @@ impl FontAtlas {
         // ------------------------------------------------------------------
         // 2. Compute the total bounding box for the text run.
         //
-        //    Height: font ascent + |descent| (in pixels). We query
-        //    `horizontal_line_metrics` for the current px size.
+        //    Height: the font's ascent plus its descent, in pixels, from
+        //    `horizontal_line_metrics` at this size.
         //
-        //    Width: sum of all glyph advance widths (integer ceiling), plus
-        //    `letter_spacing_px` between each pair of glyphs — (n - 1) gaps
-        //    for n glyphs, not n, so a single trailing gap doesn't pad the
-        //    bounding box past the last glyph's own ink.
+        //    Width: from the leftmost pen position to the rightmost ink pixel,
+        //    with `letter_spacing_px` between each pair of glyphs (n - 1 gaps
+        //    for n glyphs, so there's no trailing gap).
         // ------------------------------------------------------------------
 
         let line_metrics = self.font.horizontal_line_metrics(size_px)?;
@@ -181,22 +159,30 @@ impl FontAtlas {
         // for many glyphs — decorative caps, descenders like "y"/"j", or
         // just ordinary overhang — and most visible on the *last* glyph,
         // since there's no following glyph's space for it to overlap
-        // into). Sizing purely off the sum of advance widths silently
-        // clipped that overhang at the right edge. Instead, walk the same
-        // pen-advance sequence the compositing loop below uses, tracking
-        // the rightmost ink pixel any glyph's bitmap actually reaches, not
-        // just where the pen ends up.
+        // into). Sizing from the sum of advance widths would clip that
+        // overhang at the right edge, so this walks the same pen advances as
+        // the compositing loop below and tracks the rightmost ink pixel any
+        // glyph reaches, not just where the pen ends up.
+        //
+        // Ink can also start left of the first pen position: a glyph with a
+        // negative left bearing, such as Inter's "j" or "Î", or a later glyph
+        // pulled left by negative letter spacing. So it tracks the leftmost
+        // ink pixel too, and the pen starts that far right.
         let mut pen_x_probe: i32 = 0;
+        let mut min_left: i32 = 0;
         let mut max_right: i32 = 0;
         for (i, (metrics, _)) in rasterized.iter().enumerate() {
             let glyph_left = pen_x_probe + metrics.xmin;
+            if metrics.width > 0 {
+                min_left = min_left.min(glyph_left);
+            }
             max_right = max_right.max(glyph_left + metrics.width as i32);
             pen_x_probe += metrics.advance_width.ceil() as i32;
             if i + 1 < glyph_count {
                 pen_x_probe += letter_spacing_px.round() as i32;
             }
         }
-        let text_width = max_right.max(0) as u32;
+        let text_width = (max_right - min_left).max(0) as u32;
         if text_width == 0 {
             return None;
         }
@@ -211,12 +197,12 @@ impl FontAtlas {
 
         let mut rgba = vec![0u8; (text_width * text_height * 4) as usize];
 
-        let mut pen_x: i32 = 0;
+        let mut pen_x: i32 = -min_left;
 
         for (i, (metrics, bitmap)) in rasterized.iter().enumerate() {
             // glyph_left: horizontal offset of the glyph's left edge from pen_x.
             // metrics.xmin is the bearing from pen position to the left edge of the
-            // visible glyph pixels. For most Latin characters this is ≥ 0.
+            // visible glyph pixels. It can be negative; see the width above.
             let glyph_left: i32 = pen_x + metrics.xmin;
 
             // glyph_top (in Y-down image coords): fontdue uses Y-up for ymin/height.
@@ -274,11 +260,28 @@ mod tests {
         FontAtlas::with_embedded_font()
     }
 
+    // A glyph whose ink starts left of the pen, like Inter's "j", keeps its
+    // left edge.
+    #[test]
+    fn a_glyph_with_a_negative_left_bearing_isnt_clipped() {
+        let mut fa = atlas();
+        let (metrics, bitmap) = fa.font.rasterize('j', 64.0);
+        assert!(metrics.xmin < 0, "sanity: Inter's j starts left of the pen");
+
+        let glyphs = fa.rasterize_text("j", 64.0, 0.0).unwrap();
+
+        assert_eq!(
+            glyphs.rgba_pixels.chunks(4).filter(|p| p[3] > 0).count(),
+            bitmap.iter().filter(|&&a| a > 0).count(),
+            "every pixel of the glyph's ink is drawn"
+        );
+    }
+
     #[test]
     fn rasterize_text_returns_non_empty_pixels() {
         let mut fa = atlas();
         let glyphs = fa
-            .rasterize_text("Hello", 24.0)
+            .rasterize_text("Hello", 24.0, 0.0)
             .expect("rasterize_text returned None");
         assert!(!glyphs.rgba_pixels.is_empty());
         assert_eq!(
@@ -291,7 +294,7 @@ mod tests {
     fn rasterize_text_pixels_are_white_with_alpha() {
         let mut fa = atlas();
         let glyphs = fa
-            .rasterize_text("A", 48.0)
+            .rasterize_text("A", 48.0, 0.0)
             .expect("rasterize expected to succeed");
         // Every non-transparent pixel must have R=G=B=255.
         for chunk in glyphs.rgba_pixels.chunks_exact(4) {
@@ -308,7 +311,7 @@ mod tests {
     fn rasterize_text_has_some_opaque_pixels() {
         let mut fa = atlas();
         let glyphs = fa
-            .rasterize_text("X", 32.0)
+            .rasterize_text("X", 32.0, 0.0)
             .expect("rasterize should succeed");
         let has_visible = glyphs.rgba_pixels.chunks_exact(4).any(|c| c[3] > 0);
         assert!(
@@ -320,14 +323,14 @@ mod tests {
     #[test]
     fn rasterize_empty_text_returns_none() {
         let mut fa = atlas();
-        assert!(fa.rasterize_text("", 24.0).is_none());
+        assert!(fa.rasterize_text("", 24.0, 0.0).is_none());
     }
 
     #[test]
     fn rasterize_text_sizes_12_to_48_succeed() {
         let mut fa = atlas();
         for size in [12.0_f32, 16.0, 24.0, 32.0, 48.0] {
-            let r = fa.rasterize_text("Ag", size);
+            let r = fa.rasterize_text("Ag", size, 0.0);
             assert!(r.is_some(), "rasterize_text failed at {size}px");
             let r = r.unwrap();
             assert!(r.width > 0 && r.height > 0, "zero-size glyphs at {size}px");
@@ -335,20 +338,20 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_text_tracked_zero_spacing_matches_rasterize_text() {
+    fn rasterize_text_zero_spacing_matches_rasterize_text() {
         let mut fa = atlas();
-        let tracked = fa.rasterize_text_tracked("PROTEUS", 40.0, 0.0).unwrap();
-        let plain = fa.rasterize_text("PROTEUS", 40.0).unwrap();
+        let tracked = fa.rasterize_text("PROTEUS", 40.0, 0.0).unwrap();
+        let plain = fa.rasterize_text("PROTEUS", 40.0, 0.0).unwrap();
         assert_eq!(tracked.width, plain.width);
         assert_eq!(tracked.height, plain.height);
         assert_eq!(tracked.rgba_pixels, plain.rgba_pixels);
     }
 
     #[test]
-    fn rasterize_text_tracked_wider_spacing_widens_bounding_box() {
+    fn rasterize_text_wider_spacing_widens_bounding_box() {
         let mut fa = atlas();
-        let tight = fa.rasterize_text_tracked("PROTEUS", 40.0, 0.0).unwrap();
-        let tracked = fa.rasterize_text_tracked("PROTEUS", 40.0, 10.0).unwrap();
+        let tight = fa.rasterize_text("PROTEUS", 40.0, 0.0).unwrap();
+        let tracked = fa.rasterize_text("PROTEUS", 40.0, 10.0).unwrap();
         // 7 glyphs → 6 gaps of ~10px extra.
         assert!(
             tracked.width > tight.width + 50,
@@ -363,10 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_text_tracked_single_glyph_has_no_trailing_gap() {
+    fn rasterize_text_single_glyph_has_no_trailing_gap() {
         let mut fa = atlas();
-        let no_spacing = fa.rasterize_text_tracked("A", 40.0, 0.0).unwrap();
-        let with_spacing = fa.rasterize_text_tracked("A", 40.0, 20.0).unwrap();
+        let no_spacing = fa.rasterize_text("A", 40.0, 0.0).unwrap();
+        let with_spacing = fa.rasterize_text("A", 40.0, 20.0).unwrap();
         assert_eq!(
             no_spacing.width, with_spacing.width,
             "a single glyph has no gap to insert tracking into"

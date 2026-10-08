@@ -1,20 +1,20 @@
-//! Integration tests for the M12.2 interaction system: `hit_test_system`'s
-//! press/release/drag/focus additions and gating, plus
-//! `interaction_style_system`'s per-state style resolution.
+// Tests of interaction: `hit_test_system`'s press, release, drag and focus
+// events and what excludes an entity from them, and
+// `interaction_style_system`'s styles.
 
 use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
-    component::{Disabled, Lifecycle, TransitioningConfig},
-    input::{FocusState, InteractionEvents, PointerInput, PressedEntity},
+    component::{Disabled, Lifecycle, TransitionInteractionConfig},
+    input::{FocusState, HoveredEntity, InteractionEvents, PointerInput, PressedEntity},
     interaction::{InteractionDef, InteractionState, InteractionStateKind, StyleOverride},
-    Interactable, ProteusWorld, QuadState, TransitionRequest,
+    ActiveTransition, CompletedTransitions, Interactable, ProteusWorld, QuadState,
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// A 100 × 100 center-anchored quad at (`x`, `y`).
+// A 100 × 100 center-anchored quad at (`x`, `y`).
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
         position: Vec3::new(x, y, 0.0),
@@ -27,13 +27,12 @@ fn quad_at(x: f32, y: f32) -> QuadState {
     }
 }
 
-/// `dt` big enough to run any interaction-style mini-transition
-/// (`STYLE_TRANSITION_CONFIG`'s 0.15s duration) to completion within a single
-/// `update()` call — `auto_insert_apply_deferred` (bevy_ecs's default) makes
-/// the whole TransitionRequest → ActiveTransition → tick-to-completion →
-/// Lifecycle::Idle cycle happen in one frame when `dt` comfortably exceeds
-/// the transition's duration, so tests can assert on fully-settled state
-/// between steps instead of a mid-flight snapshot.
+// `dt` big enough to run any interaction-style mini-transition
+// (`STYLE_TRANSITION_CONFIG`'s 0.15s duration) to completion within a single
+// `update()` call — `auto_insert_apply_deferred` (bevy_ecs's default) makes
+// the whole ActiveTransition → tick-to-completion cycle happen in one tick
+// when `dt` comfortably exceeds the transition's duration, so tests can assert on fully-settled state
+// between steps instead of a mid-flight snapshot.
 const SETTLE_DT: f32 = 1.0;
 
 fn press_at(world: &mut ProteusWorld, pos: Vec2) {
@@ -219,11 +218,11 @@ fn clicking_empty_space_does_not_change_focus() {
 }
 
 // ---------------------------------------------------------------------------
-// gating: Disabled / TransitioningConfig
+// gating: Disabled / TransitionInteractionConfig
 // ---------------------------------------------------------------------------
 
 #[test]
-fn disabled_entity_is_not_hit_testable() {
+fn disabled_entity_gets_no_events() {
     let mut world = ProteusWorld::new();
     world
         .world
@@ -245,7 +244,43 @@ fn disabled_entity_is_not_hit_testable() {
 }
 
 #[test]
-fn transitioning_entity_without_allow_input_is_not_hit_testable() {
+fn disabled_entity_on_top_absorbs_the_press_and_hover() {
+    let mut world = ProteusWorld::new();
+    world.world.spawn((quad_at(100.0, 100.0), Interactable));
+    // Spawned later, so it is drawn on top.
+    world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable, Disabled));
+
+    press_at(&mut world, Vec2::new(100.0, 100.0));
+
+    let events = world.world.resource::<InteractionEvents>();
+    assert!(events.pressed.is_empty());
+    assert!(events.clicked.is_empty());
+    assert!(events.hover_entered.is_empty());
+    assert_eq!(world.world.resource::<HoveredEntity>().0, None);
+    assert_eq!(world.world.resource::<FocusState>().focused, None);
+}
+
+#[test]
+fn disabled_entity_that_is_not_interactable_passes_the_press_through() {
+    let mut world = ProteusWorld::new();
+    let below = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+    world.world.spawn((quad_at(100.0, 100.0), Disabled));
+
+    press_at(&mut world, Vec2::new(100.0, 100.0));
+
+    assert_eq!(
+        world.world.resource::<InteractionEvents>().pressed,
+        vec![below]
+    );
+}
+
+#[test]
+fn transitioning_entity_without_allow_pointer_is_not_hit_testable() {
     let mut world = ProteusWorld::new();
     world.world.spawn((
         quad_at(100.0, 100.0),
@@ -263,7 +298,7 @@ fn transitioning_entity_without_allow_input_is_not_hit_testable() {
 }
 
 #[test]
-fn transitioning_entity_with_allow_input_is_hit_testable() {
+fn transitioning_entity_with_allow_pointer_is_hit_testable() {
     let mut world = ProteusWorld::new();
     let e = world
         .world
@@ -271,8 +306,8 @@ fn transitioning_entity_with_allow_input_is_hit_testable() {
             quad_at(100.0, 100.0),
             Interactable,
             Lifecycle::Transitioning,
-            TransitioningConfig {
-                allow_input: true,
+            TransitionInteractionConfig {
+                allow_pointer: true,
                 allow_navigation: false,
             },
         ))
@@ -288,7 +323,7 @@ fn transitioning_entity_with_allow_input_is_hit_testable() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn first_frame_only_captures_declared_state_no_transition_request() {
+fn first_frame_only_captures_declared_state_no_transition() {
     let mut world = ProteusWorld::new();
     let base = quad_at(100.0, 100.0);
     let e = world
@@ -316,8 +351,9 @@ fn first_frame_only_captures_declared_state_no_transition_request() {
         "first-seen frame must baseline to Default even if already hovered"
     );
     assert_eq!(state.declared.color, base.color);
-    assert!(
-        world.world.get::<TransitionRequest>(e).is_none(),
+    assert_eq!(
+        world.world.get::<QuadState>(e).unwrap().color,
+        base.color,
         "no mini-transition should fire on the very first frame"
     );
 }
@@ -410,9 +446,10 @@ fn pressed_takes_precedence_over_hover() {
         ))
         .id();
 
-    move_to(&mut world, Vec2::new(900.0, 900.0)); // baseline
-                                                  // Pressing also implies hovering (pointer is over the entity), but
-                                                  // Pressed must win the precedence.
+    // Baseline.
+    move_to(&mut world, Vec2::new(900.0, 900.0));
+    // Pressing also means hovering, since the pointer is over the entity, but
+    // Pressed must win.
     press_at(&mut world, Vec2::new(100.0, 100.0));
 
     let state = world.world.get::<InteractionState>(e).unwrap();
@@ -476,6 +513,62 @@ fn undeclared_override_falls_back_to_declared_unchanged() {
 }
 
 #[test]
+fn a_style_transition_keeps_input_and_is_not_recorded_as_a_completion() {
+    let mut world = ProteusWorld::new();
+    // No `Lifecycle`, like a component the SDK creates.
+    let e = world
+        .world
+        .spawn((
+            quad_at(100.0, 100.0),
+            Interactable,
+            InteractionDef {
+                hover: Some(StyleOverride {
+                    color: Some(Vec4::new(0.0, 1.0, 0.0, 1.0)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ))
+        .id();
+    move_to(&mut world, Vec2::new(900.0, 900.0)); // baseline
+
+    // Hover, with a tick much shorter than the style transition.
+    world.world.resource_mut::<PointerInput>().position = Some(Vec2::new(100.0, 100.0));
+    world.update(0.01);
+    assert!(
+        world
+            .world
+            .get::<ActiveTransition>(e)
+            .is_some_and(|a| a.interaction_style),
+        "the hover style is animating"
+    );
+    assert!(
+        world.world.get::<Lifecycle>(e).is_none(),
+        "without the entity transitioning"
+    );
+
+    // A press partway through the hover animation still lands.
+    {
+        let mut pi = world.world.resource_mut::<PointerInput>();
+        pi.just_pressed = true;
+        pi.is_pressed = true;
+    }
+    world.update(0.01);
+    world.world.resource_mut::<PointerInput>().just_pressed = false;
+    assert_eq!(world.world.resource::<InteractionEvents>().pressed, vec![e]);
+
+    // The release starts another style transition, which `SETTLE_DT` runs to
+    // the end in the same tick.
+    release_at(&mut world, Vec2::new(100.0, 100.0));
+    assert!(world.world.get::<ActiveTransition>(e).is_none());
+    assert!(world
+        .world
+        .resource::<CompletedTransitions>()
+        .entities
+        .is_empty());
+}
+
+#[test]
 fn interaction_style_system_does_not_touch_a_transitioning_entity() {
     let mut world = ProteusWorld::new();
     let base = quad_at(100.0, 100.0);
@@ -496,13 +589,14 @@ fn interaction_style_system_does_not_touch_a_transitioning_entity() {
 
     move_to(&mut world, Vec2::new(900.0, 900.0)); // baseline: InteractionState inserted
 
-    // Force the entity into a big signal-driven transition.
+    // Force the entity into a big channel-driven transition.
     world.world.entity_mut(e).insert(Lifecycle::Transitioning);
 
     move_to(&mut world, Vec2::new(100.0, 100.0)); // would-be hover-in frame
 
-    assert!(
-        world.world.get::<TransitionRequest>(e).is_none(),
+    assert_eq!(
+        world.world.get::<QuadState>(e).unwrap().color,
+        base.color,
         "interaction_style_system must not compete with a live Lifecycle::Transitioning entity"
     );
     let state = world.world.get::<InteractionState>(e).unwrap();

@@ -1,16 +1,6 @@
-//! M10.5 static component baking regression tests.
-//!
-//! ## Test matrix
-//!
-//! | Test | What it guards |
-//! |---|---|
-//! | `bake_system_is_noop_without_gpu_resources` | Graceful no-op when GpuContext/QuadPipeline/FontAtlas are absent (headless unit-test worlds) |
-//! | `bake_system_bakes_quad_and_text_composite` | Full pipeline: child despawned, BakedComposite present, own Border/color/corner_radius neutralized, collect_instances renders one stable textured quad |
-//! | (same test) dynamic runtime creation | A composite `Baked` *after* the schedule has already ticked once bakes correctly too, not just one declared at startup |
-//!
-//! The GPU-backed test follows `proteus-render/tests/headless_render.rs`'s
-//! pattern exactly: skip with a warning (not a failure) if no adapter is
-//! available, so this passes in restricted CI environments the same way.
+// Tests of baking: a component with `Baked`, and the pieces of a split. The
+// GPU tests skip with a warning when no adapter is available, as in
+// `proteus-render`'s tests.
 
 use glam::{Vec2, Vec3, Vec4};
 
@@ -19,8 +9,8 @@ use proteus_render::{
     DEFAULT_TRANSITION_ATLAS_SIZE,
 };
 use proteus_ui::{
-    collect_instances, Baked, BakedComposite, BakedText, Border, ChildOf, ProteusWorld, QuadState,
-    Text, TextureRef,
+    collect_instances, Baked, BakedComposite, BakedText, Border, ChildOf, CompositeTextureRef,
+    ProteusWorld, QuadState, Text, TextTextureRef,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,9 +29,9 @@ fn quad_at(x: f32, y: f32, w: f32, h: f32) -> QuadState {
     }
 }
 
-/// Same shape as `proteus-render/tests/headless_render.rs::make_device` —
-/// try a real adapter, fall back to the software renderer, return `None` if
-/// neither is available so the caller can skip gracefully.
+// Same shape as `proteus-render/tests/headless_render.rs::make_device` —
+// try a real adapter, fall back to the software renderer, return `None` if
+// neither is available so the caller can skip gracefully.
 async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
@@ -85,12 +75,9 @@ async fn make_device() -> Option<(wgpu::Device, wgpu::Queue)> {
 // No-GPU graceful degradation
 // ---------------------------------------------------------------------------
 
-/// Without `GpuContext`/`QuadPipeline`/`FontAtlas` resources present (the
-/// convention every other GPU-touching system in this crate already follows,
-/// e.g. `one_to_n_setup_system`), `bake_system` must not panic, and must
-/// leave a `Baked` entity untouched — no `BakedComposite`, children not
-/// despawned — so it's naturally retried once those resources do become
-/// available, rather than silently failing forever.
+// Without GPU resources, `bake_system` must not panic and must leave a `Baked`
+// entity alone, with no `BakedComposite` and its children still there, so the
+// bake happens once the resources exist.
 #[test]
 fn bake_system_is_noop_without_gpu_resources() {
     let mut world = ProteusWorld::new();
@@ -120,10 +107,10 @@ fn bake_system_is_noop_without_gpu_resources() {
 // Full headless-GPU bake
 // ---------------------------------------------------------------------------
 
-/// Bakes a `Quad` parent (with a `Border`) + `Text` child into a single
-/// textured quad, and separately proves a composite declared *after* the
-/// schedule has already run once (dynamic runtime creation, not just
-/// startup) bakes correctly too.
+// Bakes a `Quad` parent (with a `Border`) + `Text` child into a single
+// textured quad, and separately proves a composite declared *after* the
+// schedule has already run once (dynamic runtime creation, not just
+// startup) bakes correctly too.
 #[test]
 fn bake_system_bakes_quad_and_text_composite() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
@@ -173,13 +160,10 @@ fn bake_system_bakes_quad_and_text_composite() {
         ))
         .id();
 
-    // Bake the child's text the same way bake_pending_text does (a shell
-    // method in the reference demo, not something proteus-ui itself exposes
-    // as a standalone function) — needed so gather_bake_instances captures
-    // real glyph pixels, not just an untextured background. M11: rasterize
-    // (FontAtlas) then register (TextureRegistry) are two separate steps now.
+    // Bake the child's text as the renderer does, so the component bake
+    // includes real glyphs: rasterize, then register in the atlas.
     let glyphs = font_atlas
-        .rasterize_text("Hi", 16.0)
+        .rasterize_text("Hi", 16.0, 0.0)
         .expect("text rasterize should succeed in a fresh font atlas");
     let text_texture_id = pw
         .world
@@ -210,7 +194,7 @@ fn bake_system_bakes_quad_and_text_composite() {
             page: uv.page,
             pixel_size: [glyphs.width as f32, glyphs.height as f32],
         },
-        TextureRef(text_texture_id),
+        TextTextureRef(text_texture_id),
     ));
 
     // One tick bakes it — BakeFlush's ApplyDeferred runs in the same
@@ -283,15 +267,148 @@ fn bake_system_bakes_quad_and_text_composite() {
 }
 
 // ---------------------------------------------------------------------------
-// M11 — TextureRef ref-counting and free-on-despawn
+// CompositeTextureRef reference counting, and freeing on destroy
 // ---------------------------------------------------------------------------
 
-/// `bake_system` inserts `TextureRef` alongside `BakedComposite`; its
-/// `ComponentHooks` ref-count the `main_atlas` region against the baked
-/// entity's lifetime. A freshly baked entity holds the only reference (an
-/// explicit `free()` must be refused); despawning it decrements the ref count
-/// to zero (`on_replace` fires uniformly on despawn, before `on_remove`), and
-/// the region becomes genuinely reusable — not just marked absent.
+// `bake_system` inserts `CompositeTextureRef` alongside `BakedComposite`; its
+// `ComponentHooks` ref-count the `main_atlas` region against the baked
+// entity's lifetime. A freshly baked entity holds the only reference (an
+// explicit `free()` must be refused); despawning it decrements the ref count
+// to zero (`on_replace` fires uniformly on despawn, before `on_remove`), and
+// the region becomes genuinely reusable — not just marked absent.
+// Text is baked by the host when it renders, after the tick. A component must
+// not be baked before its subtree's text is, or the bake would leave the text
+// out and destroy the children that had it. Once baked, the component's own
+// text is part of the bake, so it isn't drawn again on top.
+#[test]
+fn a_bake_waits_for_its_text_and_draws_its_own_text_once() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("static_bake: no GPU adapter available — skipping");
+        return;
+    };
+    let pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        64,
+        AtlasConfig::default(),
+        DEFAULT_TRANSITION_ATLAS_SIZE,
+    );
+    let mut pw = ProteusWorld::new();
+    pw.world.insert_resource(GpuContext {
+        device: device.clone(),
+        queue: queue.clone(),
+    });
+    pw.world.insert_resource(pipeline);
+
+    let parent = pw
+        .world
+        .spawn((
+            quad_at(0.0, 0.0, 120.0, 60.0),
+            Text::new("Card", 16.0),
+            Baked,
+        ))
+        .id();
+    let child = pw
+        .world
+        .spawn((
+            quad_at(0.0, 0.0, 40.0, 16.0),
+            Text::new("Hi", 16.0),
+            ChildOf(parent),
+        ))
+        .id();
+
+    pw.update(0.0);
+    assert!(
+        pw.world.get::<BakedComposite>(parent).is_none(),
+        "not baked while its text isn't"
+    );
+    assert!(pw.world.get_entity(child).is_ok(), "the child is kept");
+
+    // Stand-ins for the host's text bake.
+    let baked_text = BakedText {
+        uv_offset: [0.0, 0.0],
+        uv_scale: [0.01, 0.01],
+        page: 0,
+        pixel_size: [30.0, 16.0],
+    };
+    pw.world.entity_mut(parent).insert(baked_text.clone());
+    pw.update(0.0);
+    assert!(
+        pw.world.get::<BakedComposite>(parent).is_none(),
+        "the child's text isn't baked yet either"
+    );
+    pw.world.entity_mut(child).insert(baked_text);
+    pw.update(0.0);
+
+    assert!(
+        pw.world.get::<BakedComposite>(parent).is_some(),
+        "now baked"
+    );
+    assert!(pw.world.get_entity(child).is_err());
+    assert!(pw.world.get::<Text>(parent).is_none());
+    assert!(pw.world.get::<BakedText>(parent).is_none());
+    assert_eq!(
+        collect_instances(&mut pw.world).len(),
+        1,
+        "the bake alone, without the text drawn again over it"
+    );
+}
+
+// A component larger than an atlas page can never be baked. It must be drawn
+// normally instead, with its children, and not tried again every tick.
+#[test]
+fn a_component_larger_than_a_page_is_drawn_unbaked() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("static_bake: no GPU adapter available — skipping");
+        return;
+    };
+    let pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        64,
+        AtlasConfig {
+            page_size: 256,
+            page_count: 1,
+        },
+        DEFAULT_TRANSITION_ATLAS_SIZE,
+    );
+    let mut pw = ProteusWorld::new();
+    pw.world.insert_resource(GpuContext {
+        device: device.clone(),
+        queue: queue.clone(),
+    });
+    pw.world.insert_resource(pipeline);
+
+    let parent = pw.world.spawn((quad_at(0.0, 0.0, 300.0, 40.0), Baked)).id();
+    let child = pw
+        .world
+        .spawn((quad_at(0.0, 0.0, 20.0, 20.0), ChildOf(parent)))
+        .id();
+    pw.update(0.0);
+
+    assert!(pw.world.get::<BakedComposite>(parent).is_none());
+    assert!(
+        pw.world.get::<Baked>(parent).is_none(),
+        "unmarked, so it isn't tried again"
+    );
+    assert!(pw.world.get_entity(child).is_ok(), "the child is kept");
+    assert_eq!(
+        pw.world
+            .resource::<QuadPipeline>()
+            .texture_registry
+            .resident_static_count(),
+        0
+    );
+}
+
 #[test]
 fn bake_ref_counts_texture_and_frees_region_on_despawn() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
@@ -322,8 +439,8 @@ fn bake_ref_counts_texture_and_frees_region_on_despawn() {
 
     let texture_id = pw
         .world
-        .get::<TextureRef>(parent)
-        .expect("bake_system should insert TextureRef alongside BakedComposite")
+        .get::<CompositeTextureRef>(parent)
+        .expect("bake_system should insert CompositeTextureRef alongside BakedComposite")
         .0;
     assert!(
         pw.world
@@ -349,7 +466,7 @@ fn bake_ref_counts_texture_and_frees_region_on_despawn() {
         "free() must refuse a still-referenced region"
     );
 
-    // Despawn — TextureRef's on_replace hook (fires uniformly on despawn,
+    // Despawn — CompositeTextureRef's on_replace hook (fires uniformly on despawn,
     // before on_remove) decrements the ref count to zero.
     pw.world.despawn(parent);
 
@@ -376,4 +493,91 @@ fn bake_ref_counts_texture_and_frees_region_on_despawn() {
         reused.is_some(),
         "freed region's atlas space should be reusable by a new registration"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Splits: their pieces are baked into the transition atlas
+// ---------------------------------------------------------------------------
+
+// With a GPU, a `Row` or `Grid` split bakes the source and each target into
+// the transition atlas, and every piece crossfades between the two. Once the
+// split completes, every region it used is free again.
+#[test]
+fn a_split_bakes_its_pieces_and_frees_the_transition_atlas_when_done() {
+    use proteus_ui::topology::{GroupTarget, OneToNRequest, SplitStrategy};
+    use proteus_ui::{BakedTexture, Easing, Lifecycle, TransitionConfig, Virtual, Visibility};
+
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        if std::env::var("REQUIRE_GPU").is_ok() {
+            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+        }
+        eprintln!("static_bake: no GPU adapter available — skipping");
+        return;
+    };
+
+    for strategy in [SplitStrategy::Row, SplitStrategy::Grid { cols: 2, rows: 2 }] {
+        let mut pw = ProteusWorld::new();
+        pw.world.insert_resource(GpuContext {
+            device: device.clone(),
+            queue: queue.clone(),
+        });
+        pw.world.insert_resource(QuadPipeline::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            64,
+            AtlasConfig::default(),
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        ));
+
+        let targets: Vec<GroupTarget> = (0..3)
+            .map(|i| {
+                let state = quad_at(-100.0 + i as f32 * 100.0, 100.0, 60.0, 60.0);
+                let entity = pw.world.spawn((state.clone(), Lifecycle::Idle)).id();
+                GroupTarget { entity, state }
+            })
+            .collect();
+        let target_entities: Vec<_> = targets.iter().map(|t| t.entity).collect();
+        pw.world.spawn((
+            quad_at(0.0, -100.0, 300.0, 100.0),
+            Lifecycle::Idle,
+            OneToNRequest {
+                targets,
+                default_config: TransitionConfig {
+                    duration: 0.5,
+                    delay: 0.0,
+                    easing: Easing::Linear,
+                },
+                child_configs: None,
+                strategy: strategy.clone(),
+            },
+        ));
+
+        pw.update(0.0);
+        let mut pieces = pw
+            .world
+            .query_filtered::<Option<&BakedTexture>, bevy_ecs::query::With<Virtual>>();
+        let baked: Vec<bool> = pieces.iter(&pw.world).map(|b| b.is_some()).collect();
+        assert_eq!(baked, [true; 3], "{strategy:?}: every piece is baked");
+
+        pw.update(1.0);
+        pw.update(0.0);
+        assert_eq!(
+            pieces.iter(&pw.world).count(),
+            0,
+            "{strategy:?}: the pieces are gone once the split completes"
+        );
+        for &target in &target_entities {
+            assert!(pw.world.get::<Visibility>(target).unwrap().visible);
+        }
+        // The largest region there is: each region has a 2-pixel border.
+        let whole = DEFAULT_TRANSITION_ATLAS_SIZE - 4;
+        assert!(
+            pw.world
+                .resource_mut::<QuadPipeline>()
+                .allocate_transition_region(whole, whole)
+                .is_some(),
+            "{strategy:?}: the whole transition atlas is free again"
+        );
+    }
 }

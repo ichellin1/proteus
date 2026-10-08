@@ -1,32 +1,39 @@
 /**
- * `proteus-sdk` — the TypeScript layer over `proteus-sdk-web`'s wasm
- * bridge. This is the primary developer-facing entry point (M12.4):
- * `Handle`/`SignalHandle`/`TextureHandle` restore the `button.onClick(cb)`
- * ergonomic the raw bridge deliberately doesn't have (its methods take
- * `(handle, cb)` on `ProteusApp` instead, mirroring `proteus-sdk`'s own
- * Rust shape 1:1 — see `../src/lib.rs`'s top doc) by having each handle
- * close over its owning `ProteusApp`.
+ * The Proteus TypeScript SDK: create components, connect them, and transition
+ * between them.
+ *
+ * Start with {@link mount}, which runs an app on a `<canvas>`. Each handle
+ * ({@link Handle}, {@link TransitionChannel}, {@link TextureHandle}) keeps a
+ * reference to the {@link ProteusApp} it came from, so its methods are called
+ * directly: `button.onClick(() => ...)`.
+ *
+ * @packageDocumentation
  */
 
 import {
   Handle as WasmHandle,
   ProteusApp as WasmApp,
-  SignalHandle as WasmSignalHandle,
+  TransitionChannel as WasmTransitionChannel,
   TextureHandle as WasmTextureHandle,
+  VideoHandle as WasmVideoHandle,
 } from "../pkg/proteus_sdk_web.js";
 
 import type {
+  ImageCrop,
+  ImageSpec,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
   Geometry,
   MergeLayout,
   SplitStrategy,
+  TextSpec,
   TextureRequest,
   TextureState,
-  TransitioningConfig,
+  TransitionInteractionConfig,
   TransitionConfig,
   TransitionDropped,
+  Size,
   Vec2,
 } from "./types.js";
 
@@ -34,9 +41,15 @@ export * from "./types.js";
 export * from "./convert.js";
 export * from "./mount.js";
 
-type PlainCallback = () => void;
-type DragCallback = (delta: { x: number; y: number }) => void;
-type DroppedCallback = (dropped: TransitionDropped) => void;
+/** A callback with no arguments, such as {@link Handle.onClick}'s. */
+export type PlainCallback = () => void;
+/**
+ * {@link Handle.onDrag}'s callback: how far the pointer moved since the last
+ * frame, in world units (x right, y up).
+ */
+export type DragCallback = (delta: { x: number; y: number }) => void;
+/** {@link TransitionChannel.onDropped}'s callback: the request that couldn't run, and why. */
+export type DroppedCallback = (dropped: TransitionDropped) => void;
 
 // ---------------------------------------------------------------------------
 // Handle
@@ -45,21 +58,14 @@ type DroppedCallback = (dropped: TransitionDropped) => void;
 /**
  * A handle to one component.
  *
- * ## Using a handle after its component is destroyed
+ * Callbacks registered with the `on*` methods run every time their event
+ * happens, until the component is destroyed. They run after the app's update
+ * for that tick, so anything they start takes effect on the next tick.
  *
- * Every mutating method below **throws** if this handle's component is no
- * longer alive — destroyed directly, despawned as a descendant of a destroyed
- * parent, or reconstructed via {@link ProteusApp.handleFromId} from a stale
- * id. Read-only accessors don't throw: {@link Handle.get} returns `undefined`,
- * and {@link Handle.bakedTextSize}/{@link Handle.bakedImageSize} do too.
- *
- * These used to *panic* the wasm module instead, which freezes the canvas with
- * no recovery short of a page reload. A throw is catchable and tells you which
- * call went wrong; the Rust side logs a warning alongside it.
- *
- * A method returning `boolean` uses it for "there was nothing to do" — an image
- * that hasn't finished baking, a texture that's been evicted — which is a
- * routine state, not an error, and never throws.
+ * Once the component is destroyed, methods that change it throw, and the
+ * failure is also logged. Methods that read it return `undefined`. A method
+ * that returns `boolean` uses `false` for "there was nothing to do", such as
+ * an image that hasn't been baked yet; that is not an error and doesn't throw.
  */
 export class Handle {
   /**
@@ -72,87 +78,123 @@ export class Handle {
     public readonly wasmHandle: WasmHandle,
   ) {}
 
+  /** The component's ID, for {@link ProteusApp.handleFromId} and {@link ComponentSpec.children}. */
   id(): number {
     return this.wasmHandle.id();
   }
 
+  /** A snapshot of the component's current state, or `undefined` if it has been destroyed. */
   get(): ComponentData | undefined {
     return this.app.get(this);
   }
 
+  /** Calls `cb` each time the pointer is pressed on this component. A click also gives it focus. */
   onClick(cb: PlainCallback): void {
     this.app.wasmApp.onClick(this.wasmHandle, cb);
   }
 
   /**
-   * Fires each time a transition targeting this component finishes.
+   * Calls `cb` each time a transition finishes on this component.
    *
-   * Which component that is, per topology:
+   * Every transition reports its completion once, on one component:
    *
-   * - {@link Handle.animateTo} — this component.
-   * - {@link SignalHandle.set} — the `to` side.
-   * - {@link Handle.splitTo} with `"slice"` or `"gridSlice"` — the
-   *   **source**, once, when every target has arrived. One group is one
-   *   completion, not one per target.
-   * - {@link Handle.mergeFrom} — the **destination**, once, when every
-   *   source has arrived.
-   * - {@link Handle.splitTo} with `"bake"` — the **targets**, each
-   *   independently. *Not* the source: `bake` is N independent 1-to-1
-   *   transitions with no virtual entities, so the source has nothing of
-   *   its own to finish. Listen on the targets, or use `"slice"` if you
-   *   want one completion for the group.
+   * - {@link Handle.animateTo}: this component.
+   * - {@link TransitionChannel.set}: the `to` component.
+   * - {@link Handle.splitTo} or {@link Handle.splitToWithStates} with
+   *   `"row"`, `"column"` or `"grid"`: the source, once every target has arrived.
+   * - {@link Handle.splitTo} or {@link Handle.splitToWithStates} with
+   *   `"perTarget"`: each target, separately. The source has no transition of
+   *   its own; it is hidden as soon as the split starts.
+   * - {@link Handle.mergeFrom}: the destination, once every source has
+   *   arrived.
    *
-   * Persistent — it keeps firing for later transitions until the component
-   * is destroyed. Replaces guessing with `setTimeout(duration)`.
+   * Changes of interaction style, such as a hover effect, don't count.
    */
   onTransitionComplete(cb: PlainCallback): void {
     this.app.wasmApp.onTransitionComplete(this.wasmHandle, cb);
   }
 
+  /** Calls `cb` each time the pointer moves onto this component. */
   onHoverEnter(cb: PlainCallback): void {
     this.app.wasmApp.onHoverEnter(this.wasmHandle, cb);
   }
 
+  /** Calls `cb` each time the pointer moves off this component. */
   onHoverExit(cb: PlainCallback): void {
     this.app.wasmApp.onHoverExit(this.wasmHandle, cb);
   }
 
+  /**
+   * Calls `cb` each time the pointer is pressed on this component. This fires
+   * at the same moment as {@link Handle.onClick}; use it with
+   * {@link Handle.onRelease} to follow a press from start to end.
+   */
   onPress(cb: PlainCallback): void {
     this.app.wasmApp.onPress(this.wasmHandle, cb);
   }
 
+  /**
+   * Calls `cb` each time the pointer is released after a press on this
+   * component, even if the pointer has moved off it.
+   */
   onRelease(cb: PlainCallback): void {
     this.app.wasmApp.onRelease(this.wasmHandle, cb);
   }
 
+  /** Calls `cb` each time this component gains focus. */
   onFocus(cb: PlainCallback): void {
     this.app.wasmApp.onFocus(this.wasmHandle, cb);
   }
 
+  /** Calls `cb` each time this component loses focus. */
   onBlur(cb: PlainCallback): void {
     this.app.wasmApp.onBlur(this.wasmHandle, cb);
   }
 
+  /**
+   * Calls `cb` every tick while this component is pressed, with the distance
+   * the pointer moved since the previous tick, in world units (y points up).
+   */
   onDrag(cb: DragCallback): void {
     this.app.wasmApp.onDrag(this.wasmHandle, (x: number, y: number) =>
       cb({ x, y }),
     );
   }
 
+  /**
+   * Makes `child` a child of this component. Its geometry becomes relative to
+   * this component's.
+   */
   addChild(child: Handle): void {
     this.app.wasmApp.addChild(this.wasmHandle, child.wasmHandle);
   }
 
-  removeChild(child: Handle, destroy = false): void {
-    this.app.wasmApp.removeChild(this.wasmHandle, child.wasmHandle, destroy);
+  /**
+   * Detaches `child` from this component. The child is kept, as a top-level
+   * component; to destroy it instead, call {@link Handle.destroy} on it.
+   *
+   * A detached child may move on screen: its geometry was relative to this
+   * component, and is now relative to the world.
+   *
+   * Throws if either component no longer exists, or if `child` isn't a child
+   * of this component.
+   */
+  removeChild(child: Handle): void {
+    this.app.wasmApp.removeChild(this.wasmHandle, child.wasmHandle);
   }
 
   /**
-   * Split this component into `targets` — a 1→N group transition. Each
-   * target's geometry is resolved automatically from its own
-   * `component()`-declared rest state, mirroring {@link SignalHandle.set}.
-   * This component is hidden once the transition completes — no separate
-   * visibility call needed.
+   * Splits this component into `targets`: a 1→N transition.
+   *
+   * Each target ends at its own declared geometry. This component is hidden
+   * as soon as the split starts. With `"row"`, `"column"` and `"grid"`, slices of
+   * this component move into place and the targets appear when they arrive;
+   * with `"perTarget"`, the targets themselves move. The transition starts on
+   * the next tick.
+   *
+   * `childBehavior`, if given, sets each target's timing separately. It is
+   * called once per target with its index and the total; see
+   * {@link ChildBehavior}.
    */
   splitTo(
     targets: Handle[],
@@ -175,9 +217,12 @@ export class Handle {
   }
 
   /**
-   * Merge `sources` into this component — an N→1 group transition.
-   * `sources` are hidden immediately — "the morph is the exit", the same
-   * convention 1→1 signals already use.
+   * Merges `sources` into this component: an N→1 transition.
+   *
+   * The sources are hidden as soon as the merge starts. `layout` decides
+   * which part of this component each source moves toward. The transition
+   * starts on the next tick. `childBehavior`, if given, sets each source's
+   * timing separately; see {@link ChildBehavior}.
    */
   mergeFrom(
     sources: Handle[],
@@ -200,25 +245,76 @@ export class Handle {
   }
 
   /**
-   * Destroys this component and (via `bevy_ecs`'s `ChildOf`/`Children`
-   * relationship) every descendant.
+   * Destroys this component and its children, along with their callbacks and
+   * the channels they own.
    *
-   * @throws if this handle's component was already destroyed. Harmless to
-   * ignore, but reported so a double-destroy doesn't pass for a successful one.
+   * @throws if it was already destroyed. Safe to ignore, but reported so that
+   * destroying twice is visible.
    */
   destroy(): void {
     this.app.wasmApp.destroy(this.wasmHandle);
   }
 
+  /**
+   * Removes this component's text, image and baked content, and releases
+   * their textures. The component itself remains, drawn as a plain quad in
+   * its color. Nothing is baked again; to show new content, use
+   * {@link Handle.setText} or {@link Handle.setImage}.
+   *
+   * A component made with {@link ComponentSpec.bake} lost its children and
+   * its own color when it was baked, so afterwards it is a plain white quad.
+   *
+   * Releasing a texture doesn't free atlas space immediately. A texture that
+   * no component references becomes available for reuse, and the atlas
+   * reclaims its space when it needs room for another texture. Textures
+   * marked `eternal` are never reclaimed.
+   *
+   * @throws if this component no longer exists.
+   */
   freeResources(): void {
     this.app.wasmApp.freeResources(this.wasmHandle);
   }
 
   /**
-   * {@link splitTo}, but with each target's rest geometry given explicitly
-   * instead of resolved from its own declared/live state — needed whenever
-   * the natural declared geometry would be wrong, or (when this component is
-   * also one of `targets`) unsafe to derive automatically.
+   * Replaces this component's text, or adds text to a component that has
+   * none. The host bakes the new text before it next draws, and the old
+   * text's texture is released (see {@link Handle.freeResources}).
+   *
+   * @example
+   * ```ts
+   * score.setText({ content: `Score: ${points}`, sizePx: 24 });
+   * ```
+   *
+   * @throws if this component no longer exists, or `text` isn't a valid
+   * {@link TextSpec}.
+   */
+  setText(text: TextSpec): void {
+    this.app.wasmApp.setText(this.wasmHandle, text);
+  }
+
+  /**
+   * Replaces this component's image, or adds an image to a component that
+   * has none. The host decodes and bakes the new image before it next draws,
+   * and the old image's texture is released (see
+   * {@link Handle.freeResources}). A crop set with {@link Handle.cropImage}
+   * applied to the old image, so it is cleared.
+   *
+   * @throws if this component no longer exists, or `image` isn't a valid
+   * {@link ImageSpec}.
+   */
+  setImage(image: ImageSpec): void {
+    this.app.wasmApp.setImage(this.wasmHandle, image);
+  }
+
+  /**
+   * Like {@link Handle.splitTo}, with each target's end geometry given
+   * explicitly instead of taken from its declared geometry.
+   *
+   * Use this when a target should end somewhere other than its declared
+   * geometry, or when this component is also one of the targets. In the
+   * second case, pass its end geometry here rather than calling
+   * {@link Handle.setDeclaredGeometry} first, which would move it before the
+   * split begins.
    */
   splitToWithStates(
     targets: { handle: Handle; state: Geometry }[],
@@ -234,55 +330,70 @@ export class Handle {
   }
 
   /**
-   * Overwrites both this component's live geometry and its declared rest
-   * state — {@link splitTo}/{@link mergeFrom} resolve a target's rest state
-   * from the declared value, not the live one, so plain geometry mutation
-   * elsewhere won't update what a future group transition resolves to. Use
-   * whenever a component's real resting layout is only known after spawn —
-   * e.g. sized from its own {@link bakedTextSize}/{@link bakedImageSize}.
+   * Sets this component's declared geometry and moves it there immediately.
+   *
+   * Use this when a component's layout can only be worked out after it is
+   * created, such as a cell sized to fit its text
+   * ({@link Handle.bakedTextSize}). Transitions into the component, and its
+   * interaction styles, use the new geometry.
    */
   setDeclaredGeometry(state: Geometry): void {
     this.app.wasmApp.setDeclaredGeometry(this.wasmHandle, state);
   }
 
   /**
-   * Ad-hoc 1→1 morph to `to`, starting from this component's current live
-   * geometry — no signal or second entity involved, unlike
-   * {@link SignalHandle.set}. Useful for repeatedly re-targeting the same
-   * entity to a fresh destination with nothing else to resolve against.
+   * Transitions this component from its current geometry to `to`, where it
+   * then rests: `to` becomes its declared geometry, as with
+   * {@link Handle.setDeclaredGeometry}, so a later transition into it, or an
+   * interaction style, starts from there.
+   *
+   * Unlike {@link TransitionChannel.set}, only this component is involved, which
+   * makes this a good fit for moving a component around repeatedly. Calling
+   * it during a transition starts a new one from wherever the component is.
+   * The transition starts on the next tick.
+   *
+   * @example
+   * ```ts
+   * card.animateTo(
+   *   { ...card.get()!.geometry, position: { x: 300, y: 0, z: 0 } },
+   *   { duration: 0.3, easing: "easeOutCubic" },
+   * );
+   * ```
    */
   animateTo(to: Geometry, config: TransitionConfig): void {
     this.app.wasmApp.animateTo(this.wasmHandle, to, config);
   }
 
   /**
-   * The baked glyph run's pixel footprint, if this component's `text` has
-   * finished baking — `undefined` before baking completes or if it was
-   * never given one.
+   * The size in pixels of this component's baked text, or `undefined` if the
+   * text hasn't been baked yet or the component has none. The host bakes text
+   * the next time it renders a frame.
    */
-  bakedTextSize(): Vec2 | undefined {
+  bakedTextSize(): Size | undefined {
     return this.app.wasmApp.bakedTextSize(this.wasmHandle) as
-      | Vec2
+      | Size
       | undefined;
   }
 
   /**
-   * The baked image's pixel footprint, if this component's `image` has
-   * finished baking — `undefined` before baking completes or if it was
-   * never given one.
+   * The size in pixels of this component's baked image, or `undefined` if the
+   * image hasn't been baked yet or the component has none. This is the full
+   * image size, even after {@link Handle.cropImage}.
    */
-  bakedImageSize(): Vec2 | undefined {
+  bakedImageSize(): Size | undefined {
     return this.app.wasmApp.bakedImageSize(this.wasmHandle) as
-      | Vec2
+      | Size
       | undefined;
   }
 
   /**
-   * Copies whichever baked image `source` currently shows onto this
-   * component — `false` (no-op) if `source` has no baked image yet. Useful
-   * when one entity needs to immediately show what another already-baked
-   * entity looks like, e.g. an "enlarged view" coordinator a group
-   * transition is about to reveal.
+   * Shows `source`'s baked image on this component, replacing its current
+   * image. Returns `false` if `source` has no baked image yet.
+   *
+   * The two components share the texture, which stays in the atlas as long as
+   * either one references it. Use this to prepare a hidden component before a
+   * transition reveals it: for example, before merging grid tiles into a
+   * detail view, copy the selected tile's image onto the detail view.
    */
   copyBakedImageFrom(source: Handle): boolean {
     return this.app.wasmApp.copyBakedImageFrom(
@@ -292,51 +403,65 @@ export class Handle {
   }
 
   /**
-   * Crops this component's current baked image to a centered square, in
-   * place — `false` (no-op) if it has no baked image yet. Useful for square
-   * display cells (e.g. a photo grid tile) fed from images of varying aspect
-   * ratios — crop instead of stretch.
+   * Shows only the part of this component's image that `crop` selects: for
+   * example `{ kind: "centeredSquare" }` to fill a square grid tile with an
+   * image of any shape.
+   *
+   * The crop is always measured from the whole image, so calling it again
+   * replaces the crop rather than cropping the crop, and `{ kind: "none" }`
+   * shows the whole image again. Only the visible region changes: no pixels
+   * are copied. Returns `false`, and changes nothing, if the image hasn't been
+   * baked yet. Throws if `crop` isn't a valid {@link ImageCrop}.
+   *
+   * @example
+   * ```ts
+   * // A 16:9 view of the image, kept to its top edge.
+   * tile.cropImage({ kind: "aspect", ratio: 16 / 9, anchor: { x: 0.5, y: 0 } });
+   * ```
    */
-  centerCropToSquare(): boolean {
-    return this.app.wasmApp.centerCropToSquare(this.wasmHandle);
+  cropImage(crop: ImageCrop): boolean {
+    return this.app.wasmApp.cropImage(this.wasmHandle, crop);
   }
 
   /**
-   * Toggles this component's click/hover eligibility at runtime. Every
-   * component is interactive by default unless {@link ComponentSpec.nonInteractive}
-   * was set at spawn — this is the same toggle, applied later.
+   * Sets whether this component responds to input.
+   *
+   * A non-interactive component is not there for input: it is never hovered,
+   * pressed, dragged or focused, and input goes to whatever is behind it.
+   * `false` has the same effect as {@link ComponentSpec.nonInteractive},
+   * applied after creation. Use it for things that are never controls, such
+   * as backgrounds and labels. For a control that is temporarily unavailable,
+   * use {@link Handle.setDisabled}, which still blocks input.
+   *
+   * Proteus currently handles pointer input only (on the web, that includes
+   * touch and pen). Other kinds of input will follow the same rule.
    */
   setInteractive(interactive: boolean): void {
     this.app.wasmApp.setInteractive(this.wasmHandle, interactive);
   }
 
   /**
-   * Shows or hides this component. Hidden components stay in the world but
-   * are skipped by render, input and navigation; children cascade.
+   * Shows or hides this component and its children.
    *
-   * {@link SignalHandle.set} already hides its `from` and reveals its `to`,
-   * so a signal-driven morph needs no call here. This is for visibility a
-   * signal doesn't own.
+   * A hidden component is neither drawn nor hit-tested.
+   * {@link TransitionChannel.set} already hides the component it transitions from
+   * and shows the one it transitions to; use this for everything else.
    *
-   * Rendering stops on the next frame; hit-testing stops one tick after
-   * that. Input is resolved against what was last painted, so a click
-   * arriving in the same tick as the hide still lands.
+   * A hidden component stops being drawn on the next frame and stops receiving
+   * input one tick later. Input is matched against what was last drawn, so a
+   * click in the same tick as the hide still reaches it.
    */
   setVisible(visible: boolean): void {
     this.app.wasmApp.setVisible(this.wasmHandle, visible);
   }
 
   /**
-   * Sets this component's alpha multiplier, clamped to `0.0`–`1.0`.
+   * Sets this component's opacity, clamped to `0`–`1`.
    *
-   * Cascades down: a child's effective opacity is its own times its
-   * parent's effective, so `0.6` over `0.6` paints at `0.36`. A child never
-   * affects its parent.
-   *
-   * Unrelated to {@link Handle.setVisible} — opacity is a paint multiplier,
-   * visibility is an ECS flag. A component at `0` opacity is invisible but
-   * still hit-tests; a hidden one doesn't. Use visibility to take something
-   * out of the UI, opacity to fade it.
+   * Opacity multiplies down the hierarchy: a child at `0.6` under a parent at
+   * `0.6` is drawn at `0.36`. It only affects drawing, so a component at `0`
+   * still receives pointer input. To take a component out of input as well,
+   * use {@link Handle.setVisible}.
    */
   setOpacity(opacity: number): void {
     this.app.wasmApp.setOpacity(this.wasmHandle, opacity);
@@ -345,54 +470,108 @@ export class Handle {
   /**
    * Disables or re-enables this component.
    *
-   * A disabled component still renders and still cascades to its children;
-   * it is excluded from hit-testing entirely — no hover/press/click/focus —
-   * and wears whatever {@link ComponentSpec.disabled} style it declared, so
-   * it can look dimmed rather than merely stop responding.
-   *
-   * Not the same as {@link Handle.setInteractive}, which removes the
-   * component as a click target permanently and has no associated look.
+   * A disabled component is still drawn and still blocks input from reaching
+   * what is behind it, but fires no events itself, and shows its
+   * {@link ComponentSpec.disabled} style, as a disabled control does on the
+   * web. Use it for a control that isn't available yet, such as a submit
+   * button. For something that is never a control, use
+   * {@link Handle.setInteractive}, which lets input through.
    */
   setDisabled(disabled: boolean): void {
     this.app.wasmApp.setDisabled(this.wasmHandle, disabled);
   }
 
   /**
-   * Sets whether this component receives input while mid-transition. Pass
-   * `undefined` to remove the opt-in, restoring the default of no
-   * interaction during a morph.
+   * Sets whether this component accepts input while transitioning.
+   * `undefined` restores the default, where a transitioning component ignores
+   * input.
    */
-  setTransitioningConfig(config: TransitioningConfig | undefined): void {
-    this.app.wasmApp.setTransitioningConfig(this.wasmHandle, config ?? null);
+  setTransitionInteraction(config: TransitionInteractionConfig | undefined): void {
+    this.app.wasmApp.setTransitionInteraction(this.wasmHandle, config ?? null);
   }
 
   /**
-   * Shows an already-registered texture on this component, replacing
-   * whatever image/text/composite it previously showed — `false` (no-op) if
-   * `texture` is evicted/unknown. The sanctioned way to do frame-swap
-   * animation off a pre-baked set.
+   * Sets this component's image to `texture`, replacing its current image.
+   * Returns `false` if the texture has been evicted.
+   *
+   * Only the image changes: text on the component is still drawn on top, and
+   * video, if the component is showing it, still plays. Swapping textures is
+   * cheap, which makes this suitable for frame-by-frame animation from
+   * textures loaded in advance.
    */
   setTexture(texture: TextureHandle): boolean {
     return this.app.wasmApp.setTexture(this.wasmHandle, texture.wasmHandle);
   }
+
+  /**
+   * Shows `video` on this component, in place of its image or color.
+   * **Experimental**: see {@link VideoHandle}.
+   *
+   * If the component also has an image, {@link Handle.setVideoCrossfade}
+   * blends between the two; this starts fully on the video. Returns `false`,
+   * changing nothing, if `video` was released or replaced.
+   *
+   * @throws if this component no longer exists.
+   */
+  showVideo(video: VideoHandle): boolean {
+    return this.app.wasmApp.showVideo(this.wasmHandle, video.wasmHandle);
+  }
+
+  /**
+   * Stops showing video on this component, which returns to its image or
+   * color.
+   *
+   * @throws if this component no longer exists.
+   */
+  hideVideo(): void {
+    this.app.wasmApp.hideVideo(this.wasmHandle);
+  }
+
+  /**
+   * Sets the blend between this component's image (`0`) and its video (`1`).
+   * To fade the video in, call it with `0` right after
+   * {@link Handle.showVideo}, then raise it over time. Returns `false` if the
+   * component isn't showing video.
+   *
+   * @throws if this component no longer exists.
+   */
+  setVideoCrossfade(videoT: number): boolean {
+    return this.app.wasmApp.setVideoCrossfade(this.wasmHandle, videoT);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// SignalHandle
+// TransitionChannel
 // ---------------------------------------------------------------------------
 
-export class SignalHandle {
-  /** Prefer {@link ProteusApp.signal} over calling this directly. */
+/**
+ * A transition channel, which transitions one component into another: see
+ * {@link TransitionChannel.set}.
+ */
+export class TransitionChannel {
+  /** Prefer {@link ProteusApp.transitionChannel} over calling this directly. */
   constructor(
     private readonly app: ProteusApp,
     /** @internal */
-    public readonly wasmHandle: WasmSignalHandle,
+    public readonly wasmHandle: WasmTransitionChannel,
   ) {}
 
   /**
-   * Declare a transition: `to` should morph into its own declared geometry,
-   * appearing to originate from `from`'s current geometry — mirrors
-   * `signal.set([to, from], config)`.
+   * Transitions `from` into `to`: a 1→1 transition.
+   *
+   * `from` is hidden, and `to` is shown and moves from `from`'s current
+   * geometry to its own declared geometry. If `to` is already transitioning,
+   * the request is dropped unless `interruptible` is set; then a new
+   * transition starts from wherever `to` is. The transition starts on the
+   * next tick. A request that can't run is reported to
+   * {@link TransitionChannel.onDropped}. On a destroyed channel, the call is
+   * ignored with a warning.
+   *
+   * @example
+   * ```ts
+   * const open = app.transitionChannel();
+   * button.onClick(() => open.set(panel, button, { duration: 0.4 }));
+   * ```
    */
   set(
     to: Handle,
@@ -400,7 +579,7 @@ export class SignalHandle {
     config: TransitionConfig,
     interruptible = false,
   ): void {
-    this.app.wasmApp.signalSet(
+    this.app.wasmApp.channelSet(
       this.wasmHandle,
       to.wasmHandle,
       from.wasmHandle,
@@ -410,16 +589,16 @@ export class SignalHandle {
   }
 
   /**
-   * Persistent handler for requests on this signal that were declined
-   * (already transitioning without `interruptible`, missing/invisible
-   * entity) — fires on every drop, not just the first.
+   * Calls `cb` with the reason each time a {@link TransitionChannel.set} request on
+   * this channel can't run. See {@link DropReason}.
    */
   onDropped(cb: DroppedCallback): void {
     this.app.wasmApp.onDropped(this.wasmHandle, cb);
   }
 
+  /** Destroys this channel and its `onDropped` handlers. Later `set` calls are ignored, with a warning. */
   destroy(): void {
-    this.app.wasmApp.signalDestroy(this.wasmHandle);
+    this.app.wasmApp.channelDestroy(this.wasmHandle);
   }
 }
 
@@ -427,6 +606,14 @@ export class SignalHandle {
 // TextureHandle
 // ---------------------------------------------------------------------------
 
+/**
+ * A texture in the atlas. Show it on a component with
+ * {@link Handle.setTexture}.
+ *
+ * A texture can't be freed through its handle: once no component references
+ * it, the atlas can reclaim its space when it needs room. See
+ * {@link Handle.freeResources}.
+ */
 export class TextureHandle {
   /** Prefer {@link ProteusApp.texture} over calling this directly. */
   constructor(
@@ -435,11 +622,12 @@ export class TextureHandle {
     public readonly wasmHandle: WasmTextureHandle,
   ) {}
 
+  /** The texture's ID, for {@link ProteusApp.textureFromId}. */
   id(): number {
     return this.wasmHandle.id();
   }
 
-  /** `undefined` if this texture has been evicted or the id is unknown. */
+  /** The texture's kind and size, or `undefined` if it has been evicted or never existed. */
   state(): TextureState | undefined {
     return this.app.wasmApp.textureState(this.wasmHandle) as
       | TextureState
@@ -448,63 +636,175 @@ export class TextureHandle {
 }
 
 // ---------------------------------------------------------------------------
+// VideoHandle
+// ---------------------------------------------------------------------------
+
+/**
+ * A video whose frames your own player supplies. **Experimental.**
+ *
+ * Proteus shows video; it doesn't play it. Play the video with your own
+ * player, usually a `<video>` element, and upload each frame: with
+ * {@link VideoHandle.uploadFrom} for a `<video>` element, or
+ * {@link VideoHandle.uploadFrame} for pixels you decoded yourself. Show it on
+ * components with {@link Handle.showVideo}. Playback controls are the
+ * player's own.
+ *
+ * There is one video at a time: {@link ProteusApp.createVideo} replaces any
+ * video that already exists, and its handle stops working.
+ *
+ * @example
+ * ```ts
+ * const video = app.createVideo();
+ * tile.showVideo(video);
+ * const element = document.querySelector("video")!;
+ * const upload = () => {
+ *   video.uploadFrom(element);
+ *   element.requestVideoFrameCallback(upload);
+ * };
+ * element.requestVideoFrameCallback(upload);
+ * ```
+ */
+export class VideoHandle {
+  private canvas?: HTMLCanvasElement;
+  private context?: CanvasRenderingContext2D;
+
+  /** Prefer {@link ProteusApp.createVideo} over calling this directly. */
+  constructor(
+    private readonly app: ProteusApp,
+    /** @internal */
+    public readonly wasmHandle: WasmVideoHandle,
+  ) {}
+
+  /**
+   * Uploads one frame of `width × height` RGBA pixels, `width * height * 4`
+   * bytes, which every component showing this video draws from the next
+   * frame. The video's texture follows the frames' size.
+   *
+   * Returns `false`, uploading nothing, if the video was released or
+   * replaced, or if `rgba` has the wrong length.
+   */
+  uploadFrame(
+    width: number,
+    height: number,
+    rgba: Uint8Array | Uint8ClampedArray,
+  ): boolean {
+    const bytes =
+      rgba instanceof Uint8Array
+        ? rgba
+        : new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+    return this.app.wasmApp.uploadVideoFrame(
+      this.wasmHandle,
+      width,
+      height,
+      bytes,
+    );
+  }
+
+  /**
+   * Uploads the frame `element` is showing now. Call it for each new frame,
+   * for example from `requestVideoFrameCallback`.
+   *
+   * The frame is drawn to an offscreen canvas and read back, which works in
+   * every browser. Returns `false` if the element has no frame yet, or as
+   * {@link VideoHandle.uploadFrame} does.
+   *
+   * @throws a `SecurityError` if the video comes from another origin without
+   * CORS, since the browser then won't let its pixels be read.
+   */
+  uploadFrom(element: HTMLVideoElement): boolean {
+    const width = element.videoWidth;
+    const height = element.videoHeight;
+    if (width === 0 || height === 0) {
+      return false;
+    }
+    if (!this.canvas || !this.context) {
+      this.canvas = document.createElement("canvas");
+      const context = this.canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) {
+        return false;
+      }
+      this.context = context;
+    }
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+    this.context.drawImage(element, 0, 0, width, height);
+    const pixels = this.context.getImageData(0, 0, width, height).data;
+    return this.uploadFrame(width, height, pixels);
+  }
+
+  /**
+   * Releases this video and its GPU texture. Components showing video show
+   * nothing in its place until {@link Handle.hideVideo} or another video.
+   */
+  release(): void {
+    this.app.wasmApp.releaseVideo(this.wasmHandle);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ProteusApp
 // ---------------------------------------------------------------------------
 
+/**
+ * An app's components, channels and callbacks.
+ *
+ * {@link mount} creates one and passes it to your `setup` function; that is the
+ * usual way to get one. `new ProteusApp()` creates a standalone app that draws
+ * nothing, which is useful for tests and other headless use.
+ */
 export class ProteusApp {
   /** @internal */
   readonly wasmApp: WasmApp;
 
   /**
-   * @param wasmApp Wrap an existing wasm-bindgen app instance instead of
-   * constructing a fresh one — used by {@link mount} (see `mount.ts`),
-   * which receives a `ProteusApp` minted by `proteus-host-web`'s own,
-   * separately-compiled wasm binary rather than this package's own
-   * `pkg/proteus_sdk_web.js`. That's safe to wrap directly: both binaries
-   * compile the identical `#[wasm_bindgen] impl ProteusApp` block, so the
-   * generated classes are structurally identical, and every generated
-   * method call binds to its own module's wasm instance — nothing here
-   * ever crosses between the two. Most callers should omit this and get a
-   * fresh, standalone app.
+   * Creates a standalone app that draws nothing.
+   *
+   * @param wasmApp For internal use by {@link mount}; omit it.
    */
   constructor(wasmApp?: WasmApp) {
     this.wasmApp = wasmApp ?? new WasmApp();
   }
 
+  /** Creates a component from `spec` and returns its handle. */
   component(spec: ComponentSpec): Handle {
     return new Handle(this, this.wasmApp.component(spec));
   }
 
   /**
-   * Reconstruct a {@link Handle} from an id obtained from
-   * {@link Handle.id} or a {@link ComponentData.children} entry.
+   * Returns a {@link Handle} for a component ID, from {@link Handle.id} or
+   * {@link ComponentData.children}.
    *
-   * The id isn't checked against the live world here — if it names a component
-   * that has since been destroyed, the returned handle behaves like any other
-   * stale one: mutating methods throw, {@link Handle.get} returns `undefined`.
+   * The ID isn't checked. If its component has been destroyed, the handle
+   * behaves like any handle to a destroyed component.
    */
   handleFromId(id: number): Handle {
     return new Handle(this, WasmHandle.fromId(id));
   }
 
-  signal(owner?: Handle): SignalHandle {
-    // wasm-bindgen doesn't support Option<&CustomStruct> parameters, and
-    // taking Handle by value would consume the caller's `owner` object —
-    // see ../src/lib.rs's `signal()` doc — so the raw bridge takes an id.
-    return new SignalHandle(this, this.wasmApp.signal(owner?.id()));
+  /**
+   * Creates a transition channel, which transitions one component into
+   * another with {@link TransitionChannel.set}. If `owner` is given, the
+   * channel is destroyed along with it.
+   */
+  transitionChannel(owner?: Handle): TransitionChannel {
+    // The bridge takes the owner's ID rather than its handle object, which
+    // it would otherwise consume.
+    return new TransitionChannel(this, this.wasmApp.transitionChannel(owner?.id()));
   }
 
+  /** Returns a {@link TextureHandle} for a texture ID. The same as {@link ProteusApp.textureFromId}. */
   texture(id: number): TextureHandle {
     return new TextureHandle(this, this.wasmApp.texture(id));
   }
 
   /**
-   * Decode an encoded image (PNG, JPEG, …) and pack it into the atlas,
-   * returning a handle you can hand to {@link Handle.setTexture}.
+   * Decodes a PNG or JPEG image and adds it to the atlas, returning a handle
+   * to show with {@link Handle.setTexture}.
    *
-   * Synchronous — the pixels are on the GPU when this returns, so there is
-   * no "ready" event to wait for. You supply the bytes, so fetching stays
-   * yours:
+   * The pixels are on the GPU when this returns, so there is nothing to wait
+   * for. You supply the bytes:
    *
    * ```ts
    * const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
@@ -512,10 +812,14 @@ export class ProteusApp {
    * if (tex) tile.setTexture(tex);
    * ```
    *
-   * `undefined` if the bytes could not be decoded. A decoded image that
-   * doesn't fit the atlas returns a handle that resolves to no texture — a
-   * capacity condition rather than bad input — so the component renders as
-   * nothing instead of throwing.
+   * Show the texture on a component in the same frame. From the next frame
+   * on, a texture that no component uses may be evicted to make room.
+   * Several textures can be loaded and then shown: none is evicted in the
+   * frame it was loaded.
+   *
+   * Returns `undefined` if the bytes can't be decoded. An image that decodes
+   * but doesn't fit the atlas returns a handle to no texture, which draws
+   * nothing.
    */
   loadTexture(
     bytes: Uint8Array,
@@ -526,9 +830,13 @@ export class ProteusApp {
   }
 
   /**
-   * Pack already-decoded RGBA pixels into the atlas — the raw-pixel
-   * counterpart of {@link ProteusApp.loadTexture}, for procedurally
-   * generated content. `rgba.length` must be `width * height * 4`.
+   * Adds RGBA pixels to the atlas and returns a handle to them. `rgba` holds
+   * `width * height * 4` bytes. For PNG or JPEG data, use
+   * {@link ProteusApp.loadTexture}.
+   *
+   * Show the texture on a component in the same frame: from the next frame
+   * on, a texture that no component uses may be evicted to make room. If the
+   * atlas is full, the handle refers to no texture and draws nothing.
    */
   bakeTexture(
     width: number,
@@ -542,47 +850,64 @@ export class ProteusApp {
     );
   }
 
-  /** Reconstruct a {@link TextureHandle} from an id obtained from {@link TextureHandle.id}. */
+  /**
+   * Creates a video, whose frames your own player supplies.
+   * **Experimental**: see {@link VideoHandle}. There is one video at a time:
+   * this replaces any video that already exists.
+   */
+  createVideo(): VideoHandle {
+    return new VideoHandle(this, this.wasmApp.createVideo());
+  }
+
+  /** Returns a {@link TextureHandle} for an ID from {@link TextureHandle.id}. */
   textureFromId(id: number): TextureHandle {
     return new TextureHandle(this, WasmTextureHandle.fromId(id));
   }
 
-  /** `undefined` if `handle` no longer refers to a live component. */
+  /** A snapshot of a component's current state, or `undefined` if it has been destroyed. */
   get(handle: Handle): ComponentData | undefined {
     return this.wasmApp.get(handle.wasmHandle) as ComponentData | undefined;
   }
 
-  /** Advances one frame. `deltaSeconds` is the elapsed wall-clock time. */
+  /**
+   * Advances the app by `deltaSeconds`, then runs callbacks for the events
+   * that occurred. {@link mount} calls this for you every frame.
+   */
   tick(deltaSeconds: number): void {
     this.wasmApp.tick(deltaSeconds);
   }
 
   /**
-   * `x`/`y` are **world-space** (viewport-center origin, Y-up) — convert
-   * from screen/CSS coordinates with {@link topLeftToWorld} first if needed.
+   * Updates the pointer position, in world units: the origin is the center of
+   * the viewport and y points up. Convert from page coordinates with
+   * {@link topLeftToWorld}. {@link mount} reports the pointer for you.
    */
   pointerMoved(x: number, y: number): void {
     this.wasmApp.pointerMoved(x, y);
   }
 
+  /** Records that the pointer left the viewport. */
   pointerLeft(): void {
     this.wasmApp.pointerLeft();
   }
 
+  /** Records that the pointer was pressed. */
   pointerPressed(): void {
     this.wasmApp.pointerPressed();
   }
 
+  /** Records that the pointer was released. */
   pointerReleased(): void {
     this.wasmApp.pointerReleased();
   }
 
   /**
-   * Wires `requestAnimationFrame` to call {@link tick} automatically,
-   * converting the RAF timestamp (ms) to a delta in seconds. Returns a
-   * function that stops the loop. Manual `tick()` calls remain available
-   * for custom render-loop integration — this is purely a convenience
-   * default, not the only way to drive the app.
+   * Calls {@link ProteusApp.tick} on every animation frame, and returns a
+   * function that stops the loop.
+   *
+   * Only for a standalone app created with `new ProteusApp()`. An app from
+   * {@link mount} is already ticked every frame; starting this loop as well
+   * would tick it twice.
    */
   startAnimationLoop(): () => void {
     let lastTime: number | null = null;

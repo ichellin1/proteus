@@ -1,7 +1,7 @@
 # Proteus — developer convenience targets.
 # Run `make install-hooks` once after cloning to wire up the git hooks.
 
-.PHONY: install-hooks check fmt clippy test build-web serve-web build-sdk-web
+.PHONY: install-hooks check fmt clippy docs test check-comments build-web serve-web build-sdk-web
 
 ## Wire up the git hooks from scripts/git-hooks/ into .git/hooks/.
 install-hooks:
@@ -9,8 +9,8 @@ install-hooks:
 	chmod +x .git/hooks/pre-push
 	@echo "✓ git hooks installed"
 
-## Run the same checks that CI runs (fmt + clippy + tests).
-check: fmt clippy test
+## Run the same checks that CI runs (fmt + clippy + docs + tests).
+check: fmt clippy docs test
 
 fmt:
 	cargo fmt --all -- --check
@@ -20,10 +20,20 @@ fmt:
 ## pass and checked separately against their real target. Mirrors ci.yml.
 clippy:
 	cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
-	cargo clippy -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+
+## Build the API docs with warnings as errors, as CI does: a broken link in a
+## doc comment fails.
+docs:
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude proteus-shell-web --exclude proteus-host-web --no-deps
 
 test:
 	cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
+
+## Check code comments against CONTRIBUTING.md. Pass paths with PATHS=...; the default is
+## every crate and example.
+check-comments:
+	scripts/check-comments.sh $(PATHS)
 
 ## Build the WebGL2 WASM demo with wasm-pack.
 ## Requires: cargo install wasm-pack
@@ -53,3 +63,29 @@ build-sdk-web:
 	  --out-dir ../proteus-sdk-web/ts/pkg-host \
 	  --release
 	cd crates/proteus-sdk-web/ts && npm run build
+
+## The built proteus-sdk package, which the TypeScript examples use. It is
+## rebuilt when any crate's Rust, the SDK's TypeScript or Cargo.lock changed
+## since the last build.
+SDK_BUILT := crates/proteus-sdk-web/ts/dist/index.js
+SDK_SOURCES := $(shell find crates \( -name target -o -name node_modules -o -name pkg -o -name pkg-host \) -prune \
+  -o \( -name '*.rs' -o -name Cargo.toml \) -print) \
+  $(wildcard crates/proteus-sdk-web/ts/src/*.ts) Cargo.lock
+
+$(SDK_BUILT): $(SDK_SOURCES)
+	cd crates/proteus-sdk-web/ts && npm install
+	$(MAKE) build-sdk-web
+
+## Run a TypeScript example in a browser, such as `make example-gallery-ts`:
+## builds the SDK if needed, installs the example's packages and starts Vite.
+example-%-ts: $(SDK_BUILT)
+	cd examples/$*/typescript && npm install && npm run dev
+
+## Run a Rust example in a browser, such as `make example-gallery-web`: builds
+## it for the web with wasm-pack, then serves the repository on
+## http://localhost:8080, so an example can use the reference demo's assets.
+## Requires Python 3, for the server.
+example-%-web:
+	wasm-pack build examples/$*/rust --target web --release
+	@echo "Open http://localhost:8080/examples/$*/rust/"
+	python3 -m http.server 8080

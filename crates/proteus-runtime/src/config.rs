@@ -1,35 +1,42 @@
-//! [`ProteusConfig`] — runtime configuration threaded through host
-//! construction (M13.5).
+//! [`ProteusConfig`]: the engine's settings, passed to a host when it starts.
 //!
-//! M13.5 fixed the *shape*: every sizing/behaviour knob in the framework
-//! lives under one nested config, grouped by concern, rather than scattered
-//! as hardcoded constants across `proteus-render` / `proteus-ui` / each
-//! host. Not every field is wired to a system yet — each doc comment below
-//! says so explicitly. **Wired in this pass:** all of [`MemoryConfig`],
-//! [`RenderConfig::clear_color`] / `present_mode` / `power_preference`, and
-//! [`FrameConfig::dt_clamp_secs`]. Everything else is a real, documented
-//! field with a safe default — the shape is locked now, so plumbing it in
-//! later (as the milestone that owns that area comes up) is additive, never
-//! a breaking change to callers already holding a `ProteusConfig`.
+//! Settings are grouped by area. Some are declared but not read yet; each of
+//! those says "Not read yet" and has a safe default, so a later version can
+//! start reading it without breaking code that sets it.
 
 use std::sync::Arc;
 
-use proteus_render::AtlasConfig;
-use proteus_ui::{ease_out_quad, EasingFn, TransitionConfig};
+use proteus_render::{AtlasConfig, FontAtlas, FontError, QuadInstance};
+use proteus_ui::{Easing, TransitionConfig};
 
 // ---------------------------------------------------------------------------
 // ProteusConfig
 // ---------------------------------------------------------------------------
 
+/// The engine's settings. Start from a preset, [`ProteusConfig::web`],
+/// [`ProteusConfig::desktop`] or [`ProteusConfig::constrained`], and change
+/// what you need.
+///
+/// The memory settings must fit the GPU limits the host requests, which
+/// [`ProteusConfig::check`] tests without a GPU. `web()` and `constrained()`
+/// fit both hosts; `desktop()` fits the native host only.
 #[derive(Debug, Clone)]
 pub struct ProteusConfig {
+    /// GPU memory: atlas and instance-buffer sizes.
     pub memory: MemoryConfig,
+    /// Clear color and presentation.
     pub render: RenderConfig,
+    /// Frame timing.
     pub frame: FrameConfig,
+    /// Input defaults. Not read yet.
     pub input: InputConfig,
+    /// Transition defaults. Not read yet.
     pub transitions: TransitionDefaults,
+    /// Text rendering.
     pub text: TextConfig,
+    /// Image and texture loading.
     pub resources: ResourceConfig,
+    /// Diagnostics.
     pub debug: DebugConfig,
 }
 
@@ -40,8 +47,8 @@ impl Default for ProteusConfig {
 }
 
 impl ProteusConfig {
-    /// The safe floor — works on every host this project ships to, WebGL2
-    /// included. Same as `Default::default()`.
+    /// Settings that work on every host, including WebGL2 in the browser.
+    /// Also the default.
     pub fn web() -> Self {
         Self {
             memory: MemoryConfig::default(),
@@ -55,10 +62,10 @@ impl ProteusConfig {
         }
     }
 
-    /// A native desktop/TV target with real GPU headroom — bigger atlases, a
-    /// deeper instance buffer. Needs at least `wgpu::Limits::default()`; do
-    /// not use on a WebGL2-limited backend (`validate_render_config` /
-    /// `validate_atlas_config` will reject it there).
+    /// Larger atlases and instance buffer, for native desktop or TV with a
+    /// capable GPU. Needs at least `wgpu::Limits::default()`, which the native
+    /// host requests, so not the web host, which [`ProteusConfig::check`]
+    /// holds to WebGL2's limits.
     pub fn desktop() -> Self {
         Self {
             memory: MemoryConfig {
@@ -74,10 +81,9 @@ impl ProteusConfig {
         }
     }
 
-    /// A memory-constrained embedded / kiosk / low-end target. Smaller
-    /// atlases and a lower default video size. Tradeoffs (no single baked
-    /// region over 1024px/axis, more LRU eviction churn) are documented in
-    /// PLANNING.md's M13.5 section.
+    /// Smaller atlases, for devices with little memory, such as embedded
+    /// systems and kiosks. Fits both hosts. No single texture can be larger than 1024 pixels on
+    /// a side, and textures are evicted more often.
     pub fn constrained() -> Self {
         Self {
             memory: MemoryConfig {
@@ -96,13 +102,77 @@ impl ProteusConfig {
         }
     }
 
-    /// Rough resident GPU bytes at these sizes: `main_atlas` +
-    /// `transition_atlas` + the two instance buffers. Excludes the video
-    /// atlas (only allocated once a video actually plays — see
-    /// [`VideoConfig`]'s doc) and CPU-side memory (the ECS world, the font
-    /// glyph cache) — both scale with app content, not this config. A host
-    /// can log this against its own memory budget (see
-    /// [`DebugConfig::validate_config`]).
+    /// Checks the memory settings against a host's GPU `limits`, without a
+    /// GPU, so a setting that doesn't fit is found before the app runs. An
+    /// app can call it in its own tests with its host's limits:
+    /// `proteus_host_winit::limits()` or `proteus_host_web::limits()`.
+    ///
+    /// Both hosts call it before they create a GPU device, and
+    /// [`Renderer::new`](crate::Renderer::new) checks the device it is given.
+    ///
+    /// # Errors
+    ///
+    /// The first setting that doesn't fit, as a [`ConfigError`].
+    pub fn check(&self, limits: &wgpu::Limits) -> Result<(), ConfigError> {
+        let mem = &self.memory;
+        let max_side = u64::from(limits.max_texture_dimension_2d);
+        let too_big = |setting, value: u64, limit: u64, fix| {
+            (value > limit).then_some(ConfigError {
+                setting,
+                value,
+                allowed: Allowed::AtMost(limit),
+                fix,
+            })
+        };
+        let error = too_big(
+            "memory.main_atlas.page_size",
+            mem.main_atlas.page_size.into(),
+            max_side,
+            "Use smaller pages, and more of them for the same room.",
+        )
+        .or_else(|| {
+            (mem.main_atlas.page_count == 0).then_some(ConfigError {
+                setting: "memory.main_atlas.page_count",
+                value: 0,
+                allowed: Allowed::AtLeast(1),
+                fix: "Use at least one page.",
+            })
+        })
+        .or_else(|| {
+            too_big(
+                "memory.main_atlas.page_count",
+                mem.main_atlas.page_count.into(),
+                limits.max_texture_array_layers.into(),
+                "Use fewer pages.",
+            )
+        })
+        .or_else(|| {
+            too_big(
+                "memory.transition_atlas_size",
+                mem.transition_atlas_size.into(),
+                max_side,
+                "Use a smaller transition atlas.",
+            )
+        })
+        .or_else(|| {
+            let instance_bytes = std::mem::size_of::<QuadInstance>() as u64;
+            too_big(
+                "memory.max_instances",
+                mem.max_instances.into(),
+                limits.max_buffer_size / instance_bytes,
+                "Use fewer instances.",
+            )
+        });
+        match error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Roughly how much GPU memory these settings use, in bytes: both
+    /// atlases and the instance buffers. It leaves out video, which is only
+    /// allocated when a video plays, and CPU memory, which depends on the
+    /// app's content.
     pub fn estimated_gpu_bytes(&self) -> u64 {
         let m = &self.memory;
         let main = m.main_atlas.page_size as u64
@@ -111,29 +181,68 @@ impl ProteusConfig {
             * 4;
         let transition = m.transition_atlas_size as u64 * m.transition_atlas_size as u64 * 4;
         let instance_size = std::mem::size_of::<proteus_render::QuadInstance>() as u64;
-        // ×2: the main instance buffer and the bake-instance buffer are the
-        // same size (`QuadPipeline::new`'s own headroom choice).
+        // ×2: the bake-instance buffer is the same size as the main one.
         let instances = instance_size * m.max_instances as u64 * 2;
         main + transition + instances
     }
 }
 
 // ---------------------------------------------------------------------------
-// MemoryConfig — wired
+// ConfigError
 // ---------------------------------------------------------------------------
 
-/// GPU memory sizing. Every field here is read by [`crate::Renderer::new`].
+/// A setting that doesn't fit a host's GPU limits, from
+/// [`ProteusConfig::check`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "ProteusConfig.{setting} is {value}, but this host allows {allowed}. {fix} \
+     ProteusConfig::web() fits every host."
+)]
+pub struct ConfigError {
+    /// The setting, such as `"memory.main_atlas.page_size"`.
+    pub setting: &'static str,
+    /// Its value.
+    pub value: u64,
+    /// What the host allows.
+    pub allowed: Allowed,
+    /// How to fix it.
+    pub fix: &'static str,
+}
+
+/// The values a host allows for a setting, in a [`ConfigError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Allowed {
+    /// At most this value.
+    AtMost(u64),
+    /// At least this value.
+    AtLeast(u64),
+}
+
+impl std::fmt::Display for Allowed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AtMost(limit) => write!(f, "at most {limit}"),
+            Self::AtLeast(limit) => write!(f, "at least {limit}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemoryConfig
+// ---------------------------------------------------------------------------
+
+/// GPU memory sizes, read by [`crate::Renderer::new`].
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryConfig {
-    /// `main_atlas` sizing (page size in pixels, page count).
+    /// The main texture atlas, which holds text, images and baked components:
+    /// its page size in pixels and number of pages.
     pub main_atlas: AtlasConfig,
-    /// `transition_atlas` sizing, pixels (square) — was the hardcoded
-    /// `DEFAULT_TRANSITION_ATLAS_SIZE` constant before M13.5.
+    /// The size in pixels of the square atlas that holds images of components
+    /// during splits and merges.
     pub transition_atlas_size: u32,
-    /// Instance-buffer capacity — was a bare `QuadPipeline::new` argument
-    /// with no upper-bound check before M13.5. Exceeding it silently clamps
-    /// (extra instances are dropped from the draw), it doesn't panic.
+    /// The most components drawn in one frame. Any beyond it are not drawn.
     pub max_instances: u32,
+    /// Video texture defaults. Not read yet.
     pub video: VideoConfig,
 }
 
@@ -148,26 +257,16 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Video-atlas defaults.
-///
-/// **Not yet wired.** `QuadPipeline::init_video` still takes its own
-/// explicit `width`/`height` from the host (probed via `ffprobe`, or an HLS
-/// manifest's metadata) at the moment a video actually starts playing — the
-/// video atlas itself is a free 1×1 placeholder until then, so there is no
-/// eager allocation for these fields to gate yet. Real wiring (and
-/// `enabled: false` skipping video support entirely) still wants a pass;
-/// M13.4 moved video behind the `VideoStream` host service but left these
-/// fields inert. The shape is stable either way — per M13.5, wiring an
-/// inert field up later is not a breaking change.
+/// Video texture defaults. Not read yet: a video's texture is sized from its
+/// first frame when it starts playing.
 #[derive(Debug, Clone, Copy)]
 pub struct VideoConfig {
+    /// Default video size in pixels. Not read yet.
     pub default_size: (u32, u32),
+    /// Whether video is supported at all. Not read yet.
     pub enabled: bool,
-    /// How many decoded frames of lookahead a host's decoder should buffer
-    /// before it blocks. Inert: `proteus-render` no longer owns a frame
-    /// channel at all (M13.4 replaced it with the `VideoStream` seam), so
-    /// this is advisory for whoever implements one — the native host's
-    /// `Mp4Stream` hardcodes the equivalent bound today.
+    /// How many decoded frames a host's decoder should buffer ahead. Not read
+    /// yet; a guide for whoever writes a decoder.
     pub channel_depth: usize,
 }
 
@@ -185,29 +284,27 @@ impl Default for VideoConfig {
 }
 
 // ---------------------------------------------------------------------------
-// RenderConfig — clear_color / present_mode / power_preference wired
+// RenderConfig
 // ---------------------------------------------------------------------------
 
+/// Clear color and presentation settings.
 #[derive(Debug, Clone, Copy)]
 pub struct RenderConfig {
-    /// The surface clear color each frame, straight (non-premultiplied)
-    /// RGBA, `0.0`–`1.0`. Shows through component transparency and during
-    /// the first frames before any background asset has loaded. **Wired.**
+    /// The color behind everything: RGBA, not premultiplied, each `0`–`1`.
+    /// It shows through transparent components, and before the first frame's
+    /// content has loaded.
     pub clear_color: [f64; 4],
-    /// Swap-chain presentation mode. **Wired** — read by each host when it
-    /// configures its surface. `AutoVsync` (default) throttles to the
-    /// display's refresh rate; `AutoNoVsync`/`Immediate` suit a benchmark or
-    /// a high-refresh display that wants to see every frame land.
+    /// How frames are synchronized with the display. `AutoVsync`, the
+    /// default, matches the display's refresh rate; `AutoNoVsync` and
+    /// `Immediate` draw as fast as possible, for benchmarks.
     pub present_mode: wgpu::PresentMode,
-    /// Adapter selection hint. **Wired** — read by each host at
-    /// `request_adapter`. `HighPerformance` (default) prefers a discrete
-    /// GPU; `LowPower` suits a battery-sensitive kiosk.
+    /// Which GPU to prefer on a machine with more than one.
+    /// `HighPerformance`, the default, prefers a discrete GPU; `LowPower`
+    /// saves battery.
     pub power_preference: wgpu::PowerPreference,
-    /// MSAA sample count. **Not yet wired** — the pipeline is always
-    /// single-sampled today. The SDF corner-radius/shadow/glow math already
-    /// anti-aliases itself, but a rotated quad's straight edges do alias;
-    /// wiring this needs a resolve target and a pipeline `multisample`
-    /// state change. Post-V1.
+    /// Multisample anti-aliasing sample count. Not read yet: drawing is
+    /// always single-sampled. Rounded corners, shadows and glows are smooth
+    /// regardless, but the straight edges of a rotated component are not.
     pub msaa_samples: u32,
 }
 
@@ -231,23 +328,18 @@ impl RenderConfig {
 }
 
 // ---------------------------------------------------------------------------
-// FrameConfig — dt_clamp_secs wired
+// FrameConfig
 // ---------------------------------------------------------------------------
 
+/// Frame timing settings.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameConfig {
-    /// Per-frame `dt` is clamped to this ceiling before `Proteus::tick` runs.
-    /// **Wired** — `Engine::frame` applies it, replacing the identical
-    /// `.min(0.05)` the M12 shells (and M13.1's hosts) each hand-duplicated.
-    /// Without it, a real stall between frames (most visibly the very first
-    /// one, after GPU warm-up) is fed straight into the schedule as one
-    /// giant `dt` — easily enough to blow through a short intro animation's
-    /// entire delay+fade+hold budget in a single tick.
+    /// The longest time step one frame can take, in seconds. A pause between
+    /// frames, such as the first frame after startup, would otherwise skip a
+    /// short animation entirely.
     pub dt_clamp_secs: f32,
-    /// Continue ticking with a real `dt` while the window/tab is hidden,
-    /// instead of pausing. **Not yet wired** — no host currently detects
-    /// "hidden" uniformly: native has no such concept, and the web host's
-    /// `visibilitychange` handling is M13.2.
+    /// Keep ticking while the window or tab is hidden, instead of pausing.
+    /// Not read yet.
     pub tick_while_hidden: bool,
 }
 
@@ -261,34 +353,25 @@ impl Default for FrameConfig {
 }
 
 // ---------------------------------------------------------------------------
-// InputConfig — not yet wired
+// InputConfig
 // ---------------------------------------------------------------------------
 
-/// Input behaviour defaults. **Not yet wired to any system** — `proteus-ui`'s
-/// input systems still use their own compiled-in defaults (Phase B:
-/// `FocusConfig.input_delay_ms` defaults to 0 per-component,
-/// `TransitioningConfig`'s two flags default to `false` per-component). Real
-/// wiring is a `RuntimeConfig` ECS resource `Engine::new` would insert
-/// alongside `GpuContext`/`QuadPipeline`, read by `interaction_style_system`
-/// and the focus/navigation systems the same way `FrameTime` already is.
+/// Input defaults. Not read yet: input uses fixed defaults, which these
+/// fields match.
 #[derive(Debug, Clone, Copy)]
 pub struct InputConfig {
-    /// Global default for Phase B's per-component `FocusConfig.input_delay_ms`
-    /// settle window.
+    /// How long, in milliseconds, a newly focused component waits before it
+    /// accepts input.
     pub focus_input_delay_ms: u32,
-    /// Global default for Phase B's per-component
-    /// `TransitioningConfig.allow_input`.
-    pub transitioning_allow_input: bool,
-    /// Global default for Phase B's per-component
-    /// `TransitioningConfig.allow_navigation`.
-    pub transitioning_allow_navigation: bool,
-    /// Whether clicking an `Interactable` also moves keyboard focus to it
-    /// (Phase B's click-to-focus). `false` decouples pointer and keyboard
-    /// focus entirely.
+    /// Default for `TransitionInteractionConfig::allow_pointer`.
+    pub transition_interaction_allow_pointer: bool,
+    /// Default for `TransitionInteractionConfig::allow_navigation`.
+    pub transition_interaction_allow_navigation: bool,
+    /// Whether clicking a component also gives it focus. `false` keeps
+    /// pointer and keyboard focus separate.
     pub click_moves_focus: bool,
-    /// Minimum pointer movement, in pixels, before a press is reported as a
-    /// drag rather than a click. `0.0` (today's behaviour) starts dragging
-    /// immediately.
+    /// How far the pointer must move, in pixels, before a press counts as a
+    /// drag. `0.0` starts dragging immediately, as now.
     pub drag_threshold_px: f32,
 }
 
@@ -296,8 +379,8 @@ impl Default for InputConfig {
     fn default() -> Self {
         Self {
             focus_input_delay_ms: 0,
-            transitioning_allow_input: false,
-            transitioning_allow_navigation: false,
+            transition_interaction_allow_pointer: false,
+            transition_interaction_allow_navigation: false,
             click_moves_focus: true,
             drag_threshold_px: 0.0,
         }
@@ -305,26 +388,18 @@ impl Default for InputConfig {
 }
 
 // ---------------------------------------------------------------------------
-// TransitionDefaults — not yet wired
+// TransitionDefaults
 // ---------------------------------------------------------------------------
 
-/// Animation defaults. **Not yet wired** — `interaction_style_system` still
-/// uses its own hardcoded `STYLE_TRANSITION_CONFIG` const, and
-/// `TransitionConfig::default()` is a compiled-in default, independent of
-/// this struct. Wiring both to read from a `RuntimeConfig` resource (see
-/// [`InputConfig`]'s doc) is straightforward once something needs it.
+/// Transition defaults. Not read yet: transitions use fixed defaults, which
+/// these fields match.
 #[derive(Debug, Clone)]
 pub struct TransitionDefaults {
-    /// The hover/press/focus mini-transition every `InteractionDef` entity
-    /// gets (today: `{ duration: 0.15, easing: ease_out_quad }`).
+    /// The transition used when a component changes interaction style, such
+    /// as on hover.
     pub interaction_style: TransitionConfig,
-    /// What `signal.set()` uses when the call site doesn't specify a
-    /// `TransitionConfig` (today: `TransitionConfig::default()`).
+    /// The default transition config.
     pub default_config: TransitionConfig,
-    /// Named easing functions, for a TS caller to reference a custom
-    /// interpolation by string instead of needing a Rust `fn` pointer.
-    /// Empty by default — no easings are registered by name today.
-    pub custom_easings: Vec<(String, EasingFn)>,
 }
 
 impl Default for TransitionDefaults {
@@ -333,38 +408,53 @@ impl Default for TransitionDefaults {
             interaction_style: TransitionConfig {
                 duration: 0.15,
                 delay: 0.0,
-                easing: ease_out_quad,
+                easing: Easing::EaseOutQuad,
             },
             default_config: TransitionConfig::default(),
-            custom_easings: Vec::new(),
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// TextConfig — not yet wired
+// TextConfig
 // ---------------------------------------------------------------------------
 
-/// Text defaults. **Not yet wired** — [`crate::Renderer::new`] always builds
-/// `FontAtlas::with_embedded_font()`; `default_size_px` has no consumer (every
-/// `Text` component already carries its own `size_px`).
+/// Text settings.
 #[derive(Debug, Clone)]
 pub struct TextConfig {
-    /// The font `Renderer` should rasterize with. `FontAtlas::new(&[u8])`
-    /// already accepts arbitrary TTF bytes — plumbing this through is a
-    /// small change once an app wants a brand font instead of the embedded
-    /// Inter-Bold.
+    /// The font all text is drawn in: the embedded Inter Bold, or your own,
+    /// from [`FontSource::from_bytes`].
     pub default_font: FontSource,
-    /// Fallback text size in pixels, for a future `Text` builder default.
+    /// A default text size in pixels. Not read yet: every text sets its own
+    /// size.
     pub default_size_px: f32,
 }
 
+/// Where a font comes from.
 #[derive(Debug, Clone)]
 pub enum FontSource {
-    /// The embedded Inter-Bold (`FontAtlas::with_embedded_font()`).
+    /// Inter Bold, embedded in Proteus.
     Embedded,
-    /// Raw TTF/OTF bytes for a custom font.
+    /// A TTF or OTF font file's bytes. Prefer [`FontSource::from_bytes`],
+    /// which checks them. Bytes that turn out not to be a font are logged as
+    /// an error when the renderer is created, and the embedded font is used
+    /// instead.
     Bytes(Arc<[u8]>),
+}
+
+impl FontSource {
+    /// A font from a TTF or OTF file's bytes, checked now, so a bad font,
+    /// such as a failed download, is an error the app handles rather than a
+    /// problem found when the renderer starts.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError`] if the bytes aren't a TTF or OTF font that can be read.
+    pub fn from_bytes(bytes: impl Into<Arc<[u8]>>) -> Result<Self, FontError> {
+        let bytes = bytes.into();
+        FontAtlas::new(&bytes)?;
+        Ok(Self::Bytes(bytes))
+    }
 }
 
 impl Default for TextConfig {
@@ -377,30 +467,31 @@ impl Default for TextConfig {
 }
 
 // ---------------------------------------------------------------------------
-// ResourceConfig — image_max_side wired
+// ResourceConfig
 // ---------------------------------------------------------------------------
 
+/// Image and texture loading settings.
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceConfig {
-    /// Fallback downscale cap (longest side, pixels) for `Image` entities
-    /// that don't set their own [`max_side`](proteus_ui::Image::max_side).
-    /// `None` = no cap. **Wired** — read by [`crate::Renderer::render`].
+    /// Scale images down so their longer side is at most this many pixels,
+    /// unless the image sets its own
+    /// [`max_side`](proteus_ui::Image::max_side). `None` keeps full size, up
+    /// to an atlas page: a larger image is scaled down to fit the page.
     pub image_max_side: Option<u32>,
-    /// `main_atlas` eviction policy. **Not yet wired** — `TextureRegistry`
-    /// always runs cross-page LRU eviction today; `Never` (for a small app
-    /// that would rather fail loudly than silently re-bake) has no effect
-    /// yet.
+    /// Whether the atlas may evict textures to make room. Not read yet:
+    /// least-recently-used textures are always evicted.
     pub eviction: EvictionPolicy,
-    /// Don't decode/upload an `Image`/`Text` until its entity becomes
-    /// visible. **Not yet wired** — every entity bakes as soon as
-    /// `Renderer::render` sees it, visible or not (Phase A listed this as a
-    /// deferred resource concern from the start).
+    /// Wait to bake a component's text or image until the component is
+    /// visible.
     pub lazy_load: bool,
 }
 
+/// Whether the atlas may evict textures to make room for new ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvictionPolicy {
+    /// Evict the least recently used textures first.
     Lru,
+    /// Never evict; a texture that doesn't fit fails to load.
     Never,
 }
 
@@ -415,27 +506,21 @@ impl Default for ResourceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// DebugConfig — validate_config wired
+// DebugConfig
 // ---------------------------------------------------------------------------
 
+/// Diagnostic settings.
 #[derive(Debug, Clone, Copy)]
 pub struct DebugConfig {
-    /// Log [`ProteusConfig::estimated_gpu_bytes`] at `Renderer::new`.
-    /// **Wired.** The hard sizing checks (`validate_atlas_config`,
-    /// `validate_render_config`) always run regardless of this flag — they
-    /// prevent a real crash, so they aren't optional; this only gates the
-    /// informational log line.
+    /// Log [`ProteusConfig::estimated_gpu_bytes`] when the renderer starts.
+    /// The checks that the settings fit the device always run.
     pub validate_config: bool,
-    /// Force the `TransitionDropped` messages on in release builds (they're
-    /// automatic under `#[cfg(debug_assertions)]` already). **Not yet
-    /// wired** — the M12.1 two-tier mechanism has no config input today.
+    /// Log dropped channel requests in release builds too; debug builds always
+    /// do. Not read yet.
     pub report_dropped_transitions: bool,
-    /// An fps / instance-count / atlas-occupancy HUD. **Not yet wired** — no
-    /// overlay rendering exists.
+    /// Show frame rate, component count and atlas use on screen. Not read yet.
     pub overlay: bool,
-    /// Surface DevTools hints for subtrees that could be `bake: true`
-    /// (Phase B: "no child interaction handlers, no signal bindings on
-    /// children"). **Not yet wired.**
+    /// Suggest components that could be baked. Not read yet.
     pub bake_hints: bool,
 }
 
@@ -447,5 +532,76 @@ impl Default for DebugConfig {
             overlay: false,
             bake_hints: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The limits each host requests: `proteus_host_web::limits()` and
+    // `proteus_host_winit::limits()`.
+    fn web_limits() -> wgpu::Limits {
+        wgpu::Limits::downlevel_webgl2_defaults()
+    }
+    fn native_limits() -> wgpu::Limits {
+        wgpu::Limits::default()
+    }
+
+    #[test]
+    fn web_and_constrained_fit_both_hosts() {
+        for config in [ProteusConfig::web(), ProteusConfig::constrained()] {
+            assert_eq!(config.check(&web_limits()), Ok(()));
+            assert_eq!(config.check(&native_limits()), Ok(()));
+        }
+    }
+
+    #[test]
+    fn desktop_fits_the_native_host_only() {
+        assert_eq!(ProteusConfig::desktop().check(&native_limits()), Ok(()));
+        let err = ProteusConfig::desktop().check(&web_limits()).unwrap_err();
+        assert_eq!(err.setting, "memory.main_atlas.page_size");
+        assert_eq!(err.value, 4096);
+        assert_eq!(err.allowed, Allowed::AtMost(2048));
+    }
+
+    #[test]
+    fn each_setting_that_doesnt_fit_is_named() {
+        let limits = web_limits();
+        let with = |change: fn(&mut MemoryConfig)| {
+            let mut config = ProteusConfig::web();
+            change(&mut config.memory);
+            config.check(&limits).unwrap_err()
+        };
+
+        let e = with(|m| m.main_atlas.page_count = 0);
+        assert_eq!(
+            (e.setting, e.allowed),
+            ("memory.main_atlas.page_count", Allowed::AtLeast(1))
+        );
+        let e = with(|m| m.main_atlas.page_count = 10_000);
+        assert_eq!(e.setting, "memory.main_atlas.page_count");
+        let e = with(|m| m.transition_atlas_size = 4096);
+        assert_eq!(e.setting, "memory.transition_atlas_size");
+
+        let mut small_buffer = limits.clone();
+        small_buffer.max_buffer_size = 1024;
+        let mut config = ProteusConfig::web();
+        config.memory.max_instances = 1_000;
+        assert_eq!(
+            config.check(&small_buffer).unwrap_err().setting,
+            "memory.max_instances"
+        );
+    }
+
+    #[test]
+    fn the_message_says_what_to_change() {
+        let err = ProteusConfig::desktop().check(&web_limits()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ProteusConfig.memory.main_atlas.page_size is 4096, but this host allows at most \
+             2048. Use smaller pages, and more of them for the same room. ProteusConfig::web() \
+             fits every host."
+        );
     }
 }

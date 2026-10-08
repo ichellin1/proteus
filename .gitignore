@@ -31,3 +31,10 @@ Thumbs.db
 
 # Scripts
 make_hls.sh
+
+# Personal record of review findings; not part of the project
+REVIEW-FINDINGS.md
+# Generated: TypeScript snippets from docs/ (scripts/check-ts-snippets.mjs),
+# and the API reference the Pages workflow builds into the web demo.
+crates/proteus-sdk-web/ts/.snippets/
+crates/proteus-shell-web/www/api/

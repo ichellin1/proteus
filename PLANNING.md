@@ -2839,8 +2839,8 @@ pub trait App {
     /// body goes.
     fn setup(&mut self, f: &mut Frame);
 
-    /// Optional per-frame application logic, before Proteus::tick runs the
-    /// schedule. Most apps wire everything with signals/callbacks in setup()
+    /// Optional per-frame application logic, after Proteus::tick has run the
+    /// schedule and its callbacks. Most apps wire everything with signals/callbacks in setup()
     /// and never implement this. proteus-demo's ~20 `advance_*` steps land
     /// here.
     fn update(&mut self, f: &mut Frame, dt: f32) { let _ = (f, dt); }
@@ -4132,298 +4132,607 @@ concerns that were tracked continuously rather than as their own milestone — s
 note above on why Native Parity was retired as a standalone milestone in favor of an ongoing
 cross-shell requirement.
 
-#### SDK gaps the 2026-09-22 audit found (A-01 … A-05)
+#### Pre-release audit
 
-Reading `examples/gallery` as an outside developer would surfaced five places where the shipped
-SDK can't express what Phase A promises. These aren't bugs in what exists; they change what "an
-outside developer can build a working component with a transition" means, so they're settled
-before the rest of M14's polish.
+A full audit ran between M13 and M14 and is recorded in
+[audit/AUDIT-2026-09-21.md](./audit/AUDIT-2026-09-21.md). It fixed the correctness bugs, leaks,
+dead code and documentation drift it found, and closed the gaps between what the SDK exposed and
+what Phase A promised. The audit document holds each finding and the reasoning behind its fix;
+the resulting behaviour is documented on the API itself.
 
-##### A-01 — visibility control *(decided and built 2026-09-23)*
+What the SDK gained, in both Rust and TypeScript (TS names are the camelCase equivalents):
 
-`signal_dispatch_system` hid `from` without ever revealing `to`, so Phase A's button → list →
-button round trip was impossible: the return leg animated an invisible entity. That is why
-`examples/gallery`'s `backToGrid()` rebuilds all 12 tiles from scratch and routes through
-`splitTo` instead of the 1→1 signal path.
+| Finding | Added |
+|---|---|
+| A-01 | `ComponentSpec::visible`, `Handle::set_visible`; `signal.set` now reveals its target |
+| A-10 | `ComponentSpec::opacity`, `Handle::set_opacity`; `ComponentData::opacity` reports the cascaded value |
+| A-02 | `Handle::on_transition_complete`, which also fires for `split_to` / `merge_from` |
+| A-11 | `SplitStrategy::Bake` renamed `PerTarget` (it never baked) and marked experimental for V1 |
+| A-09 | Per-child transition configs: `split_to_with_behavior` / `merge_from_with_behavior` |
+| A-03 | `Handle::set_disabled`, `ComponentSpec::start_disabled`, and `TransitioningConfig` on both |
+| A-04 | `Proteus::load_texture` / `bake_texture`, synchronous |
+| A-05 | `mount(canvas, { config })`: validated partial overrides on `ProteusConfig::web()` |
 
-Decisions:
+`examples/gallery` was rewritten against these and no longer works around the SDK.
 
-- **Dispatch reveals `to`.** Symmetric with the `from` hide it already did. At *setup*, not
-  completion — in a 1→1 the `to` entity is what animates, so it has to be visible for the whole
-  morph. The group path reveals at completion (`reveal_on_complete`) because there it's virtuals
-  that animate and the real targets are only waiting. That asymmetry is deliberate.
-- **Reveal is ordered after the hide**, so `set(x, x)` degenerates into `animate_to` semantics
-  rather than silently hiding `x`.
-- **The `from`-must-be-visible guard stays.** "Morph from something the user can't see" is a
-  caller error worth reporting.
-- **Both `ComponentSpec::visible(bool)` and `Handle::set_visible(bool)`**, mirroring the existing
-  `non_interactive()` / `set_interactive()` pair. `ComponentSpec` deliberately had no `.hidden()`
-  builder before this; that call was about not spawning hidden *by default*, which would leave a
-  developer wondering why an element never appeared. An opt-in builder doesn't do that. The
-  `Default` impl is now hand-written so `visible` defaults to `true` rather than `bool::default()`.
+Findings the audit left open are assigned to steps below; the rest go to V2 (see the table at
+the end of this section).
 
-`Handle::set_visible` also retired 20 `world_mut().entity_mut(…).insert(Visibility::…)` calls in
-`proteus-demo` — the panicking `entity_mut` API that C-04 was about.
+#### How M14 runs
 
-##### A-10 — opacity on the SDK *(decided and built 2026-09-23)*
+Fourteen steps, done in order, each reviewed and approved before the next begins. Steps that
+touch many files are reviewed one commit at a time. Commits use Conventional Commits
+(`type(scope): subject`), which is what the release changelog is generated from.
 
-Raised as "should opacity be its own milestone?" — it shouldn't, because the feature already
-shipped. M10 built the cascade (`opacity_system`: `own × parent.effective`, walked top-down),
-`collect_instances` paints it, two integration and three unit tests cover it, and
-`example_detail` has a row demonstrating `0.6 × 0.6 = 0.36` specifically to show cascaded
-`Opacity` rather than a flat `color.w`. What was missing was only the SDK surface — the demo
-reached the feature through `world_mut().entity_mut(…).insert(Opacity(…))`, the same escape
-hatch A-01 retired for visibility. So this is an A-series exposure gap, not new scope.
+M14 ends by tagging **v0.1.0** and publishing it to npm and crates.io.
 
-Decisions:
+#### Step 0 — Condense the audit record *(done)*
 
-- **`ComponentSpec::opacity(f32)` and `Handle::set_opacity(f32)`**, plus `opacity?` and
-  `setOpacity()` in TS. `ComponentData::opacity` reports the cascaded effective value, mirroring
-  how `visible` already reports `EffectiveVisibility`.
-- **Clamped to `0.0..=1.0` at the SDK boundary.** Phase B specifies that range; the raw
-  `proteus_ui::Opacity` component stays unconstrained for internal use.
-- **Opacity and visibility do not interact.** Opacity multiplies during painting; visibility is
-  an ECS flag telling systems whether to act on the entity at all. The observable consequence:
-  an entity at `0.0` opacity is invisible but **still hit-tests**, while a hidden one doesn't.
-  That is deliberate — an invisible hit zone is a real thing to want — and is now documented on
-  both setters and pinned by a test.
-- **Hiding something stops hit-testing one tick later.** `hit_test_system` runs at the start of
-  the schedule and reads the `EffectiveVisibility` the cascade wrote at the end of the previous
-  one, so input resolves against what was last painted: a click arriving in the same tick as the
-  hide still lands, because the user was looking at the component when they made it. Found while
-  writing A-10's tests, judged correct rather than a bug, documented and pinned from both sides
-  so the ordering can't change silently.
+The audit's decisions had been copied into this section at full length. They are now the summary
+above, with the detail left in the audit document. Shorter audit notes elsewhere in this file
+are left alone on purpose: step 11 archives this file and rewrites its architecture content.
 
-##### A-02 — transition-completion callback *(decided and built 2026-09-23)*
+#### Step 1 — Plan M14 *(done)*
 
-Framed in the audit as "`CompletedTransitions` exists but isn't surfaced". Only half true: 1→1
-completions were recorded, but `group_transition_complete_system` recorded *nothing*, so for
-`split_to`/`merge_from` — the case `examples/gallery` actually needs — there was nothing to
-surface at any layer.
+- [x] Every step has its own definition of done.
+- [x] Every item from the previous checklist maps to a step (table at the end of this section).
+- [x] Every open audit finding is assigned to a step or to V2.
 
-Decisions:
+#### Step 2 — Writing standard *(done)*
 
-- **Group completion is recorded too.** `group_transition_complete_system` now pushes the
-  coordinator into `CompletedTransitions` alongside the 1→1 completions. It runs after
-  `transition_complete_system` (which is what clears the bag), so appending is safe. Virtual
-  entities are deliberately excluded — they are machinery, and one group is one completion.
-- **`Handle::on_transition_complete`, not `SignalHandle::on_complete`.** A signal's completion
-  *is* its `to` entity's completion, so a second spelling would be two names for one event.
-  `SignalHandle::on_dropped` stays signal-scoped because a drop genuinely is.
-- **The reporting entity is always the handle the caller started from**: `animate_to` → itself,
-  `signal.set` → `to`, `split_to` → the source, `merge_from` → the destination.
-- **Except `SplitStrategy::Bake`, which reports on its targets.** `Bake` is defined as N
-  independent 1→1 transitions with no virtuals, so the source has no transition of its own — it
-  hides and goes `Idle` in the same tick. Making it report uniformly would mean inventing group
-  bookkeeping for a strategy whose whole point is not having any. Documented on both the Rust and
-  TS methods instead, and pinned by a test, because a callback that silently never fires is worse
-  than an asymmetry a reader can see. Revisit if it trips anyone up.
-- **`Bake` also takes one more tick than `Slice`** to start: `one_to_n_setup_system` inserts each
-  target's `TransitionRequest` through deferred commands, and `transition_setup_system` shares its
-  schedule set, so the request isn't picked up until the following tick. Pinned, not changed.
+Agree what good comments and docs look like before rewriting hundreds of them, and prove it on
+one file.
 
-Found while testing this: `split_to_bake_hides_source_and_settles_targets_to_their_declared_geometry`
-couldn't distinguish a completed transition from one that never ran — it asserted the target sat
-at its declared geometry with no `ActiveTransition`, which is also true of a target that never
-moved. It now asserts mid-flight state as well.
+- [x] `CONTRIBUTING.md` exists with a section on writing comments and docs:
+  - A doc comment says what the item does, what it returns or guarantees, and how it fails
+    (`# Errors`, `# Panics`). It gives the reason only when the code can't show it.
+  - Comments never mention milestones, audit IDs, dates, external documents, how the code used
+    to work, or reasoning that only makes sense to someone who was in the design discussion.
+  - Tests get plain `//` comments, not `///` doc comments, saying what behaviour the test locks in
+    and why.
+  - TypeScript exports get TSDoc; the main entry points get an `@example`.
+  - A short glossary gives each concept one name (host, app, component, signal, bake, virtual…).
+  - Commit types and scopes, as the changelog groups them.
+- [x] One file, `crates/proteus-sdk/src/spec.rs`, rewritten to the standard and approved as the
+  model for step 3.
+- [x] `scripts/check-comments.sh` fails on milestone references, audit IDs, dates, references to
+  external documents, and "morph" in comments. Baseline across the tree: 548.
 
-##### `SplitStrategy::Bake` → `PerTarget`, experimental for V1 *(decided 2026-09-23)*
+#### Step 3 — Comment cleanup *(done)*
 
-Renamed. The old name claimed a behaviour the code didn't have — it baked nothing — and described
-Phase B's Strategy 1, which was never built. `PerTarget` says what it does: N independent 1→1s,
-one per target, no virtuals and no GPU work.
+One commit per crate, in the order developers read them: `proteus-sdk`, `proteus-sdk-web`
+(Rust and TypeScript), `proteus-runtime`, `proteus-ui`, `proteus-render`, `proteus-gpu`,
+`proteus-host-winit`, `proteus-host-web`, `proteus-demo`, the two shells, `examples/gallery`.
 
-The rename also retires the A-02 concern it raised. "Completion fires per target, not on the
-source" was a trap under the old name; under `PerTarget` it is the obvious reading, so the
-notification-only coordinator that was being weighed is unnecessary.
+Starting point: 352 milestone references, 59 PLANNING/phase references and 26 audit IDs in
+comments; 411 `///` lines in test files; about 30 open audit findings about stale comments
+(K-01…K-30); undocumented public items in `proteus-ui` (45), `proteus-runtime` (37),
+`proteus-render` (27), `proteus-sdk-web` (22), `proteus-sdk` (13), `proteus-gpu` (8),
+`proteus-host-winit` (1) and `proteus-host-web` (1).
 
-**Marked experimental for V1.** Its use case is hand-authored control: the developer decides what
-each target is and where it lands, and owns whether the set reads well together. That is a real
-thing to want, but it is unproven — nothing in the reference demo exercises it, and the control
-it exists for is only half-exposed: `ChildBehaviorFn` can vary each target's duration/delay/easing,
-but `proteus-sdk` hardcodes `child_behavior: None` (audit A-09), so an SDK caller gets per-target
-*geometry* without per-target *timing*. Resolving A-09 is what would make it fully usable.
+- [x] `check-comments.sh` passes on every crate's `src/` and `tests/`, and runs in CI. It also
+  checks `Cargo.toml` and `package.json` comments and descriptions.
+- [x] `missing_docs` is enforced in CI, with no warnings, on every library crate: `proteus-gpu`,
+  `-render`, `-ui`, `-sdk`, `-runtime`, `-host-winit`, `-host-web`, `-sdk-web`. `proteus-demo`
+  and the shells are exempt; they still get the style cleanup.
+- [x] `proteus-sdk` and `proteus-runtime` open with a crate-level doc whose example compiles as a
+  doctest.
+- [x] `typedoc` reports no undocumented TypeScript export (`npm run check-docs`, also in CI).
+- [x] K-01…K-30 closed, along with T-07 (stale test tables), T-08 and T-09 (tests that can't
+  fail), and three defects found while planning: the stray copy of another method's doc on
+  `Handle::set_declared_geometry`, `Handle::id` claiming `Disabled` isn't exposed, and a
+  duplicated doc block in `ts/src/types.ts`, and `ProteusConfig`'s `lazy_load` doc saying it
+  isn't wired when the text and image bake reads it.
+- [x] Only comments change; tests and clippy stay green. A bug a comment exposes is fixed in its
+  own `fix:` commit.
 
-Also fixed while renaming: the TS `splitTo` DTO fell back to this strategy for any unrecognized
-`kind`, so a typo silently selected the experimental path. It now falls back to `"slice"` and logs.
+Outcome: committed as one `docs:` commit with a short `test:`, `ci:` and `docs(planning):`
+commit, rather than one per crate, to keep the changelog brief. Besides comments, it turned on
+`missing_docs`, removed an unused `Resource` impl on `FontAtlas`, renamed two `QuadPipeline`
+fields, exported three TypeScript callback types, and fixed T-08 and T-09. The bugs and API
+problems the review found are step 5 items, not fixed here.
 
-##### A-09 — per-child transition configs, and a `split_to` doc fix *(decided and built 2026-09-23)*
 
-Two unrelated things under one finding.
+#### Step 4 — Custom easing (A-07) *(done)*
 
-The doc bug: `Handle::split_to` said the source "is hidden by the underlying system once the
-transition completes". It is hidden **immediately**, in the same tick the split is set up
-(`topology.rs`, before the strategy match). What the viewer sees during the morph is the targets
-or virtual slices of a bake — never the source. Corrected on both `split_to` and its siblings.
+Today a Rust caller can already pass any `fn(f32) -> f32` through `TransitionConfig.easing`, but
+the type isn't re-exported from `proteus-sdk` and nothing documents it. TypeScript accepts only
+the five built-in names. `ProteusConfig.transitions.custom_easings` is declared and never read.
 
-The gap: `ChildBehaviorFn` — Phase A's `childBehavior` iterator — existed only in `proteus-ui`
-and was `fn(idx, total) -> TransitionConfig`, a bare fn pointer. Neither SDK could pass one, so
-every group transition used a single shared config for all N children.
+Decided: easing is plain data, computed in Rust, so it costs nothing extra each tick and never
+calls into JavaScript during an update. Cubic-bézier control points are the custom curve: the
+same numbers as CSS `cubic-bezier()`, so they can be copied from CSS or any easing tool. They
+can overshoot ("back" easing) but can't bounce; bounce and elastic can be added later as
+built-in presets. JavaScript easing functions are not supported: each would be a call from
+WebAssembly into JavaScript per transition per tick, made mid-update, where calling back into
+Proteus panics.
 
-Decision: **resolve per-child configs eagerly instead of lazily.** The type is now
-`ChildConfigs = Vec<TransitionConfig>`, index-aligned with the request's targets or sources, and
-the SDK evaluates the caller's closure once per child before enqueueing the request. This is
-provably equivalent — the old fn pointer had no captures and was called with nothing in scope but
-`idx` and `total`, so nothing could observe *when* it ran — and it buys two things a fn pointer
-cannot: a Rust caller can use a closure that captures, and TypeScript can pass a JS function.
-The two existing `proteus-ui` stagger tests pass unchanged through the new form, which is the
-equivalence argument made concrete.
+- [x] Design chosen at the start of the step (above).
+- [x] Rust: an `Easing` type replaces the function pointer in `TransitionConfig.easing`, with
+  the five built-ins as variants, `CubicBezier { x1, y1, x2, y2 }`, and `Custom(fn(f32) -> f32)`
+  for Rust code. `#[non_exhaustive]`, since presets such as bounce will be added. `Copy`, so
+  `TransitionConfig` stays `Copy`. Re-exported from `proteus-sdk`.
+- [x] A TypeScript caller can use an easing curve that isn't built in:
+  `easing: { cubicBezier: [x1, y1, x2, y2] }`, alongside the built-in names.
+- [x] A Rust caller can do the same through `proteus-sdk` alone.
+- [x] An unknown easing name is an error at the call, not a silent `linear` (B-17).
+- [x] TypeScript's default easing matches Rust's, `easeInOutQuad` (K-26, moved here from step 5),
+  and both document it.
+- [x] Overshoot is safe: a curve whose value goes past 0 or 1 doesn't make sizes or corner radii
+  negative, or colors leave `0`–`1`.
+- [x] `custom_easings` removed: once curves are data, a named registry isn't needed.
+- [x] Tested, and documented with an example in both languages.
 
-Surface: `Handle::split_to_with_behavior` / `merge_from_with_behavior` in Rust, and an optional
-fourth argument on `splitTo`/`mergeFrom` in TypeScript (the wrapper dispatches to a separate
-wasm export, so the plain path stays a single call). A `childBehavior` that throws or returns a
-malformed config raises an error naming the index rather than silently substituting a default.
+#### Step 5 — Fixes
 
-This is what `SplitStrategy::PerTarget` was missing: it now offers per-target *timing* as well as
-per-target geometry, which is the control it exists for.
+Bugs an app author could hit, and test gaps a reviewer would ask about. Each fix comes with a
+test that fails without it.
 
-##### A-03 — `Disabled` and `TransitioningConfig` on the SDK *(decided and built 2026-09-23)*
+Split into 5a–5e, each finished, reviewed and committed before the next.
 
-TypeScript could declare a `disabled` *style* but had no way to put a component *into* that
-state, and neither SDK exposed `TransitioningConfig` at all — so Phase B's `allowInput` /
-`allowNavigation` were unreachable from any app.
+##### Step 5a — API renames and shape
 
-Decisions:
+Breaking but mostly mechanical, so it goes first: every later fix then uses the final names.
 
-- **`Handle::set_disabled(bool)` and `ComponentSpec::start_disabled()`**, plus `setDisabled()` and
-  `startDisabled?` in TS. `start_disabled()` is a no-arg marker rather than `disabled(bool)`
-  because `disabled(StyleOverride)` already means "the look", and the two would collide.
-- **Disabled is documented against `set_interactive`**, which is the confusion waiting to happen.
-  `set_interactive(false)` removes `Interactable`: the component is never a click target and has
-  no associated look — a backdrop, a label. `Disabled` keeps it a control, excludes it from
-  hit-testing, *and* resolves its declared disabled style. A submit button that isn't ready.
-- **`ComponentSpec::transitioning(TransitioningConfig)` and
-  `Handle::set_transitioning_config(Option<..>)`**, taking the struct rather than two positional
-  booleans. `allow_navigation` is exposed but inert — navigation is still a stub (A-06) — and
-  says so.
-- **`ComponentData` gains `disabled`.** Found while testing: `ComponentData::state` is *style*
-  resolution, so it stays `Default` forever for a component that declared no interaction styles,
-  even while disabled — `set_disabled(true)` was unobservable in that case. `disabled` reads the
-  marker directly.
-- **`ComponentData::state` lands one tick late**, because `interaction_style_system` writes
-  `InteractionState` through deferred commands. Documented and pinned; `disabled` has no such lag,
-  which is the other half of why it exists.
+- [x] Rename signals to transition channels, in Rust and TypeScript, so "signal" is free for
+  reactive state later (Post-Release). A Proteus signal is only a named channel for 1→1
+  transitions, while front-end developers expect a signal to be reactive state. Public:
+  `SignalHandle` → `TransitionChannel` (and TypeScript's), `Proteus::signal` / `app.signal()` →
+  `transition_channel` / `transitionChannel`, `SignalId` → `TransitionChannelId`,
+  `DropReason::SignalNotFound` → `ChannelNotFound` (TypeScript `"signalNotFound"` →
+  `"channelNotFound"`). Internal, to match: the `signal` module, `SignalRegistry`,
+  `OwnedSignals`, `PendingSignalSet(s)`, `DroppedSignals`, `create_signal` / `destroy_signal`,
+  `signal_dispatch_system` and the `SignalDispatch` schedule stage, the web bridge's
+  `signalSet` / `signalDestroy`, and test names. Docs (including CONTRIBUTING, whose TypeScript
+  rule names `signal`), the demo and `examples/gallery` updated to match.
+- [x] Name split and merge layouts by their arrangement, and add the missing vertical one, in Rust
+  and TypeScript. Today `Horizontal`/`Slice` are strips side by side (each strip is a vertical
+  column, so the name reads either way), and a vertical stack exists only as
+  `Grid { cols: 1, rows: n }`, which developers won't find.
+  - `MergeLayout`: `Horizontal` → `Row`; new `Column` (strips stacked top to bottom); `Grid`
+    stays. TypeScript: `"horizontal"` → `"row"`, new `"column"`.
+  - `SplitStrategy`: `Slice` → `Row`; new `Column`; `GridSlice` → `Grid`; `PerTarget` stays.
+    TypeScript: `"slice"` → `"row"`, new `"column"`, `"gridSlice"` → `"grid"`.
+  - Helpers: `horizontal_slices` → `row_slices`, with a `column_slices` to match.
+  - B-16: a `Grid` with fewer cells than pieces is an error. Today pieces are paired with cells
+    by `zip`, so in a merge an extra source vanishes instead of moving, and in a split an extra
+    target just appears at the end, silently. `split_to` and `merge_from` return an error
+    naming the piece and cell counts (the `HandleError` variant is decided at the step), and
+    the `Grid` docs say so. Tests for both.
+  - Docs, the demo and `examples/gallery` updated to match.
+- [x] Rename `TransitioningConfig` to `TransitionInteractionConfig`, in Rust and TypeScript. It
+  differs from `TransitionConfig` by three letters but decides something unrelated: whether a
+  component accepts input while it transitions. "Interaction" leaves room for navigation and
+  other input controls. Derived names: `ComponentSpec::transition_interaction`,
+  `Handle::set_transition_interaction`, TypeScript's `transitionInteraction` spec field and
+  `setTransitionInteraction`, and `InputConfig`'s `transition_interaction_allow_pointer` /
+  `_allow_navigation`. The field `allow_input`, which only ever meant pointer input, becomes
+  `allow_pointer` (TypeScript `allowPointer`), so each kind of input gets its own field
+  alongside `allow_navigation` as more are supported, and developers choose per kind. Docs,
+  tests and the demo updated to match.
+- [x] Mark `InteractionStateKind` `#[non_exhaustive]`. Apps read it through `ComponentData.state`,
+  and keyboard navigation (V2) will likely add a keyboard-focus state, which would otherwise
+  break any app that matches on all five. Matches inside `proteus-ui` stay exhaustive. The
+  TypeScript `InteractionState` union can't be marked, so its doc says more states may be added
+  and an exhaustive `switch` should keep a default case.
+- [x] Drop `remove_child`'s `destroy` flag, in Rust and TypeScript. `destroy: true` does exactly
+  what `Handle::destroy` does, and a bare `true` or `false` at the call site hides whether the
+  child is kept or destroyed, which is easy to miss in review. `remove_child(child)` only
+  detaches and keeps the child; destroying it is `child.destroy()`. Update the tests that pass the
+  flag, and the doc (which also notes that a detached child moves on screen, because its geometry
+  is no longer relative to the parent).
+- [x] `remove_child` doesn't check that `child` belongs to `self`: it removes the child's parent
+  link wherever it points, so `list_a.remove_child(item_of_list_b)` detaches the item from
+  `list_b` and reports success. Fail instead when `child` has a different parent or none,
+  probably with a new `HandleError` variant (decided at the step). Rust and TypeScript, with a
+  test. Do it together with dropping the `destroy` flag, since both change the same method.
+- [x] Replace `Handle::center_crop_to_square` (and TypeScript `centerCropToSquare`) with a
+  general `crop_image(ImageCrop)`. `center_crop_to_square` compounds when called twice, because
+  it crops the current crop window, and a crop can't be undone. `ImageCrop` always crops from the
+  full image. Variants: `None` (whole image), `CenteredSquare`, `Aspect { ratio, anchor }` (the
+  largest region with that width-to-height ratio, placed by `anchor`) and `Rect` (an explicit
+  region in fractions of the image). No other presets, and not `#[non_exhaustive]`: a new
+  variant needs a real, recurring use that `Aspect` or `Rect` can't express well. Both callers
+  (the demo's gallery tiles and `examples/gallery`) move to it.
+- [x] One text rasterizer: rename `FontAtlas::rasterize_text_tracked` to `rasterize_text` and
+  remove the old `rasterize_text`, which only tests call (the renderer's text bake already uses
+  the tracked version). Tests pass `0.0` for letter spacing. The V2 text work will likely
+  deprecate this interface, so this leaves one function to deprecate rather than two.
 
-Fixed in passing: `ComponentDataDto` never carried `opacity`, so A-10's `ComponentData::opacity`
-was unreadable from TypeScript. Both it and `disabled` cross now.
+##### Step 5b — Input and events
 
-##### A-04 — texture loading on the SDK *(decided and built 2026-09-23)*
+- [x] Make disabled and non-interactive genuinely different. Today both drop the component from
+  hit-testing, so both are click-through and differ only in that disabled has a look. Decided:
+  - **Non-interactive** (`set_interactive(false)`, `non_interactive()`): the component is not
+    there for input. It has no look of its own, and input goes to whatever is behind it. For
+    things that are never controls, such as backgrounds and labels.
+  - **Disabled** (`set_disabled`, `start_disabled`): the component is there but inert. It still
+    blocks input from reaching what is behind it, fires no events, and shows its disabled style.
+    For a control that is temporarily unavailable, as a disabled control behaves on the web.
 
-TypeScript had no way to get pixels into the atlas. `examples/gallery` works around it by
-spawning a throwaway off-screen component with `image: { bytes }` and polling `bakedImageSize()`
-every frame until the bake system happens to run (`loadBaked`/`waitForBake`).
+  In `hit_test_system`, a disabled component can be the topmost hit, and then no events are
+  emitted. Tested both ways (a disabled component over a clickable one absorbs the click; a
+  non-interactive one passes it through). Update the Rust and TypeScript docs of all four
+  methods and `input.rs`'s module doc to state the difference.
+- [x] `non_interactive_component_does_not_shadow_a_click_on_what_it_overlaps` (`proteus-sdk`
+  tests) no longer tests anything: the backdrop is created before the button, so the button is
+  drawn on top and wins the click with or without `non_interactive()`. Create the backdrop after
+  the button, check the test fails without `non_interactive()` (confirmed: it does), and replace
+  its comment with "A full-window backdrop drawn over the button. Without `non_interactive()` it
+  would take the click."
+- [x] Interaction-style animations fire `on_transition_complete`. A hover, pressed, focused or
+  disabled style animates through an ordinary `TransitionRequest` (`interaction_style_system`),
+  and its completion is recorded like any other, so a component with a hover style reports a
+  "completed transition" every time the pointer moves onto or off it. A once-only completion
+  helper, like `examples/gallery`'s `afterTransition`, attached to such a component would run on
+  a stray hover. Mark style transitions so `transition_complete_system` doesn't record them, with
+  a test; then change the last paragraph of `Handle::on_transition_complete`'s doc (Rust and
+  TypeScript) to "Changes of interaction style, such as a hover effect, don't count."
+- [x] An `on_dropped` handler that destroys its own channel leaves that channel's handlers
+  registered: `fire_dropped` puts them back without checking that the channel still exists, and
+  they fire again if the stale handle is used. Give it the same check `fire` has, with a test.
+- [x] Dispatch reorders handlers: a handler registered during dispatch ends up ahead of the
+  existing handlers for the same event. Keep registration order, or document the order.
+- [x] `TransitionChannel::set` on a destroyed channel is silent: the request is dropped with
+  `ChannelNotFound` a tick later, and `destroy` already removed the `on_dropped` handlers that
+  would have heard it. A `Handle` method on a destroyed component logs a warning; make `set` do
+  the same, checking at call time that the channel exists. Rust and TypeScript, with a test, and
+  `TransitionChannel::destroy`'s doc changed to "Later `set` calls are ignored, with a warning."
+- [x] C-12 — dispatching a pointer event from inside the web `update` callback panics.
+- [x] C-13 — exceptions thrown in JavaScript callbacks are silently swallowed.
 
-Decisions:
+##### Step 5c — Rendering and textures
 
-- **The primitive belongs in `proteus-sdk`, not `proteus-runtime`.** `bake_texture` needs nothing
-  but the world and `proteus-render` — both of which `proteus-sdk` already has — so it sat a
-  layer higher than necessary, out of reach of the one caller that needed it most.
-  `Proteus::bake_texture` is the implementation now and `Frame::bake_texture` delegates, so
-  there's one of it.
-- **`TextureRequest` moved down with it**, from `proteus-runtime::services` to `proteus-sdk`.
-  How a texture should be packed is app-authoring, not host-services. `proteus-runtime`
-  re-exports it, so hosts and apps that name it through `proteus_runtime` are unaffected.
-- **`Proteus::load_texture(bytes, request)`** decodes then bakes — the bytes-in-hand counterpart
-  of `Frame::load_texture(key, request)`, which fetches through the host. TS gets `loadTexture`
-  and `bakeTexture` on `ProteusApp`.
-- **No `onReady`, no promise.** Phase A sketched `texture({src})` with an `onReady` because it
-  assumed the SDK would do the fetching. It doesn't: the caller supplies bytes, and baking them
-  is synchronous, so the handle is usable the moment the call returns. The asynchrony the
-  gallery's polling was working around was never in the texture path — it was waiting for a
-  *bake system* to notice a component it had spawned.
-- Failure split by kind: `None` for undecodable bytes (bad input), a null handle for a decoded
-  image that doesn't fit the atlas (capacity, logged, renders as nothing) — matching the
-  degradation the rest of the texture path already uses.
+- [x] A component's opacity fades its border, drop shadow and glow too. Today `quad.wgsl`
+  multiplies `in.opacity` into the fill's alpha only, so `set_opacity(0.0)`, or a fading parent,
+  leaves the border, shadow and glow at full strength (confirmed on the GPU: at opacity 0 the
+  fill vanished, the border and glow didn't change). Multiply the border's and the shadow's
+  alpha by `in.opacity` too. GPU tests: a bordered, a shadowed and a glowing quad each draw
+  nothing at opacity 0, and half strength at 0.5. Then remove the **Known issue** paragraph in
+  `effects.rs`.
+- [x] After that fix, clean up the demo's hand-written fades. It never calls `set_opacity`;
+  wherever it fades something with a border or glow, it writes the alpha of the fill, the
+  border, the glow and the label separately. Replace those with `set_opacity`, which also fades
+  children such as labels: `advance_gallery_button_fade` (fetch button and its label),
+  `advance_video_crossfade` (the two idle tiles) and the matching restore in
+  `advance_pending_tile_reset`, and `advance_nav_icons`. Keep the fades that are effects in
+  their own right: the hover glow ramp in `advance_hovers`, and the theme and overlay
+  crossfades between two images. Update the comments that describe the workaround, and check
+  the demo looks the same (visual check by the human).
+- [x] Textures larger than an atlas page. Text is one line with no length limit, so it can be
+  wider than a page ("PROTEUS" at the documented maximum, 512 px, is 2406 px; pages are 2048).
+  Today such a request evicts every unreferenced texture trying to fit (50 of 50 in a test),
+  then fails; the text bake skips it with no log and retries every frame, so the text never
+  appears and the atlas cache is wiped each time. Oversized images and `.bake()` components
+  hit the same eviction, with a warning every frame. Fix:
+  - `TextureRegistry::register_static` rejects a request larger than a page at once, with a
+    warning, before evicting anything.
+  - Text wider (or taller) than a page is clipped to the page, with a warning naming the
+    component, the text's size and the limit. The clipped text is drawn at its normal size.
+  - Images larger than a page are scaled down to fit it (`resize_to_fit`), with a warning
+    naming the component, the image's size and the limit.
+  - A `.bake()` component larger than a page isn't baked, with a warning naming the component,
+    its size and the limit; it is drawn normally, unbaked.
+  - None of these is retried every frame, and each warning is logged once.
+  - Developer-chosen behavior (fit, clip, tile and so on) is a Post-Release item; V1 has these
+    fixed defaults.
+  - Docs state what happens, in plain terms: `Text`, the `text` module doc,
+    `ComponentSpec::text`, TypeScript's `text` spec field; `Image`, `ComponentSpec::image` and
+    TypeScript's `image` spec field; `ComponentSpec::bake` and TypeScript's `bake`; and the
+    `image_max_side` and `AtlasConfig::page_size` docs. Fix the `texture_registry.rs` module
+    doc's claim that a failed registration is logged (W-44).
+  - Tests: an oversized request evicts nothing; too-wide text bakes clipped to the page width;
+    an oversized image is scaled to fit; an oversized `.bake()` component is drawn unbaked.
+- [x] A component keeps only one texture reference, so a second texture can be reclaimed while
+  it is still drawn. Baked text, an image and baked content (`.bake()`) each insert the same
+  `TextureRef` (`proteus-runtime/src/bake.rs` for text and images, `proteus-ui/src/bake.rs` for
+  baked content), and `Handle::set_texture` inserts it too. On a component with both text and an
+  image, the atlas treats one of the two as unreferenced; under memory pressure it can be
+  reclaimed and reused, and the component then draws another texture's pixels. The demo avoids it
+  only by putting text on child components. Fix: one reference per texture kind, not per
+  component. Test: a component with text and an image, then allocation pressure, keeps both.
+- [x] `free_resources` doesn't stay freed for text or images, and is the only way to change a
+  component's text. It removes a component's baked result and its texture references, but leaves
+  the `Text` or `Image` in place, so the host bakes it again on the next frame and takes new
+  atlas space. The demo relies on this to update a label (`proteus-demo`, `lib.rs` around line
+  2659: edit `Text` through `world_mut()`, then `free_resources`). Also check what it does to a
+  component made with `.bake()`, which keeps its bake flag after its children were destroyed by
+  the first bake. Likely fix: `set_text` / `set_image` to replace content (the host bakes the
+  new version), and a `free_resources` that removes the content too, so nothing is re-baked. In
+  Rust and TypeScript, with tests, and the demo moved off `world_mut()`. Update the docs, which
+  must also say that releasing references doesn't free atlas space immediately: a texture with
+  no references becomes available for reuse, the atlas reclaims it when it needs room, and
+  `eternal` textures are never reclaimed.
+- [x] C-10 — a texture from `load_texture` / `bake_texture` can be evicted before it is attached.
+- [x] C-15 — a baked component with its own text draws that text twice.
+- [x] C-17 — a glyph whose outline starts left of the pen is clipped (custom fonts).
+- [x] T-03 — a GPU-backed test for the baked path of group transitions (`Slice`, `GridSlice`).
 
-`examples/gallery` was rewritten against this and A-02 together — see below.
+##### Step 5d — Config, loading and robustness
 
-##### `examples/gallery` rewritten *(2026-09-23)*
+- [x] A font that can't be parsed doesn't crash the app. Today `FontAtlas::new` panics on bytes
+  that aren't a valid TTF or OTF font, so a bad `ProteusConfig.text.default_font` (downloaded, or
+  a user's file) crashes the app at startup. Three layers:
+  - `FontAtlas::new` returns a `Result` instead of panicking.
+  - The app can handle the error: the font is parsed when the config is built (for example
+    `FontSource::from_bytes(bytes)` returning a `Result`), so the failure surfaces in the app's
+    own code.
+  - As a failsafe, a font that still fails in `Renderer::new` is logged as an error, and the
+    embedded font is used instead.
 
-The audit's step 6 noted the example "demonstrates the workarounds, not the model". With A-02 and
-A-04 landed it demonstrates the model:
+  TypeScript apps can choose a font too: the config object gets a font setting, and `mount`
+  throws a clear error for a font that can't be parsed, as it does for invalid atlas settings.
+  Tested in both languages.
+- [x] Catch an atlas or instance-buffer setting that doesn't fit the host before the app runs.
+  Natively, the limits checked are the ones `proteus-host-winit` requests (`Limits::default()`),
+  so a config fails the same way on every machine; weaker hardware that can't provide them
+  already fails earlier, with a `GpuError`. On the web it depends on the browser:
+  `proteus-host-web` requests WebGL2's limits, which a WebGL2 device reports exactly, but a
+  WebGPU device raises any requested limit below WebGPU's default to the default (a 2048
+  request reports 8192). So today a config such as `desktop()` works in a WebGPU browser and
+  fails in a WebGL2 one. The web host checks against WebGL2's limits instead of the device's,
+  so a config behaves the same in every browser (proposed; confirmed at the step).
+  - **A check that needs no GPU:** `ProteusConfig::check(&wgpu::Limits)` returning a structured
+    `ConfigError` (the setting, its value, the limit, and how to fix it: a smaller value or the
+    `web()` / `constrained()` presets). An app can call it in its own tests against its host's
+    limits. Both hosts run it before creating the device: TypeScript's `mount` switches to it
+    and still throws, and the Rust `run`s report it clearly. `validate_atlas_config` and
+    `validate_render_config` are replaced or built on it (decided at the step). The panic in
+    `Renderer::new` stays as a backstop, with the same message, and is documented in the
+    `# Panics` sections of `Renderer::new`, `Engine::new` and both hosts' `run`.
+  - **Preset tests:** `web()` fits WebGL2's limits; `desktop()` and `constrained()` fit
+    `Limits::default()`. Done together with T-04.
+  - **Docs:** each host states which limits it requests, and `ProteusConfig`'s docs say which
+    presets fit which host.
+- [x] T-04 — tests for the `desktop()` and `constrained()` config presets and for
+  `validate_render_config`.
+- [x] A transition's `duration` of 0 means instant, and no duration panics. Today
+  `ActiveTransition::new` debug-asserts `duration > 0.0`, so 0 (a natural "snap there", or the
+  first step of a stagger) panics in debug builds, and release builds clamp it to 0.1 ms. New
+  rule: 0 completes on the next tick with no warning; a negative or NaN duration logs a warning
+  and is treated as 0. Never a panic. Update `TransitionConfig::duration`'s doc and
+  TypeScript's to "0 means instant; a negative or NaN duration logs a warning and is treated as
+  0", remove `ActiveTransition::new`'s `# Panics` section, and update the test that relies on
+  the clamp. Tests: 0, a negative value and NaN each complete on the next tick, without a panic.
+- [x] C-18 — native fetches have no timeout, so a hung request pins a thread.
+- [x] The web host delivers a cancelled fetch if it finished before `cancel_fetch` was called:
+  `PreloadedHostServices` checks for cancellation only when a fetch finishes, so a result
+  already queued is still returned by the next `poll_fetches`, and its ID stays in the
+  `cancelled` set for good. `cancel_fetch` drops any queued result with that ID, so the
+  documented contract holds ("after this call, `poll_fetches` never returns its result"). With
+  a test, then remove the `DOC-REVIEW` note on `HostServices::cancel_fetch`.
+- [x] C-14 — confirm A-01 fixed it and a test covers it, then close.
 
-- Loading an image was a throwaway off-screen component carrying `image: { bytes }`, polled with
-  `bakedImageSize()` on every `requestAnimationFrame` until a bake system happened to run. It is
-  `app.loadTexture(bytes)` now, synchronous, with the texture worn via `setTexture`. `GridSlot`
-  holds a `TextureHandle` rather than a hidden `Handle` — and that is a better model as well as
-  less code, since cropping edits the *entity's* UVs and never the texture, so one texture backs
-  both the square-cropped grid tile and the uncropped hero.
-- Knowing when a morph finished was `setTimeout(duration * 1000 + 150)` in one place and
-  `sleep(duration * 1000)` raced against a fetch in another. Both are `onTransitionComplete` now,
-  through a small `afterTransition` helper that guards the once-only case — the callback is
-  persistent, which the helper's doc explains, since that is the first thing anyone will trip on.
-- The hero's self-cleanup after `splitTo` demonstrates A-02's group semantics directly: a slicing
-  split reports once, on the source, when every target has arrived.
+##### Step 5e — Video, demo and shells
 
-Net −69/+101 lines, most of the growth being comments that now explain the model instead of the
-workaround. The two topologies the example was built to show (1→1 via `signal.set`, 1→N via
-`splitTo`) are unchanged.
+Last, since it changes both shells and the demo.
 
-##### A-05 — engine config from TypeScript *(decided and built 2026-09-23)*
+- [x] Demo: clicking a hovered video tile makes its title label flicker instead of fading out,
+  on both shells; sometimes it fades, sometimes it flickers. Not caused by step 5c (an offscreen
+  render of the 5b commit gives the same frames). Leads from that render: on the click frame the
+  label is hidden completely, apparently drawn under the video backdrop (whose z is the midpoint
+  between the idle tiles' and the clicked tile's, so it ties with the tile at the start), then
+  reappears at 80% and fades; and the label jumps to its screen scale at once rather than growing
+  with the tile. The render didn't start real video playback, which the real app does. Check
+  with a release build too, since a debug build's frame times can look like a flicker.
 
-`mount()` hardcoded `ProteusConfig::web()`, so a TS app could not set a clear colour, atlas
-sizes, `image_max_side` or a present mode.
+- [x] The demo owns its own settings and asset list; the shells pass in only what is
+  per-platform. Today both shells carry identical copies of the demo's `CLEAR_COLOR` and
+  `IMAGE_MAX_SIDE`, and the web shell's `asset_keys()` is a hand-kept copy of every image
+  `DemoApp` loads, which silently breaks if the two drift. `proteus-demo` exposes its config
+  (for example `DemoApp::config(base) -> ProteusConfig`, applied over each platform's preset)
+  and its asset keys, which `load_assets` and the web shell's preload both read. The shells
+  keep only the asset directory or URL, the video keys, and the window title and size. Done
+  with the video item below, which also changes both shells.
+- [x] Video: restore "bring your own player", and mark video experimental for V1. Proteus shows
+  video frames; it doesn't play video. An app brings its own player (on the web, usually the
+  browser's `<video>` element) and hands Proteus the frames. M13.4 lost this: it moved an
+  `ffmpeg` player into `proteus-host-winit` and an HLS player into `proteus-host-web`, deleted the
+  browser-player example, and left a TypeScript app no way to show video at all. For V1:
+  - **Frame upload API**, in Rust and TypeScript: create a video texture, upload frames to it,
+    show it on components, and release it. The renderer already has the pieces
+    (`QuadPipeline::init_video`, `upload_video_frame`). Whether TypeScript also gets
+    `uploadFrom(videoElement)`, and whether it copies on the GPU, is decided at the step.
+  - **Move the players out of the hosts** into example code, so the hosts ship no player. The
+    `ffmpeg` player becomes the native example; the web example uses the browser's `<video>`
+    element. The demo gets its video from them. What happens to `HostServices::open_video`,
+    `VideoStream` and `Frame::play_video` once the hosts have no player (kept as the Rust
+    integration point, or replaced by the frame upload API) is decided at the step.
+  - **`proteus_host_winit::run_with_services`**, so a native app can supply its own
+    `HostServices`, as `proteus_host_web::run` already allows.
+  - **`examples/video`** (TypeScript): a browser `<video>` element driven by
+    `requestVideoFrameCallback`, pushing frames into a component. Linked from the docs.
+  - **One video texture at a time.** The renderer has one, and nothing stops a second video from
+    being started while one plays: both then write to it, and stopping the first shrinks it to
+    1×1, so the second goes black. Make starting a second video stop or refuse the first
+    (decided at the step), with a test.
+  - **Docs:** the README and every video item state the tenet, and mark video **Experimental**,
+    as `SplitStrategy::PerTarget` is. They say plainly what V1 supports: one video at a time,
+    frames supplied by the app.
 
-Decisions:
+#### Step 6 — Documentation
 
-- **Partial overrides, not a mirror.** `ProteusConfigDto` has every field optional, applied on
-  top of `ProteusConfig::web()`. A caller states only what it wants changed, and a new knob is a
-  new optional field — M13.5's "the shape only grows" rule holds on this side too.
-- **Only knobs that are wired.** `ProteusConfig` carries fields nothing consumes yet —
-  `memory.video.*`, `render.msaa_samples`, all of `input.*`, `transitions.custom_easings` (A-07),
-  most of `debug.*`. They're absent here on purpose: in Rust an inert field is a documented
-  placeholder, but in a TypeScript API it is a control that silently does nothing. Checked each
-  field for a real consumer before exposing it; nine qualified.
-- **Typos are rejected, not ignored** (`deny_unknown_fields`), as are unknown `presentMode` /
-  `powerPreference` strings. A config typo that quietly changes nothing is the exact failure this
-  API exists to prevent — different from the `splitTo` strategy tag, where leniency is fine
-  because the wrong branch is immediately visible on screen.
-- **Validation returns a JS error instead of aborting.** `Renderer::new` asserts its config and
-  would take the wasm module down; a TS caller's config is *input*, not a programmer error, so
-  `mount` runs `validate_atlas_config`/`validate_render_config` first and throws with the
-  offending field named. Both are now re-exported from `proteus-runtime` for that purpose.
-- **The DTO lives in `proteus-runtime`, not `proteus-host-web`.** It is a property of the config
-  rather than of the web, a native host loading settings from a file wants the same thing — and
-  `proteus-host-web` only compiles for wasm32, where nothing runs `cargo test`, so tests placed
-  there would never have run.
+Plain Markdown in `docs/`, readable on GitHub. The generated API reference (rustdoc and typedoc)
+is deployed to GitHub Pages alongside the demo.
 
-`imageMaxSide` distinguishes absent from an explicit `null`: omitting it keeps the preset, while
-`null` means "pack at native resolution".
-- **A-03** TS can't make a component `Disabled`, and `allowInput`/`allowNavigation` aren't
-  exposed by either SDK.
-- **A-04** No texture-loading primitive in TS: the only way to get pixels into the atlas is to
-  spawn a throwaway off-screen component and poll `bakedImageSize()` every frame.
-- **A-05** `mount()` hardcodes `ProteusConfig::web()`, so a TS app can't set `clear_color`,
-  atlas sizes, `image_max_side` or `present_mode`.
+- [x] `README.md` links to the guides and API reference. Its full rewrite is step 13.
+- [x] Getting-started guides for TypeScript and for Rust.
+- [x] Concept guides: components and geometry; 1→1 transitions; 1→N and N→1 transitions;
+  interaction; text, images and video; configuration; hosts and platforms.
+- [x] Short how-to pages for common tasks (chaining transitions, staggering a group, loading an
+  image, custom easing, …).
+- [x] A how-to on using a platform feature Proteus doesn't provide, such as the clipboard or a
+  file picker: use it directly from the app, and for one that differs by platform, define the
+  app's own trait with an implementation per platform, passed in where the app is created (as
+  `DemoApp::new` takes each platform's video keys). Linked from the `HostServices` docs and the
+  hosts and platforms guide.
+- [x] A "Proteus tricks" page: other ways to bring content into an app. For example, draw
+  anything the platform can draw, such as text in a CSS font on a 2D canvas, read its pixels,
+  and show it with `bake_texture` and `set_texture`. Not specific to fonts, and kept out of the
+  concept guides, which describe what Proteus itself does.
+- [x] API reference builds in CI and deploys to GitHub Pages.
+- [x] `GETTING_STARTED.md`'s build-from-source content moves into `CONTRIBUTING.md` (R-05).
+- [x] Every code snippet in the guides compiles or type-checks in CI.
+- [x] No developer-facing page links into PLANNING.
+- [x] Every relative link in `docs/`, and every heading it names, resolves; checked by a test in
+  `proteus-docs`, which also fails on a link into PLANNING.
 
-`examples/gallery` should be revisited once A-01/A-02 have both landed — it currently
-demonstrates the workarounds rather than the model.
+#### Step 7 — Examples
 
-**Definition of done:**
-- [ ] Public documentation: README covers installation, quickstart, and links to full docs;
-  a `docs/` directory with API reference and at least a getting-started guide
-- [ ] **Comment cleanup pass.** Doc comments across the codebase are wordy and carry context from
-  design conversations — "matching source's own selective scope", "per this pass's design
-  decision", rationale that only makes sense to whoever was in the room. A reader wants what the
-  code does and why, not the deliberation that produced it. The 2026-09-22 audit's K-31 sweep did
-  this for one class of it (157 references to a deleted shell); this is the general pass. New
-  comments written from here should be short and self-contained.
-- [ ] ≥3 complete examples in an `examples/` directory, beyond the reference demo — each
-  demonstrating a distinct use case or transition pattern
-- [ ] Pluggable interpolation interface is public, stable, and documented with an example
-  custom easing function
-- [ ] `CHANGELOG.md` exists; project is on semantic versioning (v0.1.0 minimum)
-- [ ] `CONTRIBUTING.md` covers: how to build, how to run tests, PR process
-- [ ] An outside developer with no prior codebase knowledge can follow the README,
-  install the SDK, and produce a working component with a transition
-- [ ] Final cross-shell parity audit: every V1 feature confirmed working identically on native and
-  web, as a last check on the standing per-milestone requirement (not a re-test from scratch)
-- [ ] CI runs the test suite across macOS, Linux, and Windows (GitHub Actions matrix) for the
-  native shell specifically — this is *cross-platform* parity within native, distinct from the
-  native-vs-web parity checked above
-- [ ] No platform-specific behavioral differences in transitions, input handling, or text
-  rendering across macOS/Linux/Windows
-- [ ] Performance benchmarks on native documented in `BENCHMARKS.md`
+Which examples to build is decided at the start of the step.
+
+**Decided (2026-10-08).** Five examples, Rust first where an example has both languages:
+
+| Example | Rust | TypeScript | Shows |
+|---|---|---|---|
+| gallery | port | exists | 1→1 and 1→N with downloaded photos, loading images |
+| video | new | exists | Bringing your own player: `ffmpeg` natively, `<video>` on the web |
+| menu | new | new | A split into a menu and a merge back (N→1), interaction styles |
+| stepper | new | new | A sequence of screens, each transforming into the next |
+
+- **Layout:** one folder per example, a subfolder per language (`examples/gallery/rust`,
+  `examples/gallery/typescript`), and one README per example covering both, Rust first.
+- **Rust examples** are workspace crates named after the example (`publish = false`). They run
+  natively with `cargo run -p gallery`, and in a browser with `make example-gallery-web`, which
+  builds with `wasm-pack` and serves the page.
+- **TypeScript examples** run with `make example-gallery-ts`, which builds the SDK when its
+  sources have changed, installs and starts Vite. The README also gives the steps without make.
+- **Sub-commits:** 7a structure (layout, make targets, CI, README pattern); 7b gallery in Rust;
+  7c video in Rust; 7d menu in TypeScript; 7e stepper in Rust and TypeScript. Each links its
+  example from the relevant guide as it lands.
+
+- [x] At least three complete examples in `examples/` beyond the reference demo, each showing a
+  distinct use case or transition pattern.
+- [x] Each has a README and runs with one command.
+- [x] Each is built in CI and linked from the relevant guide.
+- [x] `examples/gallery`'s README no longer points into PLANNING.
+
+#### Step 8 — Release process
+
+One version for every crate and the npm package. Library crates publish to crates.io;
+`proteus-demo` and the shells are `publish = false`.
+
+- [ ] `cliff.toml` configures git-cliff; `CHANGELOG.md` is generated, never hand-edited. The
+  commits before M14 aren't conventional, so v0.1.0 opens with one hand-written summary.
+- [ ] A script bumps the version everywhere and regenerates the changelog; the result lands as a
+  normal pull request.
+- [ ] `release.yml` runs on a `vX.Y.Z` tag: checks that versions match, runs CI, creates the
+  GitHub Release with that version's changelog as its notes, and publishes to npm and crates.io.
+- [ ] Every published crate and the npm package have complete metadata, and every dependency
+  between workspace crates carries a version so crates.io accepts it.
+- [ ] `CONTRIBUTING.md` completed: building from source, running tests (including GPU tests), the
+  pull-request process, commit conventions.
+- [ ] `RELEASING.md` covers both releasing the library and deploying the demo.
+- [ ] Repository cleanup: unused committed video removed and the HLS build script tracked
+  (R-02); one demo asset directory instead of two drifted copies (R-03); `design/` and `brand/`
+  reduced to what is source (R-04), keeping the logo assets step 13 uses. History is not
+  rewritten.
+- [ ] A dry run of v0.1.0 passes end to end: a draft GitHub Release with generated notes, and
+  `npm publish --dry-run` / `cargo publish --dry-run` succeeding for every package.
+
+#### Step 9 — Platform checks
+
+- [ ] CI builds and tests the native crates on macOS, Linux and Windows. No behaviour in
+  transitions, input or text rendering differs between them.
+- [ ] Each GPU test either runs or is reported as skipped by name — never skipped silently
+  (T-13). Linux uses lavapipe and Windows can use WARP; macOS runner GPU support is checked at
+  the step.
+- [ ] Tests that can never run today do (T-05): the HLS manifest parser moves where
+  `cargo test` reaches it. CI's lack of wasm32 tests is recorded as known (R-07).
+- [ ] The native demo is run for real on macOS. Real runs on Linux and Windows are Post-V1.
+- [ ] A native-vs-web parity checklist of V1 features is signed off after visual review.
+- [ ] The README no longer says native has only been verified on macOS, and states what is
+  tested where.
+
+#### Step 10 — Benchmarks
+
+- [ ] The per-frame overheads the audit flagged (C-19) are measured, and fixed if they would
+  distort the results.
+- [ ] Native: frame time as component count grows, and under heavy transition load.
+- [ ] Web: the WebAssembly renderer against a hand-written TypeScript/WebGL2 baseline, per the
+  method in `BENCHMARKS.md`, with a batched baseline added or the naive baseline's limits stated
+  plainly.
+- [ ] `BENCHMARKS.md` has real results with hardware and browser recorded, and the harness is in
+  the repo so anyone can rerun it.
+
+#### Step 11 — Architecture document, and archive the V1 planning
+
+- [ ] `ARCHITECTURE.md` at the repo root, written from the current code: crates and layers, the
+  component model and per-frame order, rendering (one instanced draw, atlases, baking),
+  transitions and the three topologies, input, texture lifetime, the app/host contract, and a
+  short list of key design decisions with a paragraph each.
+- [ ] The rendering section explains why, not just what: each frame, every visible component's
+  data is collected and copied to the GPU in one go, then drawn with one draw call; one draw
+  call means one pipeline, so one shader (`quad.wgsl`) handles every feature, each switched on
+  or off by the instance's data. Trade-offs: all 16 vertex attribute slots are in use, so new
+  per-component data must be packed into existing fields. Another pipeline is possible (bakes
+  already use a second one, `atlas_pipeline`) but costs a draw call per run of consecutive
+  components that use it, and needs an atlas version so bakes and transitions can capture
+  those components. It suits features on their own layer better than ones mixed through the
+  scene.
+- [ ] Every claim in it checked against the code.
+- [ ] This file, the V1 `ROADMAP.md` and the audit move to `docs/archive/`, each with a line at the
+  top saying it is archived and where to look instead. D-16 (the missing link to the original
+  proof of concept) is noted there or dropped.
+- [ ] No live document links into the archive except as history. `VISION.md` stays.
+
+#### Step 12 — Start V2
+
+- [ ] A new `PLANNING.md` and `ROADMAP.md` at the repo root for V2. The first V2 milestone is
+  **V2 Planning**; everything else on the V2 roadmap is an unordered candidate list until it runs.
+- [ ] The candidate list includes every Post-Release item below and every audit finding left for
+  V2, checked against both lists.
+- [ ] The new PLANNING states its own rule: it records decisions and definitions of done, and
+  reasoning longer than a paragraph goes in a separate design note.
+
+#### Step 13 — README
+
+The README is what everyone sees first, on GitHub, npm and crates.io. Done last, so it can point
+at finished docs, examples and benchmarks.
+
+- [ ] The Proteus logo at the top, switching between the light and dark lockups to match the
+  reader's theme (`brand/logo/assets/`).
+- [ ] In order: what Proteus is in a sentence or two, a picture or short clip of the demo, a
+  quickstart, install instructions for TypeScript and Rust, links to the docs, examples, demo
+  and architecture, project status (0.x is an early release), and license.
+- [ ] Renders correctly on GitHub, npm and crates.io; images use URLs that work off GitHub.
+- [ ] The quickstart code is checked in CI like the guides' snippets.
+
+#### Release — v0.1.0
+
+- [ ] The step 8 release process runs for real: tag, changelog, GitHub Release, npm and crates.io.
+  Publishing cannot be undone, so it goes ahead only on explicit approval.
+
+#### Where the previous checklist went
+
+| Previous item | Step |
+|---|---|
+| Public documentation, `docs/`, getting-started guide | 6, 13 (README) |
+| Comment cleanup pass | 2, 3 |
+| At least three examples | 7 |
+| Pluggable interpolation interface | 4 |
+| `CHANGELOG.md` and semantic versioning | 8 |
+| `CONTRIBUTING.md` | 2, 8 |
+| An outside developer can follow the README to a working transition | 6 (the getting-started guides) |
+| Final cross-shell parity audit | 9 |
+| macOS/Linux/Windows CI matrix | 9 |
+| No platform differences across macOS/Linux/Windows | 9 |
+| Native benchmarks in `BENCHMARKS.md` | 10 (also the web benchmark, per ROADMAP) |
+
+#### Audit findings left for V2
+
+A-06 (keyboard navigation), A-08 (outer and centered borders), D-17 (parent/child transition
+priority), T-06 (the demo never uses interaction styles), T-11 (zero-duration transitions from
+TypeScript), T-12 (a WGSL layout test that breaks on reformatting), R-06 (repository size).
+
+**Decided for A-06, to carry into V2:** non-interactive and disabled components ignore *all*
+input, not just the pointer: mouse, touch, pen, keyboard, gamepad and TV remote. The Rust SDK
+docs (`Handle::set_interactive`, `Handle::set_disabled`, `ComponentSpec::non_interactive`,
+`ComponentSpec::start_disabled`) state this intent, with a note that only pointer input exists
+today; the TypeScript equivalents get the same wording in step 3. When keyboard navigation or any
+other input is built, keyboard focus and every other input path must skip non-interactive and
+disabled components, and the "currently handles pointer input only" notes must be updated to
+match.
 
 ---
 
@@ -4435,10 +4744,81 @@ load-bearing — this section tracks their *implementation*, which is deferred t
 via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
 not V1.**
 
+- Where (0, 0) is. Today it is the center of the window, with y up, for top-level components;
+  a child's position is relative to its parent. Many developers, on the web especially, expect
+  (0, 0) at the top-left with y down. TypeScript has `topLeftToWorld` to convert, but positions
+  are still center-based. To decide in V2: a top-left origin, or leaving positions as they are
+  and giving developers layouts that place components for them.
+- Image fit: an image fills its component's shape and the crop follows the component's size as
+  it changes, like CSS `object-fit: cover`. During a transition from a square tile to a wide
+  view, the crop would widen with it. Needs the crop recomputed from the in-progress size each
+  frame, so it is a rendering feature rather than an SDK one; builds on M14's `ImageCrop`.
+- Let developers choose what happens to content larger than an atlas page, per image, text or
+  baked component: scale to fit, clip, or tile it across several atlas regions so it's shown
+  in full at full resolution (which very large images and long text need). V1's fixed
+  defaults (step 5): images scale to fit, text is clipped, a baked component is drawn unbaked,
+  each with a warning. Related to image fit, above.
+- Masking: shape a component's content with a mask (a shape, or another image's alpha). Its own
+  method, separate from `crop_image`, so a crop and a mask can be used together: the crop picks
+  which part of the image to show, and the mask shapes it.
+- Multiple fonts. V1 has one font per app, set once in `ProteusConfig.text.default_font`; `Text`
+  has no font field, and the renderer holds a single `FontAtlas`. Planned: a font per text,
+  several weights of one family (regular and bold, say), and falling back to another font for
+  characters the first doesn't have. The configuration guide states the V1 limit and says
+  several fonts are planned.
+- Loading that manages itself. V1 decodes every pending image, and rasterizes every pending
+  text, in the frame it's given, with no limit: 50 large images in one frame make that frame as
+  long as all 50 decodes, and nothing is carried over to the next. `load_texture` decodes on the
+  spot, in the app's own code. `FrameConfig::dt_clamp_secs` doesn't limit this work; it only
+  caps how far the next frame's transitions advance, so after a long frame they continue rather
+  than jump. The how-to on loading images tells developers to spread loads over frames
+  themselves. Planned: resource loading that is opaque and works as well as it can on its own.
+  Decode off the main thread (threads natively, workers or `createImageBitmap` on the web),
+  give the bake pass a per-frame time budget that carries the rest over, and load what is
+  visible first. An async `load_texture`, or one that returns a handle whose image arrives
+  later, changes the API, so it is a V2 decision.
+- An `on_destroy` callback for components and transition channels. Most destruction is started
+  by the app, so it already knows, but two cases happen as side effects: destroying a parent
+  destroys its children, and destroying a component destroys the channels it owns. An app holding
+  those handles is never told.
+- Bake at the display's resolution (moved from M14 step 5). Nothing that draws into a texture reads the scale factor:
+  text is rasterized at `size_px` logical pixels, and baked components (`.bake()`) and split and
+  merge snapshots get atlas regions of their logical size. On a 2× display each texel covers
+  2×2 screen pixels, so text and baked content are slightly soft next to native text (confirmed
+  on a Retina display). Fix:
+  - Rasterize text at `size_px × scale_factor`, and size component and transition bakes the
+    same way; keep drawing them at their logical size, so layout doesn't change.
+  - When the scale factor changes (a window moved to another display), bake text and
+    components again.
+  - It costs up to 4× the atlas space for that content on a 2× display, which matters most on
+    the web's 2048-pixel pages. Whether a config setting caps the bake scale for memory-tight
+    apps is decided at the step.
+  - Test: on a scale-2 viewport, a text bake's pixel size is twice its logical size, and it is
+    drawn at its logical size.
+- Signals: reactive state that notifies its observers when its value changes, the observer
+  pattern front-end developers know from SolidJS, Preact, Angular and Leptos. The name is free
+  for this once M14 renames today's 1→1 transition signals to transition channels (step 5).
+- A video handle with playback controls (play, pause, seek, loop, mute, volume, duration,
+  position, an "ended" event), designed around "bring your own player". Proteus doesn't play
+  video, so the handle drives the app's player rather than containing one. The design work is an
+  interface that most players can sit behind: on the web, `<video>`, hls.js, Shaka and video.js;
+  natively, `ffmpeg`, GStreamer and platform decoders. Also: several videos at once, each with its
+  own texture; frames copied from a `<video>` element straight to the GPU
+  (`copy_external_image_to_texture`) instead of read back through a canvas; and live video during
+  group transitions (M9.6).
+- Real runs of the native host on Linux and Windows. V1 tests both in CI but has only been run
+  by hand on macOS (M14 step 9).
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
 - Custom shader authoring experience (formal support for developer-written WGSL)
+- Split `quad.wgsl` into parts. `fs_main` is about 170 lines doing the shadow, the shape's edge,
+  sampling from three atlases, the crossfade, tint, border and compositing in one function.
+  Break it into named functions (for example `sample_atlas`, `shadow_alpha`, `apply_border`,
+  `composite`), and consider composing the shader from separate files (WGSL has no `#include`;
+  a crate such as `naga_oil`, or joining files at build time). Do it before custom shader
+  authoring, which needs pieces a developer can reuse. The output must stay identical: the
+  `headless_render` pixel tests are the check.
 - Advanced transition effects (non-linear easing library, particle dissolution, fluid deformation)
 - Transition `direction` and `stagger` — superseded by the `childBehavior` iterator pattern. Developers implement these as iterator functions rather than framework primitives. No separate post-V1 work needed.
 - XR shell (WebXR / OpenXR) — seam designed in M13.7

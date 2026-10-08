@@ -1,49 +1,31 @@
-//! Static image ECS components (M9.7) — PNG/JPEG-as-texture rendering.
-//!
-//! Mirrors [`crate::text`]'s `Text`/`BakedText` split exactly, just with
-//! `proteus_render::static_texture::decode_image` in place of glyph
-//! rasterization:
+//! Images: a PNG or JPEG drawn on an entity. They work like [`crate::text`],
+//! with decoding in place of rasterizing:
 //!
 //! ```text
-//! Image { bytes }                    ← developer declares on an entity
-//!         │
-//!         │ (shell detects Image without BakedImage, calls decode_image)
+//! Image { bytes }                declared on an entity
+//!         │  the renderer finds Image without BakedImage
 //!         ▼
-//! decode_image → DecodedImage (RGBA8 pixels + dimensions)
-//!         │
-//!         │ (shell calls TextureRegistry::register_static for a main_atlas region,
-//!         │  then write_to_main_atlas to upload the pixels — M11)
+//! decode_image                   the image, as RGBA pixels
+//!         │  added to the main atlas
 //!         ▼
-//! BakedImage { uv_offset, uv_scale, page, pixel_size } + TextureRef  ← written back onto the entity
+//! BakedImage + ImageTextureRef   where the image is in the atlas
 //!         │
-//!         │ (collect_instances uses these UVs in the entity's background QuadInstance;
-//!         │  TextureRef ref-counts the region against this entity's lifetime)
 //!         ▼
-//! GPU shader samples main_atlas sub-region → tinted image pixel
+//! drawn as the entity's background
 //! ```
 //!
-//! ## Sizing — unlike `BakedText`
+//! Unlike text, the image fills the entity at the entity's size: an entity
+//! with a different shape from its image stretches it. To show part of it
+//! instead, see [`ImageCrop`] and `Handle::crop_image`.
 //!
-//! `Text` renders as a *second* overlay instance layered on top of a
-//! (possibly differently-sized) parent quad, so `BakedText::pixel_size`
-//! exists to size that overlay to the glyph run's own footprint rather than
-//! inheriting the wrong size from its parent.
+//! `QuadState::color` multiplies the image's colors, so use `Vec4::ONE` to show
+//! it unchanged.
 //!
-//! `Image` has no such parent/overlay split — it maps directly onto the
-//! entity's own background instance, at whatever size the entity's
-//! `QuadState` already declares (same as a plain solid-color fill). A tile
-//! sized to its poster's aspect ratio just shows the poster; a tile sized
-//! differently stretches it to fit, same as any other textured quad.
-//! `BakedImage::pixel_size` is carried for parity with `BakedText` and any
-//! future aspect-fit logic, but `collect_instances` does not use it to
-//! resize the quad.
+//! An image larger than an atlas page ([`AtlasConfig::page_size`], 2048 pixels
+//! by default), after any [`Image::max_side`], is scaled down to fit the page,
+//! with a warning.
 //!
-//! ## Color
-//!
-//! Unlike text (white base + coverage alpha, designed for tinting), image
-//! pixels are the image's real RGB values. `QuadState::color` still
-//! multiplies them in the shader, so `Vec4::ONE` (white) is the "untinted"
-//! choice for an entity meant to show the image as-is.
+//! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
 
 use bevy_ecs::prelude::*;
 use std::sync::Arc;
@@ -52,33 +34,27 @@ use std::sync::Arc;
 // Image component
 // ---------------------------------------------------------------------------
 
-/// Declares that an entity should display a decoded PNG/JPEG image.
+/// A PNG or JPEG image to draw on an entity.
 ///
-/// When this component is present on an entity that does not yet have a
-/// [`BakedImage`] component, the shell's image-bake step decodes `bytes`,
-/// uploads the result to `main_atlas`, and inserts [`BakedImage`] with the
-/// resulting UV coordinates. The baked texture is permanent for the entity's
-/// lifetime — re-baking on content change is not implemented.
+/// The renderer decodes it into the main atlas and adds a [`BakedImage`].
+/// Changing `bytes` afterwards has no effect until the `BakedImage` is
+/// removed; `proteus-sdk`'s `Handle::set_image` does both. An image larger than an atlas page is scaled down to fit it; see
+/// the [module docs](self).
 #[derive(Component, Clone, Debug)]
 pub struct Image {
-    /// Raw PNG or JPEG file bytes (format sniffed from the data, not a file
-    /// extension). `Arc` so the shell's per-frame "already baked?" check
-    /// (mirroring `bake_pending_text`) doesn't copy the whole buffer.
+    /// The PNG or JPEG file's bytes. The format is detected from the data.
+    /// Shared rather than copied.
     pub bytes: Arc<[u8]>,
-    /// Downscale cap (longest side, pixels) applied before packing into
-    /// `main_atlas`. `None` = pack at native resolution. Per-entity because
-    /// real assets vary wildly in how much on-screen footprint they need —
-    /// a 12-up gallery grid tile and the one enlarged hero view of the same
-    /// photo want very different caps (M13.1: this replaced the shells'
-    /// hand-ordered "bake this one entity bigger" special-case passes).
+    /// Scale the image down so its longer side is at most this many pixels.
+    /// `None` uses the configured default. Set per image, since a small grid
+    /// tile and a full-screen view of the same photo need very different
+    /// sizes.
     pub max_side: Option<u32>,
 }
 
 impl Image {
-    /// `bytes` accepts anything convertible to `Arc<[u8]>` — a `Vec<u8>`
-    /// from `std::fs::read`, or a `&[u8]` slice (e.g. from a wasm-bindgen
-    /// parameter), without an extra explicit conversion at call sites.
-    /// No downscale cap; see [`Image::with_max_side`].
+    /// Creates an image from its file's bytes, such as a `Vec<u8>` or a
+    /// `&[u8]`. See [`Image::with_max_side`] to limit its size.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
         Self {
             bytes: bytes.into(),
@@ -86,7 +62,7 @@ impl Image {
         }
     }
 
-    /// Set the downscale cap (see [`Image::max_side`]).
+    /// Sets [`Image::max_side`].
     pub fn with_max_side(mut self, max_side: u32) -> Self {
         self.max_side = Some(max_side);
         self
@@ -97,31 +73,132 @@ impl Image {
 // BakedImage component
 // ---------------------------------------------------------------------------
 
-/// Written by the shell after an [`Image`] entity's bytes have been decoded
-/// and uploaded to the GPU `main_atlas`.
-///
-/// The render loop reads `uv_offset`/`uv_scale` to point the entity's
-/// background [`QuadInstance`] at the correct atlas sub-region — see the
-/// [module docs](self) for why, unlike `BakedText`, this does not resize the
-/// entity's own quad.
+/// Where an entity's image is in the main atlas, added once it is baked. The
+/// entity's background [`QuadInstance`] draws it.
 ///
 /// [`QuadInstance`]: proteus_render::QuadInstance
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct BakedImage {
-    /// Normalised UV origin within `main_atlas` (top-left corner of the image region).
-    /// Range: [0, 1] × [0, 1].
+    /// Texture coordinates of the image's top-left corner in the atlas.
     pub uv_offset: [f32; 2],
-    /// Normalised UV extent of the image region.
-    /// `uv_offset + uv_scale` gives the bottom-right UV corner.
+    /// The image's size in texture coordinates; `uv_offset + uv_scale` is its
+    /// bottom-right corner.
     pub uv_scale: [f32; 2],
-    /// Which `main_atlas` array layer (M11.2) `uv_offset`/`uv_scale` address — `main_atlas` is a
-    /// multi-page pool, so the UVs alone are ambiguous without it. Comes straight from
-    /// `TextureRegistry::main_atlas_uv`'s `MainAtlasUv::page` and is encoded into
-    /// `QuadInstance::atlas_page` by `proteus_render::pack_atlas_page`.
+    /// The main-atlas page the image is on. The main atlas has several pages,
+    /// so the texture coordinates alone don't locate it.
     pub page: u32,
-    /// The decoded image's native size in pixels (`DecodedImage::width`/`height`).
-    /// Not used to resize the entity's quad — see the [module docs](self).
+    /// The image's size in pixels, after any scaling down. The entity isn't
+    /// resized to it.
     pub pixel_size: [f32; 2],
+    /// The whole image's `uv_offset`, before any crop. [`BakedImage::crop`]
+    /// always works from it, so cropping again replaces the crop.
+    pub full_uv_offset: [f32; 2],
+    /// The whole image's `uv_scale`, before any crop.
+    pub full_uv_scale: [f32; 2],
+}
+
+impl BakedImage {
+    /// A baked image showing all of its region of the atlas, uncropped.
+    pub fn new(uv_offset: [f32; 2], uv_scale: [f32; 2], page: u32, pixel_size: [f32; 2]) -> Self {
+        Self {
+            uv_offset,
+            uv_scale,
+            page,
+            pixel_size,
+            full_uv_offset: uv_offset,
+            full_uv_scale: uv_scale,
+        }
+    }
+
+    /// Shows only the part of the image `crop` selects. The crop is worked
+    /// out from the whole image, so a second call replaces the first rather
+    /// than cropping the crop, and [`ImageCrop::None`] shows all of it again.
+    pub fn crop(&mut self, crop: ImageCrop) {
+        let [x, y, w, h] = crop.region(self.pixel_size[0], self.pixel_size[1]);
+        self.uv_offset = [
+            self.full_uv_offset[0] + x * self.full_uv_scale[0],
+            self.full_uv_offset[1] + y * self.full_uv_scale[1],
+        ];
+        self.uv_scale = [w * self.full_uv_scale[0], h * self.full_uv_scale[1]];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ImageCrop
+// ---------------------------------------------------------------------------
+
+/// Which part of an image a component shows. Always measured from the whole
+/// image, so changing the crop never compounds it.
+///
+/// Only the visible region changes: no pixels are copied and no atlas space is
+/// used.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImageCrop {
+    /// The whole image: no crop.
+    None,
+    /// The largest centered square. Fills a square cell, such as a grid tile,
+    /// with an image of any shape.
+    CenteredSquare,
+    /// The largest region with this width-to-height `ratio`, placed by
+    /// `anchor`: `(0.5, 0.5)` centers it, `(0.0, 0.0)` keeps the top-left
+    /// corner, `(1.0, 1.0)` the bottom-right. A `ratio` that isn't positive
+    /// shows the whole image.
+    Aspect {
+        /// Width divided by height, such as `16.0 / 9.0`.
+        ratio: f32,
+        /// Where the region sits within the image, each axis from `0` to `1`.
+        anchor: glam::Vec2,
+    },
+    /// An explicit region, in fractions of the image: `x` and `y` are its
+    /// top-left corner, from `0` to `1`. Clamped to the image.
+    Rect {
+        /// Left edge, from `0` to `1`.
+        x: f32,
+        /// Top edge, from `0` to `1`.
+        y: f32,
+        /// Width, from `0` to `1`.
+        width: f32,
+        /// Height, from `0` to `1`.
+        height: f32,
+    },
+}
+
+impl ImageCrop {
+    /// The region this crop selects from a `width × height` image, as
+    /// `[x, y, width, height]` in fractions of the image.
+    pub fn region(&self, width: f32, height: f32) -> [f32; 4] {
+        let aspect = |ratio: f32, anchor: glam::Vec2| {
+            let image_ratio = width / height;
+            // `is_nan` as well: a NaN ratio would fail neither comparison.
+            if ratio.is_nan() || ratio <= 0.0 || image_ratio.is_nan() || image_ratio <= 0.0 {
+                return [0.0, 0.0, 1.0, 1.0];
+            }
+            let anchor = anchor.clamp(glam::Vec2::ZERO, glam::Vec2::ONE);
+            if ratio < image_ratio {
+                // Narrower than the image: full height, part of the width.
+                let w = ratio / image_ratio;
+                [(1.0 - w) * anchor.x, 0.0, w, 1.0]
+            } else {
+                let h = image_ratio / ratio;
+                [0.0, (1.0 - h) * anchor.y, 1.0, h]
+            }
+        };
+        match *self {
+            ImageCrop::None => [0.0, 0.0, 1.0, 1.0],
+            ImageCrop::CenteredSquare => aspect(1.0, glam::Vec2::splat(0.5)),
+            ImageCrop::Aspect { ratio, anchor } => aspect(ratio, anchor),
+            ImageCrop::Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            } => {
+                let x = x.clamp(0.0, 1.0);
+                let y = y.clamp(0.0, 1.0);
+                [x, y, w.clamp(0.0, 1.0 - x), h.clamp(0.0, 1.0 - y)]
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,12 +232,7 @@ mod tests {
 
     #[test]
     fn baked_image_stores_uv_coords() {
-        let baked = BakedImage {
-            uv_offset: [0.1, 0.2],
-            uv_scale: [0.3, 0.4],
-            page: 2,
-            pixel_size: [200.0, 300.0],
-        };
+        let baked = BakedImage::new([0.1, 0.2], [0.3, 0.4], 2, [200.0, 300.0]);
         let mut world = World::new();
         let e = world.spawn(baked.clone()).id();
         let b = world.get::<BakedImage>(e).unwrap();
@@ -176,12 +248,7 @@ mod tests {
         let e = world
             .spawn((
                 Image::new(vec![1u8, 2, 3]),
-                BakedImage {
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [0.1, 0.1],
-                    page: 0,
-                    pixel_size: [64.0, 64.0],
-                },
+                BakedImage::new([0.0, 0.0], [0.1, 0.1], 0, [64.0, 64.0]),
             ))
             .id();
         assert!(world.get::<Image>(e).is_some());

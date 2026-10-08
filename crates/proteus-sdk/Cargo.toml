@@ -1,6 +1,6 @@
 [package]
 name = "proteus-sdk"
-description = "Layer 2.5: generic app-authoring API (component/signal/texture) over proteus-ui"
+description = "The Proteus app API: create components, transition them and handle input."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
