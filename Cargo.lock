@@ -1561,6 +1561,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "menu"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "proteus-host-web",
+ "proteus-host-winit",
+ "proteus-runtime",
+ "proteus-sdk",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

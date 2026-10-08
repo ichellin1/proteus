@@ -6,7 +6,7 @@ languages, the two versions are the same app: Rust in `rust/`, TypeScript in `ty
 | Example | Rust | TypeScript | Shows |
 |---|---|---|---|
 | [Gallery](./gallery) | ✓ | ✓ | A grid of downloaded photos; a photo opens into a large view (1→1), which splits back into a new grid (1→N). |
-| [Menu](./menu) | — | ✓ | A button that splits into a menu (1→N), and the menu merging back into the button (N→1). Hover, pressed and disabled styles. |
+| [Menu](./menu) | ✓ | ✓ | A button that splits into a menu (1→N), and the menu merging back into the button (N→1). Hover, pressed and disabled styles. |
 | [Stepper](./stepper) | ✓ | ✓ | An onboarding flow whose steps transform into one another through one transition channel (1→1). |
 | [Video](./video) | ✓ | ✓ | Video from your own player, shown on a component: `ffmpeg` on the desktop, a `<video>` element in a browser. |
 

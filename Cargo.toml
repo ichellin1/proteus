@@ -17,6 +17,7 @@ members = [
     "examples/gallery/rust",
     "examples/video/rust",
     "examples/stepper/rust",
+    "examples/menu/rust",
 ]
 
 # What `cargo build`, `run`, `test` and `clippy` use without `-p` or
@@ -37,6 +38,7 @@ default-members = [
     "examples/gallery/rust",
     "examples/video/rust",
     "examples/stepper/rust",
+    "examples/menu/rust",
 ]
 
 [workspace.package]
