@@ -45,7 +45,7 @@ proteus-host-winit = "0.1"
 Replace `src/main.rs` with:
 
 ```rust,no_run
-use proteus_runtime::glam::{Vec2, Vec4};
+use proteus_sdk::glam::{Vec2, Vec4};
 use proteus_runtime::{App, Frame};
 use proteus_sdk::{ComponentSpec, QuadState, Text, TransitionConfig};
 

@@ -72,7 +72,7 @@ import { colorFrom, mount, type Geometry } from "proteus-sdk";
 function centered(width: number, height: number, cornerRadius: number): Geometry {
   return {
     position: { x: 0, y: 0, z: 0 },
-    size: { x: width, y: height },
+    size: { width, height },
     rotation: 0,
     scale: 1,
     anchor: { x: 0.5, y: 0.5 },
