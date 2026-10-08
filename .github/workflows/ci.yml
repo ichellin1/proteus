@@ -191,6 +191,10 @@ jobs:
         working-directory: examples/gallery/typescript
         run: npm ci && npm run build
 
+      - name: examples/menu/typescript — build
+        working-directory: examples/menu/typescript
+        run: npm ci && npm run build
+
       - name: examples/video/typescript — build
         working-directory: examples/video/typescript
         run: npm ci && npm run build

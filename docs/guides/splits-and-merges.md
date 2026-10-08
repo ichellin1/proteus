@@ -116,7 +116,7 @@ button.mergeFrom(items, { duration: 0.5 }, { kind: "column" });
 ```
 
 A split followed by a merge is a round trip: a button that opens into a list, and closes back
-into the button.
+into the button. The [menu example](../../examples/menu) is one.
 
 ## Timing each piece
 
