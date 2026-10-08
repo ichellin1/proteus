@@ -8,9 +8,9 @@
 //!
 //! Techniques worth copying:
 //!   - The player is a trait of the app's own, [`Player`], with an
-//!     implementation for each platform: `ffmpeg` on the desktop
-//!     ([`ffmpeg`]), and the browser's `<video>` element on the web
-//!     ([`browser`]). Each entry point passes its own in, and the app never
+//!     implementation for each platform: `ffmpeg` on the desktop, in
+//!     `ffmpeg.rs`, and the browser's `<video>` element on the web, in
+//!     `browser.rs`. Each entry point passes its own in, and the app never
 //!     needs to know which it has.
 //!   - Upload in [`App::update`], which the host calls every frame: ask the
 //!     player for a new frame, and upload it if there is one. Asking never
