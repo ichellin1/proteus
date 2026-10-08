@@ -1076,3 +1076,44 @@ fn spawning_into_an_existing_archetype_does_not_reorder_a_different_archetype() 
          content with no explicit z-order change requested anywhere"
     );
 }
+
+// Siblings are drawn by their own `z`, then creation order, like top-level
+// entities: here the child added first has the greater `z`, so it is drawn
+// last, on top.
+#[test]
+fn siblings_are_drawn_by_z_then_creation_order() {
+    let mut world = World::new();
+    register_spawn_order_hooks(&mut world);
+    let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+    let green = Vec4::new(0.0, 1.0, 0.0, 1.0);
+    let parent = world.spawn(sky_blue_button()).id();
+    world.spawn((
+        QuadState {
+            position: Vec3::new(0.0, 0.0, 1.0),
+            color: red,
+            ..sky_blue_button()
+        },
+        proteus_ui::ChildOf(parent),
+    ));
+    world.spawn((
+        QuadState {
+            position: Vec3::ZERO,
+            color: green,
+            ..sky_blue_button()
+        },
+        proteus_ui::ChildOf(parent),
+    ));
+
+    let colors: Vec<[f32; 4]> = collect_instances(&mut world)
+        .iter()
+        .map(|i| i.color)
+        .collect();
+    assert_eq!(
+        colors,
+        [
+            sky_blue_button().color.to_array(),
+            green.to_array(),
+            red.to_array()
+        ]
+    );
+}

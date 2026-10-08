@@ -31,17 +31,17 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
     console_error_panic_hook::set_once();
 
     let canvas = web_sys::window()
-        .ok_or_else(|| JsValue::from_str("no window"))?
+        .ok_or_else(|| crate::js_error("no window"))?
         .document()
-        .ok_or_else(|| JsValue::from_str("no document"))?
+        .ok_or_else(|| crate::js_error("no document"))?
         .get_element_by_id(canvas_id)
-        .ok_or_else(|| JsValue::from_str("canvas element not found"))?
+        .ok_or_else(|| crate::js_error("canvas element not found"))?
         .dyn_into::<web_sys::HtmlCanvasElement>()
-        .map_err(|_| JsValue::from_str("element is not a canvas"))?;
+        .map_err(|_| crate::js_error("element is not a canvas"))?;
 
     config
         .check(&crate::limits())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| crate::js_error(&e.to_string()))?;
     let render_cfg = config.render;
     let surface = WebSurface::new(&canvas, render_cfg).await?;
     let viewport = surface.viewport();

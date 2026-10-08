@@ -123,7 +123,7 @@ pub(crate) async fn fetch_bytes(
     url: &str,
     signal: Option<&web_sys::AbortSignal>,
 ) -> Result<Vec<u8>, JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+    let window = web_sys::window().ok_or_else(|| crate::js_error("no window"))?;
     let promise = match signal {
         Some(signal) => {
             let init = web_sys::RequestInit::new();
@@ -135,9 +135,9 @@ pub(crate) async fn fetch_bytes(
     let resp_value = JsFuture::from(promise).await?;
     let resp: web_sys::Response = resp_value
         .dyn_into()
-        .map_err(|_| JsValue::from_str("fetch: response was not a Response"))?;
+        .map_err(|_| crate::js_error("fetch: response was not a Response"))?;
     if !resp.ok() {
-        return Err(JsValue::from_str(&format!(
+        return Err(crate::js_error(&format!(
             "{} {}",
             resp.status(),
             resp.status_text()

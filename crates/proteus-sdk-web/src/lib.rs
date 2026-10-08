@@ -48,7 +48,7 @@ pub use handle::{
 
 use dto::{
     ComponentDataDto, ComponentSpecDto, ImageDto, MergeLayoutDto, QuadStateDto, SplitStrategyDto,
-    TargetStateDto, TextDto, TransitionConfigDto, TransitionDroppedDto, Vec2Dto,
+    TargetStateDto, TextDto, TransitionConfigDto, TransitionDroppedDto,
 };
 
 // ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ fn resolve_child_behavior(
         .map(|i| {
             let raw = f.call2(&JsValue::NULL, &(i as f64).into(), &(total as f64).into())?;
             let dto: TransitionConfigDto = serde_wasm_bindgen::from_value(raw).map_err(|e| {
-                JsValue::from_str(&format!(
+                crate::js_error(&format!(
                     "childBehavior({i}, {total}) returned an invalid TransitionConfig: {e}"
                 ))
             })?;
@@ -153,8 +153,14 @@ fn texture_request_from(value: JsValue) -> sdk::TextureRequest {
 /// Converts a [`HandleError`](sdk::HandleError) into the value thrown to
 /// JavaScript. Like every error this bridge throws, it is a string rather than
 /// an `Error` object.
+/// An `Error` with `message`, to throw to JavaScript. Unlike a thrown string,
+/// it carries a stack trace and passes `instanceof Error`.
+pub(crate) fn js_error(message: &str) -> JsValue {
+    js_sys::Error::new(message).into()
+}
+
 fn handle_err(e: sdk::HandleError) -> JsValue {
-    JsValue::from_str(&format!("proteus: {e}"))
+    crate::js_error(&format!("proteus: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +200,7 @@ impl ProteusApp {
     #[wasm_bindgen]
     pub fn component(&mut self, spec: JsValue) -> Result<Handle, JsValue> {
         let dto: ComponentSpecDto = serde_wasm_bindgen::from_value(spec)
-            .map_err(|e| JsValue::from_str(&format!("invalid ComponentSpec: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid ComponentSpec: {e}")))?;
         let (mut spec, children_bits) = dto.into_spec_without_children();
         for bits in children_bits {
             let entity = bevy_ecs::prelude::Entity::from_bits(bits as u64);
@@ -225,7 +231,7 @@ impl ProteusApp {
         interruptible: bool,
     ) -> Result<(), JsValue> {
         let dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         channel.0.set(
             &mut self.0.borrow_mut(),
             to.0,
@@ -254,9 +260,9 @@ impl ProteusApp {
         strategy: JsValue,
     ) -> Result<(), JsValue> {
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         let strategy_dto: SplitStrategyDto = serde_wasm_bindgen::from_value(strategy)
-            .map_err(|e| JsValue::from_str(&format!("invalid SplitStrategy: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid SplitStrategy: {e}")))?;
         let targets: Vec<sdk::Handle> = target_ids
             .into_iter()
             .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
@@ -283,9 +289,9 @@ impl ProteusApp {
         layout: JsValue,
     ) -> Result<(), JsValue> {
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         let layout_dto: MergeLayoutDto = serde_wasm_bindgen::from_value(layout)
-            .map_err(|e| JsValue::from_str(&format!("invalid MergeLayout: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid MergeLayout: {e}")))?;
         let sources: Vec<sdk::Handle> = source_ids
             .into_iter()
             .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
@@ -313,9 +319,9 @@ impl ProteusApp {
         child_behavior: js_sys::Function,
     ) -> Result<(), JsValue> {
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         let strategy_dto: SplitStrategyDto = serde_wasm_bindgen::from_value(strategy)
-            .map_err(|e| JsValue::from_str(&format!("invalid SplitStrategy: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid SplitStrategy: {e}")))?;
         let targets: Vec<sdk::Handle> = target_ids
             .into_iter()
             .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
@@ -345,9 +351,9 @@ impl ProteusApp {
         child_behavior: js_sys::Function,
     ) -> Result<(), JsValue> {
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         let layout_dto: MergeLayoutDto = serde_wasm_bindgen::from_value(layout)
-            .map_err(|e| JsValue::from_str(&format!("invalid MergeLayout: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid MergeLayout: {e}")))?;
         let sources: Vec<sdk::Handle> = source_ids
             .into_iter()
             .map(|bits| sdk::Handle::from_entity(bevy_ecs::prelude::Entity::from_bits(bits as u64)))
@@ -376,11 +382,11 @@ impl ProteusApp {
         strategy: JsValue,
     ) -> Result<(), JsValue> {
         let targets_dto: Vec<TargetStateDto> = serde_wasm_bindgen::from_value(targets)
-            .map_err(|e| JsValue::from_str(&format!("invalid target state list: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid target state list: {e}")))?;
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         let strategy_dto: SplitStrategyDto = serde_wasm_bindgen::from_value(strategy)
-            .map_err(|e| JsValue::from_str(&format!("invalid SplitStrategy: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid SplitStrategy: {e}")))?;
         let targets: Vec<(sdk::Handle, proteus_sdk::QuadState)> = targets_dto
             .iter()
             .map(|t| {
@@ -580,7 +586,7 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = setText)]
     pub fn set_text(&mut self, handle: &Handle, text: JsValue) -> Result<(), JsValue> {
         let dto: TextDto = serde_wasm_bindgen::from_value(text)
-            .map_err(|e| JsValue::from_str(&format!("invalid TextSpec: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TextSpec: {e}")))?;
         handle
             .0
             .set_text(&mut self.0.borrow_mut(), (&dto).into())
@@ -591,7 +597,7 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = setImage)]
     pub fn set_image(&mut self, handle: &Handle, image: JsValue) -> Result<(), JsValue> {
         let dto: ImageDto = serde_wasm_bindgen::from_value(image)
-            .map_err(|e| JsValue::from_str(&format!("invalid ImageSpec: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid ImageSpec: {e}")))?;
         handle
             .0
             .set_image(&mut self.0.borrow_mut(), (&dto).into())
@@ -606,7 +612,7 @@ impl ProteusApp {
         state: JsValue,
     ) -> Result<(), JsValue> {
         let dto: QuadStateDto = serde_wasm_bindgen::from_value(state)
-            .map_err(|e| JsValue::from_str(&format!("invalid QuadState: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid Geometry: {e}")))?;
         handle
             .0
             .set_declared_geometry(&mut self.0.borrow_mut(), (&dto).into())
@@ -622,9 +628,9 @@ impl ProteusApp {
         config: JsValue,
     ) -> Result<(), JsValue> {
         let to_dto: QuadStateDto = serde_wasm_bindgen::from_value(to)
-            .map_err(|e| JsValue::from_str(&format!("invalid QuadState: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid Geometry: {e}")))?;
         let config_dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid TransitionConfig: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
         handle
             .0
             .animate_to(
@@ -640,11 +646,8 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = bakedTextSize)]
     pub fn baked_text_size(&self, handle: &Handle) -> JsValue {
         match handle.0.baked_text_size(&self.0.borrow()) {
-            Some(size) => serde_wasm_bindgen::to_value(&Vec2Dto {
-                x: size.x,
-                y: size.y,
-            })
-            .unwrap_or(JsValue::UNDEFINED),
+            Some(size) => serde_wasm_bindgen::to_value(&dto::SizeDto::from(size))
+                .unwrap_or(JsValue::UNDEFINED),
             None => JsValue::UNDEFINED,
         }
     }
@@ -654,11 +657,8 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = bakedImageSize)]
     pub fn baked_image_size(&self, handle: &Handle) -> JsValue {
         match handle.0.baked_image_size(&self.0.borrow()) {
-            Some(size) => serde_wasm_bindgen::to_value(&Vec2Dto {
-                x: size.x,
-                y: size.y,
-            })
-            .unwrap_or(JsValue::UNDEFINED),
+            Some(size) => serde_wasm_bindgen::to_value(&dto::SizeDto::from(size))
+                .unwrap_or(JsValue::UNDEFINED),
             None => JsValue::UNDEFINED,
         }
     }
@@ -681,7 +681,7 @@ impl ProteusApp {
     #[wasm_bindgen(js_name = cropImage)]
     pub fn crop_image(&mut self, handle: &Handle, crop: JsValue) -> Result<bool, JsValue> {
         let dto: dto::ImageCropDto = serde_wasm_bindgen::from_value(crop)
-            .map_err(|e| JsValue::from_str(&format!("invalid ImageCrop: {e}")))?;
+            .map_err(|e| crate::js_error(&format!("invalid ImageCrop: {e}")))?;
         handle
             .0
             .crop_image(&mut self.0.borrow_mut(), (&dto).into())
@@ -803,7 +803,7 @@ impl ProteusApp {
 
     /// Calls [`Handle::set_transition_interaction`](sdk::Handle::set_transition_interaction).
     /// `null` or `undefined` restores the default.
-    #[wasm_bindgen(js_name = setTransitionInteractionConfig)]
+    #[wasm_bindgen(js_name = setTransitionInteraction)]
     pub fn set_transition_interaction(
         &mut self,
         handle: &Handle,
@@ -814,7 +814,7 @@ impl ProteusApp {
         } else {
             let dto: dto::TransitionInteractionConfigDto = serde_wasm_bindgen::from_value(config)
                 .map_err(|e| {
-                JsValue::from_str(&format!("invalid TransitionInteractionConfig: {e}"))
+                crate::js_error(&format!("invalid TransitionInteractionConfig: {e}"))
             })?;
             Some((&dto).into())
         };

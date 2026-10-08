@@ -1939,10 +1939,10 @@ impl Demo {
         }
         self.pending_tile_reset = None;
         for (i, tile) in self.video_tiles.tiles.into_iter().enumerate() {
+            // The tile also rests here again: `start_tiles_to_screen` moved it
+            // to the screen with `animate_to`, which made that where it rests.
             let state = video_tiles::tile_target_state(proteus, tile, i);
-            if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(tile.id()) {
-                *qs = state;
-            }
+            let _ = tile.set_declared_geometry(proteus, state);
             if let Some(mut glow) = proteus.world_mut().get_mut::<Glow>(tile.id()) {
                 glow.radius = 0.0;
             }

@@ -33,6 +33,7 @@ import type {
   TransitionInteractionConfig,
   TransitionConfig,
   TransitionDropped,
+  Size,
   Vec2,
 } from "./types.js";
 
@@ -341,7 +342,10 @@ export class Handle {
   }
 
   /**
-   * Transitions this component from its current geometry to `to`.
+   * Transitions this component from its current geometry to `to`, where it
+   * then rests: `to` becomes its declared geometry, as with
+   * {@link Handle.setDeclaredGeometry}, so a later transition into it, or an
+   * interaction style, starts from there.
    *
    * Unlike {@link TransitionChannel.set}, only this component is involved, which
    * makes this a good fit for moving a component around repeatedly. Calling
@@ -365,9 +369,9 @@ export class Handle {
    * text hasn't been baked yet or the component has none. The host bakes text
    * the next time it renders a frame.
    */
-  bakedTextSize(): Vec2 | undefined {
+  bakedTextSize(): Size | undefined {
     return this.app.wasmApp.bakedTextSize(this.wasmHandle) as
-      | Vec2
+      | Size
       | undefined;
   }
 
@@ -376,9 +380,9 @@ export class Handle {
    * image hasn't been baked yet or the component has none. This is the full
    * image size, even after {@link Handle.cropImage}.
    */
-  bakedImageSize(): Vec2 | undefined {
+  bakedImageSize(): Size | undefined {
     return this.app.wasmApp.bakedImageSize(this.wasmHandle) as
-      | Vec2
+      | Size
       | undefined;
   }
 
@@ -482,8 +486,8 @@ export class Handle {
    * `undefined` restores the default, where a transitioning component ignores
    * input.
    */
-  setTransitionInteractionConfig(config: TransitionInteractionConfig | undefined): void {
-    this.app.wasmApp.setTransitionInteractionConfig(this.wasmHandle, config ?? null);
+  setTransitionInteraction(config: TransitionInteractionConfig | undefined): void {
+    this.app.wasmApp.setTransitionInteraction(this.wasmHandle, config ?? null);
   }
 
   /**

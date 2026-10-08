@@ -49,7 +49,7 @@ impl WebSurface {
             },
         )
         .await
-        .map_err(|e| JsValue::from_str(&format!("GPU setup failed: {e}")))?;
+        .map_err(|e| crate::js_error(&format!("GPU setup failed: {e}")))?;
         log::info!("proteus-host-web: adapter {}", gpu.adapter_description());
 
         Ok(Self {

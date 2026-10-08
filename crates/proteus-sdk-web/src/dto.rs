@@ -45,6 +45,28 @@ pub struct ColorDto {
     pub a: f32,
 }
 
+/// A size: TypeScript's `Size`, `{ width, height }`, where Rust has a `Vec2`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SizeDto {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl From<glam::Vec2> for SizeDto {
+    fn from(v: glam::Vec2) -> Self {
+        Self {
+            width: v.x,
+            height: v.y,
+        }
+    }
+}
+
+impl From<SizeDto> for glam::Vec2 {
+    fn from(s: SizeDto) -> Self {
+        glam::Vec2::new(s.width, s.height)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // QuadState
 // ---------------------------------------------------------------------------
@@ -53,7 +75,7 @@ pub struct ColorDto {
 #[serde(rename_all = "camelCase")]
 pub struct QuadStateDto {
     pub position: Vec3Dto,
-    pub size: Vec2Dto,
+    pub size: SizeDto,
     pub rotation: f32,
     pub scale: f32,
     pub anchor: Vec2Dto,
@@ -69,10 +91,7 @@ impl From<&QuadState> for QuadStateDto {
                 y: q.position.y,
                 z: q.position.z,
             },
-            size: Vec2Dto {
-                x: q.size.x,
-                y: q.size.y,
-            },
+            size: q.size.into(),
             rotation: q.rotation,
             scale: q.scale,
             anchor: Vec2Dto {
@@ -94,7 +113,7 @@ impl From<&QuadStateDto> for QuadState {
     fn from(d: &QuadStateDto) -> Self {
         Self {
             position: glam::Vec3::new(d.position.x, d.position.y, d.position.z),
-            size: glam::Vec2::new(d.size.x, d.size.y),
+            size: d.size.into(),
             rotation: d.rotation,
             scale: d.scale,
             anchor: glam::Vec2::new(d.anchor.x, d.anchor.y),
@@ -114,7 +133,7 @@ pub struct StyleOverrideDto {
     #[serde(default)]
     pub position: Option<Vec3Dto>,
     #[serde(default)]
-    pub size: Option<Vec2Dto>,
+    pub size: Option<SizeDto>,
     #[serde(default)]
     pub rotation: Option<f32>,
     #[serde(default)]
@@ -131,7 +150,7 @@ impl From<&StyleOverrideDto> for StyleOverride {
     fn from(d: &StyleOverrideDto) -> Self {
         Self {
             position: d.position.map(|p| glam::Vec3::new(p.x, p.y, p.z)),
-            size: d.size.map(|s| glam::Vec2::new(s.x, s.y)),
+            size: d.size.map(Into::into),
             rotation: d.rotation,
             scale: d.scale,
             anchor: d.anchor.map(|a| glam::Vec2::new(a.x, a.y)),

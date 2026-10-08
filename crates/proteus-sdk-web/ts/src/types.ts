@@ -7,12 +7,20 @@
 // helpers in `convert.ts` convert from degrees, hex colors and page
 // coordinates.
 
-/** A 2D vector or size. */
+/** A 2D vector. */
 export interface Vec2 {
-  /** Horizontal: to the right, or the width. */
+  /** Horizontal: to the right. */
   x: number;
-  /** Vertical: up in world units, or the height. */
+  /** Vertical: up in world units. */
   y: number;
+}
+
+/** A width and a height, in pixels. */
+export interface Size {
+  /** Width, in pixels. */
+  width: number;
+  /** Height, in pixels. */
+  height: number;
 }
 
 /** A 3D position. Among top-level components that overlap, higher `z` is drawn on top. */
@@ -46,7 +54,7 @@ export interface Geometry {
   /** World units: origin at the viewport center, y up. See {@link topLeftToWorld}. */
   position: Vec3;
   /** Width and height, in pixels. */
-  size: Vec2;
+  size: Size;
   /** Radians. See {@link degreesToRadians}. */
   rotation: number;
   /** Uniform scale; `1` is the component's natural size. */
@@ -71,7 +79,7 @@ export interface StyleOverride {
   /** Position, in world units. */
   position?: Vec3;
   /** Width and height, in pixels. */
-  size?: Vec2;
+  size?: Size;
   /** Rotation, in radians. */
   rotation?: number;
   /** Uniform scale. */
@@ -153,7 +161,7 @@ export interface DropShadow {
  * const button = app.component({
  *   geometry: {
  *     position: { x: 0, y: 0, z: 0 },
- *     size: { x: 160, y: 48 },
+ *     size: { width: 160, height: 48 },
  *     rotation: 0,
  *     scale: 1,
  *     anchor: { x: 0.5, y: 0.5 },
