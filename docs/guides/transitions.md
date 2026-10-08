@@ -74,7 +74,8 @@ panel.onClick(() => opener.set(button, panel, { duration: 0.4 }));
 ```
 
 Neither component refers to the other: the channel holds the relationship, and the code that
-calls `set` decides where each transition goes. One channel can drive any number of transitions,
+calls `set` decides where each transition goes. The [stepper example](../../examples/stepper)
+drives a whole onboarding flow with one channel. One channel can drive any number of transitions,
 between any components; a channel per relationship, such as one per screen, keeps the code
 easy to follow.
 
