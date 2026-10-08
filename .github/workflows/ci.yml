@@ -39,7 +39,7 @@ jobs:
       - name: Check comments
         # Paths are added as each crate is brought up to CONTRIBUTING.md's
         # comment rules.
-        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs examples/gallery examples/video Cargo.toml
+        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs examples Cargo.toml
 
       - name: Clippy
         # proteus-shell-web / proteus-host-web are wasm32-only
@@ -172,10 +172,9 @@ jobs:
         run: npm run check-docs
 
       - name: Build TypeScript (dist/)
-        # examples/gallery depends on this package via `file:`, resolving
-        # its `main`/`types` into dist/ — it needs this built, not just
-        # type-checked, before that example's own npm install/type-check
-        # below can succeed.
+        # The TypeScript examples depend on this package via `file:`,
+        # resolving its `main`/`types` into dist/, so it must be built
+        # before they are.
         working-directory: crates/proteus-sdk-web/ts
         run: npm run build
 
@@ -187,18 +186,11 @@ jobs:
         working-directory: crates/proteus-sdk-web/ts
         run: npm pack --dry-run
 
-      - name: examples/gallery — npm install
-        working-directory: examples/gallery
-        run: npm ci
+      # `npm run build` type-checks each example, then bundles it with Vite.
+      - name: examples/gallery/typescript — build
+        working-directory: examples/gallery/typescript
+        run: npm ci && npm run build
 
-      - name: examples/gallery — type-check
-        working-directory: examples/gallery
-        run: npx tsc --noEmit
-
-      - name: examples/video — npm install
-        working-directory: examples/video
-        run: npm ci
-
-      - name: examples/video — type-check
-        working-directory: examples/video
-        run: npx tsc --noEmit
+      - name: examples/video/typescript — build
+        working-directory: examples/video/typescript
+        run: npm ci && npm run build

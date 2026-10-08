@@ -59,6 +59,9 @@ button.splitTo(items, { duration: 0.5 }, { kind: "column" });
 
 Each target ends at its own declared geometry.
 
+The [gallery example](../../examples/gallery) splits a large photo into a new grid of photos
+this way.
+
 ## How the source is cut
 
 The strategy decides how the source is cut into pieces, and which piece goes where:

@@ -274,4 +274,4 @@ void element.play();
 
 Playback controls, such as pause and seek, are the player's own. If a component also has an
 image, `set_video_crossfade` blends between the image and the video, for a video that fades in
-over a poster. The `examples/video` app plays a `<video>` element this way.
+over a poster. The [video example](../../examples/video) plays a `<video>` element this way.

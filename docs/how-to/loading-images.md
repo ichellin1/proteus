@@ -121,6 +121,9 @@ the image arrives. Setting it with `animate_to` fades the image in from gray.
 - **Show the same image on several components** by giving each the same texture; it's stored on
   the GPU once.
 
+The [gallery example](../../examples/gallery) loads a grid of downloaded photos, and gives a
+large view a small image to show until its large one arrives.
+
 ## Spreading loads over frames
 
 To load many images without a stutter, put them in a queue, and load a few from it in each
