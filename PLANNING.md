@@ -4601,11 +4601,11 @@ Which examples to build is decided at the start of the step.
   7c video in Rust; 7d menu in TypeScript; 7e stepper in Rust and TypeScript. Each links its
   example from the relevant guide as it lands.
 
-- [ ] At least three complete examples in `examples/` beyond the reference demo, each showing a
+- [x] At least three complete examples in `examples/` beyond the reference demo, each showing a
   distinct use case or transition pattern.
-- [ ] Each has a README and runs with one command.
-- [ ] Each is built in CI and linked from the relevant guide.
-- [ ] `examples/gallery`'s README no longer points into PLANNING.
+- [x] Each has a README and runs with one command.
+- [x] Each is built in CI and linked from the relevant guide.
+- [x] `examples/gallery`'s README no longer points into PLANNING.
 
 #### Step 8 — Release process
 
