@@ -5,7 +5,7 @@ languages, the two versions are the same app: Rust in `rust/`, TypeScript in `ty
 
 | Example | Rust | TypeScript | Shows |
 |---|---|---|---|
-| [Gallery](./gallery) | — | ✓ | A grid of downloaded photos; a photo opens into a large view (1→1), which splits back into a new grid (1→N). |
+| [Gallery](./gallery) | ✓ | ✓ | A grid of downloaded photos; a photo opens into a large view (1→1), which splits back into a new grid (1→N). |
 | [Video](./video) | — | ✓ | Video from the platform's own player, shown on a component. |
 
 The reference demo, in `crates/proteus-demo`, is a larger app that shows every transition
@@ -61,6 +61,10 @@ sudo apt install nodejs npm
 
 Each example's README has its commands. From the repository's root:
 
+- **A Rust example, in a window:** `cargo run -p gallery`.
+- **A Rust example, in a browser:** `make example-gallery-web`, then open
+  <http://localhost:8080>. It needs Python 3, which comes with macOS and most Linux
+  distributions, to serve the page.
 - **A TypeScript example:** `make example-gallery-ts`. The first run builds the TypeScript SDK
   from source, which takes a few minutes; later runs rebuild it only when Proteus's code has
   changed. Then open the address Vite prints, usually <http://localhost:5173>.

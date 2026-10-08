@@ -14,6 +14,7 @@ members = [
     "crates/proteus-shell-web",
     "crates/proteus-shell-native",
     "crates/proteus-docs",
+    "examples/gallery/rust",
 ]
 
 # What `cargo build`, `run`, `test` and `clippy` use without `-p` or
@@ -31,6 +32,7 @@ default-members = [
     "crates/proteus-demo",
     "crates/proteus-shell-native",
     "crates/proteus-docs",
+    "examples/gallery/rust",
 ]
 
 [workspace.package]
