@@ -6,9 +6,14 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [dependencies]
-proteus-render = { path = "../proteus-render" }
+proteus-render = { workspace = true }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
 serde = { workspace = true }
@@ -23,7 +28,7 @@ slotmap = { workspace = true }
 # QuadPipeline constants for UV sentinel assertions.
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
-proteus-render = { path = "../proteus-render" }
+proteus-render = { workspace = true }
 # wgpu and pollster: the GPU test for component baking (tests/static_bake.rs),
 # set up as in proteus-render/tests/headless_render.rs.
 wgpu = { workspace = true }
