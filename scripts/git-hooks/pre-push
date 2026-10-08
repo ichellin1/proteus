@@ -14,7 +14,7 @@ cargo fmt --all -- --check
 echo "▶ cargo clippy (host, workspace minus proteus-shell-web/proteus-host-web)"
 cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
 
-echo "▶ cargo clippy (proteus-shell-web + proteus-host-web, wasm32-unknown-unknown)"
-cargo clippy -p proteus-shell-web -p proteus-host-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+echo "▶ cargo clippy (proteus-shell-web + proteus-host-web + proteus-docs, wasm32-unknown-unknown)"
+cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 echo "✓ pre-push checks passed"

@@ -56,12 +56,9 @@
     // wasm-pack emits the glue module at pkg/proteus_shell_web.js.
     // Run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
     //
-    // The full collapse M13.2's own module doc predicted: canvas/wgpu setup,
-    // DPI, resize, Pointer Events, visibility-pause, and the render loop
-    // itself live in proteus-host-web/Engine; texture churn, the photo
-    // gallery, and video (real <video>/MediaSource playback) all live in
-    // DemoApp/proteus-host-web's own hls_video module (M13.4). start() below
-    // is the entire JS surface this demo needs.
+    // Everything else is in Rust: the canvas, the GPU, input and the frame
+    // loop in proteus-host-web, the demo in proteus-demo, and its HLS video
+    // player in proteus-shell-web. start() is all this page calls.
     import init, { start } from './pkg/proteus_shell_web.js';
 
     async function main() {
