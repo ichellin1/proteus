@@ -20,7 +20,7 @@ fmt:
 ## pass and checked separately against their real target. Mirrors ci.yml.
 clippy:
 	cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
-	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 ## Build the API docs with warnings as errors, as CI does: a broken link in a
 ## doc comment fails.

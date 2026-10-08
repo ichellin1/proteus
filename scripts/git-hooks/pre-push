@@ -15,7 +15,7 @@ echo "▶ cargo clippy (host, workspace minus proteus-shell-web/proteus-host-web
 cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
 
 echo "▶ cargo clippy (wasm32: the web crates, the docs' web snippets and the Rust examples)"
-cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 echo "▶ cargo doc (warnings as errors)"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude proteus-shell-web --exclude proteus-host-web --no-deps
 

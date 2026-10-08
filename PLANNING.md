@@ -4587,7 +4587,7 @@ Which examples to build is decided at the start of the step.
 |---|---|---|---|
 | gallery | port | exists | 1→1 and 1→N with downloaded photos, loading images |
 | video | new | exists | Bringing your own player: `ffmpeg` natively, `<video>` on the web |
-| menu | — | new | A split into a menu and a merge back (N→1), interaction styles |
+| menu | new | new | A split into a menu and a merge back (N→1), interaction styles |
 | stepper | new | new | A sequence of screens, each transforming into the next |
 
 - **Layout:** one folder per example, a subfolder per language (`examples/gallery/rust`,
