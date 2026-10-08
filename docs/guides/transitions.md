@@ -127,7 +127,7 @@ Every transition takes a `TransitionConfig`:
 - **`duration`**, in seconds. `0` is instant: the transition completes on the next frame. A
   negative duration is treated as `0`, with a warning.
 - **`delay`**, in seconds, before the transition starts moving. Useful for staggering several
-  transitions; see [Splits and merges](./splits-and-merges.md).
+  transitions; see [Stagger a group](../how-to/staggering.md).
 - **`easing`**, how the transition speeds up and slows down. The default starts slowly, speeds
   up, and slows to a stop.
 
@@ -158,13 +158,14 @@ let config = TransitionConfig {
 const config = { duration: 0.5, easing: { cubicBezier: [0.34, 1.56, 0.64, 1] } } as const;
 ```
 
-In Rust, `Easing::Custom` takes any function from linear progress to eased progress.
+In Rust, `Easing::Custom` takes any function from linear progress to eased progress. See
+[Use a custom easing curve](../how-to/custom-easing.md) for curves to start from, and a bounce.
 
 ## When a transition starts and ends
 
 A transition starts on the next frame. Its completion is reported to the component's
 `on_transition_complete` callback, which is how to start something once a transition has
-finished, such as another transition:
+finished, such as another transition; see [Chain transitions](../how-to/chaining-transitions.md):
 
 #### Rust
 

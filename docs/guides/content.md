@@ -131,7 +131,9 @@ photo.crop_image(&mut app, ImageCrop::CenteredSquare)?;
 card.cropImage({ kind: "centeredSquare" });
 ```
 
-`crop_image` returns `false` if the image hasn't been decoded yet; crop it once it has.
+`crop_image` returns `false` if the image hasn't been decoded yet; crop it once it has. An image
+loaded as a texture is decoded at once, so it can be cropped straight away; see
+[Load an image](../how-to/loading-images.md).
 
 ### Changing and sharing images
 

@@ -21,3 +21,4 @@ proteus-host-winit = { path = "../proteus-host-winit" }
 proteus-host-web = { path = "../proteus-host-web" }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = ["Window"] }

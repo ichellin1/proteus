@@ -91,6 +91,11 @@ impl FetchTracker {
 /// synchronously. For anything else, such as a URL,
 /// [`fetch_async`](HostServices::fetch_async) starts a request and
 /// [`poll_fetches`](HostServices::poll_fetches) delivers the result.
+///
+/// These are only the services Proteus's own APIs need. For any other
+/// platform feature, such as the clipboard or opening a web page, the app
+/// uses the platform directly; see [Use a platform feature Proteus doesn't
+/// provide](https://github.com/ichellin1/proteus/blob/main/docs/how-to/platform-features.md).
 pub trait HostServices {
     /// Returns an asset's bytes by key, such as `"nav/home-idle.png"`, or
     /// `None` if it isn't found. The bytes are shared rather than copied.

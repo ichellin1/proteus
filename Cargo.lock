@@ -2142,6 +2142,7 @@ dependencies = [
  "proteus-sdk",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
