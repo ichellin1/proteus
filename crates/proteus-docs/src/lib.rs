@@ -27,6 +27,9 @@ pages! {
     index => "README.md",
     getting_started_rust => "getting-started/rust.md",
     getting_started_typescript => "getting-started/typescript.md",
+    guides_components => "guides/components.md",
+    guides_transitions => "guides/transitions.md",
+    guides_splits_and_merges => "guides/splits-and-merges.md",
 }
 
 /// The snippets that use the web host; see `build.rs`.

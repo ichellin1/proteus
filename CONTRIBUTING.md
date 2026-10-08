@@ -171,8 +171,8 @@ catches the rest.
   against the SDK alone, such as a Vite config, is `ts no-check`.
 - Keep snippets short. A Rust snippet hides its setup behind `# ` lines, and is `no_run` if it
   opens a window. A TypeScript snippet can use the names that
-  `scripts/ts-snippet-prelude.ts` declares, such as `app` and `button`, without declaring them,
-  and mustn't declare them again.
+  `scripts/ts-snippet-prelude.d.ts` declares, such as `app`, `button` and `items`, without
+  declaring them.
 - Link to the API reference for details rather than repeating them, and never to
   `PLANNING.md`.
 

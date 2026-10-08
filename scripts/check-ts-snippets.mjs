@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Type-checks every TypeScript snippet in docs/: each ```ts block becomes a
-// file in crates/proteus-sdk-web/ts/.snippets/, after the prelude in
-// ts-snippet-prelude.ts, and tsc checks them against the SDK's source with
-// tsconfig.snippets.json. Run it with `npm run check-snippets` in
+// file in crates/proteus-sdk-web/ts/.snippets/, beside the global
+// declarations in ts-snippet-prelude.d.ts, and tsc checks them against the
+// SDK's source with tsconfig.snippets.json. Run it with `npm run check-snippets` in
 // crates/proteus-sdk-web/ts, after `make build-sdk-web`.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const docs = join(root, "docs");
 const ts = join(root, "crates/proteus-sdk-web/ts");
 const out = join(ts, ".snippets");
-const prelude = readFileSync(join(root, "scripts/ts-snippet-prelude.ts"), "utf8");
+
 
 function pages(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -26,6 +26,7 @@ function pages(dir) {
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
+copyFileSync(join(root, "scripts/ts-snippet-prelude.d.ts"), join(out, "prelude.d.ts"));
 
 let count = 0;
 for (const page of pages(docs)) {
@@ -37,7 +38,7 @@ for (const page of pages(docs)) {
     count += 1;
     // `export {}` makes each file a module, so snippets don't share a scope
     // and can use top-level `await`.
-    writeFileSync(join(out, `${name}-${n}.ts`), `${prelude}\n${code}\nexport {};\n`);
+    writeFileSync(join(out, `${name}-${n}.ts`), `${code}\nexport {};\n`);
   }
 }
 
