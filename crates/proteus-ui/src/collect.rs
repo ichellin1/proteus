@@ -76,6 +76,7 @@ use proteus_render::{
 
 use crate::{
     bake::BakedComposite,
+    draw_order::rank_cmp,
     effects::{Border, DropShadow, Glow},
     hierarchy::{compose_with_parent, EffectiveOpacity, EffectiveVisibility, Opacity},
     spawn_order::SpawnOrder,
@@ -334,10 +335,11 @@ type RootSnapshot = (Entity, QuadState, Option<bool>, Option<bool>, SpawnOrder);
 /// ## Drawing order
 ///
 /// Each top-level entity (one without a [`ChildOf`]) is drawn, then its
-/// children in [`Children`] order, depth first, so a child is always drawn over
-/// its parent. Top-level entities are drawn in order of `QuadState::position.z`,
-/// lowest first, and then of [`SpawnOrder`], earliest first. So among entities
-/// with the same `z`, the one created last is on top.
+/// children, depth first, so a child is always drawn over its parent.
+/// Top-level entities are drawn in order of `QuadState::position.z`, lowest
+/// first, and then of [`SpawnOrder`], earliest first, so among entities with
+/// the same `z`, the one created last is on top. Each entity's children are
+/// ordered the same way, by their own `z`. See `crate::draw_order`.
 ///
 /// The order is worked out explicitly rather than taken from how `bevy_ecs`
 /// stores entities, which has no reliable relationship to creation order.
@@ -366,13 +368,7 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
             })
             .collect()
     };
-    roots.sort_by(|a, b| {
-        a.1.position
-            .z
-            .partial_cmp(&b.1.position.z)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.4.cmp(&b.4))
-    });
+    roots.sort_by(|a, b| rank_cmp((a.1.position.z, a.4), (b.1.position.z, b.4)));
 
     let mut out = Vec::new();
     for (e, local_qs, vis, eff_vis, _spawn_order) in roots {
@@ -382,7 +378,7 @@ pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
     out
 }
 
-/// Appends `entity`'s instances, then each child's in [`Children`] order, with
+/// Appends `entity`'s instances, then each child's in drawing order, with
 /// each child placed in the world by [`compose_with_parent`].
 fn collect_subtree(
     world: &World,
@@ -403,7 +399,19 @@ fn collect_subtree(
     let Some(children) = world.get::<Children>(entity) else {
         return;
     };
-    for child in children.iter() {
+    // Siblings are drawn by their own `z`, then creation order, like
+    // top-level entities; see `crate::draw_order`.
+    let mut children: Vec<Entity> = children.iter().collect();
+    let rank = |e: Entity| {
+        let z = world.get::<QuadState>(e).map_or(0.0, |qs| qs.position.z);
+        let spawn = world
+            .get::<SpawnOrder>(e)
+            .copied()
+            .unwrap_or(SpawnOrder(u64::MAX));
+        (z, spawn)
+    };
+    children.sort_by(|a, b| rank_cmp(rank(*a), rank(*b)));
+    for child in children {
         let Some(child_local) = world.get::<QuadState>(child) else {
             continue;
         };

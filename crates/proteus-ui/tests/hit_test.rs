@@ -466,3 +466,45 @@ fn overlap_is_decided_by_spawn_order_across_archetypes() {
          another archetype must not flip which of these two receives the click"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The pointer follows drawing order
+// ---------------------------------------------------------------------------
+
+fn at_z(x: f32, y: f32, z: f32) -> QuadState {
+    QuadState {
+        position: Vec3::new(x, y, z),
+        ..quad_at(x, y)
+    }
+}
+
+// Siblings are ordered by their own `z`, like top-level components: the child
+// added first, with the greater `z`, is drawn on top, so it gets the click.
+#[test]
+fn among_siblings_the_greater_z_gets_the_click() {
+    let mut world = ProteusWorld::new();
+    let parent = world.world.spawn((quad_at(0.0, 0.0), Interactable)).id();
+    let above = world
+        .world
+        .spawn((at_z(0.0, 0.0, 1.0), Interactable, ChildOf(parent)))
+        .id();
+    world
+        .world
+        .spawn((at_z(0.0, 0.0, 0.0), Interactable, ChildOf(parent)));
+
+    assert_eq!(click_at(&mut world, Vec2::ZERO), vec![above]);
+}
+
+// A child is drawn with its parent, so it never comes over a top-level
+// component drawn after the parent, whatever its own `z`.
+#[test]
+fn a_child_never_beats_a_component_drawn_after_its_parent() {
+    let mut world = ProteusWorld::new();
+    let parent = world.world.spawn((at_z(0.0, 0.0, 0.0), Interactable)).id();
+    world
+        .world
+        .spawn((at_z(0.0, 0.0, 100.0), Interactable, ChildOf(parent)));
+    let on_top = world.world.spawn((at_z(0.0, 0.0, 1.0), Interactable)).id();
+
+    assert_eq!(click_at(&mut world, Vec2::ZERO), vec![on_top]);
+}

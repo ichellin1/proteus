@@ -87,6 +87,19 @@ fn entity_mut<'a>(
     })
 }
 
+/// Makes `state` where `entity` rests: its declared geometry, and the copy
+/// interaction styles resolve against. Left stale, that copy would send the
+/// component back to its old geometry when the pointer moves onto or off it.
+fn declare(app: &mut Proteus, entity: Entity, state: QuadState) {
+    let world = &mut app.world.world;
+    if let Some(mut interaction) = world.get_mut::<proteus_ui::InteractionState>(entity) {
+        interaction.declared = state.clone();
+    }
+    if let Ok(mut entity) = world.get_entity_mut(entity) {
+        entity.insert(DeclaredGeometry(state));
+    }
+}
+
 /// [`entity_mut`] for an entity other than the handle's own, reporting
 /// [`HandleError::OtherEntityNotFound`].
 fn other_entity_mut<'a>(
@@ -241,22 +254,15 @@ impl Handle {
         app: &mut Proteus,
         state: QuadState,
     ) -> Result<(), HandleError> {
-        entity_mut(app, self.0, "set_declared_geometry")?
-            .insert((state.clone(), DeclaredGeometry(state.clone())));
-        // Interaction styles resolve against their own copy of the declared
-        // geometry. Left stale, the component would snap back to its old
-        // geometry when the pointer leaves it.
-        if let Some(mut interaction) = app
-            .world
-            .world
-            .get_mut::<proteus_ui::InteractionState>(self.0)
-        {
-            interaction.declared = state;
-        }
+        entity_mut(app, self.0, "set_declared_geometry")?.insert(state.clone());
+        declare(app, self.0, state);
         Ok(())
     }
 
-    /// Transitions this component from its current geometry to `to`.
+    /// Transitions this component from its current geometry to `to`, where it
+    /// then rests: `to` becomes its declared geometry, as with
+    /// [`Handle::set_declared_geometry`], so a later transition into it, or
+    /// an interaction style, starts from there.
     ///
     /// Unlike [`TransitionChannel::set`], only this component is involved, which
     /// makes this a good fit for moving a component around repeatedly. Calling
@@ -305,10 +311,11 @@ impl Handle {
         config: TransitionConfig,
     ) -> Result<(), HandleError> {
         entity_mut(app, self.0, "animate_to")?.insert(TransitionRequest {
-            to,
+            to: to.clone(),
             config,
             from_state: None,
         });
+        declare(app, self.0, to);
         Ok(())
     }
 

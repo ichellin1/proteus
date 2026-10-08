@@ -109,7 +109,7 @@ function geom(cx: number, cy: number, w: number, h: number, color: Color = CARD_
   const pos = topLeftToWorld(cx, cy, vw, vh);
   return {
     position: { x: pos.x, y: pos.y, z: 0 },
-    size: { x: w, y: h },
+    size: { width: w, height: h },
     rotation: 0,
     scale: 1,
     anchor: { x: 0.5, y: 0.5 },

@@ -75,12 +75,24 @@ impl Proteus {
         }
 
         if spec.has_interaction_styles() {
-            self.world.world.entity_mut(entity).insert(InteractionDef {
-                hover: spec.hover,
-                pressed: spec.pressed,
-                focused: spec.focused,
-                disabled: spec.disabled,
-            });
+            // The style state starts here, rather than on the style system's
+            // first tick, so that its resting geometry is the one declared
+            // now, even if `animate_to` or `set_declared_geometry` changes it
+            // before the first tick. It starts on `Default`, as on a first
+            // tick; the next tick applies any style that already applies.
+            let declared = spec.geometry.clone();
+            self.world.world.entity_mut(entity).insert((
+                InteractionDef {
+                    hover: spec.hover,
+                    pressed: spec.pressed,
+                    focused: spec.focused,
+                    disabled: spec.disabled,
+                },
+                proteus_ui::InteractionState {
+                    current: proteus_ui::InteractionStateKind::Default,
+                    declared,
+                },
+            ));
         }
 
         if spec.bake {

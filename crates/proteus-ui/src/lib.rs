@@ -24,6 +24,7 @@ pub mod bake;
 pub mod channel;
 pub mod collect;
 pub mod component;
+mod draw_order;
 pub mod effects;
 pub mod hierarchy;
 pub mod image;

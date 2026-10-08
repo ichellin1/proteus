@@ -11,16 +11,9 @@
 //! A component is hit-tested against the area it is actually drawn in: its
 //! position relative to its parents, its rotation and its scale.
 //!
-//! When several components contain the pointer, the one with the greatest
-//! `(z, SpawnOrder)` wins: the same order [`crate::collect_instances`] draws
-//! top-level components in, so the click goes to the one drawn on top.
-//!
-//! **A known difference from drawing:** a child is always drawn over its
-//! parent, whatever its `z`, and never above a different top-level component.
-//! Hit testing compares every candidate by the same key instead. The two agree
-//! for top-level components, and for a child created after its parent with no
-//! `z` of its own; they can disagree for a child with a nonzero `z`, or one
-//! moved under a parent created later.
+//! When several components contain the pointer, the one drawn on top wins:
+//! hit testing follows the same order as [`crate::collect_instances`], so the
+//! click goes to the component you see. See `crate::draw_order`.
 //!
 //! ## Non-interactive and disabled
 //!
@@ -39,6 +32,7 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 
 use crate::component::{Disabled, Lifecycle, TransitionInteractionConfig, Virtual};
+use crate::draw_order::DrawKey;
 use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
 use crate::spawn_order::SpawnOrder;
 use crate::{QuadState, Visibility};
@@ -206,7 +200,6 @@ type HitTestQuery<'w, 's> = Query<
         Option<&'static Lifecycle>,
         Option<&'static TransitionInteractionConfig>,
         Has<Disabled>,
-        Option<&'static SpawnOrder>,
     ),
     (With<Interactable>, Without<Virtual>),
 >;
@@ -228,6 +221,7 @@ pub fn hit_test_system(
     query: HitTestQuery,
     quad_states: Query<&QuadState>,
     parents: Query<&ChildOf>,
+    spawn_orders: Query<&SpawnOrder>,
 ) {
     // Clear last frame's events.
     events.clicked.clear();
@@ -248,12 +242,10 @@ pub fn hit_test_system(
         return;
     };
 
-    // Find the topmost entity containing the pointer, by `(z, SpawnOrder)`,
-    // the order `collect_instances` draws in.
-    let mut hit: Option<(Entity, f32, SpawnOrder, bool)> = None;
-    for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled, spawn_order) in
-        query.iter()
-    {
+    // Find the topmost entity containing the pointer, in the order
+    // `collect_instances` draws in.
+    let mut hit: Option<(Entity, DrawKey, bool)> = None;
+    for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled) in query.iter() {
         // The cascaded visibility if it has been computed, else the entity's
         // own, for tests that run this system without the full schedule.
         let visible = eff_vis
@@ -271,27 +263,19 @@ pub fn hit_test_system(
         if !quad_contains(&world_qs, pos) {
             continue;
         }
-        // An entity without a SpawnOrder, such as one in a test world with no
-        // hooks, sorts last among equals, as in `collect_instances`: drawn on
-        // top there, so it wins here.
-        let order = spawn_order.copied().unwrap_or(SpawnOrder(u64::MAX));
-        let z = world_qs.position.z;
-        let wins = match hit {
+        let key = DrawKey::of(e, &quad_states, &spawn_orders, &parents);
+        let wins = match &hit {
             None => true,
             // `is_ge`, not `is_gt`: in an exact tie, the last one checked
             // wins.
-            Some((_, best_z, best_order, _)) => z
-                .partial_cmp(&best_z)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(order.cmp(&best_order))
-                .is_ge(),
+            Some((_, best, _)) => key.draw_cmp(best).is_ge(),
         };
         if wins {
-            hit = Some((e, z, order, disabled));
+            hit = Some((e, key, disabled));
         }
     }
     // A disabled entity on top absorbs the pointer: nothing is hit.
-    let hit = hit.and_then(|(e, _, _, disabled)| (!disabled).then_some(e));
+    let hit = hit.and_then(|(e, _, disabled)| (!disabled).then_some(e));
 
     // Compute hover enter / exit.
     if hit != hovered.0 {

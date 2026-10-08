@@ -35,13 +35,13 @@ pub async fn mount(
     wasm_logger::init(wasm_logger::Config::default());
 
     let canvas = web_sys::window()
-        .ok_or_else(|| JsValue::from_str("no window"))?
+        .ok_or_else(|| crate::js_error("no window"))?
         .document()
-        .ok_or_else(|| JsValue::from_str("no document"))?
+        .ok_or_else(|| crate::js_error("no document"))?
         .get_element_by_id(&canvas_id)
-        .ok_or_else(|| JsValue::from_str("canvas element not found"))?
+        .ok_or_else(|| crate::js_error("canvas element not found"))?
         .dyn_into::<web_sys::HtmlCanvasElement>()
-        .map_err(|_| JsValue::from_str("element is not a canvas"))?;
+        .map_err(|_| crate::js_error("element is not a canvas"))?;
 
     // Overrides on top of `ProteusConfig::web()`. `null` or `undefined`
     // keeps the web settings unchanged.
@@ -49,8 +49,8 @@ pub async fn mount(
         ProteusConfig::web()
     } else {
         let dto: proteus_runtime::ProteusConfigDto = serde_wasm_bindgen::from_value(config)
-            .map_err(|e| JsValue::from_str(&format!("invalid config: {e}")))?;
-        dto.apply().map_err(|e| JsValue::from_str(&e))?
+            .map_err(|e| crate::js_error(&format!("invalid config: {e}")))?;
+        dto.apply().map_err(|e| crate::js_error(&e))?
     };
 
     // `Renderer::new` panics on settings that don't fit, which would stop
@@ -59,7 +59,7 @@ pub async fn mount(
     // reports, so a config behaves the same in every browser.
     config
         .check(&crate::limits())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| crate::js_error(&e.to_string()))?;
 
     let surface = WebSurface::new(&canvas, config.render).await?;
     let viewport = surface.viewport();

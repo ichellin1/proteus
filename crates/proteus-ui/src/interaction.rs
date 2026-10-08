@@ -29,7 +29,9 @@
 //! `QuadState`, which may be partway through another style's transition.
 //! [`InteractionState::declared`] holds it: the first tick the system sees an
 //! entity, it records the entity's `QuadState` there and does nothing else.
-//! `proteus-sdk`'s `set_declared_geometry` updates it.
+//! `proteus-sdk` creates the `InteractionState` itself, with the component's
+//! declared geometry, and its `set_declared_geometry` and `animate_to` update
+//! it.
 //!
 //! ## Other transitions take priority
 //!

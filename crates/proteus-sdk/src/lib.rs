@@ -65,6 +65,10 @@ pub use handle::{Handle, HandleError, TextureHandle, TextureRequest, TransitionC
 pub use spec::ComponentSpec;
 pub use video::VideoHandle;
 
+/// The vector types geometry is made of, such as `Vec2`, `Vec3` and `Vec4`.
+/// Re-exported so that an app uses the same `glam` as Proteus.
+pub use glam;
+
 // The value types this API takes and returns, so an app needs no direct
 // `proteus-ui` dependency.
 pub use proteus_ui::{

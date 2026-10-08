@@ -44,7 +44,7 @@ function main(app: ProteusApp, canvas: HTMLCanvasElement): void {
   );
   const geometry: Geometry = {
     position: { x: center.x, y: center.y, z: 0 },
-    size: { x: width, y: height },
+    size: { width, height },
     rotation: 0,
     scale: 1,
     anchor: { x: 0.5, y: 0.5 },

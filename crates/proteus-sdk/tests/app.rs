@@ -1227,18 +1227,11 @@ fn start_disabled_spawns_in_the_disabled_state() {
     assert!(app.get(styled).unwrap().disabled);
 
     // `state` is the interaction style applied, not whether the component is
-    // disabled. It differs from `disabled` in two ways, both pinned here: it
-    // stays `Default` for a component with no styles, and it updates a tick
-    // late even for one with styles. `disabled` is true immediately.
+    // disabled: it stays `Default` for a component with no styles.
     assert_eq!(
         app.get(styled).unwrap().state,
-        proteus_sdk::InteractionStateKind::Default,
-        "style resolution hasn't been applied yet on the spawn tick"
-    );
-    app.tick(0.0);
-    assert_eq!(
-        app.get(styled).unwrap().state,
-        proteus_sdk::InteractionStateKind::Disabled
+        proteus_sdk::InteractionStateKind::Disabled,
+        "the disabled style applies on the first tick"
     );
     assert_eq!(
         app.get(bare).unwrap().state,
@@ -2133,6 +2126,40 @@ fn component_skips_a_dead_child_instead_of_panicking() {
 // `set_declared_geometry` must update it too, or a component snaps back to
 // its original geometry when the pointer leaves it: exactly the component
 // whose layout is only known after creation, which the method exists for.
+// A component moved with `animate_to` rests where it ends up. Before, its
+// declared geometry stayed behind, and hovering it sent it back there.
+#[test]
+fn a_component_moved_with_animate_to_rests_where_it_ends_up() {
+    let mut app = Proteus::new();
+    let card = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).hover(StyleOverride {
+        scale: Some(1.1),
+        ..Default::default()
+    }));
+    let _ = card.animate_to(&mut app, quad_at(300.0, 0.0), cfg(0.1));
+    for _ in 0..30 {
+        app.tick(1.0 / 60.0);
+    }
+
+    app.pointer_moved(Some(Vec2::new(300.0, 0.0)));
+    for _ in 0..30 {
+        app.tick(1.0 / 60.0);
+    }
+    let hovered = app.get(card).unwrap().geometry;
+    assert_eq!(hovered.position.x, 300.0, "the hover stays where it is");
+    assert_eq!(hovered.scale, 1.1);
+
+    // A transition into it ends there too.
+    let from = app.component(ComponentSpec::new(quad_at(-300.0, 0.0)));
+    let _ = card.set_visible(&mut app, false);
+    let channel = app.transition_channel(None);
+    channel.set(&mut app, card, from, cfg(0.1), false);
+    app.pointer_moved(None);
+    for _ in 0..60 {
+        app.tick(1.0 / 60.0);
+    }
+    assert_eq!(app.get(card).unwrap().geometry.position.x, 300.0);
+}
+
 #[test]
 fn set_declared_geometry_updates_what_hover_returns_to() {
     let spawn = quad_at(0.0, 0.0);

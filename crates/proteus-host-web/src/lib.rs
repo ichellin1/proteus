@@ -44,6 +44,12 @@ pub use js_app::mount;
 pub use rust_app::run;
 pub use services::PreloadedHostServices;
 
+/// An `Error` with `message`, to throw to JavaScript. Unlike a thrown string,
+/// it carries a stack trace and passes `instanceof Error`.
+pub(crate) fn js_error(message: &str) -> JsValue {
+    js_sys::Error::new(message).into()
+}
+
 /// The GPU limits this host requests and checks a config against:
 /// WebGL2's, `wgpu::Limits::downlevel_webgl2_defaults()`, since WebGL2 is the
 /// fallback in every browser. A WebGPU browser reports higher limits, but a
