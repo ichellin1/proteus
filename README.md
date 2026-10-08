@@ -43,8 +43,8 @@ see `examples/gallery/typescript`.
 
 Video is currently **experimental**. Proteus shows video but doesn't play it: you bring your own
 player, such as the browser's `<video>` element, `ffmpeg` or a hardware decoder, and upload its
-frames to a `VideoHandle`, which components show. The current version of Proteus supports one video at a time, with frames supplied by the app; playback controls are the player's own. See `examples/video/typescript` for a
-`<video>` element in TypeScript, and the native shell's `video_player` for `ffmpeg` in Rust.
+frames to a `VideoHandle`, which components show. The current version of Proteus supports one video at a time, with frames supplied by the app; playback controls are the player's own. See `examples/video` for `ffmpeg`
+on the desktop and a `<video>` element in a browser, in Rust and TypeScript.
 
 ## Reference Demo
 

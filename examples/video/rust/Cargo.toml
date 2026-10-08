@@ -1,0 +1,36 @@
+[package]
+name = "video"
+description = "Video from your own player, shown with Proteus, in Rust: ffmpeg natively, a <video> element on the web."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# `cdylib` for the web build, `rlib` for the native binary in src/main.rs.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+proteus-sdk = { path = "../../../crates/proteus-sdk" }
+proteus-runtime = { path = "../../../crates/proteus-runtime" }
+log = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+proteus-host-winit = { path = "../../../crates/proteus-host-winit" }
+env_logger = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+proteus-host-web = { path = "../../../crates/proteus-host-web" }
+wasm-bindgen = { workspace = true }
+# The code wasm-bindgen generates for the `async fn start` export needs it.
+wasm-bindgen-futures = { workspace = true }
+wasm-logger = { workspace = true }
+js-sys = { workspace = true }
+# The browser player, src/browser.rs: a <video> element, read back through a
+# canvas.
+web-sys = { workspace = true, features = [
+    "Window", "Document", "Element", "HtmlVideoElement", "HtmlMediaElement",
+    "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData",
+] }

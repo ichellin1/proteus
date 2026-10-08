@@ -31,11 +31,12 @@ In a browser:
 make example-gallery-web
 ```
 
-Then open <http://localhost:8080>. Without make, build it for the web, then serve its folder:
+Then open <http://localhost:8080/examples/gallery/rust/>. Without make, build it for the web,
+then serve the repository from its root:
 
 ```bash
 wasm-pack build examples/gallery/rust --target web --release
-python3 -m http.server 8080 --directory examples/gallery/rust
+python3 -m http.server 8080
 ```
 
 ### TypeScript

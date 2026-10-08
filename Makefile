@@ -20,7 +20,7 @@ fmt:
 ## pass and checked separately against their real target. Mirrors ci.yml.
 clippy:
 	cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
-	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 test:
 	cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
@@ -77,8 +77,10 @@ example-%-ts: $(SDK_BUILT)
 	cd examples/$*/typescript && npm install && npm run dev
 
 ## Run a Rust example in a browser, such as `make example-gallery-web`: builds
-## it for the web with wasm-pack, then serves it on http://localhost:8080.
+## it for the web with wasm-pack, then serves the repository on
+## http://localhost:8080, so an example can use the reference demo's assets.
 ## Requires Python 3, for the server.
 example-%-web:
 	wasm-pack build examples/$*/rust --target web --release
-	python3 -m http.server 8080 --directory examples/$*/rust
+	@echo "Open http://localhost:8080/examples/$*/rust/"
+	python3 -m http.server 8080
