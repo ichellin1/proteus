@@ -7,7 +7,7 @@
 //!
 //! Techniques worth copying:
 //!   - Callbacks are given the components, `&mut Proteus`, but not the app.
-//!     Each pushes an [`Event`] onto a shared queue, and [`App::update`] acts
+//!     Each pushes an `Event` onto a shared queue, and [`App::update`] acts
 //!     on the queue each frame, with the whole app at hand.
 //!   - Download with `fetch_async` and collect the results from
 //!     `poll_fetches` in `update`. A grid's photos are all decoded and given
@@ -25,7 +25,7 @@
 //!     fades in with `animate_to` on its color's alpha, then hands its
 //!     texture to the large view.
 //!   - Request the small and the sharp photo at the same aspect ratio; see
-//!     [`fetch_size`].
+//!     `fetch_size`.
 //!   - The transition channel is owned by the large view, so it is destroyed
 //!     with it.
 //!   - While the new grid downloads, a loader over the large view shows that
