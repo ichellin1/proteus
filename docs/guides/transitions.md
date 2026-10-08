@@ -80,8 +80,28 @@ easy to follow.
 
 `to` usually starts hidden, with `visible(false)`, and appears as the transition begins.
 
-A channel lasts until you destroy it. Pass an owner to `transition_channel` to destroy the
-channel along with that component:
+A channel lasts until you destroy it with `destroy`. After that, its `set` calls are ignored,
+with a warning:
+
+#### Rust
+
+```rust
+# use proteus_sdk::Proteus;
+# let mut app = Proteus::new();
+# let channel = app.transition_channel(None);
+channel.destroy(&mut app);
+```
+
+#### TypeScript
+
+```ts
+channel.destroy();
+```
+
+A channel usually belongs to one part of the app, such as the screen whose components it
+transitions. Instead of destroying it yourself when that part goes, give the channel an
+**owner** when you create it: destroying the owner then destroys the channel too, as destroying
+a component destroys its children. `None`, or in TypeScript no argument, means no owner.
 
 #### Rust
 
@@ -89,12 +109,14 @@ channel along with that component:
 # use proteus_sdk::{ComponentSpec, Proteus, QuadState};
 # let mut app = Proteus::new();
 # let screen = app.component(ComponentSpec::new(QuadState::default()));
+// Destroying `screen` destroys this channel along with it.
 let channel = app.transition_channel(Some(screen));
 ```
 
 #### TypeScript
 
 ```ts
+// Destroying `panel` destroys this channel along with it.
 const owned = app.transitionChannel(panel);
 ```
 

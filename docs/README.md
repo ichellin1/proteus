@@ -21,6 +21,13 @@ Build a button that transforms into a panel, step by step:
   another.
 - [Splits and merges](./guides/splits-and-merges.md): one component into several, and several
   into one.
+- [Interaction](./guides/interaction.md): pointer events, which component gets the pointer, and
+  hover, pressed and disabled styles.
+- [Text, images and video](./guides/content.md): what a component shows, and how to change it.
+- [Configuration](./guides/configuration.md): GPU memory, the background color, the font, and
+  how images load.
+- [Hosts and platforms](./guides/hosts.md): what runs an app, loading assets, and the size of the
+  window.
 
 ## API reference
 
