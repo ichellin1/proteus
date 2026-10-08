@@ -4744,6 +4744,17 @@ not V1.**
   several weights of one family (regular and bold, say), and falling back to another font for
   characters the first doesn't have. The configuration guide states the V1 limit and says
   several fonts are planned.
+- Loading that manages itself. V1 decodes every pending image, and rasterizes every pending
+  text, in the frame it's given, with no limit: 50 large images in one frame make that frame as
+  long as all 50 decodes, and nothing is carried over to the next. `load_texture` decodes on the
+  spot, in the app's own code. `FrameConfig::dt_clamp_secs` doesn't limit this work; it only
+  caps how far the next frame's transitions advance, so after a long frame they continue rather
+  than jump. The how-to on loading images tells developers to spread loads over frames
+  themselves. Planned: resource loading that is opaque and works as well as it can on its own.
+  Decode off the main thread (threads natively, workers or `createImageBitmap` on the web),
+  give the bake pass a per-frame time budget that carries the rest over, and load what is
+  visible first. An async `load_texture`, or one that returns a handle whose image arrives
+  later, changes the API, so it is a V2 decision.
 - An `on_destroy` callback for components and transition channels. Most destruction is started
   by the app, so it already knows, but two cases happen as side effects: destroying a parent
   destroys its children, and destroying a component destroys the channels it owns. An app holding

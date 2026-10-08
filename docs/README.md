@@ -29,6 +29,19 @@ Build a button that transforms into a panel, step by step:
 - [Hosts and platforms](./guides/hosts.md): what runs an app, loading assets, and the size of the
   window.
 
+## How-tos
+
+- [Chain transitions](./how-to/chaining-transitions.md): run transitions one after another.
+- [Stagger a group](./how-to/staggering.md): start a group's transitions one after another, as a
+  wave.
+- [Load an image](./how-to/loading-images.md): from a file that comes with the app, or a URL,
+  cropped to fit.
+- [Use a custom easing curve](./how-to/custom-easing.md): copy a curve from CSS, or write your
+  own.
+- [Use a platform feature Proteus doesn't provide](./how-to/platform-features.md), such as the
+  clipboard or opening a web page.
+- [Tricks](./how-to/tricks.md): show anything the platform can draw, such as text in any font.
+
 ## API reference
 
 - [Rust](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/): `proteus-sdk` for building

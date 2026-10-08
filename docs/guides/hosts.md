@@ -208,4 +208,4 @@ Read it from the canvas element, with `clientWidth` and `clientHeight`.
 
 For what Proteus doesn't do, such as playing audio or reading files the user picks, the app
 uses the platform directly, alongside Proteus: Rust crates natively, and the browser's APIs on
-the web.
+the web. See [Use a platform feature Proteus doesn't provide](../how-to/platform-features.md).

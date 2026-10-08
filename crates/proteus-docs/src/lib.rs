@@ -34,6 +34,12 @@ pages! {
     guides_content => "guides/content.md",
     guides_configuration => "guides/configuration.md",
     guides_hosts => "guides/hosts.md",
+    how_to_chaining_transitions => "how-to/chaining-transitions.md",
+    how_to_staggering => "how-to/staggering.md",
+    how_to_loading_images => "how-to/loading-images.md",
+    how_to_custom_easing => "how-to/custom-easing.md",
+    how_to_platform_features => "how-to/platform-features.md",
+    how_to_tricks => "how-to/tricks.md",
 }
 
 /// The snippets that use the web host; see `build.rs`.
