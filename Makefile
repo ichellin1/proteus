@@ -1,7 +1,7 @@
 # Proteus — developer convenience targets.
 # Run `make install-hooks` once after cloning to wire up the git hooks.
 
-.PHONY: install-hooks check fmt clippy test check-comments build-web serve-web build-sdk-web
+.PHONY: install-hooks check fmt clippy docs test check-comments build-web serve-web build-sdk-web
 
 ## Wire up the git hooks from scripts/git-hooks/ into .git/hooks/.
 install-hooks:
@@ -9,8 +9,8 @@ install-hooks:
 	chmod +x .git/hooks/pre-push
 	@echo "✓ git hooks installed"
 
-## Run the same checks that CI runs (fmt + clippy + tests).
-check: fmt clippy test
+## Run the same checks that CI runs (fmt + clippy + docs + tests).
+check: fmt clippy docs test
 
 fmt:
 	cargo fmt --all -- --check
@@ -20,7 +20,12 @@ fmt:
 ## pass and checked separately against their real target. Mirrors ci.yml.
 clippy:
 	cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
-	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+
+## Build the API docs with warnings as errors, as CI does: a broken link in a
+## doc comment fails.
+docs:
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude proteus-shell-web --exclude proteus-host-web --no-deps
 
 test:
 	cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
