@@ -6,6 +6,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+# The reference demo, which ships as a web page, not a crate.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -14,9 +16,9 @@ crate-type = ["cdylib", "rlib"]
 # Everything but the settings and the asset download lives elsewhere: the
 # canvas, GPU, frame loop and input in proteus-host-web, and the demo itself
 # in proteus-demo.
-proteus-demo = { path = "../proteus-demo" }
-proteus-host-web = { path = "../proteus-host-web" }
-proteus-runtime = { path = "../proteus-runtime" }
+proteus-demo = { workspace = true }
+proteus-host-web = { workspace = true }
+proteus-runtime = { workspace = true }
 wasm-bindgen = { workspace = true }
 # Not referenced by name in src/, but the code wasm-bindgen generates for an
 # `async fn` export (`start`) needs it; without it the build fails with

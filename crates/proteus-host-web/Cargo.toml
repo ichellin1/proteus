@@ -6,6 +6,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -15,8 +20,8 @@ crate-type = ["cdylib", "rlib"]
 # glam at the versions it builds against. proteus-sdk-web for running a
 # TypeScript app (`mount`). proteus-sdk-web doesn't depend on this crate,
 # so it can still be used on its own.
-proteus-runtime = { path = "../proteus-runtime" }
-proteus-sdk-web = { path = "../proteus-sdk-web" }
+proteus-runtime = { workspace = true }
+proteus-sdk-web = { workspace = true }
 # mount() deserializes a partial ProteusConfig from JS.
 serde-wasm-bindgen = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -34,3 +39,6 @@ log = { workspace = true }
 wasm-logger = { workspace = true }
 console_error_panic_hook = { workspace = true }
 
+# It only builds for WebAssembly, so docs.rs documents it there.
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]

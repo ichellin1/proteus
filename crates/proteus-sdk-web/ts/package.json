@@ -4,6 +4,11 @@
   "description": "TypeScript SDK for Proteus, a UI framework whose components transform into other components instead of loading new screens. Draws with WebGPU or WebGL2.",
   "type": "module",
   "license": "MIT OR Apache-2.0",
+  "author": "Blue <isaac.chellin@gmail.com>",
+  "homepage": "https://github.com/ichellin1/proteus/tree/main/docs",
+  "bugs": {
+    "url": "https://github.com/ichellin1/proteus/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/ichellin1/proteus",

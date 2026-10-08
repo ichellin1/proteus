@@ -6,6 +6,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 # `ProteusConfigDto`: a partial, deserializable ProteusConfig — see config_dto.rs.
@@ -13,10 +18,10 @@ serde = { workspace = true }
 # proteus-sdk stays headless; this crate is the first layer that knows about
 # the GPU surface. Hosts (proteus-host-winit, proteus-host-web) depend on
 # this crate only — never on proteus-render / proteus-ui directly.
-proteus-gpu = { path = "../proteus-gpu" }
-proteus-sdk = { path = "../proteus-sdk" }
-proteus-render = { path = "../proteus-render" }
-proteus-ui = { path = "../proteus-ui" }
+proteus-gpu = { workspace = true }
+proteus-sdk = { workspace = true }
+proteus-render = { workspace = true }
+proteus-ui = { workspace = true }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
 wgpu = { workspace = true }

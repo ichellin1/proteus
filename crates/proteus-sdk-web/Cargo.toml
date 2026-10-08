@@ -6,14 +6,19 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-proteus-sdk = { path = "../proteus-sdk" }
-proteus-ui = { path = "../proteus-ui" }
-proteus-render = { path = "../proteus-render" }
+proteus-sdk = { workspace = true }
+proteus-ui = { workspace = true }
+proteus-render = { workspace = true }
 # Logs exceptions thrown by JavaScript callbacks, and lenient DTO fallbacks.
 log = { workspace = true }
 bevy_ecs = { workspace = true }

@@ -6,10 +6,15 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [dependencies]
-proteus-ui = { path = "../proteus-ui" }
-proteus-render = { path = "../proteus-render" }
+proteus-ui = { workspace = true }
+proteus-render = { workspace = true }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
 # `Handle`'s methods log the failure path before returning `Err`, so a caller

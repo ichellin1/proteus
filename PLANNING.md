@@ -4612,6 +4612,17 @@ Which examples to build is decided at the start of the step.
 One version for every crate and the npm package. Library crates publish to crates.io;
 `proteus-demo` and the shells are `publish = false`.
 
+**Decided (2026-10-08).**
+- **Published:** the eight library crates (`proteus-gpu`, `-render`, `-ui`, `-sdk`, `-runtime`,
+  `-host-winit`, `-host-web`, `-sdk-web`), since the ones apps use depend on all the others, and
+  the npm package `proteus-sdk`. All nine names were free on 2026-10-08.
+- **Authentication:** trusted publishing on both registries, through GitHub's OIDC, so no
+  long-lived tokens are stored. A crate must exist on crates.io before it can be linked, so
+  v0.1.0's first publish uses a token once.
+- **Sub-commits:** 8a publishable crates (metadata, versioned workspace dependencies,
+  `publish = false` for the demo and shells, `rust-version`); 8b changelog; 8c version-bump
+  script; 8d `release.yml`; 8e CONTRIBUTING and RELEASING; 8f repository cleanup; 8g dry run.
+
 - [ ] `cliff.toml` configures git-cliff; `CHANGELOG.md` is generated, never hand-edited. The
   commits before M14 aren't conventional, so v0.1.0 opens with one hand-written summary.
 - [ ] A script bumps the version everywhere and regenerates the changelog; the result lands as a
