@@ -4555,25 +4555,27 @@ Last, since it changes both shells and the demo.
 Plain Markdown in `docs/`, readable on GitHub. The generated API reference (rustdoc and typedoc)
 is deployed to GitHub Pages alongside the demo.
 
-- [ ] `README.md` links to the guides and API reference. Its full rewrite is step 13.
-- [ ] Getting-started guides for TypeScript and for Rust.
-- [ ] Concept guides: components and geometry; 1→1 transitions; 1→N and N→1 transitions;
+- [x] `README.md` links to the guides and API reference. Its full rewrite is step 13.
+- [x] Getting-started guides for TypeScript and for Rust.
+- [x] Concept guides: components and geometry; 1→1 transitions; 1→N and N→1 transitions;
   interaction; text, images and video; configuration; hosts and platforms.
-- [ ] Short how-to pages for common tasks (chaining transitions, staggering a group, loading an
+- [x] Short how-to pages for common tasks (chaining transitions, staggering a group, loading an
   image, custom easing, …).
-- [ ] A how-to on using a platform feature Proteus doesn't provide, such as the clipboard or a
+- [x] A how-to on using a platform feature Proteus doesn't provide, such as the clipboard or a
   file picker: use it directly from the app, and for one that differs by platform, define the
   app's own trait with an implementation per platform, passed in where the app is created (as
   `DemoApp::new` takes each platform's video keys). Linked from the `HostServices` docs and the
   hosts and platforms guide.
-- [ ] A "Proteus tricks" page: other ways to bring content into an app. For example, draw
+- [x] A "Proteus tricks" page: other ways to bring content into an app. For example, draw
   anything the platform can draw, such as text in a CSS font on a 2D canvas, read its pixels,
   and show it with `bake_texture` and `set_texture`. Not specific to fonts, and kept out of the
   concept guides, which describe what Proteus itself does.
-- [ ] API reference builds in CI and deploys to GitHub Pages.
-- [ ] `GETTING_STARTED.md`'s build-from-source content moves into `CONTRIBUTING.md` (R-05).
-- [ ] Every code snippet in the guides compiles or type-checks in CI.
-- [ ] No developer-facing page links into PLANNING.
+- [x] API reference builds in CI and deploys to GitHub Pages.
+- [x] `GETTING_STARTED.md`'s build-from-source content moves into `CONTRIBUTING.md` (R-05).
+- [x] Every code snippet in the guides compiles or type-checks in CI.
+- [x] No developer-facing page links into PLANNING.
+- [x] Every relative link in `docs/`, and every heading it names, resolves; checked by a test in
+  `proteus-docs`, which also fails on a link into PLANNING.
 
 #### Step 7 — Examples
 

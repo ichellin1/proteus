@@ -191,7 +191,7 @@ its config in its own tests:
 # fn web_limits() -> proteus_runtime::wgpu::Limits {
 #     proteus_runtime::wgpu::Limits::downlevel_webgl2_defaults()
 # }
-// In a test. `web_limits()` stands for the web host's limits, below.
+// In a test. `web_limits()` stands for `proteus_host_web::limits()`.
 let error = ProteusConfig::desktop().check(&web_limits()).unwrap_err();
 assert_eq!(error.setting, "memory.main_atlas.page_size");
 ```
