@@ -1,6 +1,6 @@
 [package]
 name = "proteus-sdk-web"
-description = "Layer 2.5 (web): thin wasm-bindgen bridge over proteus-sdk's generic app API"
+description = "WebAssembly bindings that expose proteus-sdk to JavaScript, for the Proteus TypeScript SDK."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 proteus-sdk = { path = "../proteus-sdk" }
 proteus-ui = { path = "../proteus-ui" }
 proteus-render = { path = "../proteus-render" }
-# Lenient DTO fallbacks log what they ignored rather than failing the call.
+# Logs exceptions thrown by JavaScript callbacks, and lenient DTO fallbacks.
 log = { workspace = true }
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
@@ -24,3 +24,7 @@ wasm-bindgen-futures = { workspace = true }
 js-sys = { workspace = true }
 serde = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
+# Tests deserialize DTOs from JSON, the shape JavaScript sends.
+serde_json = { workspace = true }

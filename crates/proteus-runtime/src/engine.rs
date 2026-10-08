@@ -1,27 +1,18 @@
-//! [`Engine`] — owns [`Proteus`] and the [`Renderer`], and drives one frame.
-//!
-//! *"`Proteus` ownership moves from the app to the host"* is this type: the
-//! host holds an `Engine`, the `Engine` holds `Proteus`, and the application
-//! is a `&mut dyn App` the engine calls into. [`Engine::new`] (via
-//! [`Renderer::new`]) is also what inserts `proteus_render::GpuContext` and
-//! `QuadPipeline` into the world (the M12 shells did this themselves) so
-//! `bake_system` keeps working.
+//! [`Engine`]: owns the [`Proteus`] state and the [`Renderer`], and runs one
+//! frame at a time.
 //!
 //! ## Frame order
 //!
 //! ```text
-//! Proteus::tick(dt)         run the ECS schedule — input, signals, transitions, cascades
-//! App::update(frame, dt)    application reacts to this frame's events; may mutate the world directly
-//! Proteus::refresh_cascades re-cascade Visibility/Opacity after any direct mutation in update()
-//! Renderer::render(target)  bake pending Text/Image, collect, one draw pass
+//! Proteus::tick(dt)          input, channel requests, transitions, then callbacks
+//! App::update(frame, dt)     the app reacts to this frame's events
+//! Proteus::refresh_cascades  recompute visibility and opacity after update's changes
+//! Renderer::render(target)   bake pending text and images, then draw
 //! ```
 //!
-//! `App::update` runs **after** the schedule, not before: the M12 reference
-//! demo's per-frame logic is reactive (it reads the click/transition events
-//! the schedule just produced, then imperatively adjusts geometry), and a
-//! "late update" hook models that directly. Signals fired from `update` are
-//! picked up by `signal_dispatch_system` on the next frame, unchanged from
-//! how `signal.set()` already behaves.
+//! `App::update` runs after the tick so it can react to what just happened,
+//! such as a click or a finished transition. A transition it starts begins on
+//! the next frame.
 
 use glam::Vec2;
 
@@ -33,20 +24,25 @@ use crate::renderer::Renderer;
 use crate::services::HostServices;
 use crate::viewport::Viewport;
 
-/// See the module docs.
+/// Owns the [`Proteus`] state and the [`Renderer`], and runs one frame at a
+/// time. A host creates one and calls [`Engine::frame`] every frame.
 pub struct Engine {
     proteus: Proteus,
     renderer: Renderer,
     viewport: Viewport,
-    /// [`crate::config::FrameConfig::dt_clamp_secs`], read out of `config`
-    /// before it moved into [`Renderer`] — [`Engine::frame`] applies it.
+    /// [`crate::config::FrameConfig::dt_clamp_secs`], which [`Engine::frame`]
+    /// applies.
     dt_clamp_secs: f32,
 }
 
 impl Engine {
-    /// Construct `Proteus` + [`Renderer`], wire them (the renderer inserts
-    /// the GPU resources into the world and builds the projection), and run
-    /// [`App::setup`] once.
+    /// Creates the [`Proteus`] state and the [`Renderer`], then calls
+    /// [`App::setup`].
+    ///
+    /// # Panics
+    ///
+    /// If `config`'s memory settings don't fit the device; see
+    /// [`Renderer::new`].
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -84,10 +80,18 @@ impl Engine {
         }
     }
 
-    /// One frame — see the module docs for the order. `target` is a surface
-    /// texture view the host has already acquired. `dt` is clamped to
-    /// [`crate::config::FrameConfig::dt_clamp_secs`] before anything runs —
-    /// hosts no longer need their own copy of that clamp.
+    /// Runs one frame and draws it into `target`, a surface texture the host
+    /// has acquired.
+    ///
+    /// 1. Clamps `dt` to [`crate::config::FrameConfig::dt_clamp_secs`].
+    /// 2. Calls [`Proteus::tick`]: input, channel requests, transitions, then callbacks.
+    /// 3. Calls [`App::update`], so the app can react to this frame's events.
+    /// 4. Recomputes visibility and opacity, so changes `update` made are
+    ///    drawn this frame.
+    /// 5. Calls [`Renderer::render`]: bakes pending text and images, then
+    ///    draws.
+    ///
+    /// A transition the app starts in `update` begins on the next frame.
     pub fn frame(
         &mut self,
         dt: f32,
@@ -111,35 +115,33 @@ impl Engine {
         self.renderer.render(&mut self.proteus, target);
     }
 
-    /// Report a new drawable area — updates the renderer's projection and the
-    /// copy delivered to the app via [`Frame`]. The host is separately
-    /// responsible for reconfiguring the `wgpu::Surface`.
+    /// Reports a new drawable area to the renderer and the app. The host
+    /// resizes the GPU surface itself.
     pub fn resize(&mut self, viewport: Viewport) {
         self.viewport = viewport;
         self.renderer.resize(&mut self.proteus, viewport);
     }
 
-    /// Read-only access to the underlying app object — for reading component
-    /// state (`Proteus::get`) from a host or a test.
+    /// The [`Proteus`] state, read-only, for a host or a test to inspect.
     pub fn proteus(&self) -> &Proteus {
         &self.proteus
     }
 
-    // ── Input forwarding — the host calls these from its native event stream.
-    //    Coordinates are world-space (viewport-centre origin, Y-up); the host
-    //    does the window/CSS-pixel → world conversion, as the M12 shells do. ─
+    // Input, reported by the host from its platform's events. Positions are
+    // world units (origin at the viewport center, y up); the host converts
+    // from window coordinates.
 
     /// Pointer moved to `pos`, or `None` when it leaves the surface.
     pub fn pointer_moved(&mut self, pos: Option<Vec2>) {
         self.proteus.pointer_moved(pos);
     }
 
-    /// Primary button pressed.
+    /// Records that the pointer was pressed.
     pub fn pointer_pressed(&mut self) {
         self.proteus.pointer_pressed();
     }
 
-    /// Primary button released.
+    /// Records that the pointer was released.
     pub fn pointer_released(&mut self) {
         self.proteus.pointer_released();
     }

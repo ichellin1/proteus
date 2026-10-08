@@ -1,22 +1,23 @@
-//! [`Renderer`] — the render primitive.
+//! [`Renderer`]: draws a frame.
 //!
-//! Owns the [`FontAtlas`] and the [`ProteusConfig`]. The per-frame work that
-//! was hand-duplicated in `proteus-shell-native` and `proteus-shell-web`
-//! moves here:
+//! Each frame it:
 //!
-//! 1. bake pending [`Text`](proteus_ui::Text) — rasterize into `main_atlas`
-//! 2. bake pending [`Image`](proteus_ui::Image) — decode + downscale into `main_atlas`
-//! 3. [`proteus_ui::collect_instances`]
-//! 4. `QuadPipeline::upload_instances`
-//! 5. encode one render pass into the handed-in target
+//! 1. bakes pending [`Text`](proteus_ui::Text) into the atlas;
+//! 2. decodes and bakes pending [`Image`](proteus_ui::Image)s;
+//! 3. collects every visible component's data (position, size, colors,
+//!    texture coordinates and so on) with [`proteus_ui::collect_instances`];
+//! 4. copies that data to the GPU in one go, then draws every component with
+//!    one draw call into the given target.
 //!
-//! Surface *acquire / reconfigure / present* stays with the host — this
-//! type never sees a `wgpu::Surface`, only an already-acquired
-//! `wgpu::TextureView`. `QuadPipeline` and `proteus_render::GpuContext` live
-//! as `World` resources (as in M12); `proteus_ui::bake_system` reads them
-//! from there for composite bakes, and this type reaches them the same way
-//! via [`Proteus::world_mut`]. [`Renderer::new`] is what inserts them
-//! (the M12 shells did it themselves).
+//! The shader is the same for every component; only the data differs.
+//! Components are drawn in the order collected, so later ones are on top. At
+//! most `ProteusConfig.memory.max_instances` are drawn; any beyond that, the
+//! topmost, are dropped with a warning.
+//!
+//! The host acquires and presents the surface texture; the renderer only
+//! draws into it. The GPU resources live in the ECS world, where
+//! [`Renderer::new`] puts them, so that systems such as component baking can
+//! use them too.
 //!
 
 use proteus_render::{GpuContext, QuadPipeline};
@@ -27,7 +28,8 @@ use crate::bake;
 use crate::config::{FontSource, ProteusConfig};
 use crate::viewport::Viewport;
 
-/// See the module docs.
+/// Draws a frame: bakes pending text and images, then draws every visible
+/// component. See the module docs.
 pub struct Renderer {
     font_atlas: proteus_render::FontAtlas,
     config: ProteusConfig,
@@ -35,12 +37,16 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create the `QuadPipeline` + `GpuContext`, insert them into the world,
-    /// set the initial projection, and build the font atlas.
+    /// Creates the GPU resources, adds them to `proteus`'s world, sets the
+    /// projection for `viewport`, and builds the font atlas.
     ///
-    /// Panics if `config.memory`'s sizing does not fit the device's reported
-    /// limits (a `Result` form can come later; the M12 shells also treated
-    /// this as fatal).
+    /// # Panics
+    ///
+    /// If `config`'s memory settings don't fit `device`'s limits, with the
+    /// [`ConfigError`](crate::ConfigError)'s message. Both hosts check the
+    /// config before creating the device, with
+    /// [`ProteusConfig::check`](crate::ProteusConfig::check), so this is a
+    /// backstop for code that creates a renderer itself.
     pub fn new(
         proteus: &mut Proteus,
         device: &wgpu::Device,
@@ -50,14 +56,9 @@ impl Renderer {
         config: ProteusConfig,
     ) -> Self {
         let mem = &config.memory;
-        proteus_render::validate_atlas_config(device, &mem.main_atlas)
-            .expect("ProteusConfig.memory.main_atlas must fit the device's reported limits");
-        proteus_render::validate_render_config(
-            device,
-            mem.transition_atlas_size,
-            mem.max_instances,
-        )
-        .expect("ProteusConfig.memory sizing must fit the device's reported limits");
+        if let Err(e) = config.check(&device.limits()) {
+            panic!("{e}");
+        }
         if config.debug.validate_config {
             log::info!(
                 "ProteusConfig: ~{:.1} MiB estimated resident GPU memory (main_atlas {}×{}×{}, transition_atlas {}², {} instances)",
@@ -91,13 +92,15 @@ impl Renderer {
         world.insert_resource(pipeline);
         world.insert_resource(TransitionAtlasSize(mem.transition_atlas_size));
 
-        // M13.4 step 2: TextConfig.default_font was declared back in M13.5
-        // but always ignored in favor of the embedded font — actually read
-        // it now. `FontAtlas::new(&[u8])` already accepted arbitrary TTF/OTF
-        // bytes; this was pure wiring, no new capability to build.
+        // Use the configured font, or the embedded one. Bytes that aren't a
+        // font fall back to the embedded font rather than stopping the app;
+        // `FontSource::from_bytes` lets an app catch them earlier.
         let font_atlas = match &config.text.default_font {
             FontSource::Embedded => proteus_render::FontAtlas::with_embedded_font(),
-            FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes),
+            FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes).unwrap_or_else(|e| {
+                log::error!("ProteusConfig.text.default_font: {e}; using the embedded font");
+                proteus_render::FontAtlas::with_embedded_font()
+            }),
         };
 
         Self {
@@ -112,9 +115,8 @@ impl Renderer {
         self.viewport
     }
 
-    /// Rebuild the orthographic projection for a new viewport. The host is
-    /// responsible for reconfiguring the `wgpu::Surface` itself; atlas
-    /// resizing on viewport change is out of scope for M13.1 (M13.5).
+    /// Updates the projection for a new viewport. The host resizes the GPU
+    /// surface itself. The atlases keep their size.
     pub fn resize(&mut self, proteus: &mut Proteus, viewport: Viewport) {
         self.viewport = viewport;
         let queue = proteus.world().resource::<GpuContext>().queue.clone();
@@ -127,9 +129,8 @@ impl Renderer {
             );
     }
 
-    /// Render one frame into `target` — a surface texture view the host has
-    /// already acquired. [`Proteus::tick`] has already run by the time the
-    /// engine calls this; the renderer advances no simulation.
+    /// Draws one frame into `target`, a surface texture the host has acquired.
+    /// It advances nothing: [`Proteus::tick`] has already run.
     pub fn render(&mut self, proteus: &mut Proteus, target: &wgpu::TextureView) {
         let gpu = proteus.world().resource::<GpuContext>().clone();
         let world = proteus.world_mut();

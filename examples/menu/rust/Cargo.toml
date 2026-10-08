@@ -1,0 +1,29 @@
+[package]
+name = "menu"
+description = "A menu that a button splits into and merges back from, built with Proteus, in Rust: the same app as the TypeScript menu."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# `cdylib` for the web build, `rlib` for the native binary in src/main.rs.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+proteus-sdk = { path = "../../../crates/proteus-sdk" }
+proteus-runtime = { path = "../../../crates/proteus-runtime" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+proteus-host-winit = { path = "../../../crates/proteus-host-winit" }
+env_logger = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+proteus-host-web = { path = "../../../crates/proteus-host-web" }
+wasm-bindgen = { workspace = true }
+# The code wasm-bindgen generates for the `async fn start` export needs it.
+wasm-bindgen-futures = { workspace = true }
+log = { workspace = true }
+wasm-logger = { workspace = true }

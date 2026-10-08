@@ -14,151 +14,68 @@ use wgpu::util::DeviceExt;
 use crate::mesh::{quad_vertex_layout, QuadInstance, QUAD_INDICES, QUAD_VERTICES};
 use crate::texture_registry::{AtlasConfig, TextureId, TextureRegistry};
 
-/// Runtime self-check ("BIT" — validate before you build, not after a wgpu validation panic deep
-/// inside `create_texture`): does `config` actually fit *this* device's real limits, not just the
-/// `wgpu::Limits` preset that was requested? Call once, right after `request_device`, before
-/// constructing [`QuadPipeline`].
-pub fn validate_atlas_config(device: &wgpu::Device, config: &AtlasConfig) -> Result<(), String> {
-    let limits = device.limits();
-    if config.page_size > limits.max_texture_dimension_2d {
-        return Err(format!(
-            "AtlasConfig.page_size={} exceeds this device's max_texture_dimension_2d={}",
-            config.page_size, limits.max_texture_dimension_2d
-        ));
-    }
-    if config.page_count == 0 {
-        return Err("AtlasConfig.page_count must be at least 1".to_string());
-    }
-    if config.page_count > limits.max_texture_array_layers {
-        return Err(format!(
-            "AtlasConfig.page_count={} exceeds this device's max_texture_array_layers={}",
-            config.page_count, limits.max_texture_array_layers
-        ));
-    }
-    Ok(())
-}
-
-/// M13.5: same "validate before you build" self-check as
-/// [`validate_atlas_config`], for the two sizing knobs that used to be
-/// hardcoded constants — `transition_atlas_size` (was `DEFAULT_TRANSITION_ATLAS_SIZE`)
-/// and `max_instances` (was a bare `QuadPipeline::new` argument with no
-/// upper-bound check at all).
-pub fn validate_render_config(
-    device: &wgpu::Device,
-    transition_atlas_size: u32,
-    max_instances: u32,
-) -> Result<(), String> {
-    let limits = device.limits();
-    if transition_atlas_size > limits.max_texture_dimension_2d {
-        return Err(format!(
-            "transition_atlas_size={transition_atlas_size} exceeds this device's max_texture_dimension_2d={}",
-            limits.max_texture_dimension_2d
-        ));
-    }
-    let instance_buf_bytes = std::mem::size_of::<QuadInstance>() as u64 * max_instances as u64;
-    if instance_buf_bytes > limits.max_buffer_size {
-        return Err(format!(
-            "max_instances={max_instances} needs a {instance_buf_bytes}-byte instance buffer, \
-             exceeding this device's max_buffer_size={}",
-            limits.max_buffer_size
-        ));
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
-// Atlas sizes
-//
-// M1: small fixed sizes — enough for the white-pixel fallback and early dev.
-// These will be driven by ProteusConfig (window size) once the config system
-// is wired up in M2+.
+// Default sizes
 // ---------------------------------------------------------------------------
 
-/// Default per-*page* `main_atlas` dimensions. Must fit within
-/// `device.limits().max_texture_dimension_2d`. Can't be raised to buy more room on the web shell
-/// specifically — it deliberately requests `wgpu::Limits::downlevel_webgl2_defaults()` for real
-/// WebGL2 compatibility, which caps `max_texture_dimension_2d` at 2048; anything larger would
-/// fail `create_texture` there (see `headless_render.rs`'s tests, which request the same downlevel
-/// limits specifically to catch this class of regression).
+/// The default size of each main-atlas page, in pixels.
 ///
-/// (M11.2) Atlas pressure is no longer answered by shrinking page size — `main_atlas` is a
-/// multi-page pool (see [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`], [`crate::texture_registry::AtlasConfig`]), and
-/// per-page size/page count are now a configurable, validated input
-/// ([`crate::validate_atlas_config`]) rather than a hard ceiling. This constant and
-/// [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`] together are only `AtlasConfig::default()`'s values — the
-/// safe out-of-box defaults, not a limit on what a consumer can configure.
+/// It must fit `max_texture_dimension_2d`, which WebGL2 limits to 2048, so it
+/// can't be larger on the web. For more room, add pages instead: see
+/// [`DEFAULT_MAIN_ATLAS_PAGE_COUNT`] and [`crate::texture_registry::AtlasConfig`].
 ///
-/// Also what normalizes a `main_atlas` pixel region — the placement
-/// [`crate::TextureRegistry::register_static`] hands back — into the UV
-/// coordinates stored in a [`QuadInstance`], for a pipeline left at the
-/// default. A pipeline configured with its own `AtlasConfig::page_size` must
-/// normalize against *that*, not this.
+/// A main-atlas region is converted to texture coordinates by dividing by the
+/// page size: this value for a default pipeline, or the configured
+/// `AtlasConfig::page_size` otherwise.
 pub const DEFAULT_MAIN_ATLAS_SIZE: u32 = 2048;
 
-/// Number of array layers ("pages") in the default `main_atlas` pool (M11.2).
+/// The default number of main-atlas pages.
 ///
-/// Total capacity at the defaults is `MAIN_ATLAS_SIZE² × DEFAULT_MAIN_ATLAS_PAGE_COUNT` texels — 4 ×
-/// 2048² × 4 bytes = 64 MiB of VRAM, eagerly committed at texture creation (wgpu cannot lazily
-/// back array layers).
+/// At the defaults the main atlas holds 4 pages of 2048 × 2048 × 4 bytes:
+/// 64 MiB of GPU memory, allocated up front. The count is fixed when the atlas
+/// is created, since an array texture can't grow without being recreated; the
+/// [`crate::texture_registry::TextureRegistry`] keeps usage within it by
+/// evicting the least recently used textures.
 ///
-/// Fixed at creation by design: a `D2Array`'s layer count cannot grow without recreating the
-/// texture and re-uploading everything resident. Capacity is bounded here and *held* bounded by
-/// [`crate::texture_registry::TextureRegistry`]'s cross-page LRU eviction — "thousands of images
-/// available, not thousands resident" is what makes unbounded content tractable, not the page
-/// count alone.
-///
-/// Safe on every backend this project targets: `max_texture_array_layers` is 256 under
-/// `Limits::default()` (native), `downlevel_defaults()` (headless tests), and
-/// `downlevel_webgl2_defaults()` (web shell) alike — unlike `max_texture_dimension_2d`, which is
-/// what caps [`DEFAULT_MAIN_ATLAS_SIZE`]. Page count is an orthogonal axis to page size, so
-/// raising it costs no WebGL2 parity.
-///
-/// Only meaningful as `AtlasConfig::default()`'s value; a consumer building a custom
-/// [`crate::texture_registry::AtlasConfig`] chooses its own page count directly.
+/// Every target allows 256 array layers, so the page count, unlike the page
+/// size, isn't limited by WebGL2.
 pub const DEFAULT_MAIN_ATLAS_PAGE_COUNT: u32 = 4;
 
-/// Default `transition_atlas` dimensions (~2× window area for concurrent full-screen bakes).
+/// The default size of the transition atlas, about twice the window's area,
+/// so full-screen bakes can overlap.
 ///
-/// Also what normalizes a `transition_atlas` pixel region into UV coordinates
-/// (e.g. `BakedTexture::uv_offset`/`uv_scale`) for a pipeline left at the
-/// default — the transition-atlas counterpart of [`DEFAULT_MAIN_ATLAS_SIZE`].
-/// A pipeline configured with its own `transition_atlas_size` must normalize
-/// against *that*, not this.
+/// Transition-atlas regions are converted to texture coordinates by dividing by
+/// this value for a default pipeline, or by the configured
+/// `transition_atlas_size` otherwise.
 pub const DEFAULT_TRANSITION_ATLAS_SIZE: u32 = 2048;
 
-/// Default video texture dimensions (M9).  1280×720 is enough for a crisp demo;
-/// the caller can request a different resolution via [`QuadPipeline::init_video`].
+/// The default video texture width. [`QuadPipeline::init_video`] sets the real
+/// size.
 pub const DEFAULT_VIDEO_WIDTH: u32 = 1280;
-/// Height of the default video texture (M9).
+/// The default video texture height.
 pub const DEFAULT_VIDEO_HEIGHT: u32 = 720;
 
 // ---------------------------------------------------------------------------
 // GpuContext
 // ---------------------------------------------------------------------------
 
-/// `wgpu::Device`/`Queue` handles, insertable into the bevy ECS `World` as a
-/// resource so transition-setup systems can trigger GPU bakes themselves
-/// (see `proteus_ui::topology::one_to_n_setup_system`). The design PLANNING.md
-/// originally sketched as an ECS resource named `GpuContext`.
+/// The GPU device and queue, as an ECS resource, so systems such as split setup
+/// can bake textures.
 ///
-/// Deliberately excludes the swapchain `surface` PLANNING.md's original sketch
-/// included — that stays shell-owned (native window vs. web canvas differ,
-/// and nothing on the bake path touches it).
-///
-/// `Device`/`Queue` are cheap, `Arc`-backed handles — clone freely. The shell
-/// keeps its own copies for swapchain/surface work alongside inserting this.
+/// It doesn't include the surface, which the host owns. The handles are cheap
+/// to clone.
 #[derive(Clone)]
 pub struct GpuContext {
+    /// The GPU device.
     pub device: wgpu::Device,
+    /// The device's command queue.
     pub queue: wgpu::Queue,
 }
 
 impl bevy_ecs::prelude::Resource for GpuContext {}
 
-// SAFETY: same reasoning as `QuadPipeline`'s manual Send/Sync impls above —
-// sound on the single-threaded wasm32-unknown-unknown target this project
-// builds for; a no-op override on native, where `Device`/`Queue` are already
-// genuinely `Send + Sync`.
+// SAFETY: as for `QuadPipeline`'s `Send`/`Sync` impls below. On native these
+// types are already `Send + Sync`.
 unsafe impl Send for GpuContext {}
 unsafe impl Sync for GpuContext {}
 
@@ -166,6 +83,13 @@ unsafe impl Sync for GpuContext {}
 // QuadPipeline
 // ---------------------------------------------------------------------------
 
+/// The render pipeline that draws every component as an instanced quad, with
+/// its buffers and texture atlases.
+///
+/// Each frame: set the projection with [`QuadPipeline::set_view_projection`],
+/// upload the instances with [`QuadPipeline::upload_instances`], then call
+/// [`QuadPipeline::draw`] in a render pass. One upload and one draw call render
+/// everything.
 pub struct QuadPipeline {
     // Core render pipeline — targets the swapchain's `surface_format`.
     pipeline: wgpu::RenderPipeline,
@@ -198,13 +122,13 @@ pub struct QuadPipeline {
     bake_uniform_buffer: wgpu::Buffer,
     bake_uniform_bind_group: wgpu::BindGroup,
 
-    // Atlas textures — kept alive so the bind group views remain valid.
-    // The bind group (group 1) includes all three; it is rebuilt whenever the
-    // video_atlas is swapped (suspend/resume).
-    _main_atlas: wgpu::Texture,
-    _transition_atlas: wgpu::Texture,
-    /// Streaming video texture (M9).  Starts as a 1×1 black placeholder; replaced
-    /// by [`init_video`](QuadPipeline::init_video) with the requested resolution.
+    // The atlas textures. Uploads and bakes write to them, and the atlas bind
+    // group (group 1) samples them along with `video_atlas`; it is rebuilt
+    // whenever `video_atlas` is replaced.
+    main_atlas: wgpu::Texture,
+    transition_atlas: wgpu::Texture,
+    /// The video texture. A 1×1 black placeholder until
+    /// [`init_video`](QuadPipeline::init_video) gives it a size.
     video_atlas: wgpu::Texture,
     /// Pixel dimensions of the current `video_atlas` allocation.
     video_atlas_size: (u32, u32),
@@ -222,58 +146,32 @@ pub struct QuadPipeline {
     transition_allocator: crate::transition_atlas::TransitionAtlasAllocator,
 }
 
-// `QuadPipeline` is inserted directly into the bevy ECS `World` as a resource
-// (see `GpuContext` below) so transition-setup systems can trigger bakes
-// themselves — see PLANNING.md's `GpuContext` design.
+// `QuadPipeline` is an ECS resource, so that systems can bake textures.
 impl bevy_ecs::prelude::Resource for QuadPipeline {}
 
-// SAFETY: on wasm32-unknown-unknown (no `atomics`/shared-memory target
-// feature — the target this project builds for), there is exactly one
-// thread of execution: the browser's JS main thread. wgpu's wasm32 backend
-// uses non-atomic/non-thread-safe internals for some fields (e.g.
-// `Box<dyn DynCommandBuffer>`, `RefCell`-like storage) that are `!Send`/
-// `!Sync` there even though the equivalent native backend's
-// `Arc<Mutex<..>>`-based internals are genuinely `Send + Sync` — correctly
-// so on a real multi-threaded target, but on this single-threaded target
-// `QuadPipeline` can never actually move across or be observed from two
-// threads at once, so asserting both here is sound in practice. A manual
-// `impl` replaces (does not conflict with) whatever auto-derivation would
-// otherwise apply, so this is a no-op on native (already genuinely
-// `Send + Sync` there) and the necessary override on wasm32.
+// SAFETY: on wasm32-unknown-unknown without atomics, which is the target built
+// for, there is only one thread, the browser's main thread. Some of wgpu's
+// wasm types aren't `Send`/`Sync`, but `QuadPipeline` can never be used from
+// two threads there. On native, wgpu's types are already `Send + Sync`, so
+// these impls change nothing.
 unsafe impl Send for QuadPipeline {}
 unsafe impl Sync for QuadPipeline {}
 
 impl QuadPipeline {
     // ---------------------------------------------------------------------------
-    // White-pixel sentinel UV constants
+    // White-pixel texture coordinates
     //
-    // `main_atlas` has a solid-white block baked at its origin (see
-    // `create_atlases`). Components with no image texture point at it so their
-    // `color` field alone determines appearance, with no shader branching.
+    // The main atlas has a white block at the origin of page 0 (see
+    // `create_atlases`). A component with no texture samples it, so its color
+    // alone decides how it looks, with no branch in the shader.
     //
-    // ## Why the offset is exactly (0, 0), not the texel centre
-    //
-    // It used to be `0.5 / DEFAULT_MAIN_ATLAS_SIZE` — the centre of texel 0
-    // *assuming a 2048px page*. That assumption became wrong the moment
-    // `AtlasConfig::page_size` was made configurable (M11.2): the constant is
-    // a normalised UV, so the texel it lands on scales with the real page size.
-    // At `page_size` 4096 — i.e. `ProteusConfig::desktop()`, a shipped, public
-    // preset — it lands exactly on the boundary between texel 0 and texel 1 on
-    // both axes, so the bilinear sampler averages the white texel with three
-    // never-written ones and every untextured quad in the app renders at about
-    // a quarter intensity.
-    //
-    // Sampling at (0, 0) is correct for *any* page size instead of one: the
-    // sampler is `ClampToEdge` on both axes (see `new`), so the four bilinear
-    // taps around the atlas corner all clamp to texel (0, 0) and the result is
-    // that texel exactly. The original comment's worry — bleed from sampling on
-    // a texel boundary — applies to the boundary *between* texels, not to the
-    // outer edge of the texture, where clamping removes it.
-    //
-    // Belt and braces: `create_atlases` fills the whole reserved guard block
-    // with white rather than a single pixel, so the neighbourhood of the origin
-    // is uniformly white and the sentinel reads pure white even if a future
-    // change nudges this offset or the address mode.
+    // The offset is exactly (0, 0), the atlas corner, not the center of the
+    // first texel. The sampler clamps to the edge, so all four bilinear samples
+    // at the corner read texel (0, 0), whatever the page size. A texel center
+    // would be a normalized coordinate, so its position would shift with the
+    // page size and, on a 4096 page, land between texels and blend in unwritten
+    // ones. The whole guard block is white too, so nearby samples are also
+    // white.
     // ---------------------------------------------------------------------------
 
     /// UV offset for the white-pixel sentinel — the atlas origin corner.
@@ -287,17 +185,17 @@ impl QuadPipeline {
     /// Assign to `QuadInstance::uv_scale` when the component has no image texture.
     pub const WHITE_PIXEL_UV_SCALE: [f32; 2] = [0.0, 0.0];
 
-    /// Create the render pipeline, upload static geometry, and initialize atlas textures.
+    /// Creates the render pipeline, its buffers and its atlases.
     ///
-    /// `surface_format` must match the swap-chain texture format of the target surface.
-    /// `max_instances` sets the capacity of the instance buffer — the pipeline silently
-    /// clamps submissions that exceed it. 4096 is a reasonable default for most UIs.
-    /// `atlas_config` sizes `main_atlas` (see [`crate::texture_registry::AtlasConfig`]) —
-    /// validate it against this device's real limits with [`crate::validate_atlas_config`]
-    /// *before* calling this, since a bad config otherwise fails deep inside `create_texture`
-    /// with an opaque wgpu validation panic instead of a clear error. `transition_atlas_size`
-    /// sizes `transition_atlas` (M13.5 — was the hardcoded [`DEFAULT_TRANSITION_ATLAS_SIZE`] constant);
-    /// callers that don't need a different value can just pass that constant.
+    /// `surface_format` must match the surface the pipeline draws to.
+    /// `max_instances` is how many quads one frame can draw; more are dropped.
+    /// `atlas_config` sizes the main atlas and `transition_atlas_size` the
+    /// transition atlas ([`DEFAULT_TRANSITION_ATLAS_SIZE`] by default).
+    ///
+    /// # Panics
+    ///
+    /// If the atlas sizes don't fit the device, in a wgpu validation error.
+    /// `proteus-runtime`'s `ProteusConfig::check` checks them first.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -306,7 +204,6 @@ impl QuadPipeline {
         atlas_config: AtlasConfig,
         transition_atlas_size: u32,
     ) -> Self {
-        // --- Shader ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quad_shader"),
             source: wgpu::ShaderSource::Wgsl(crate::QUAD_SHADER_SRC.into()),
@@ -333,7 +230,7 @@ impl QuadPipeline {
         let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("atlas_bgl"),
             entries: &[
-                // binding 0: main_atlas — a D2Array pool since M11.2 (see DEFAULT_MAIN_ATLAS_PAGE_COUNT)
+                // binding 0: main_atlas, an array texture with one layer per page
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -362,7 +259,7 @@ impl QuadPipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // binding 3: video_atlas (M9) — streaming per-frame video texture
+                // binding 3: video_atlas, updated with each video frame
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -376,7 +273,6 @@ impl QuadPipeline {
             ],
         });
 
-        // --- Pipeline layout ---
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("quad_pipeline_layout"),
             bind_group_layouts: &[Some(&uniform_layout), Some(&atlas_layout)],
@@ -448,16 +344,12 @@ impl QuadPipeline {
             }],
         });
 
-        // --- Bake uniform buffer — entirely separate from the main scene's.
+        // --- Bake uniform buffer, separate from the main one ---
         //
-        // Bakes (bake_instances_to_atlas) need their own view-projection (framed
-        // tightly on whatever entity is being baked), issued mid-frame from
-        // inside an ECS system that has no idea what the main scene's screen-size
-        // ortho even is. If bakes wrote into `uniform_buffer` above, they'd leave
-        // the *main* per-frame draw permanently using that tiny, off-center
-        // projection — the shell only calls `set_view_projection` at init/resize,
-        // not every frame, so nothing would ever restore it. A dedicated buffer
-        // means baking can never clobber the main scene's camera, full stop.
+        // A bake frames the entity being baked with its own projection, and
+        // can happen mid-frame, from inside a system. If it wrote the main
+        // uniform buffer, the main draw would keep that projection, since
+        // `set_view_projection` is only called on resize.
         let bake_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("quad_bake_uniform_buf"),
             contents: bytemuck::cast_slice(&identity),
@@ -531,8 +423,8 @@ impl QuadPipeline {
             uniform_bind_group,
             bake_uniform_buffer,
             bake_uniform_bind_group,
-            _main_atlas: main_atlas,
-            _transition_atlas: transition_atlas,
+            main_atlas,
+            transition_atlas,
             video_atlas,
             video_atlas_size: (1, 1),
             atlas_layout,
@@ -549,15 +441,15 @@ impl QuadPipeline {
     // Per-frame API
     // ---------------------------------------------------------------------------
 
-    /// Upload a new view/projection matrix for this frame.
-    /// Call once per frame before `draw()`.
+    /// Uploads the view/projection matrix. Call it before [`Self::draw`]
+    /// whenever the viewport changes.
     pub fn set_view_projection(&self, queue: &wgpu::Queue, matrix: glam::Mat4) {
         let data: [[f32; 4]; 4] = matrix.to_cols_array_2d();
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
     }
 
-    /// Upload the instance list for this frame. Silently clamps to `max_instances`.
-    /// Call once per frame before `draw()`.
+    /// Uploads this frame's instances. Instances beyond `max_instances` are
+    /// dropped. Call it once per frame, before [`Self::draw`].
     pub fn upload_instances(&mut self, queue: &wgpu::Queue, instances: &[QuadInstance]) {
         let count = instances.len().min(self.max_instances as usize);
         if count < instances.len() {
@@ -577,8 +469,8 @@ impl QuadPipeline {
         }
     }
 
-    /// Issue the draw call. Must be called inside an active `wgpu::RenderPass`.
-    /// Call after `upload_instances()`.
+    /// Draws the uploaded instances in `pass`. Call it after
+    /// [`Self::upload_instances`].
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         if self.instance_count == 0 {
             return;
@@ -593,10 +485,10 @@ impl QuadPipeline {
     }
 
     // ---------------------------------------------------------------------------
-    // Atlas write API (M4 text pipeline)
+    // Writing to the main atlas
     // ---------------------------------------------------------------------------
 
-    /// Write a rectangular region of RGBA pixels into one page of `main_atlas`.
+    /// Writes a rectangle of RGBA pixels into one page of `main_atlas`.
     ///
     /// Use this to upload pixels produced by [`FontAtlas::rasterize_text`] or
     /// [`crate::decode_image`], after registering their region via
@@ -643,10 +535,9 @@ impl QuadPipeline {
 
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self._main_atlas,
+                texture: &self.main_atlas,
                 mip_level: 0,
-                // `main_atlas` is a D2Array (M11.2) — origin.z is the array-layer index, not a
-                // depth slice.
+                // `origin.z` is the page (array layer), not a depth.
                 origin: wgpu::Origin3d { x, y, z: page },
                 aspect: wgpu::TextureAspect::All,
             },
@@ -668,7 +559,7 @@ impl QuadPipeline {
     // Transition atlas allocation
     // ---------------------------------------------------------------------------
 
-    /// Allocate a `width × height` region within `transition_atlas`.
+    /// Allocates a `width × height` region in `transition_atlas`.
     ///
     /// Returns `None` if the atlas is full — callers (the transition setup
     /// systems) should fall back to flat-color geometry for that slice rather
@@ -681,9 +572,8 @@ impl QuadPipeline {
         self.transition_allocator.allocate(width, height)
     }
 
-    /// Release a region allocated by [`Self::allocate_transition_region`] back
-    /// to the packer. Call once a transition using it (or the source/target
-    /// bake it held) is fully complete.
+    /// Releases a region allocated by [`Self::allocate_transition_region`].
+    /// Call it once the transition using it has completed.
     pub fn free_transition_region(&mut self, id: crate::TransitionAllocId) {
         self.transition_allocator.free(id);
     }
@@ -692,16 +582,15 @@ impl QuadPipeline {
     // Transition-bake API
     // ---------------------------------------------------------------------------
 
-    /// Render `instances` into a `width × height` sub-region of `main_atlas`,
-    /// preserving the rest of the atlas untouched — a snapshot of one entity's
+    /// Renders `instances` into a `width × height` region of `main_atlas`,
+    /// leaving the rest of the atlas untouched — a snapshot of one entity's
     /// on-screen appearance (shape, border, baked text) that other entities can
     /// then UV-address via [`crate::QuadInstance::uv_offset`]/`uv_scale`.
     ///
-    /// For a *static* texture reference (no crossfade), use this. For a bake
-    /// that a virtual slice will crossfade away from as its own transition
-    /// progresses, use [`Self::bake_instances_to_transition_atlas`] instead —
-    /// the fragment shader's crossfade path only reads `base_uv_offset`/`scale`
-    /// from `transition_atlas`, never `main_atlas`.
+    /// Use it for a lasting texture, such as a component baked with
+    /// `.bake()`. For the short-lived images a split or merge's pieces fade
+    /// between, use [`Self::bake_instances_to_transition_atlas`], whose
+    /// regions are freed when the transition ends.
     ///
     /// See [`Self::bake_instances_to_transition_atlas`] for the full
     /// parameter/behavior docs (scratch-texture rationale, dedicated
@@ -715,7 +604,7 @@ impl QuadPipeline {
         view_projection: glam::Mat4,
         placement: crate::MainAtlasPlacement,
     ) {
-        let dest = self._main_atlas.clone();
+        let dest = self.main_atlas.clone();
         // No gutter here (`pad: 0`) — unlike `transition_allocator`,
         // `MainAtlasAllocator` packs regions with zero reserved margin, so
         // painting a transparent ring beyond the requested region would
@@ -733,19 +622,15 @@ impl QuadPipeline {
         );
     }
 
-    /// Render `instances` into a `width × height` sub-region of
+    /// Renders `instances` into a `width × height` region of
     /// `transition_atlas` — the atlas the fragment shader's crossfade path
     /// reads `base_uv_offset`/`base_uv_scale` from (see `quad.wgsl`:
     /// `if in.crossfade_t > 0.0 { ... transition_atlas ... }`).
     ///
-    /// This is how a 1→N Slice virtual crossfades from an actual crop of the
-    /// source entity's rendered appearance toward its own target state as it
-    /// morphs, instead of either (a) a flat-color geometry-only slice with no
-    /// texture at all, or (b) a static baked texture that never fades: bake
-    /// the source once into `transition_atlas`, point each slice's
-    /// `base_uv_offset`/`scale` at its third of the region, and drive
-    /// `crossfade_t` from the slice's own `ActiveTransition` progress each
-    /// frame (see `proteus_ui::BakedTexture` / `collect.rs`).
+    /// Splits and merges use it so that each piece fades from a slice of the
+    /// source's appearance: the source is baked once, each piece's
+    /// `base_uv_offset` and `base_uv_scale` select its slice, and its
+    /// `crossfade_t` follows its transition (see `proteus_ui::BakedTexture`).
     ///
     /// `view_projection` should be [`Self::ortho_centered`] on the source
     /// entity's own position/size, so its geometry fills the target region
@@ -780,12 +665,11 @@ impl QuadPipeline {
         view_projection: glam::Mat4,
         region: (u32, u32, u32, u32),
     ) {
-        let dest = self._transition_atlas.clone();
-        // `pad`: the allocator (`TransitionAtlasAllocator`) reserved an extra
-        // `TRANSITION_BAKE_PAD`-pixel gutter around `region` in the atlas —
-        // see `bake_instances_to_atlas`'s `pad` doc for why this bake must be
-        // the one to paint it transparent. `dest_layer: 0` — `transition_atlas`
-        // is single-layer, unlike `main_atlas`'s multi-page pool (M11.2).
+        let dest = self.transition_atlas.clone();
+        // `pad`: `TransitionAtlasAllocator` reserved a `TRANSITION_BAKE_PAD`
+        // gutter around `region`, which this bake paints transparent (see
+        // `bake_instances_to_atlas`). `dest_layer: 0`: the transition atlas has
+        // one layer.
         self.bake_instances_to_atlas(
             device,
             queue,
@@ -798,18 +682,14 @@ impl QuadPipeline {
         );
     }
 
-    /// `dest_layer`: destination array layer of `dest_texture`. `main_atlas` is a `D2Array`
-    /// pool (M11.2), so this is its page index; `transition_atlas` is single-layer, so that
-    /// caller always passes 0. Only the `copy_texture_to_texture` destination reads it — the
-    /// scratch render target is always a plain single-layer `D2` texture.
+    /// `dest_layer` is the page of `dest_texture` to write: the main atlas's page
+    /// index, or 0 for the single-layer transition atlas.
     ///
-    /// `pad`: extra transparent gutter (atlas pixels) to reserve and paint
-    /// around `region` on every side, beyond the `region` itself — the
-    /// caller's allocator must already have reserved this space (e.g.
-    /// `TransitionAtlasAllocator` builds it into every allocation); passing a
-    /// nonzero `pad` when the allocator didn't reserve it would overwrite a
-    /// neighboring allocation's edge pixels. `0` for callers (like
-    /// `MainAtlasAllocator`) that pack with no reserved margin.
+    /// `pad` is a transparent gutter, in atlas pixels, painted around `region`.
+    /// The allocator must already have reserved it, as
+    /// `TransitionAtlasAllocator` does; otherwise it would overwrite the edge of
+    /// a neighboring region. `MainAtlasAllocator` reserves none, so its callers
+    /// pass 0.
     #[allow(clippy::too_many_arguments)]
     fn bake_instances_to_atlas(
         &mut self,
@@ -854,8 +734,8 @@ impl QuadPipeline {
 
         // Dedicated bake uniform + instance buffers — never touches
         // `uniform_buffer`/`instance_buffer`, which the main per-frame draw
-        // relies on staying correct between bakes (see their field doc
-        // comments for why sharing them was the wrong call).
+        // relies on staying correct between bakes (see their field
+        // comments).
         let matrix_data: [[f32; 4]; 4] = view_projection.to_cols_array_2d();
         queue.write_buffer(
             &self.bake_uniform_buffer,
@@ -945,23 +825,17 @@ impl QuadPipeline {
     }
 
     // ---------------------------------------------------------------------------
-    // Video texture API (M9)
+    // Video
     // ---------------------------------------------------------------------------
 
-    /// Allocate the video texture slot at `width`×`height` and register it.
+    /// Creates the video texture at `width` × `height` and registers it.
     ///
-    /// Feed it with [`upload_video_frame`], once per render frame while
-    /// playback is live. A host obtains frames however it likes — the
-    /// `VideoStream` seam (M13.4) is the supported route — and this crate
-    /// never owns a decoder or a frame channel of its own.
+    /// Upload frames to it with [`upload_video_frame`]. The app's own player
+    /// decodes the video; `proteus-sdk`'s `VideoHandle` drives these calls.
     ///
-    /// Calling `init_video` a second time replaces the GPU texture.
-    ///
-    /// The new texture is cleared to opaque black immediately — a freshly
-    /// created GPU texture has undefined contents (some backends leave
-    /// leftover VRAM from a previous allocation), so without this the video
-    /// quad would render that garbage, fully opaque, for however long
-    /// playback takes to produce its first real frame.
+    /// Calling it again replaces the texture. The new texture is cleared to
+    /// black, since a new GPU texture's contents are undefined and would show
+    /// until the first frame arrives.
     ///
     /// [`upload_video_frame`]: QuadPipeline::upload_video_frame
     pub fn init_video(
@@ -981,25 +855,14 @@ impl QuadPipeline {
         self.texture_registry.register_video(width, height)
     }
 
-    /// Upload one frame of RGBA pixels to the video texture.
+    /// Uploads one frame of RGBA pixels to the video texture. Call it once per
+    /// frame while video plays, before [`draw`].
     ///
-    /// `rgba` must be exactly `width × height × 4` bytes, where `width` and
-    /// `height` are the dimensions passed to the most recent [`init_video`] call.
-    /// Call this once per render frame while video is playing, before
-    /// [`draw`].
-    ///
-    /// A length mismatch is a caller bug (e.g. a browser-side frame
-    /// pipeline racing with a dimensions change), not a `proteus-render`
-    /// invariant to trust — silently drops the frame (logged) rather than
-    /// handing `wgpu::Queue::write_texture` a buffer that doesn't match
-    /// the declared copy size, which wgpu validates independently of this
-    /// crate's own build profile and can reject harshly (in the browser,
-    /// as an uncaptured GPU error that can lose the whole device — every
-    /// future frame silently stops rendering). A `debug_assert_eq!` alone
-    /// isn't enough here specifically because `wasm-pack build` defaults
-    /// to `--release`, which compiles debug-only asserts out entirely, so
-    /// this exact bug would be invisible until it reached wgpu itself in
-    /// the one build that actually ships.
+    /// `rgba` must be `width × height × 4` bytes, for the size given to the last
+    /// [`init_video`]. A frame of the wrong size is dropped and logged, not
+    /// passed to wgpu, which could reject it harshly: in a browser, by losing
+    /// the GPU device. This is checked in release builds too, since the web
+    /// package is built in release mode.
     ///
     /// [`init_video`]: QuadPipeline::init_video
     /// [`draw`]: QuadPipeline::draw
@@ -1034,7 +897,8 @@ impl QuadPipeline {
         );
     }
 
-    /// Release the video texture GPU memory (e.g., when the app is backgrounded).
+    /// Releases the video texture's GPU memory, for example when the app is
+    /// in the background.
     ///
     /// Replaces the full-resolution `video_atlas` with a 1×1 black placeholder,
     /// freeing the bulk of GPU memory used by the video.  The [`TextureId`]
@@ -1050,15 +914,12 @@ impl QuadPipeline {
         self.texture_registry.mark_suspended(id);
     }
 
-    /// Re-allocate the video texture after [`suspend_video`].
+    /// Creates the video texture again after [`suspend_video`], and rebuilds
+    /// the bind group. [`TextureRegistry::is_active`] is `true` again after
+    /// this; upload frames straight away.
     ///
-    /// Creates a fresh texture at the given resolution and rebuilds the bind
-    /// group.  [`TextureRegistry::is_active`] returns `true` again after this
-    /// call.  Upload frames immediately afterward.
-    ///
-    /// No in-tree caller yet: M11 shipped the suspend/resume pair as a
-    /// callable API, but the OS-signal wiring that would drive it on a
-    /// real backgrounding event is Post-V1 (see `ROADMAP.md`).
+    /// Nothing calls it yet: it is for resuming when an app returns from the
+    /// background.
     ///
     /// [`suspend_video`]: QuadPipeline::suspend_video
     pub fn resume_video(&mut self, device: &wgpu::Device, id: TextureId, width: u32, height: u32) {
@@ -1076,7 +937,8 @@ impl QuadPipeline {
     ///
     /// - Origin at viewport center, Y-up, 1 unit = 1 pixel.
     /// - Depth range: Z 0 → 1000 maps to NDC 0 → 1 (wgpu convention).
-    /// - DPI scaling should be applied by the caller: pass physical pixels, not logical ones.
+    /// - Pass the viewport's size in logical pixels: one unit is one logical
+    ///   pixel, and the surface's scale factor doesn't affect it.
     pub fn ortho(width: f32, height: f32) -> glam::Mat4 {
         Self::ortho_centered(0.0, 0.0, width, height)
     }
@@ -1107,7 +969,7 @@ impl QuadPipeline {
     // Internal helpers
     // ---------------------------------------------------------------------------
 
-    /// Build a quad render pipeline targeting `color_format`. Used to create
+    /// Builds a quad render pipeline targeting `color_format`. Used to create
     /// both `pipeline` (swapchain format) and `atlas_pipeline` (`main_atlas`'s
     /// `Rgba8Unorm` format) from identical shader/layout/vertex state — see
     /// the field doc comments on `QuadPipeline::atlas_pipeline` for why two
@@ -1132,12 +994,9 @@ impl QuadPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    // Premultiplied alpha blending: 1 * src + (1 - src_alpha) * dst.
-                    // `fs_main` outputs premultiplied color (see its final `return`
-                    // and the `unpremultiply` doc comment in quad.wgsl) — this must
-                    // match, or a fully-opaque fragment would render correctly but
-                    // any partial-alpha fragment would blend wrong. Numerically
-                    // identical to the old `ALPHA_BLENDING` for opaque content.
+                    // Premultiplied alpha: src + (1 - src_alpha) * dst. `fs_main`
+                    // outputs premultiplied color, so this must match, or
+                    // partly transparent fragments would blend wrongly.
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -1152,7 +1011,7 @@ impl QuadPipeline {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None, // Z ordering via instance sort order for now
+            depth_stencil: None, // Z order comes from instance order
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -1172,7 +1031,7 @@ impl QuadPipeline {
         })
     }
 
-    /// Create a blank RGBA video texture of the given dimensions.
+    /// Creates a blank RGBA video texture of the given size.
     fn create_video_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("video_atlas"),
@@ -1184,21 +1043,21 @@ impl QuadPipeline {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // Linear (not sRGB) to match main_atlas and transition_atlas, avoiding
-            // brightness discontinuity when morphing between them at crossfade endpoints.
+            // Not sRGB, like the other atlases, so brightness doesn't jump when
+            // fading between them.
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         })
     }
 
-    /// Rebuild the atlas bind group (group 1) after `video_atlas` has changed.
+    /// Rebuilds the atlas bind group (group 1) after `video_atlas` has changed.
     ///
     /// This is called by [`init_video`], [`suspend_video`], and [`resume_video`]
     /// whenever the video texture is swapped for a different allocation.
     fn rebuild_atlas_bind_group(&mut self, device: &wgpu::Device) {
-        let main_view = Self::create_main_atlas_view(&self._main_atlas);
-        let transition_view = self._transition_atlas.create_view(&Default::default());
+        let main_view = Self::create_main_atlas_view(&self.main_atlas);
+        let transition_view = self.transition_atlas.create_view(&Default::default());
         let video_view = self.video_atlas.create_view(&Default::default());
 
         self.atlas_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1225,19 +1084,15 @@ impl QuadPipeline {
         });
     }
 
-    /// Create `main_atlas` (a `config.page_count`-layer `D2Array` pool, M11.2) and
-    /// `transition_atlas`, and fill the reserved guard block at the origin of `main_atlas`'s
-    /// **layer 0 only** with white — [`QuadPipeline::WHITE_PIXEL_UV_OFFSET`] and the default
-    /// `atlas_page` (`pack_atlas_page(ATLAS_SELECTOR_MAIN, 0)`, i.e. plain `0`) both hard-code
-    /// that fixed location, so it must never move even though `main_atlas` now has more than
-    /// one layer. Components with no texture sample it so their `color` field alone determines
-    /// their appearance with no shader branching.
+    /// Creates the main atlas, with `config.page_count` pages, and the
+    /// transition atlas, and fills the white guard block at the origin of the
+    /// main atlas's page 0.
     ///
-    /// The whole [`crate::main_atlas_allocator::WHITE_PIXEL_GUARD_SIZE`] block is written, not
-    /// just one texel: that region is reserved from the allocator anyway (nothing else can ever
-    /// be packed there), so filling it costs nothing and makes "the neighbourhood of the atlas
-    /// origin is white" true by construction rather than by the sample point landing on exactly
-    /// the right texel — see [`QuadPipeline::WHITE_PIXEL_UV_OFFSET`]'s own note.
+    /// [`QuadPipeline::WHITE_PIXEL_UV_OFFSET`] and the default atlas page both
+    /// point there, so it must never move. Components with no texture sample it,
+    /// so their color alone decides how they look. The whole
+    /// [`crate::main_atlas_allocator::WHITE_PIXEL_GUARD_SIZE`] block is filled,
+    /// not one texel, since nothing else can be placed there anyway.
     fn create_atlases(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

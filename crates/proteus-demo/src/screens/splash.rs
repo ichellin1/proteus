@@ -1,19 +1,15 @@
 //! The Splash screen — the demo's entry point. Auto-advances to `Home`
-//! after a hold timer once spawned; no click-driven navigation (the
-//! original demo has no reverse edge back to Splash — see PLANNING.md's
-//! M12.5 research).
+//! after a hold timer once spawned. Nothing navigates back to it.
 //!
-//! Built in three staged passes: the real animated logo mark (light
-//! treatment, 19-frame loop) and a Brand Spec wordmark; then the intro
-//! fade/slide-in (`Demo::advance_intro`), which also delays the hold
-//! countdown until it settles; then the light/dark theme toggle and
-//! full-window background image, which are app-wide systems rather than
-//! Splash's own content and live in `screens::theme` / `screens::background`.
+//! It shows the animated logo mark (a 19-frame loop) beside the "PROTEUS"
+//! wordmark, and fades and slides them in (`Demo::advance_intro`); the hold
+//! countdown starts once the intro settles. The light/dark theme toggle and
+//! the full-window background image are app-wide rather than part of
+//! Splash, so they live in `screens::theme` and `screens::background`.
 //!
-//! Frame baking/cycling: loading the 19 PNGs and registering them into
-//! `main_atlas` is shell-only asset I/O (same convention as `Text`/`Image`
-//! baking — see the crate-root doc), done once at startup via
-//! [`crate::Demo::set_logo_frames`]. Cycling *which* already-baked frame is
+//! Frame baking/cycling: `DemoApp` loads the 19 PNGs into the atlas once at
+//! startup, since `Demo` has no asset access (see the crate-root doc), and
+//! hands them over with [`crate::Demo::set_logo_frames`]. Cycling *which* already-baked frame is
 //! shown each tick is ordinary app state, so that part lives in
 //! `Demo::advance_logo_animation`, not here.
 
@@ -35,10 +31,10 @@ pub const INTRO_SLIDE_DISTANCE_PX: f32 = 250.0;
 /// before auto-advancing to Home.
 pub const HOLD_SECS: f32 = 1.5;
 
-/// The Brand Spec's suggested playback rate (~11fps).
+/// Seconds per logo frame: about 11 frames per second.
 pub const LOGO_FRAME_DURATION: f32 = 0.09;
 
-/// Brand Spec violet.
+/// The brand violet.
 fn violet() -> Vec4 {
     Vec4::new(115.0 / 255.0, 90.0 / 255.0, 204.0 / 255.0, 1.0)
 }
@@ -58,7 +54,7 @@ const WORDMARK_TEXT: &str = "PROTEUS";
 /// (via `COMPOSITE_SCALE`),
 /// crisper than rasterizing directly at the smaller size.
 const WORDMARK_SIZE_PX: f32 = 90.0;
-/// Brand Spec: "letter-spacing 0.06em" — 0.06 × font size.
+/// Letter spacing of 0.06 × the font size (0.06em).
 const WORDMARK_LETTER_SPACING_PX: f32 = WORDMARK_SIZE_PX * 0.06;
 /// Gap between the mark's right edge and the wordmark's left edge.
 const WORDMARK_GAP_PX: f32 = 65.0;

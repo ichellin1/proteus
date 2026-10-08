@@ -4,11 +4,11 @@
 // Renders every visible component in one instanced draw call.
 //
 // Bind group 0:  uniform buffer   — view/projection matrix (one upload per frame)
-// Bind group 1:  main_atlas       — long-lived textures (images, static bakes); a multi-page
-//                                   D2Array pool since M11.2 (see ATLAS_PAGE_SHIFT below)
+// Bind group 1:  main_atlas       — long-lived textures (text, images, baked components);
+//                                   an array texture with one layer per page (see ATLAS_PAGE_SHIFT)
 //                transition_atlas — ephemeral bakes for in-flight transitions
 //                atlas_sampler    — shared linear sampler
-//                video_atlas      — streaming per-frame video texture (M9)
+//                video_atlas      — the video, updated each frame
 //
 // Vertex buffer 0:  QuadVertex   — base unit quad, 4 vertices, step per vertex
 // Vertex buffer 1:  QuadInstance — per-component data, step per instance
@@ -38,9 +38,8 @@ struct Uniforms {
 //   bits  8..31 — which main_atlas array layer ("page"). Meaningful only when the selector
 //                 is 0; transition_atlas and video_atlas are single-layer textures.
 //
-// Packing rather than a 17th vertex attribute: the instance layout is already at 16 of 16
-// locations (see mesh.rs's QuadInstance::buffer_layout). pack(selector, 0) == selector, so
-// every pre-M11.2 instance value is bit-identical.
+// Packed, rather than a 17th vertex attribute, because all 16 locations are in use (see
+// mesh.rs's QuadInstance::buffer_layout). pack(selector, 0) == selector.
 // ---------------------------------------------------------------------------
 const ATLAS_SELECTOR_MASK: u32 = 0xFFu;
 const ATLAS_PAGE_SHIFT:    u32 = 8u;
@@ -50,8 +49,8 @@ const ATLAS_PAGE_SHIFT:    u32 = 8u;
 // Vertex stage
 // ---------------------------------------------------------------------------
 
-// QuadInstance fields are packed into fewer attribute locations to stay under
-// the Metal/wgpu limit of 16 total vertex attributes (2 vertex + 13 instance = 15).
+// QuadInstance fields are packed into fewer attribute locations to stay within
+// the Metal/wgpu limit of 16 vertex attributes: 2 vertex + 14 instance = 16.
 //
 // Packed fields are unpacked at the top of vs_main with named locals.
 struct VertexIn {
@@ -59,7 +58,7 @@ struct VertexIn {
     @location(0) position:             vec2<f32>,
     @location(1) uv:                   vec2<f32>,
 
-    // QuadInstance — locations 2–14, step per instance
+    // QuadInstance — locations 2–15, step per instance
     @location(2)  inst_position:       vec3<f32>,
     // .xy = size, .z = rotation (radians), .w = scale
     @location(3)  inst_size_rot_scale: vec4<f32>,
@@ -113,7 +112,7 @@ struct VertexOut {
     @location(10)                    border_offset:   f32,
     @location(11) @interpolate(flat) atlas_page:      u32,  // flat — no interpolation for integers
 
-    // Drop shadow / Glow (M8 / M8.6)
+    // Drop shadow / glow
     @location(12)                    shadow_params:   vec4<f32>, // (offset_x, offset_y, softness, spread)
     @location(13)                    shadow_color:    vec4<f32>, // RGBA; alpha == 0.0 = no shadow
 
@@ -186,10 +185,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let world = vec4(rotated + in.inst_position.xy, in.inst_position.z, 1.0);
     out.clip_position = uniforms.view_projection * world;
 
-    // local_pos is the inflated centered position — the actual pixel coordinate
-    // relative to the component center.  For fragments inside the main shape this
-    // behaves exactly as before; for shadow-only fragments (|local_pos| > half_size)
-    // the shadow SDF in fs_main takes over.
+    // local_pos is the inflated centered position: the pixel coordinate relative
+    // to the component center. Fragments inside the main shape use it as is; for
+    // shadow-only fragments (|local_pos| > half_size) the shadow SDF in fs_main
+    // takes over.
     out.local_pos = centered;
     out.half_size = half;
 
@@ -230,20 +229,15 @@ fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
     return length(max(q, vec2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
-// All three atlases store premultiplied-alpha pixels (main_atlas: premultiplied
-// at CPU upload time in `QuadPipeline::write_to_main_atlas`; transition_atlas:
-// premultiplied by this same shader's premultiplied `fs_main` output, since it's
-// only ever populated by baking through this pipeline; video_atlas: always
-// alpha=1, so premultiplied/straight are identical there). This is what makes
-// `atlas_sampler`'s hardware bilinear filtering correct at partial-alpha texels
-// (e.g. antialiased edges in a decoded PNG with real per-pixel transparency) —
-// filtering straight (non-premultiplied) RGBA linearly is undefined/incorrect
-// wherever alpha varies between neighboring texels, producing dark or light
-// fringing depending on what "don't care" RGB a source image happened to store
-// at fully-transparent pixels. Un-premultiply immediately after sampling so
-// every existing straight-alpha calculation below (tint, crossfade mix, border,
-// shadow) is unaffected — this is a no-op for alpha ∈ {0, 1}, which is all any
-// content used before real per-pixel-transparent images existed.
+// All three atlases hold premultiplied-alpha pixels: the main atlas is
+// premultiplied on upload (`QuadPipeline::write_to_main_atlas`), the transition
+// atlas is written by this shader's premultiplied output, and video is always
+// opaque. Premultiplied pixels are what make the sampler's bilinear filtering
+// correct where alpha varies between texels, such as a PNG's antialiased
+// edges; filtering straight alpha gives dark or light fringes. Samples are
+// un-premultiplied straight away, so the straight-alpha math below (tint,
+// crossfade, border, shadow) is unchanged. For alpha 0 or 1 this does
+// nothing.
 fn unpremultiply(c: vec4<f32>) -> vec4<f32> {
     if c.a <= 0.0001 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -280,22 +274,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // 1-pixel antialiased edge. edge_alpha → 0 as dist → +1 (outside the shape).
     let edge_alpha = 1.0 - smoothstep(-1.0, 1.0, dist);
 
-    // Shadow/glow is meant to bleed outward past the main shape's edge (the
-    // halo for Glow, the offset/spread blob for DropShadow) — never as a
-    // solid backing filling the shape's own interior. `shadow_alpha`'s
-    // smoothstep only tapers *near* shadow_dist == 0; deep inside (shadow_dist
-    // very negative — true for the entire interior whenever Glow's spread is
-    // 0, since its shadow shape then coincides with the main one) it plateaus
-    // at a roughly-constant value instead of fading with depth. That plateau
-    // was always there but never visible: it sat *underneath* fully-opaque
-    // main content on every component before real per-pixel-transparent
-    // images existed. A textured quad with genuine holes (e.g. the animated
-    // logo's hatch gaps) exposes it — without this mask, a transparent gap
-    // deep inside the shape shows the shadow/glow color instead of whatever
-    // is actually behind the component. Masking with the same 1px
-    // antialiasing width as `edge_alpha` leaves the exterior bleed-out
-    // (dist > 1) completely unaffected.
+    // A shadow or glow should only extend outward from the shape, not fill
+    // it. But `shadow_alpha` stays roughly constant deep inside the shape
+    // (always, for a glow with no spread), which shows through wherever a
+    // texture is transparent inside the shape, such as gaps in an image.
+    // Masking it with the same 1-pixel edge as `edge_alpha` removes it inside
+    // and leaves the outside unchanged.
     shadow_alpha *= smoothstep(-1.0, 1.0, dist);
+
+    // Opacity fades the whole component: the fill below, the border, and the
+    // shadow or glow here.
+    shadow_alpha *= in.opacity;
 
     // Discard fragments where neither the shadow nor the main shape contribute.
     if edge_alpha <= 0.0 && shadow_alpha <= 0.0 {
@@ -322,8 +311,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // has position.y=+0.5 and uv.y=0.0; the bottom-left has position.y=-0.5
         // and uv.y=1.0.
         //
-        // For the white-pixel sentinel (uv_scale == 0) this collapses to
-        // `uv_offset + 0` — identical to the previous vertex-interpolated result.
+        // For the white pixel (uv_scale == 0) this is just `uv_offset`.
         let safe_half    = max(in.half_size, vec2(0.5, 0.5)); // guard against 0-size entities
         let norm_uv_raw  = (in.local_pos + safe_half) / (safe_half * 2.0);
         let norm_uv      = clamp(
@@ -337,9 +325,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
         // Texture sampling.
         // Primary texture: the low bits of atlas_page select which atlas; for main_atlas the
-        // high bits additionally select which array layer of the multi-page pool (M11.2).
-        // Components without a texture point at a 1×1 white pixel baked into main_atlas
-        // layer 0 at init, so the color tint alone determines their appearance with no branching.
+        // high bits select the page (array layer).
+        // Components without a texture sample the white block at the origin of main_atlas
+        // layer 0, so the color tint alone decides how they look, with no branch.
         // textureSampleLevel (LOD 0) is used instead of textureSample because both
         // branches vary per-instance (non-uniform control flow). textureSample requires
         // implicit derivatives, which are undefined in non-uniform control flow per the
@@ -354,19 +342,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         } else if atlas_selector == 1u {
             tex_color = textureSampleLevel(transition_atlas, atlas_sampler, atlas_uv, 0.0);
         } else {
-            // selector == 2: streaming video texture (M9)
+            // selector == 2: the video
             tex_color = textureSampleLevel(video_atlas,      atlas_sampler, atlas_uv, 0.0);
         }
         tex_color = unpremultiply(tex_color);
 
-        // Crossfade: blend from-state into to-state. base_atlas_page selects
-        // which atlas the from-state samples from — independent of the
-        // to-state's atlas_page above. Almost always transition_atlas (the
-        // baked-slice crossfade's from-side), but a live video↔box-art
-        // crossfade (M9.8) needs the from-side pinned to main_atlas while the
-        // to-side streams from video_atlas every frame — snapshotting live
-        // video into a static bake would freeze it mid-transition.
-        // When crossfade_t == 0.0 this branch is skipped entirely.
+        // Crossfade: blend from the start image to the end image.
+        // base_atlas_page selects the start image's atlas, independently of
+        // atlas_page. It is usually the transition atlas, for a split's slices,
+        // but fading an image into playing video needs the main atlas for the
+        // start and the video atlas for the end, so the video keeps playing.
+        // Skipped when crossfade_t == 0.0.
         if in.crossfade_t > 0.0 {
             let base_selector = in.base_atlas_page & ATLAS_SELECTOR_MASK;
             let base_layer    = in.base_atlas_page >> ATLAS_PAGE_SHIFT;
@@ -391,7 +377,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // Border (SDF-based).
         // Zero cost when border_width == 0.0 — the branch is never entered.
         //
-        // LIMITATION (M4+): only inner borders (border_offset = -1.0) render correctly.
+        // LIMITATION: only inner borders (border_offset = -1.0) render correctly.
         // border_offset = 0.0 (centered) shows only the inner half of the band.
         // border_offset = 1.0 (outer) renders nothing: fragments beyond the rect edge
         // are never rasterized, and edge_alpha goes to zero right at the boundary.
@@ -405,13 +391,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let border_dist   = abs(dist - border_center) - half_w;
             let border_alpha  = (1.0 - smoothstep(-1.0, 1.0, border_dist)) * edge_alpha;
 
-            // Composite border over fill using standard alpha blending.
-            let b      = in.border_color;
-            let b_a    = b.a * border_alpha;
-            main_color = vec4(
-                mix(main_color.rgb, b.rgb, b_a),
-                max(main_color.a, b_a),
-            );
+            // Composite the border over the fill: Porter-Duff "over", straight
+            // alpha, as for the shadow below. Over an opaque fill this is
+            // `mix(fill, border, b_a)`; over a transparent or translucent
+            // fill, the border keeps its own alpha.
+            let b     = in.border_color;
+            let b_a   = b.a * border_alpha * in.opacity;
+            let fill  = main_color;
+            let out_a = b_a + fill.a * (1.0 - b_a);
+            var out_rgb = vec3<f32>(0.0);
+            if out_a > 0.0 {
+                out_rgb = (b.rgb * b_a + fill.rgb * fill.a * (1.0 - b_a)) / out_a;
+            }
+            main_color = vec4(out_rgb, out_a);
         }
     }
 
@@ -420,8 +412,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     //   result.a   = main.a + shadow.a * (1 − main.a)
     //   result.rgb = (main.rgb × main.a + shadow.rgb × shadow.a × (1 − main.a)) / result.a
     //
-    // When there is no shadow (shadow_alpha == 0) this collapses to returning
-    // main_color unchanged — identical to the pre-M8 behavior.
+    // With no shadow (shadow_alpha == 0) this returns main_color unchanged.
     let src_a = main_color.a;
     let dst_a = shadow_alpha;
     let out_a = src_a + dst_a * (1.0 - src_a);
@@ -430,11 +421,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         out_rgb = (main_color.rgb * src_a + in.shadow_color.rgb * dst_a * (1.0 - src_a)) / out_a;
     }
 
-    // Output premultiplied — the pipeline's color target blend state is
-    // `PREMULTIPLIED_ALPHA_BLENDING` (see `pipeline.rs::build_render_pipeline`),
-    // matching the premultiplied convention every atlas is stored in (see
-    // `unpremultiply`'s doc comment above). For any fully-opaque fragment
-    // (out_a == 1, true of every draw before per-pixel-transparent images
-    // existed) this is numerically identical to the old straight-alpha output.
+    // Output premultiplied alpha, to match the pipeline's blend state
+    // (`PREMULTIPLIED_ALPHA_BLENDING`, see `pipeline.rs::build_render_pipeline`)
+    // and the atlases. For an opaque fragment it is the same as straight
+    // alpha.
     return vec4(out_rgb * out_a, out_a);
 }

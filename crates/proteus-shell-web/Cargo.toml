@@ -1,6 +1,6 @@
 [package]
 name = "proteus-shell-web"
-description = "Layer 3: WebGL2/WebGPU WASM shell (reference demo)"
+description = "Runs the Proteus reference demo on a web page."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,21 +11,26 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# M13.4 step 4b: this crate collapsed to just DemoApp wiring — texture
-# churn, the gallery, and now video (real <video>/MediaSource playback,
-# moved into proteus-host-web's own hls_video module) all moved off the
-# shell and onto the real Frame/HostServices contract. All platform glue
-# (canvas/wgpu setup, rAF loop, DPI, resize, Pointer Events, visibility-
-# pause, context-loss) already lived in proteus-host-web since M13.2.
+# Everything but the settings and the asset download lives elsewhere: the
+# canvas, GPU, frame loop and input in proteus-host-web, and the demo itself
+# in proteus-demo.
 proteus-demo = { path = "../proteus-demo" }
 proteus-host-web = { path = "../proteus-host-web" }
 proteus-runtime = { path = "../proteus-runtime" }
 wasm-bindgen = { workspace = true }
-# Not referenced by name in src/, but a real dependency of wasm-bindgen's own
-# macro-generated glue for `async fn` exports (`start`) — confirmed by the
-# pre-M13.2 shell hitting `cannot find module or crate` at the macro
-# expansion site without it.
+# Not referenced by name in src/, but the code wasm-bindgen generates for an
+# `async fn` export (`start`) needs it; without it the build fails with
+# "cannot find module or crate".
 wasm-bindgen-futures = { workspace = true }
 log = { workspace = true }
 wasm-logger = { workspace = true }
 console_error_panic_hook = { workspace = true }
+# The demo's HLS video player, src/video_player.rs: a <video> element fed
+# through MediaSource, and canvas readback of each frame.
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Window", "Document", "Element", "HtmlElement", "HtmlVideoElement", "HtmlMediaElement",
+    "HtmlCanvasElement", "CssStyleDeclaration", "MediaSource", "MediaSourceReadyState",
+    "SourceBuffer", "Url", "CanvasRenderingContext2d", "ImageData", "Node", "Event",
+    "Request", "RequestInit", "Response", "AbortController", "AbortSignal",
+] }

@@ -1,46 +1,58 @@
-//! `proteus-runtime` — Layer 2.75: the engine that binds headless
-//! [`proteus_sdk::Proteus`] to a GPU surface (M13.1).
+//! Runs a Proteus app on a GPU surface: the contract between an app and the
+//! host that runs it.
 //!
-//! Everything through M12 left rendering *outside* the framework: the
-//! `proteus-ui` schedule's render stage is a stub, and the real per-frame
-//! loop (bake pending `Text`/`Image` → `collect_instances` → draw → present)
-//! was hand-written and duplicated in `proteus-shell-native` and
-//! `proteus-shell-web`, each welded 1:1 to a concrete `Demo`. This crate
-//! breaks that apart into three contracts, plus a host crate per platform:
+//! | Type | Role |
+//! |---|---|
+//! | [`App`] | What an application implements: `setup` once, `update` every frame |
+//! | [`Engine`] | Owns the [`Proteus`] app state and the [`Renderer`], and runs one frame at a time |
+//! | [`Renderer`] | Bakes pending text and images, then draws everything in one pass |
+//! | [`HostServices`] | Loads assets and fetches data for the app, per platform |
+//! | [`ProteusConfig`] | Engine settings: memory, rendering, frame timing and more |
 //!
-//! ```text
-//! Renderer       the render primitive — bake + collect + one draw pass into a handed-in target
-//! Engine         owns Proteus + Renderer; one `frame()` = App::update → Proteus::tick → Renderer::render
-//! App            what an application implements — `setup()` once, `update()` per frame
-//! HostServices   per-platform asset fulfilment, handed to the App through `Frame`
+//! A host is a crate rather than a trait: it owns the window or canvas, the GPU
+//! surface (see [`GpuSurface`]), the platform's event loop, input and the
+//! viewport, and provides its own `run` function. `proteus-host-winit` and
+//! `proteus-host-web` are the two hosts. The host owns the [`Engine`], which
+//! owns the [`Proteus`] state; the app owns only its own data.
+//!
+//! This crate re-exports what a host needs from the layers below it, including
+//! `wgpu` and `glam`, so a host can depend on `proteus-runtime` alone.
+//!
+//! # Examples
+//!
+//! An app with one button that grows when it's clicked. A host runs it:
+//! `proteus_host_winit::run` natively, or `proteus_host_web::run` on the web.
+//!
 //! ```
+//! use proteus_runtime::glam::Vec2;
+//! use proteus_runtime::{App, Frame};
+//! use proteus_sdk::{ComponentSpec, QuadState, TransitionConfig};
 //!
-//! A *host* is a crate, not a trait: it owns the surface/GPU (see
-//! [`GpuSurface`]), the platform's native loop, input translation and the
-//! viewport, and exposes its own `run()`. M13.1 sketched a `Host` trait for
-//! this, but nothing ever dispatched through it — `Engine::new`/`frame` take
-//! `device`/`queue`/`surface_format`/`viewport` as plain arguments, and the
-//! web host never implemented it at all — so it was dropped rather than kept
-//! as decoration.
+//! struct GrowingButton;
 //!
-//! Ownership after M13.1 is **host → [`Engine`] → [`proteus_sdk::Proteus`]**;
-//! the application owns only its own state and is a `dyn App` the engine
-//! calls into.
-//!
-//! See `PLANNING.md` § M13.1 for the full design and the decisions behind it.
-//!
-//! ## Status: M13.5 — `ProteusConfig`'s shape locked
-//!
-//! `ProteusConfig` is now the single nested config surface (`memory` /
-//! `render` / `frame` / `input` / `transitions` / `text` / `resources` /
-//! `debug` — see [`config`]). Wired in this pass: all of `memory`,
-//! `render.{clear_color,present_mode,power_preference}`, and
-//! `frame.dt_clamp_secs`. Everything else is a real, documented field with a
-//! safe default, plumbed in incrementally as later milestones touch that
-//! area.
+//! impl App for GrowingButton {
+//!     fn setup(&mut self, f: &mut Frame) {
+//!         let small = QuadState {
+//!             size: Vec2::new(160.0, 48.0),
+//!             ..QuadState::default()
+//!         };
+//!         let large = QuadState {
+//!             size: Vec2::new(320.0, 96.0),
+//!             ..small.clone()
+//!         };
+//!         let button = f.proteus.component(ComponentSpec::new(small));
+//!         button.on_click(f.proteus, move |app| {
+//!             let _ = button.animate_to(app, large.clone(), TransitionConfig::default());
+//!         });
+//!     }
+//! }
+//! ```
+
+#![warn(missing_docs)]
 
 mod app;
 mod bake;
+/// [`ProteusConfig`] and its sections.
 pub mod config;
 mod config_dto;
 mod engine;
@@ -48,27 +60,23 @@ mod renderer;
 mod services;
 mod viewport;
 
-pub use app::{App, Frame, PlayingVideo};
-pub use config::ProteusConfig;
+pub use app::{App, Frame};
+pub use config::{Allowed, ConfigError, ProteusConfig};
 pub use config_dto::ProteusConfigDto;
 pub use engine::Engine;
-/// Re-exported so a host can check a config *before* handing it to
-/// [`Renderer::new`], which asserts. A host taking config from outside the
-/// binary — `mount`'s JS caller, say — wants a reportable error, not an
-/// abort.
-pub use proteus_render::{validate_atlas_config, validate_render_config};
-/// Re-exported from `proteus-sdk`, where the type now lives: how a texture
-/// should be packed is app-authoring, not host-services. Hosts and apps keep
-/// naming it through `proteus_runtime`.
+/// Re-exported so a host can check a config before passing it to
+/// [`Renderer::new`], which panics on an invalid one. A host that takes config
+/// from outside the program, such as `mount` from JavaScript, reports an error
+/// instead.
+pub use proteus_render::FontError;
+/// Re-exported from `proteus-sdk`.
 pub use proteus_sdk::TextureRequest;
 pub use renderer::Renderer;
-pub use services::{FetchId, FetchResult, HostServices, VideoFrame, VideoStream};
+pub use services::{FetchId, FetchResult, FetchTracker, HostServices};
 pub use viewport::{Insets, Viewport};
 
-// Re-exported so a host crate can depend on `proteus-runtime` alone and
-// still name the handful of lower-layer types it legitimately touches —
-// including `wgpu` and `glam` at the exact versions this crate builds
-// against, so a host can never drift onto a mismatched copy.
+// Re-exported so a host can depend on `proteus-runtime` alone, and uses the
+// same `wgpu` and `glam` versions this crate does.
 pub use glam;
 pub use proteus_gpu::{GpuError, GpuSurface, SurfaceRequest};
 pub use proteus_sdk::{Proteus, TextureHandle};

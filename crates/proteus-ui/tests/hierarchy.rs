@@ -1,32 +1,14 @@
-//! M10 component composition & hierarchy regression tests.
-//!
-//! Pure `resolve_world_position` math (translation/rotation/scale composition,
-//! multi-level chains) is covered by unit tests in `proteus-ui/src/hierarchy.rs`
-//! itself. These integration tests exercise the same behavior through the full
-//! `ProteusWorld` schedule — cascading visibility/opacity, hierarchy
-//! construction/teardown, rendering, hit-testing, and independent child
-//! transitions all running together, the way a real application would use them.
-//!
-//! ## Test matrix
-//!
-//! | Test | What it guards |
-//! |---|---|
-//! | `child_of_populates_children` | `ChildOf`/`Children` wiring sanity |
-//! | `despawning_parent_despawns_child` | No entity leaks on parent destroy |
-//! | `visibility_cascade_hidden_parent_hides_child` | Hidden parent ⇒ child `EffectiveVisibility` false regardless of its own declaration |
-//! | `visibility_cascade_visible_parent_hidden_child_only_affects_that_child` | Sibling unaffected |
-//! | `opacity_cascade_multiplies_down_chain` | Parent × child opacity composes |
-//! | `opacity_cascade_defaults_to_one_when_undeclared` | Missing `Opacity` = 1.0 at every level |
-//! | `collect_instances_positions_child_at_composed_world_offset` | End-to-end render position |
-//! | `child_transitions_independently_of_parent` | Parent + child each mid-lerp, independently |
-//! | `interactable_child_hit_tests_at_world_position` | Hit-testing uses resolved world position |
+// Tests of parents and children through the full `ProteusWorld` schedule:
+// visibility and opacity cascading, creating and destroying hierarchies,
+// drawing, hit testing, and children transitioning on their own. The world
+// position math itself is unit-tested in `src/hierarchy.rs`.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_ui::{
-    collect_instances, linear, transition::TransitionConfig, EffectiveOpacity, EffectiveVisibility,
+    collect_instances, transition::TransitionConfig, Easing, EffectiveOpacity, EffectiveVisibility,
     Interactable, InteractionEvents, Opacity, PointerInput, ProteusWorld, QuadState,
     TransitionRequest, Visibility,
 };
@@ -73,10 +55,8 @@ fn child_of_populates_children() {
     assert_eq!(&**children, &[child]);
 }
 
-/// bevy_ecs's `ChildOf`/`Children` relationship despawns descendants
-/// recursively when the parent is despawned — verifying this directly since
-/// it's the mechanism M10's "no entity leaks on parent destroy" DoD item
-/// relies on rather than a hand-rolled cleanup system.
+// Destroying a parent destroys its descendants, through bevy_ecs's
+// `ChildOf`/`Children`; nothing else cleans them up, so check it directly.
 #[test]
 fn despawning_parent_despawns_child() {
     let mut world = World::new();
@@ -198,9 +178,9 @@ fn opacity_cascade_defaults_to_one_when_undeclared() {
 // End-to-end rendering
 // ---------------------------------------------------------------------------
 
-/// A child's local `QuadState` is relative to its parent — `collect_instances`
-/// must resolve it to the composed world position before emitting a
-/// `QuadInstance`, not the raw local offset.
+// A child's local `QuadState` is relative to its parent — `collect_instances`
+// must resolve it to the composed world position before emitting a
+// `QuadInstance`, not the raw local offset.
 #[test]
 fn collect_instances_positions_child_at_composed_world_offset() {
     let mut world = ProteusWorld::new();
@@ -222,13 +202,13 @@ fn collect_instances_positions_child_at_composed_world_offset() {
     );
 }
 
-/// `collect_instances` must emit a child's instance *after* its parent's, so
-/// the child draws on top (the "last pushed = on top" convention the whole
-/// render pipeline relies on) — regardless of whichever order the ECS's own
-/// archetype storage happens to iterate entities in. A handful of unrelated
-/// root entities with varied component combinations (mimicking a Text-bearing
-/// button, a plain quad, etc.) are interspersed to guard against a future
-/// regression back to a flat, iteration-order-dependent collection.
+// `collect_instances` must emit a child's instance *after* its parent's, so
+// the child draws on top (the "last pushed = on top" convention the whole
+// render pipeline relies on) — regardless of whichever order the ECS's own
+// archetype storage happens to iterate entities in. A handful of unrelated
+// root entities with varied component combinations (like a button with text,
+// or a plain quad) are mixed in, so an order that depends on ECS iteration
+// would show.
 #[test]
 fn collect_instances_draws_child_after_parent() {
     let mut world = ProteusWorld::new();
@@ -266,10 +246,10 @@ fn collect_instances_draws_child_after_parent() {
 // Independent transitions
 // ---------------------------------------------------------------------------
 
-/// A parent mid-transition and a child mid-*independent* transition must each
-/// progress on their own — and the child's rendered position must compose the
-/// parent's *current* (mid-lerp) world position with the child's own current
-/// (also mid-lerp) local offset, not either one in isolation.
+// A parent mid-transition and a child mid-*independent* transition must each
+// progress on their own — and the child's rendered position must compose the
+// parent's *current* (mid-lerp) world position with the child's own current
+// (also mid-lerp) local offset, not either one in isolation.
 #[test]
 fn child_transitions_independently_of_parent() {
     let mut world = ProteusWorld::new();
@@ -279,7 +259,7 @@ fn child_transitions_independently_of_parent() {
     let cfg = TransitionConfig {
         duration: 1.0,
         delay: 0.0,
-        easing: linear,
+        easing: Easing::Linear,
     };
 
     world.world.entity_mut(parent).insert(TransitionRequest {
@@ -330,9 +310,9 @@ fn child_transitions_independently_of_parent() {
 // Hit-testing
 // ---------------------------------------------------------------------------
 
-/// An `Interactable` child hit-tests against its *resolved world* position,
-/// not its raw parent-relative local coordinates — otherwise a click at the
-/// child's true on-screen location would silently miss.
+// An `Interactable` child hit-tests against its *resolved world* position,
+// not its raw parent-relative local coordinates — otherwise a click at the
+// child's true on-screen location would silently miss.
 #[test]
 fn interactable_child_hit_tests_at_world_position() {
     let mut world = ProteusWorld::new();

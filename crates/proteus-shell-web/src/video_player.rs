@@ -1,31 +1,28 @@
-//! Real HLS playback for the web host (M13.4 step 4b) — `<video>`/
-//! `MediaSource`/`SourceBuffer`, with decoded frames read back via an
-//! offscreen `<canvas>`. Ported from `proteus-shell-web`'s pre-M13.4
-//! `www/index.html` JS implementation into a
-//! [`VideoStream`](proteus_runtime::VideoStream) impl — the manifest
-//! parsing, segment-fetch sequencing, and buffering logic are unchanged,
-//! just moved from JS into web-sys.
+//! The demo's web video player, an example of bringing your own. It plays an
+//! HLS stream in a `<video>` element fed through `MediaSource`, draws each
+//! frame to an offscreen `<canvas>`, reads it back, and delivers it as a
+//! [`VideoStream`], which the demo uploads with
+//! `proteus_sdk::VideoHandle::upload_frame`.
 //!
-//! No `requestVideoFrameCallback` — it isn't in this project's pinned
-//! web-sys version's stable bindings. Frames are pumped via
-//! `requestAnimationFrame` instead, matching the JS reference's own
-//! fallback path for browsers without that (still fairly new) API: draw the
-//! video's current frame to the canvas and read it back once per animation
-//! frame, rather than only when the decoder actually produced a new one.
+//! Proteus doesn't play video; it shows the frames a player hands it. Any
+//! other browser player plugs in the same way: decode the frames, and upload
+//! them. A TypeScript app does the same with the SDK's `uploadFrom`.
 //!
-//! Every async continuation and event listener here checks a `generation`
-//! counter against `Inner`'s current value before touching anything — bumped
-//! by [`HlsVideoStream::stop`], it turns a stale callback (e.g. a manifest
-//! fetch already in flight when `stop` was called) into a silent no-op
-//! instead of a callback reaching into torn-down state. Mirrors the
-//! `playbackGeneration` guard the JS reference used for the same reason.
+//! Frames are read once per animation frame, since `requestVideoFrameCallback`,
+//! which would report each new video frame, isn't available in the version of
+//! `web-sys` in use.
+//!
+//! Every event listener and asynchronous step checks a `generation` counter
+//! before doing anything. [`HlsVideoStream::stop`] increments it, so a
+//! callback still pending when playback stopped, such as a manifest download,
+//! does nothing.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use js_sys::Promise;
-use proteus_runtime::{VideoFrame, VideoStream};
+use proteus_demo::video::{VideoFrame, VideoSource, VideoStream};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -33,28 +30,25 @@ use web_sys::{
     MediaSourceReadyState, SourceBuffer,
 };
 
-use crate::request_animation_frame;
-use crate::services::fetch_bytes;
-
-/// Shared, `Rc<RefCell<_>>`-held state — every listener and async
-/// continuation below reaches it through a clone of the same `Rc`, since
-/// they all outlive the single [`HlsVideoStream`] handle returned to `Frame`.
+/// State shared by the stream and every listener and asynchronous step, which
+/// can outlive it.
 struct Inner {
     video: HtmlVideoElement,
     frame_canvas: HtmlCanvasElement,
     frame_ctx: CanvasRenderingContext2d,
     object_url: Option<String>,
-    /// Bumped by `stop` — see the module doc.
+    /// Incremented by `stop`; see the module doc.
     generation: u32,
     abort_controller: AbortController,
     metadata_ready: bool,
     first_segment_ready: bool,
     started: bool,
-    /// Written by the `requestAnimationFrame` pump; drained by `poll_frame`.
+    /// The newest frame, written each animation frame and taken by
+    /// `poll_frame`.
     latest_frame: Option<VideoFrame>,
 }
 
-/// The [`VideoStream`] this module hands back from [`open`].
+/// An HLS video being played, returned by [`open`].
 pub struct HlsVideoStream {
     inner: Rc<RefCell<Inner>>,
 }
@@ -82,12 +76,26 @@ impl VideoStream for HlsVideoStream {
     }
 }
 
-/// `dir`: the manifest's base directory (e.g. `"videos/hls/tiger"`, relative
-/// to the page — same convention `fetch_async` URLs use). `codecs`: the
-/// exact MP4 container codec string this file needs (differs per video —
-/// see [`crate::services::PreloadedHostServices::open_video`]'s own doc for
-/// why this isn't just part of the manifest). `None` (logged) if this
-/// browser can't play `codecs` at all, or basic DOM setup fails.
+/// The demo's three tile videos, as HLS streams.
+pub struct HlsVideos {
+    /// The left, center and right tiles' streams: the directory holding each
+    /// stream's manifest, relative to the page, such as
+    /// `"videos/hls/tiger"`, and the codec string the browser needs to check
+    /// it can play it, which varies between files.
+    pub streams: [(String, String); 3],
+}
+
+impl VideoSource for HlsVideos {
+    fn open(&mut self, tile: usize) -> Option<Box<dyn VideoStream>> {
+        let (dir, codecs) = self.streams.get(tile)?.clone();
+        open(dir, codecs).map(|stream| Box::new(stream) as Box<dyn VideoStream>)
+    }
+}
+
+/// Starts playing the HLS stream in `dir`, a directory relative to the page
+/// such as `"videos/hls/tiger"`. `codecs` is the stream's codec string, which
+/// the browser needs to check it can play it. Returns `None`, and logs why, if
+/// it can't, or if the elements can't be created.
 pub fn open(dir: String, codecs: String) -> Option<HlsVideoStream> {
     let window = web_sys::window()?;
     let document = window.document()?;
@@ -136,11 +144,9 @@ pub fn open(dir: String, codecs: String) -> Option<HlsVideoStream> {
     Some(HlsVideoStream { inner })
 }
 
-/// `loadedmetadata` (fires once) and `resize` (may fire again — Safari can
-/// report `loadedmetadata` on an MSE-backed `<video>` before
-/// `videoWidth`/`videoHeight` are actually known; `resize` re-fires once
-/// they land) both just re-check [`maybe_start`]'s own readiness gate —
-/// idempotent, so no harm re-registering interest on every call.
+/// Calls [`maybe_start`] on `loadedmetadata` and on `resize`. Safari can report
+/// `loadedmetadata` before the video's size is known, and `resize` follows
+/// once it is.
 fn wire_metadata_listeners(inner: &Rc<RefCell<Inner>>) {
     let video = inner.borrow().video.clone();
 
@@ -168,11 +174,9 @@ fn wire_metadata_listeners(inner: &Rc<RefCell<Inner>>) {
     on_resize.forget();
 }
 
-/// Starts playback and the frame pump once metadata and the first segment
-/// are both ready *and* real dimensions are known (guards the same Safari
-/// quirk noted in [`wire_metadata_listeners`]'s doc). Idempotent — safe to
-/// call from multiple listeners without an external "have I already fired"
-/// check.
+/// Starts playback and reading frames, once the metadata and the first
+/// segment are loaded and the video's size is known. Calling it again does
+/// nothing.
 fn maybe_start(inner: &Rc<RefCell<Inner>>) {
     let ready = {
         let state = inner.borrow();
@@ -202,11 +206,9 @@ fn maybe_start(inner: &Rc<RefCell<Inner>>) {
     start_frame_pump(inner.clone(), generation);
 }
 
-/// One `requestAnimationFrame`-paced loop per playback generation — draws
-/// the video's current frame to the offscreen canvas and reads it back into
-/// `Inner::latest_frame`. Stops rescheduling itself (rather than being
-/// explicitly cancelled) once `inner`'s generation has moved on — see the
-/// module doc.
+/// Each animation frame, draws the video's current frame to the offscreen
+/// canvas and stores it in `Inner::latest_frame`. The loop stops itself once
+/// the stream has been stopped; see the module doc.
 fn start_frame_pump(inner: Rc<RefCell<Inner>>, generation: u32) {
     let slot = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
     let slot_for_closure = slot.clone();
@@ -247,9 +249,8 @@ fn start_frame_pump(inner: Rc<RefCell<Inner>>, generation: u32) {
     request_animation_frame(slot.borrow().as_ref().unwrap());
 }
 
-/// Wires the one-shot `sourceopen` event that kicks off the whole manifest/
-/// segment fetch sequence — see the module doc for the `generation` guard
-/// every step below checks before touching `inner` or `media_source`.
+/// On `sourceopen`, downloads the manifest, then the init segment and each
+/// media segment in turn, adding them to the `SourceBuffer`.
 fn wire_source_open(
     inner: &Rc<RefCell<Inner>>,
     media_source: &MediaSource,
@@ -338,10 +339,8 @@ async fn run_source_open(
     Ok(())
 }
 
-/// Wraps `SourceBuffer::append_buffer` (which signals completion via the
-/// `updateend` event, not a return value) in a `Promise`/`Future`, so the
-/// segment-fetch sequence above can simply `.await` each append in turn —
-/// `SourceBuffer` only accepts one `appendBuffer` call at a time anyway.
+/// Appends `bytes` to the `SourceBuffer` and waits for its `updateend` event.
+/// A `SourceBuffer` accepts only one append at a time.
 async fn append_buffer(source_buffer: &SourceBuffer, mut bytes: Vec<u8>) -> Result<(), JsValue> {
     let promise = Promise::new(&mut |resolve, _reject| {
         let on_update_end = Closure::once_into_js(move || {
@@ -354,20 +353,17 @@ async fn append_buffer(source_buffer: &SourceBuffer, mut bytes: Vec<u8>) -> Resu
     Ok(())
 }
 
-/// One parsed `#EXT-X-MAP` init segment URI, the flat list of `#EXTINF`
-/// media segment URIs, and their summed duration — see
-/// [`parse_hls_manifest`].
+/// A parsed HLS manifest: the init segment, the media segments, and their
+/// total duration.
 struct HlsManifest {
     init_uri: String,
     segment_uris: Vec<String>,
     duration: f64,
 }
 
-/// Minimal single-variant HLS manifest parser — no adaptive bitrate, so
-/// there's no master playlist/variant selection to handle, just one
-/// `#EXT-X-MAP` init segment and a flat list of `#EXTINF` segments. Ported
-/// verbatim (parsing logic, not just shape) from the JS reference's own
-/// `parseHlsManifest`.
+/// Parses a single-stream HLS manifest: one `#EXT-X-MAP` init segment and a
+/// list of `#EXTINF` segments. Streams with several bitrates aren't
+/// supported.
 fn parse_hls_manifest(text: &str) -> Result<HlsManifest, String> {
     let lines: Vec<&str> = text
         .lines()
@@ -406,15 +402,47 @@ fn parse_hls_manifest(text: &str) -> Result<HlsManifest, String> {
     }
 }
 
-/// `f64::parse` is strict (all-or-nothing); this mimics JS `parseFloat`'s
-/// "parse as much of a valid number as possible from the start, ignore the
-/// rest" behavior — `#EXTINF:6.006,` has a trailing comma `f64::from_str`
-/// would otherwise reject outright.
+/// Parses the number at the start of `s` and ignores the rest, like
+/// JavaScript's `parseFloat`: `#EXTINF:6.006,` has a trailing comma.
 fn parse_leading_f64(s: &str) -> f64 {
     let end = s
         .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
         .unwrap_or(s.len());
     s[..end].parse().unwrap_or(0.0)
+}
+
+fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
+    web_sys::window()
+        .expect("no window")
+        .request_animation_frame(f.as_ref().unchecked_ref())
+        .expect("requestAnimationFrame failed");
+}
+
+/// Fetches a URL's bytes. `signal` lets an `AbortController` cancel the
+/// request.
+async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>) -> Result<Vec<u8>, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
+    let promise = match signal {
+        Some(signal) => {
+            let init = web_sys::RequestInit::new();
+            init.set_signal(Some(signal));
+            window.fetch_with_str_and_init(url, &init)
+        }
+        None => window.fetch_with_str(url),
+    };
+    let resp: web_sys::Response = JsFuture::from(promise)
+        .await?
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("fetch: response was not a Response"))?;
+    if !resp.ok() {
+        return Err(JsValue::from_str(&format!(
+            "{} {}",
+            resp.status(),
+            resp.status_text()
+        )));
+    }
+    let buf = JsFuture::from(resp.array_buffer()?).await?;
+    Ok(js_sys::Uint8Array::new(&buf).to_vec())
 }
 
 #[cfg(test)]

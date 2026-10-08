@@ -1,15 +1,9 @@
-//! Generic `Text` / `Image` → `main_atlas` baking.
+//! Baking a component's `Text` and `Image` into the atlas, once per frame from
+//! [`crate::Renderer::render`].
 //!
-//! Lifted verbatim from `proteus-shell-native/src/main.rs` (M13.1 step 2),
-//! where `bake_pending_text` / `bake_pending_images` / `bake_images` were
-//! identical free functions hand-duplicated into `proteus-shell-web`. Only
-//! *which* bytes and *what size cap* were ever platform- or app-specific;
-//! rasterizing a `Text` and decoding an `Image` into the atlas is generic,
-//! so it belongs here, driven once per frame by [`crate::Renderer::render`].
-//!
-//! Static **composite** baking (`Baked` / `childBehavior: 'bake'`) is a
-//! different thing entirely — it stays in `proteus_ui::bake_system`, which
-//! runs inside the ECS schedule and needs `Query` access to walk a subtree.
+//! Baking a whole component (`ComponentSpec::bake`) is separate: it is
+//! `proteus_ui::bake_system`, which runs in the ECS schedule because it walks
+//! the component's children.
 
 use std::sync::Arc;
 
@@ -18,33 +12,26 @@ use bevy_ecs::world::World;
 
 use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, TextureId};
 use proteus_sdk::TextureHandle;
-use proteus_ui::{BakedImage, BakedText, EffectiveVisibility, Image, Text, TextureRef, Visibility};
+use proteus_ui::{
+    BakedImage, BakedText, EffectiveVisibility, Image, ImageTextureRef, Text, TextTextureRef,
+    Visibility,
+};
 
 use crate::services::HostServices;
 use proteus_sdk::TextureRequest;
 
-/// Same "prefer the cascaded `EffectiveVisibility`, fall back to the
-/// entity's own raw `Visibility`, default visible" convention
-/// `proteus_ui::collect_instances` already uses — see that function's own
-/// doc for why (a bare `World` in a test may never have run the visibility
-/// cascade at all).
+/// Whether an entity is visible: its cascaded visibility if that has been
+/// computed, else its own, else visible. The same rule
+/// `proteus_ui::collect_instances` uses.
 fn is_visible(vis: Option<&Visibility>, eff_vis: Option<&EffectiveVisibility>) -> bool {
     eff_vis
         .map(|v| v.0)
         .unwrap_or_else(|| vis.map(|v| v.visible).unwrap_or(true))
 }
 
-/// Fetch an asset's bytes via `services`, decode, and bake — backs
-/// [`Frame::load_texture`]. The fetch-and-decode half of the work; the actual
-/// atlas registration/upload is [`bake_texture`], shared with
-/// [`Frame::bake_texture`] (M13.4) for a caller that already has pixels in
-/// hand and has no key to fetch (e.g. procedurally generated content).
-///
-/// A missing/undecodable asset yields a null `TextureHandle` — see
-/// [`bake_texture`]'s own doc for the rest of the graceful-degradation story.
-///
-/// [`Frame::load_texture`]: crate::Frame::load_texture
-/// [`Frame::bake_texture`]: crate::Frame::bake_texture
+/// Loads an asset through `services`, decodes it and bakes it. Implements
+/// [`Frame::load_texture`](crate::Frame::load_texture). A missing or
+/// undecodable asset gives a null handle.
 pub(crate) fn load_texture(
     proteus: &mut proteus_sdk::Proteus,
     services: &mut dyn HostServices,
@@ -62,8 +49,8 @@ pub(crate) fn load_texture(
             return TextureHandle::from_texture_id(TextureId::default());
         }
     };
-    // Decoded here rather than through `Proteus::load_texture` so the
-    // failure log can name the key, which that layer has no way to know.
+    // Decoded here rather than by `Proteus::load_texture`, so that the
+    // failure log can name the asset key.
     bake_texture(
         proteus,
         decoded.width,
@@ -72,13 +59,8 @@ pub(crate) fn load_texture(
         req,
     )
 }
-/// Bake already-decoded RGBA pixels into `main_atlas`.
-///
-/// Delegates to [`proteus_sdk::Proteus::bake_texture`], which is where this
-/// lives now — it needs nothing but the world and `proteus-render`, so it
-/// belongs a layer down where an SDK caller (including TypeScript) can reach
-/// it. `Frame` keeps the method so an app that already has a `Frame` in hand
-/// doesn't have to reach past it.
+/// Adds RGBA pixels to the atlas, through
+/// [`proteus_sdk::Proteus::bake_texture`].
 pub(crate) fn bake_texture(
     proteus: &mut proteus_sdk::Proteus,
     width: u32,
@@ -89,11 +71,14 @@ pub(crate) fn bake_texture(
     proteus.bake_texture(width, height, rgba, req)
 }
 
-/// Rasterize and upload every `Text` entity that has no `BakedText` yet. If
-/// `lazy_load` is set (M13.4 step 2 — `ResourceConfig.lazy_load`, declared in
-/// M13.5, previously never read), an entity that isn't currently visible is
-/// left pending rather than baked — it'll be picked up here again on some
-/// later call once it becomes visible.
+/// Rasterizes and uploads the text of every entity that has `Text` but no
+/// `BakedText` yet. With `lazy_load`, a hidden entity is skipped until it is
+/// visible.
+///
+/// Text wider or taller than an atlas page is clipped to the page, with a
+/// warning, and drawn at its normal size. Text that draws nothing, such as an
+/// empty string, gets a zero-size `BakedText` and no texture, so it counts as
+/// baked and isn't tried again every frame.
 pub(crate) fn bake_pending_text(
     world: &mut World,
     font_atlas: &mut FontAtlas,
@@ -115,9 +100,15 @@ pub(crate) fn bake_pending_text(
     };
 
     for (entity, text) in pending {
-        let Some(glyphs) =
-            font_atlas.rasterize_text_tracked(&text.content, text.size_px, text.letter_spacing_px)
+        let Some(mut glyphs) =
+            font_atlas.rasterize_text(&text.content, text.size_px, text.letter_spacing_px)
         else {
+            world.entity_mut(entity).insert(BakedText {
+                uv_offset: [0.0, 0.0],
+                uv_scale: [0.0, 0.0],
+                page: 0,
+                pixel_size: [0.0, 0.0],
+            });
             continue;
         };
 
@@ -125,6 +116,19 @@ pub(crate) fn bake_pending_text(
             let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
                 return;
             };
+            let max = pipeline.texture_registry.max_texture_side();
+            if glyphs.width > max || glyphs.height > max {
+                let (width, height) = (glyphs.width.min(max), glyphs.height.min(max));
+                log::warn!(
+                    "the text of entity {entity:?} is {}x{} pixels, larger than an atlas page \
+                     ({max}x{max}); it is clipped to {width}x{height}",
+                    glyphs.width,
+                    glyphs.height,
+                );
+                glyphs.rgba_pixels = clip_rgba(&glyphs.rgba_pixels, glyphs.width, width, height);
+                glyphs.width = width;
+                glyphs.height = height;
+            }
             let Some(texture_id) =
                 pipeline
                     .texture_registry
@@ -151,16 +155,20 @@ pub(crate) fn bake_pending_text(
                 page: uv.page,
                 pixel_size: [glyphs.width as f32, glyphs.height as f32],
             },
-            TextureRef(texture_id),
+            TextTextureRef(texture_id),
         ));
     }
 }
 
-/// Decode and upload every `Image` entity that has no `BakedImage` yet.
+/// Decodes and uploads the image of every entity that has `Image` but no
+/// `BakedImage` yet. With `lazy_load`, a hidden entity is skipped until it is
+/// visible.
 ///
-/// Each entity's own [`Image::max_side`] wins; `default_max_side` is the
-/// fallback for entities that don't set one (`None` on both = no downscale).
-/// `lazy_load` — see [`bake_pending_text`]'s identical doc.
+/// An image is scaled down to its own [`Image::max_side`], or else to
+/// `default_max_side`; with neither, it keeps its full size. An image still
+/// larger than an atlas page is then scaled down to fit it, with a warning.
+/// An image that can't be decoded is removed from its entity, with a warning,
+/// so it isn't tried again every frame.
 pub(crate) fn bake_pending_images(
     world: &mut World,
     queue: &wgpu::Queue,
@@ -185,7 +193,8 @@ pub(crate) fn bake_pending_images(
         let mut decoded = match decode_image(&bytes) {
             Ok(decoded) => decoded,
             Err(e) => {
-                log::warn!("bake_pending_images: entity {entity:?}: {e}");
+                log::warn!("bake_pending_images: entity {entity:?}: {e}; the image is removed");
+                world.entity_mut(entity).remove::<Image>();
                 continue;
             }
         };
@@ -197,6 +206,16 @@ pub(crate) fn bake_pending_images(
             let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
                 return;
             };
+            let max = pipeline.texture_registry.max_texture_side();
+            if decoded.width > max || decoded.height > max {
+                log::warn!(
+                    "the image of entity {entity:?} is {}x{} pixels, larger than an atlas page \
+                     ({max}x{max}); it is scaled down to fit",
+                    decoded.width,
+                    decoded.height,
+                );
+                decoded = resize_to_fit(decoded, max);
+            }
             let Some(texture_id) =
                 pipeline
                     .texture_registry
@@ -222,27 +241,230 @@ pub(crate) fn bake_pending_images(
         };
 
         world.entity_mut(entity).insert((
-            BakedImage {
-                uv_offset: uv.uv_offset,
-                uv_scale: uv.uv_scale,
-                page: uv.page,
-                pixel_size: [decoded.width as f32, decoded.height as f32],
-            },
-            TextureRef(texture_id),
+            BakedImage::new(
+                uv.uv_offset,
+                uv.uv_scale,
+                uv.page,
+                [decoded.width as f32, decoded.height as f32],
+            ),
+            ImageTextureRef(texture_id),
         ));
     }
 }
 
+/// The top-left `width × height` pixels of an RGBA image `src_width` pixels
+/// wide.
+fn clip_rgba(rgba: &[u8], src_width: u32, width: u32, height: u32) -> Vec<u8> {
+    let src_row = src_width as usize * 4;
+    let row = width as usize * 4;
+    rgba.chunks_exact(src_row)
+        .take(height as usize)
+        .flat_map(|src| &src[..row])
+        .copied()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_visible;
-    use proteus_ui::{EffectiveVisibility, Visibility};
+    use super::*;
+    use proteus_render::{AtlasConfig, DEFAULT_TRANSITION_ATLAS_SIZE};
 
-    // Mirrors M6's own stated preference for deterministic, GPU-free tests
-    // over pixel/integration ones (see PLANNING.md) — `is_visible` is the
-    // one piece of lazy-load logic worth pinning down in isolation; the
-    // surrounding `query_filtered` plumbing reuses the exact pattern
-    // `proteus_ui::collect_instances` already has extensive coverage for.
+    use crate::app::gpu_tests::headless_device;
+
+    // A world with a one-page atlas of 256 × 256, so that modest content is
+    // larger than a page, and with texture references counted.
+    fn world_with_small_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> World {
+        let mut world = World::new();
+        proteus_ui::texture_ref::register_texture_ref_hooks(&mut world);
+        world.insert_resource(QuadPipeline::new(
+            device,
+            queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            16,
+            AtlasConfig {
+                page_size: 256,
+                page_count: 1,
+            },
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        ));
+        world
+    }
+
+    #[test]
+    fn text_wider_than_a_page_is_clipped_to_it() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut world = world_with_small_atlas(&device, &queue);
+        let mut font_atlas = FontAtlas::with_embedded_font();
+        let unclipped = font_atlas.rasterize_text("PROTEUS", 128.0, 0.0).unwrap();
+        assert!(
+            unclipped.width > 256,
+            "sanity: the text is wider than a page"
+        );
+
+        let entity = world.spawn(Text::new("PROTEUS", 128.0)).id();
+        bake_pending_text(&mut world, &mut font_atlas, &queue, false);
+
+        let baked = world.get::<BakedText>(entity).expect("baked, clipped");
+        assert_eq!(
+            baked.pixel_size,
+            [256.0, unclipped.height as f32],
+            "clipped to the page's width, at its normal height"
+        );
+    }
+
+    #[test]
+    fn an_image_larger_than_a_page_is_scaled_to_fit_it() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut world = world_with_small_atlas(&device, &queue);
+        let mut png = Vec::new();
+        image::RgbaImage::new(512, 128)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let entity = world.spawn(Image::new(png)).id();
+        bake_pending_images(&mut world, &queue, None, false);
+
+        let baked = world.get::<BakedImage>(entity).expect("baked, scaled");
+        assert_eq!(baked.pixel_size, [256.0, 64.0], "half size, aspect kept");
+    }
+
+    // A component that draws text and an image holds a reference to each, so
+    // neither can be evicted while it is drawn.
+    #[test]
+    fn text_and_an_image_on_one_component_both_survive_eviction() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut world = world_with_small_atlas(&device, &queue);
+        let mut png = Vec::new();
+        image::RgbaImage::new(64, 64)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let entity = world.spawn((Text::new("Hi", 32.0), Image::new(png))).id();
+        bake_pending_text(
+            &mut world,
+            &mut FontAtlas::with_embedded_font(),
+            &queue,
+            false,
+        );
+        let text = world.get::<TextTextureRef>(entity).unwrap().0;
+        bake_pending_images(&mut world, &queue, None, false);
+        let image = world.get::<ImageTextureRef>(entity).unwrap().0;
+
+        // Far more than the page holds, so everything unreferenced is evicted
+        // once a frame has passed.
+        let mut pipeline = world.resource_mut::<QuadPipeline>();
+        pipeline.texture_registry.advance_frame();
+        for _ in 0..200 {
+            pipeline.texture_registry.register_static(32, 32, false);
+        }
+
+        let registry = &pipeline.texture_registry;
+        assert!(
+            registry.main_atlas_region(text).is_some(),
+            "the text is kept"
+        );
+        assert!(
+            registry.main_atlas_region(image).is_some(),
+            "the image is kept"
+        );
+    }
+
+    // `set_text` gets the new text baked and releases the old text's
+    // texture, so it can be reclaimed.
+    #[test]
+    fn set_text_rebakes_and_releases_the_old_texture() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut proteus = proteus_sdk::Proteus::new();
+        let world = proteus.world_mut();
+        world.insert_resource(QuadPipeline::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            16,
+            AtlasConfig::default(),
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        ));
+        let mut font_atlas = FontAtlas::with_embedded_font();
+        let handle = proteus.component(
+            proteus_sdk::ComponentSpec::new(proteus_ui::QuadState::default())
+                .text(Text::new("Hi", 32.0)),
+        );
+        bake_pending_text(proteus.world_mut(), &mut font_atlas, &queue, false);
+        let old = proteus
+            .world()
+            .get::<TextTextureRef>(handle.id())
+            .unwrap()
+            .0;
+        let old_width = proteus
+            .world()
+            .get::<BakedText>(handle.id())
+            .unwrap()
+            .pixel_size[0];
+
+        handle
+            .set_text(&mut proteus, Text::new("Hello there", 32.0))
+            .unwrap();
+        bake_pending_text(proteus.world_mut(), &mut font_atlas, &queue, false);
+
+        let baked = proteus.world().get::<BakedText>(handle.id()).unwrap();
+        assert!(baked.pixel_size[0] > old_width, "the new, longer text");
+        let mut pipeline = proteus.world_mut().resource_mut::<QuadPipeline>();
+        pipeline.texture_registry.free(old);
+        assert!(
+            pipeline.texture_registry.main_atlas_region(old).is_none(),
+            "the old texture has no references left, so it can be freed"
+        );
+    }
+
+    // Content that can never bake must settle, not be tried every frame: a
+    // `.bake()` component waits for its subtree's text and images.
+    #[test]
+    fn empty_text_and_an_undecodable_image_settle_instead_of_retrying() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut world = world_with_small_atlas(&device, &queue);
+        let empty = world.spawn(Text::new(" ", 16.0)).id();
+        let broken = world.spawn(Image::new(vec![1u8, 2, 3])).id();
+
+        bake_pending_text(
+            &mut world,
+            &mut FontAtlas::with_embedded_font(),
+            &queue,
+            false,
+        );
+        bake_pending_images(&mut world, &queue, None, false);
+
+        let baked = world.get::<BakedText>(empty).expect("counts as baked");
+        assert_eq!(baked.pixel_size, [0.0, 0.0]);
+        assert!(
+            world.get::<TextTextureRef>(empty).is_none(),
+            "with no texture"
+        );
+        assert!(world.get::<Image>(broken).is_none(), "removed");
+    }
+
+    #[test]
+    fn clip_rgba_keeps_the_top_left_pixels() {
+        // A 3 × 2 image whose pixels are numbered 0 to 5, clipped to 2 × 1.
+        let rgba: Vec<u8> = (0..6u8).flat_map(|i| [i; 4]).collect();
+        assert_eq!(clip_rgba(&rgba, 3, 2, 1), [0, 0, 0, 0, 1, 1, 1, 1]);
+    }
+
+    // `is_visible` is the part of lazy loading worth testing on its own, and
+    // it needs no GPU.
 
     #[test]
     fn no_components_defaults_to_visible() {
@@ -257,9 +479,8 @@ mod tests {
 
     #[test]
     fn effective_visibility_wins_over_raw_visibility() {
-        // A visible entity under a hidden ancestor: EffectiveVisibility
-        // reflects the cascade, raw Visibility does not — the cascaded
-        // value must win, exactly like collect_instances.
+        // A visible entity under a hidden ancestor: the cascaded visibility
+        // must win over the entity's own, as in collect_instances.
         assert!(!is_visible(
             Some(&Visibility::VISIBLE),
             Some(&EffectiveVisibility(false))

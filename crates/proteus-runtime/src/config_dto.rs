@@ -1,46 +1,49 @@
-//! [`ProteusConfigDto`] — a partial, deserializable [`ProteusConfig`].
+//! [`ProteusConfigDto`]: a partial [`ProteusConfig`] that can be deserialized,
+//! for configuration that comes from outside the program, such as
+//! TypeScript's `mount`.
 //!
-//! Built for `proteus-host-web`'s `mount`, which takes config from a JS
-//! caller, but it lives here rather than in that host: this is a property of
-//! the config, not of the web. A native host reading settings from a file
-//! wants the same thing — and here the tests actually run, since
-//! `proteus-host-web` only compiles for wasm32, where nothing runs
-//! `cargo test`.
-//!
-//! **Overrides, not a mirror.** Every field is optional and anything omitted
-//! keeps [`ProteusConfig::web`]'s value, so a TS app states only what it
-//! actually wants to change. That also keeps this additive: a new knob is a
-//! new optional field, and M13.5's "the config shape only grows" rule holds
-//! on this side too.
-//!
-//! **Only knobs that do something.** `ProteusConfig` carries fields that are
-//! declared but not yet consumed — `memory.video.*`, `render.msaa_samples`,
-//! all of `input.*`, `transitions.custom_easings` (audit A-07), most of
-//! `debug.*`. Those are deliberately absent here: an inert field is a
-//! documented placeholder in Rust, but in a TypeScript API it is a knob that
-//! silently does nothing, which is worse. They can be added when they work.
+//! Every field is optional, and anything omitted keeps
+//! [`ProteusConfig::web`]'s value. Only settings that have an effect are
+//! included: a setting that silently did nothing would be worse than none.
 
 use crate::{wgpu, ProteusConfig};
 use serde::Deserialize;
 
+/// Overrides for [`ProteusConfig`], deserialized with camelCase field names.
+/// Each section is optional; see [`ProteusConfigDto::apply`].
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProteusConfigDto {
+    /// Overrides for [`ProteusConfig::render`].
     #[serde(default)]
     pub render: Option<RenderDto>,
+    /// Overrides for [`ProteusConfig::memory`].
     #[serde(default)]
     pub memory: Option<MemoryDto>,
+    /// Overrides for [`ProteusConfig::frame`].
     #[serde(default)]
     pub frame: Option<FrameDto>,
+    /// Overrides for [`ProteusConfig::resources`].
     #[serde(default)]
     pub resources: Option<ResourcesDto>,
+    /// Overrides for [`ProteusConfig::text`].
+    #[serde(default)]
+    pub text: Option<TextDto>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextDto {
+    /// A TTF or OTF font file's bytes, for all text.
+    #[serde(default)]
+    pub font: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderDto {
-    /// Linear RGBA, 0–1. The colour behind everything, shown before the
-    /// first frame paints and through any transparency.
+    /// The color behind everything, and what shows through transparency:
+    /// RGBA, each `0`–`1`.
     #[serde(default)]
     pub clear_color: Option<[f64; 4]>,
     #[serde(default)]
@@ -79,15 +82,16 @@ pub struct FrameDto {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourcesDto {
-    /// `null` packs at native resolution; a number caps the longest side.
+    /// Scale images down so their longer side is at most this many pixels;
+    /// `null` keeps full size.
     #[serde(default, deserialize_with = "double_option")]
     pub image_max_side: Option<Option<u32>>,
     #[serde(default)]
     pub lazy_load: Option<bool>,
 }
 
-/// Distinguishes "absent" from an explicit `null`, so `imageMaxSide: null`
-/// can mean "pack at native resolution" rather than "leave the default".
+/// Tells an absent field from an explicit `null`, so that
+/// `imageMaxSide: null` means "full size" rather than "keep the default".
 fn double_option<'de, D>(d: D) -> Result<Option<Option<u32>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -95,9 +99,8 @@ where
     Option::<u32>::deserialize(d).map(Some)
 }
 
-/// Unknown strings are rejected rather than silently defaulted: unlike a
-/// split strategy, getting `presentMode` wrong changes frame pacing in a way
-/// that is hard to notice and harder to attribute.
+/// An unknown string is rejected rather than replaced with a default: a wrong
+/// present mode changes frame pacing in a way that is hard to notice.
 fn present_mode(s: &str) -> Result<wgpu::PresentMode, String> {
     Ok(match s {
         "autoVsync" => wgpu::PresentMode::AutoVsync,
@@ -120,7 +123,13 @@ fn power_preference(s: &str) -> Result<wgpu::PowerPreference, String> {
 }
 
 impl ProteusConfigDto {
-    /// Apply these overrides on top of [`ProteusConfig::web`].
+    /// Applies these overrides to [`ProteusConfig::web`] and returns the
+    /// result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the field if a value isn't recognized, such as
+    /// an unknown present mode or a font that can't be read.
     pub fn apply(&self) -> Result<ProteusConfig, String> {
         let mut config = ProteusConfig::web();
 
@@ -162,6 +171,12 @@ impl ProteusConfigDto {
             }
             if let Some(v) = r.lazy_load {
                 config.resources.lazy_load = v;
+            }
+        }
+        if let Some(t) = &self.text {
+            if let Some(bytes) = &t.font {
+                config.text.default_font = crate::config::FontSource::from_bytes(bytes.as_slice())
+                    .map_err(|e| format!("text.font: {e}"))?;
             }
         }
         Ok(config)
@@ -236,12 +251,28 @@ mod tests {
 
     #[test]
     fn a_misspelled_field_is_rejected() {
-        // `deny_unknown_fields`: a typo silently doing nothing is the exact
-        // failure mode this API exists to avoid.
+        // `deny_unknown_fields`: a misspelled field must be an error, not
+        // silently ignored.
         assert!(serde_json::from_str::<ProteusConfigDto>(r#"{"renderr":{}}"#).is_err());
         assert!(serde_json::from_str::<ProteusConfigDto>(
             r#"{"render":{"clearColour":[0,0,0,1]}}"#
         )
         .is_err());
+    }
+
+    // TypeScript's `text.font`: a font that can't be read is an error naming
+    // the setting, which `mount` throws; a real one is used.
+    #[test]
+    fn a_font_that_cant_be_read_is_an_error_naming_the_setting() {
+        let err = dto(r#"{"text":{"font":[1,2,3]}}"#).apply().unwrap_err();
+        assert!(err.contains("text.font"), "{err}");
+
+        let font = proteus_render::EMBEDDED_FONT_BYTES.to_vec();
+        let json = format!(r#"{{"text":{{"font":{font:?}}}}}"#);
+        let applied = dto(&json).apply().unwrap();
+        assert!(matches!(
+            applied.text.default_font,
+            crate::config::FontSource::Bytes(_)
+        ));
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "proteus-demo"
-description = "The shared, shell-agnostic reference demo — built once against proteus-sdk, linked by both proteus-shell-native and proteus-shell-web (M12.5)"
+description = "The Proteus reference demo, written once and run natively and on the web."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -12,25 +12,16 @@ proteus-sdk = { path = "../proteus-sdk" }
 proteus-runtime = { path = "../proteus-runtime" }
 glam = { workspace = true }
 log = { workspace = true }
-# Gallery nonce (see gallery_fetch.rs): needs a value that varies across
-# separate app launches, not just across visits within one session — plain
-# std::time::SystemTime::now() panics at runtime on wasm32-unknown-unknown
-# (confirmed by hitting it), and this crate is shared with that target.
-# web-time is a drop-in SystemTime/Instant replacement backed by std::time
-# on native and by Performance/Date on wasm32 — already in the dependency
-# tree transitively (via wgpu), so this adds no new build weight.
+# The gallery's nonce (see gallery_fetch.rs) needs the current time, and
+# std::time::SystemTime::now() panics on wasm32-unknown-unknown. web-time
+# works on both: std::time natively, Performance and Date on wasm32. wgpu
+# already depends on it, so it adds nothing to the build.
 web-time = "1"
 
 [dev-dependencies]
-# Only needed by src/lib.rs's own `#[cfg(test)]` module, for direct
-# component inspection (`BakedImage`, `ActiveTransition`, `Virtual`,
-# `VideoCrossfade`, etc.) beyond what `Proteus::get`'s `ComponentData`
-# exposes — not part of this crate's own public API (rendering itself stays
-# a shell/host concern, per proteus-sdk's own design — see crate root
-# docs). Originally also used by examples/native_preview/ (a visual harness
-# for M12.5's migration, promoted to proteus-shell-native's real main.rs at
-# Step 9's cutover and deleted from here) — wgpu/winit/pollster/env_logger/
-# ureq were that harness's own platform-glue deps and are gone with it.
+# For the tests in src/lib.rs, which inspect ECS components directly
+# (`BakedImage`, `ActiveTransition`, `Virtual`, `VideoCrossfade` and so on)
+# beyond what `Proteus::get`'s `ComponentData` exposes.
 proteus-render = { path = "../proteus-render" }
 proteus-ui = { path = "../proteus-ui" }
 bevy_ecs = { workspace = true }

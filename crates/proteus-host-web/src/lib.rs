@@ -1,50 +1,39 @@
-//! `proteus-host-web` — Layer 3: a WebGPU/WebGL2 wasm host for
-//! [`proteus_runtime`] (M13.2).
+//! The web host: runs a Proteus app on an HTML canvas, compiled to
+//! WebAssembly, drawing with WebGPU where available and WebGL2 otherwise.
 //!
-//! Two front doors, both driving the same internal `WebLoop` machinery
-//! (canvas/wgpu setup, DPI, resize, Pointer Events, visibility-pause,
-//! context-loss logging):
+//! A Proteus app for the web is written in Rust or in TypeScript. Both share
+//! the same canvas setup, frame loop and input handling:
 //!
-//! - **Rust → web**: [`run`] — an app author writes `impl App`, compiles to
-//!   wasm, calls `proteus_host_web::run(MyApp::new(), "canvas-id").await`.
-//!   Uses the real [`proteus_runtime::Engine`], identical to
-//!   `proteus-host-winit`.
-//! - **TS → web**: [`mount`] — a wasm-bindgen export the `ts/` layer's
-//!   `mount()` calls, taking `setup`/`update` JS functions. Does *not* go
-//!   through `Engine` (JS isn't a Rust `App` impl) — `js_app`'s own driver
-//!   replicates
-//!   `Engine::frame`'s exact sequence (`tick` → call JS `update` →
-//!   `refresh_cascades` → `Renderer::render`) by hand against a shared
-//!   `Rc<RefCell<Proteus>>` (see `proteus_sdk_web`'s module doc for why
-//!   `ProteusApp` needed to become shared-ownership for this to be sound).
+//! - **From Rust:** [`run`] runs an [`App`](proteus_runtime::App) through a
+//!   [`proteus_runtime::Engine`], exactly as `proteus-host-winit` does.
+//! - **From TypeScript:** [`mount`] is what the TypeScript SDK's `mount` calls.
+//!   A JavaScript app isn't an `App`, so `mount` runs the same frame sequence
+//!   as [`Engine::frame`](proteus_runtime::Engine::frame) itself, calling the
+//!   JavaScript `update` function in place of `App::update`.
 //!
-//! ## Asset loading: prefetch, not a new `HostServices` shape
+//! The canvas follows the device's pixel density and its CSS size, input comes
+//! from Pointer Events (mouse, touch and pen). While the tab is hidden, the
+//! browser stops running the frame loop; the first frame after it returns has
+//! a time step of zero, not the whole time it was hidden.
 //!
-//! `HostServices::load_asset` is synchronous (M13.1) but browser `fetch` is
-//! async. Rather than changing that trait now — `PLANNING.md`'s M13.2
-//! section defers the general async asset contract to M13.4 — this crate's
-//! [`PreloadedHostServices`] fetches a known, fixed list of keys in parallel
-//! *before* `Engine::new` / `App::setup` runs, then serves them synchronously
-//! from an in-memory map. Mirrors what `proteus-host-winit`'s
-//! `DirHostServices` does for a filesystem, just backed by pre-fetched bytes.
+//! ## Loading assets
 //!
-//! ## Scope notes (read before assuming more is wired than is)
+//! `HostServices::load_asset` must return immediately, but a browser can only
+//! fetch asynchronously. So [`PreloadedHostServices`] downloads a fixed list of
+//! assets before the app starts, then serves them from memory. For anything
+//! else, `fetch_async` makes a real request.
 //!
-//! - **Safe-area insets**: [`Viewport::safe_area`] is always
-//!   `Insets::default()` (zero) here — no `env(safe-area-inset-*)` probe is
-//!   implemented yet. Correct today on every desktop/laptop browser (no
-//!   notch to report); a real probe is a follow-up.
-//! - **Context loss**: `webglcontextlost` / `webglcontextrestored` are
-//!   listened for and logged; on `restored` the surface is reconfigured.
-//!   Full "tear down and rebuild everything, re-fetch, re-bake" recovery
-//!   (this crate's own `PLANNING.md` section originally sketched) is **not**
-//!   implemented — a genuine context loss today logs a warning and the
-//!   canvas goes blank until the page reloads. Narrowed scope, stated
-//!   plainly rather than claimed working.
-//! - **Keyboard / directional navigation**: not wired — `navigation_system`
-//!   is itself still a stub.
+//! ## Not supported yet
+//!
+//! - **Safe-area insets:** [`Viewport::safe_area`] is always zero. That is
+//!   correct on desktop browsers.
+//! - **Recovering a lost GPU context:** the loss is logged, and when the
+//!   browser restores the context the surface is reconfigured, but textures
+//!   are not rebuilt, so the canvas stays blank until the page reloads.
+//! - **Keyboard input.**
 
-mod hls_video;
+#![warn(missing_docs)]
+
 mod services;
 mod surface;
 
@@ -54,6 +43,21 @@ pub mod rust_app;
 pub use js_app::mount;
 pub use rust_app::run;
 pub use services::PreloadedHostServices;
+
+/// An `Error` with `message`, to throw to JavaScript. Unlike a thrown string,
+/// it carries a stack trace and passes `instanceof Error`.
+pub(crate) fn js_error(message: &str) -> JsValue {
+    js_sys::Error::new(message).into()
+}
+
+/// The GPU limits this host requests and checks a config against:
+/// WebGL2's, `wgpu::Limits::downlevel_webgl2_defaults()`, since WebGL2 is the
+/// fallback in every browser. A WebGPU browser reports higher limits, but a
+/// config is still held to these, so it behaves the same in every browser.
+/// Pass them to `ProteusConfig::check` to test a config for this host.
+pub fn limits() -> wgpu::Limits {
+    wgpu::Limits::downlevel_webgl2_defaults()
+}
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -65,16 +69,12 @@ use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
 // ---------------------------------------------------------------------------
-// FrameDriver — the seam between WebLoop's event wiring and either front door
+// FrameDriver: what WebLoop calls, for either way in
 // ---------------------------------------------------------------------------
 
-/// What [`WebLoop`] needs from either front door. `rust_app`'s driver
-/// forwards to an `Engine`; `js_app`'s hand-drives a shared `Proteus` +
-/// `Renderer`, calling into JS for `update`.
-///
-/// Internal: both implementors live in this crate, and a host shell reaches
-/// the loop through [`rust_app::run`] or [`js_app::mount`] rather than by
-/// naming this.
+/// What [`WebLoop`] needs from each way in: `rust_app` forwards to an
+/// `Engine`, and `js_app` runs `Proteus` and a `Renderer` itself, calling
+/// JavaScript for `update`.
 pub(crate) trait FrameDriver {
     fn frame(&mut self, dt_secs: f32, target: &wgpu::TextureView);
     fn resize(&mut self, viewport: Viewport);
@@ -84,22 +84,54 @@ pub(crate) trait FrameDriver {
 }
 
 // ---------------------------------------------------------------------------
-// WebLoop — shared canvas/rAF/input wiring for both front doors
+// Inbox: what the event listeners record for the next frame
 // ---------------------------------------------------------------------------
 
-/// Owns the live `wgpu` surface and drives `driver` from a
-/// `requestAnimationFrame` loop, wired once to the canvas's Pointer Events,
-/// a `ResizeObserver`, and `document.visibilitychange`. Both front doors
-/// build one of these and call [`WebLoop::start`] to hand control to the
-/// browser's event loop (this function returns immediately — wasm has no
-/// blocking "run forever" the way native's winit loop does).
+/// What the event listeners record for [`WebLoop`] to apply at the start of
+/// the next frame.
+///
+/// The listeners never borrow the `WebLoop` itself. JavaScript's `update`
+/// runs while it is borrowed, and anything `update` does that fires a
+/// listener synchronously, such as dispatching a `PointerEvent` on the
+/// canvas, would borrow it again and panic. The inbox is only borrowed for a
+/// moment, never while JavaScript runs.
+#[derive(Default)]
+struct Inbox {
+    /// Pointer input, in the order it happened.
+    pointer: Vec<PointerInput>,
+    /// The canvas's latest size in CSS pixels, if it changed.
+    resize: Option<(f64, f64)>,
+    /// The page was hidden, so the next frame's time step starts over.
+    hidden: bool,
+    /// The WebGL context was lost.
+    context_lost: bool,
+    /// The WebGL context was restored.
+    context_restored: bool,
+}
+
+enum PointerInput {
+    /// `offsetX` and `offsetY`: CSS pixels from the canvas's corner. `None`
+    /// when the pointer left the canvas.
+    Moved(Option<(f32, f32)>),
+    Pressed,
+    Released,
+}
+
+// ---------------------------------------------------------------------------
+// WebLoop: canvas, frame loop and input, shared by both ways in
+// ---------------------------------------------------------------------------
+
+/// Owns the GPU surface and drives `driver` from a `requestAnimationFrame`
+/// loop, with listeners for the canvas's Pointer Events, its size, and the
+/// page's visibility. [`WebLoop::start`] hands it to the browser and returns
+/// immediately.
 pub(crate) struct WebLoop<D: FrameDriver + 'static> {
     canvas: HtmlCanvasElement,
     surface: surface::WebSurface,
     driver: D,
+    inbox: Rc<RefCell<Inbox>>,
     last_frame: Option<f64>,
-    /// Set by the `webglcontextlost` listener; checked (and logged, once)
-    /// on the next frame. See the crate-root doc's "Context loss" note.
+    // Set when the WebGL context is lost; frames are skipped while it is.
     context_lost: bool,
 }
 
@@ -109,32 +141,30 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             canvas,
             surface,
             driver,
+            inbox: Rc::default(),
             last_frame: None,
             context_lost: false,
         }
     }
 
-    /// Wire every DOM listener and start the `requestAnimationFrame` loop,
-    /// then hand ownership to the browser: `self` moves into a shared
-    /// `Rc<RefCell<_>>` that the closures wired below each hold a clone of,
-    /// so the loop outlives this call with nothing left for a caller to
-    /// keep.
+    /// Adds the event listeners and starts the frame loop. The frame loop
+    /// owns `self`, so it keeps running after this returns, with nothing for
+    /// the caller to keep.
     pub(crate) fn start(self) {
-        let state = Rc::new(RefCell::new(self));
+        wire_resize(&self.canvas, &self.inbox);
+        wire_pointer(&self.canvas, &self.inbox);
+        wire_visibility(&self.inbox);
+        wire_context_loss(&self.canvas, &self.inbox);
 
-        wire_resize(&state);
-        wire_pointer(&state);
-        wire_visibility(&state);
-        wire_context_loss(&state);
-
-        start_raf_loop(state);
+        start_raf_loop(self);
     }
 
     fn render_frame(&mut self, ts_ms: f64) {
+        self.apply_inbox();
+
         if self.context_lost {
-            // Logged once by the listener itself; every frame after that is
-            // a silent no-op until the page reloads — see the crate-root
-            // doc's "Context loss" scope note.
+            // Already logged once by the listener; skip frames until the
+            // page reloads.
             return;
         }
 
@@ -162,6 +192,44 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         frame.present();
     }
 
+    /// Applies what the listeners recorded since the last frame. Pointer
+    /// input is still passed on while the context is lost, as it always was.
+    fn apply_inbox(&mut self) {
+        let inbox = std::mem::take(&mut *self.inbox.borrow_mut());
+
+        if let Some((width, height)) = inbox.resize {
+            self.resize(width, height);
+        }
+        for input in inbox.pointer {
+            match input {
+                PointerInput::Moved(Some((x, y))) => {
+                    // The offsets are in the same units as
+                    // `Viewport::logical_size`.
+                    let size = self.surface.viewport().logical_size;
+                    let world = Vec2::new(x - size.x / 2.0, size.y / 2.0 - y);
+                    self.driver.pointer_moved(Some(world));
+                }
+                PointerInput::Moved(None) => self.driver.pointer_moved(None),
+                PointerInput::Pressed => self.driver.pointer_pressed(),
+                PointerInput::Released => self.driver.pointer_released(),
+            }
+        }
+        if inbox.hidden {
+            // Forget the last frame's time, so the first frame after the tab
+            // returns has a time step of zero rather than the whole time it
+            // was hidden.
+            self.last_frame = None;
+        }
+        if inbox.context_lost {
+            self.context_lost = true;
+        }
+        if inbox.context_restored {
+            self.surface.reconfigure();
+            self.context_lost = false;
+            self.last_frame = None;
+        }
+    }
+
     fn resize(&mut self, css_width: f64, css_height: f64) {
         if css_width <= 0.0 || css_height <= 0.0 {
             return;
@@ -172,16 +240,15 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
 }
 
 // ---------------------------------------------------------------------------
-// Event wiring — each `wire_*` attaches one listener, leaked via
-// `Closure::forget` (standard for a listener meant to live as long as the
-// page — there is no natural point before page unload to drop it).
+// Event listeners. Each `wire_*` adds one that records into the `Inbox`, and
+// leaks it with `Closure::forget`, since it lives as long as the page.
 // ---------------------------------------------------------------------------
 
-fn start_raf_loop<D: FrameDriver + 'static>(state: Rc<RefCell<WebLoop<D>>>) {
+fn start_raf_loop<D: FrameDriver + 'static>(mut web_loop: WebLoop<D>) {
     let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |ts_ms: f64| {
-        state.borrow_mut().render_frame(ts_ms);
+        web_loop.render_frame(ts_ms);
         request_animation_frame(f.borrow().as_ref().unwrap());
     }));
     request_animation_frame(g.borrow().as_ref().unwrap());
@@ -194,11 +261,11 @@ pub(crate) fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
         .expect("requestAnimationFrame failed");
 }
 
-fn wire_resize<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
-    let state = state.clone();
-    let canvas = state.borrow().canvas.clone();
+fn wire_resize(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
+    let inbox = inbox.clone();
     let closure: Closure<dyn FnMut(js_sys::Array)> = Closure::new(move |entries: js_sys::Array| {
-        // One canvas observed → exactly one entry; contentRect is in CSS px.
+        // One canvas is observed, so there is one entry. `contentRect` is in
+        // CSS pixels.
         let Some(entry) = entries
             .get(0)
             .dyn_into::<web_sys::ResizeObserverEntry>()
@@ -207,72 +274,50 @@ fn wire_resize<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
             return;
         };
         let rect = entry.content_rect();
-        state.borrow_mut().resize(rect.width(), rect.height());
+        inbox.borrow_mut().resize = Some((rect.width(), rect.height()));
     });
     let observer = web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref())
         .expect("ResizeObserver construction failed");
-    observer.observe(&canvas);
+    observer.observe(canvas);
     closure.forget();
-    // `observer` itself must also outlive the callback; leaking it is the
-    // same "lives as long as the page" convention as the closure.
+    // The observer must outlive the callback, so it is leaked too.
     std::mem::forget(observer);
 }
 
-fn wire_pointer<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
+fn wire_pointer(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
     use web_sys::PointerEvent;
 
-    let canvas = state.borrow().canvas.clone();
+    let listen = |event: &str, record: fn(&PointerEvent) -> Option<PointerInput>| {
+        let inbox = inbox.clone();
+        let closure: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
+            if let Some(input) = record(&e) {
+                inbox.borrow_mut().pointer.push(input);
+            }
+        });
+        canvas
+            .add_event_listener_with_callback(event, closure.as_ref().unchecked_ref())
+            .unwrap_or_else(|_| panic!("addEventListener({event}) failed"));
+        closure.forget();
+    };
 
-    let move_state = state.clone();
-    let on_move: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
-        let mut s = move_state.borrow_mut();
-        // offsetX/Y are CSS px relative to the canvas — the same space
-        // `Viewport.logical_size` reports, so no DPR conversion here.
-        let w = s.surface.viewport().logical_size.x;
-        let h = s.surface.viewport().logical_size.y;
-        let wx = e.offset_x() as f32 - w / 2.0;
-        let wy = h / 2.0 - e.offset_y() as f32;
-        s.driver.pointer_moved(Some(Vec2::new(wx, wy)));
+    listen("pointermove", |e| {
+        Some(PointerInput::Moved(Some((
+            e.offset_x() as f32,
+            e.offset_y() as f32,
+        ))))
     });
-    canvas
-        .add_event_listener_with_callback("pointermove", on_move.as_ref().unchecked_ref())
-        .expect("addEventListener(pointermove) failed");
-    on_move.forget();
-
-    let leave_state = state.clone();
-    let on_leave: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |_e: PointerEvent| {
-        leave_state.borrow_mut().driver.pointer_moved(None);
+    listen("pointerleave", |_| Some(PointerInput::Moved(None)));
+    // Only the primary button: the left mouse button, a touch or a pen tip.
+    listen("pointerdown", |e| {
+        (e.button() == 0).then_some(PointerInput::Pressed)
     });
-    canvas
-        .add_event_listener_with_callback("pointerleave", on_leave.as_ref().unchecked_ref())
-        .expect("addEventListener(pointerleave) failed");
-    on_leave.forget();
-
-    let down_state = state.clone();
-    let on_down: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
-        if e.button() == 0 {
-            down_state.borrow_mut().driver.pointer_pressed();
-        }
+    listen("pointerup", |e| {
+        (e.button() == 0).then_some(PointerInput::Released)
     });
-    canvas
-        .add_event_listener_with_callback("pointerdown", on_down.as_ref().unchecked_ref())
-        .expect("addEventListener(pointerdown) failed");
-    on_down.forget();
-
-    let up_state = state.clone();
-    let on_up: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
-        if e.button() == 0 {
-            up_state.borrow_mut().driver.pointer_released();
-        }
-    });
-    canvas
-        .add_event_listener_with_callback("pointerup", on_up.as_ref().unchecked_ref())
-        .expect("addEventListener(pointerup) failed");
-    on_up.forget();
 }
 
-fn wire_visibility<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
-    let state = state.clone();
+fn wire_visibility(inbox: &Rc<RefCell<Inbox>>) {
+    let inbox = inbox.clone();
     let document = web_sys::window()
         .expect("no window")
         .document()
@@ -282,14 +327,8 @@ fn wire_visibility<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
             .and_then(|w| w.document())
             .map(|d| d.hidden())
             .unwrap_or(false);
-        let mut s = state.borrow_mut();
         if hidden {
-            // Dropping the timestamp means the next visible frame computes
-            // dt from `None` (0.0) instead of the real, huge, tab-was-
-            // backgrounded gap — same intent as `ProteusConfig.frame.
-            // dt_clamp_secs`, just for a stall this large rather than a
-            // merely long one.
-            s.last_frame = None;
+            inbox.borrow_mut().hidden = true;
         }
     });
     document
@@ -298,32 +337,26 @@ fn wire_visibility<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
     closure.forget();
 }
 
-fn wire_context_loss<D: FrameDriver + 'static>(state: &Rc<RefCell<WebLoop<D>>>) {
-    let canvas = state.borrow().canvas.clone();
-
-    let lost_state = state.clone();
+fn wire_context_loss(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
+    let lost_inbox = inbox.clone();
     let on_lost: Closure<dyn FnMut(web_sys::Event)> = Closure::new(move |e: web_sys::Event| {
-        // Required by the WebGL spec for the context to ever come back —
-        // an uncancelled contextlost is permanent.
+        // Required for the browser to ever restore the context.
         e.prevent_default();
         log::error!(
             "proteus-host-web: WebGL context lost — rendering paused. Full recovery isn't \
              implemented yet (see this crate's root doc); reload the page."
         );
-        lost_state.borrow_mut().context_lost = true;
+        lost_inbox.borrow_mut().context_lost = true;
     });
     canvas
         .add_event_listener_with_callback("webglcontextlost", on_lost.as_ref().unchecked_ref())
         .expect("addEventListener(webglcontextlost) failed");
     on_lost.forget();
 
-    let restored_state = state.clone();
+    let restored_inbox = inbox.clone();
     let on_restored: Closure<dyn FnMut()> = Closure::new(move || {
         log::warn!("proteus-host-web: WebGL context restored — reconfiguring surface");
-        let mut s = restored_state.borrow_mut();
-        s.surface.reconfigure();
-        s.context_lost = false;
-        s.last_frame = None;
+        restored_inbox.borrow_mut().context_restored = true;
     });
     canvas
         .add_event_listener_with_callback(

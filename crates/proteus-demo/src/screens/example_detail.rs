@@ -136,12 +136,8 @@ pub struct StressContent {
     /// why this is one of the few pieces of category content that *does*
     /// get the live theme lerp.
     pub button_labels: [Handle; 2],
-    /// Seeded with a single space, not empty — an empty string leaves
-    /// `bake_pending_text` with nothing to rasterize, so it never gains a
-    /// `BakedText` and gets retried forever. `Demo::finalize_stress_test`
-    /// updates `.content` then calls `Handle::free_resources` to force a
-    /// re-bake (`Text` doesn't support in-place content changes otherwise —
-    /// see `proteus_ui::text`'s own doc).
+    /// Empty until a run finishes; `Demo::finalize_stress_test` then sets
+    /// the result with `Handle::set_text`.
     pub result_text: Handle,
     pub warning_text: Handle,
 }
@@ -174,8 +170,8 @@ impl ExampleDetail {
     /// `Visibility` toggle rather than a `ChildOf` cascade. Excludes
     /// `stress.warning_text`, which `Demo::advance_stress_warning_visibility`
     /// governs continuously on its own finer-grained condition (only when
-    /// idle, no test running) rather than the enter/exit timing every other
-    /// entity here follows.
+    /// idle, no test running) rather than the enter/exit timing all the other
+    /// entities here follow.
     pub fn content_handles(&self, idx: usize) -> Vec<Handle> {
         let mut handles = vec![self.headings[idx]];
         match idx {
@@ -522,10 +518,10 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     };
 
     // --- Stress Tests (category 3) ---
-    // Same "no fill ever, border/glow only, violet label" Design System
-    // treatment as `screens::home`/`screens::examples_home`'s buttons, down
-    // to the same constants. Hover registration lives in `Demo::new`,
-    // theme-color blend in `Demo::advance_theme`.
+    // Styled like `screens::home`'s and `screens::examples_home`'s buttons
+    // (a transparent fill with a violet border, glow and label), with the
+    // same constants. Hover is registered in `Demo::new`, and the theme
+    // colors are blended in `Demo::advance_theme`.
     let stress_button = |app: &mut Proteus, label: &str| -> (Handle, Handle) {
         let button = app.component(
             ComponentSpec::new(QuadState {
@@ -564,14 +560,14 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     let (burst_button, burst_label) = stress_button(app, "Run Burst Spawn");
     let (churn_button, churn_label) = stress_button(app, "Run Texture Churn");
 
-    // Seeded with a single space — see `StressContent::result_text`'s doc.
+    // Empty until a run finishes — see `StressContent::result_text`'s doc.
     let result_text = app.component(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, CONTENT_Z),
             color: Vec4::new(1.0, 1.0, 1.0, 0.0),
             ..Default::default()
         })
-        .text(Text::new(" ", 16.0).with_color(violet()))
+        .text(Text::new("", 16.0).with_color(violet()))
         .non_interactive(),
     );
     let warning_text = app.component(
@@ -884,8 +880,7 @@ fn layout_stress(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
 /// Convert a fully-saturated, full-value HSV color (`hue_deg` in degrees,
 /// wrapped to `[0, 360)`; s=1, v=1 fixed) to RGB — standard six-sector
 /// conversion. Used only by `advance_continuous_animation`'s rainbow hue
-/// cycle, which has no other place in this demo to live given every other
-/// color is a fixed design token.
+/// cycle; all the other colors in the demo are fixed design tokens.
 pub(crate) fn hsv_to_rgb(hue_deg: f32) -> Vec3 {
     let h = hue_deg.rem_euclid(360.0) / 60.0;
     let x = 1.0 - (h % 2.0 - 1.0).abs();

@@ -1,74 +1,46 @@
 /**
  * Proteus TypeScript SDK example: an image gallery.
  *
- * Full assembly of the incremental rebuild (see PLANNING.md's M13.8
- * section) — every mechanism here was individually proven, in isolation,
- * before being combined:
- *   - grid tile → detail hero:      1→1  (`SignalHandle.set`)
- *   - detail hero → fresh grid:     1→N  (`Handle.splitTo` — "back to grid")
+ * A grid of photos fetched from picsum.photos. Clicking a tile transitions
+ * it into a large "hero" view with `TransitionChannel.set`; going back splits the
+ * hero into a fresh grid with `Handle.splitTo`.
  *
- * `Handle.mergeFrom` (N→1) was exercised in its own isolated step during
- * the rebuild (a "related row" merging back into a new hero) but dropped
- * from this assembled example — it read as an extra, slightly confusing
- * detour rather than a natural part of the gallery flow. `mergeFrom` stays
- * proven working; it's just not part of this particular app.
+ * Techniques worth copying:
+ *   - Fetch each batch of images concurrently (`Promise.all`), not with one
+ *     `await` per loop iteration. Sequential fetches are slower, and leave
+ *     each new tile fully visible in its final spot before the transition
+ *     that should reveal it runs.
+ *   - Give the hero an image *before* the tile → hero transition starts.
+ *     A hero spawned blank shows an empty box that grows, and the image
+ *     pops in only when the hi-res fetch lands. `setTexture` works on a
+ *     component without an image, so the hero can start with the tile's
+ *     photo and scale it continuously with the box.
+ *   - Start the hero from the photo's *uncropped* low-res image. The grid
+ *     tile shows the same texture cropped to a square, and starting the hero
+ *     from that framing would differ from the hi-res photo: mid-crossfade,
+ *     two differently framed copies of the photo would blend together.
+ *     Cropping changes the component, not the texture, so `GridSlot.full`
+ *     keeps the uncropped texture for the hero.
+ *   - Crossfade to the hi-res image with a second, transparent overlay
+ *     component that fades in with `animateTo` on `color.a`. There's no
+ *     built-in crossfade between two images on one component, and swapping
+ *     the texture on the hero would be a hard cut.
+ *   - Request the tile and the hi-res photo at *exactly* the same aspect
+ *     ratio. picsum.photos crops its source to the requested size, so two
+ *     slightly different ratios crop differently, and the photo shifts
+ *     sideways when the crossfade swaps them. Rounding one side from the
+ *     other isn't precise enough for some photos, so `fetchDimensions`
+ *     searches nearby sizes for the pair closest to the photo's real ratio.
+ *   - Load an image straight into a texture with `app.loadTexture`, and
+ *     react to a finished transition with `onTransitionComplete` rather
+ *     than a timer.
  *
- * Every photo is fetched over the network from picsum.photos; `Text` and
- * `Image` both render throughout.
+ *   - While the new grid downloads, a loader over the large view shows that
+ *     something is happening. Its text is left-aligned with the anchor, so
+ *     the words stay still as the arrow after them grows.
  *
- * Five lessons carried over from the individual steps, all load-bearing:
- *   - Fetch every batch of images *concurrently* (`Promise.all`), not one
- *     `await` per loop iteration — sequential fetches are both slower and
- *     leave each newly-created tile fully visible in its final spot before
- *     the transition that's supposed to hide-then-reveal it ever runs
- *     (found and fixed during step 6's `splitTo` work).
- *   - A tile → hero morph needs the hero to already carry an image *before*
- *     the geometry transition starts — a hero spawned blank shows an empty
- *     box that only grows, with the image popping in only once the hi-res
- *     fetch lands. `setTexture` works on an imageless component precisely
- *     so the hero can start out showing an image and have it scale
- *     continuously with the box.
- *   - That initial image must be the photo's *uncropped* low-res fetch. The
- *     grid tile wears the same texture but square-crops its own UVs in
- *     place, so starting the hero from the tile's framing would differ from
- *     the eventual hi-res fetch — visible mid-crossfade as a "double
- *     exposure", two differently-framed copies of one photo blending
- *     together. Cropping edits the entity, never the texture, so
- *     `GridSlot.full` hands the hero the uncropped original.
- *   - There's no built-in single-entity image crossfade, so swapping in the
- *     hi-res image once it's fetched uses a second, transparent overlay
- *     entity that fades to opaque via `animateTo`'s `color.a` (the same
- *     mechanism `proteus-demo`'s own gallery uses for this) — an instant
- *     texture swap on the hero itself would be a visible hard cut.
- *   - picsum.photos crops its source photo to whatever exact width/height a
- *     request asks for. The tile fetch and the hi-res fetch request two
- *     different sizes of the *same* photo — if their requested aspect
- *     ratios aren't identical down to a fraction of a percent, picsum crops
- *     each source slightly differently, which shows up as a small
- *     left/right content shift the instant the crossfade swaps one for the
- *     other. Naively pinning the larger axis exactly and rounding the other
- *     isn't precise enough (some photos' true ratios round badly at small
- *     sizes); `fetchDimensions` instead searches a small window of
- *     candidate larger-axis values for whichever integer pair lands closest
- *     to the photo's real ratio. Mirrors `proteus-demo`'s own
- *     `gallery_fetch::fetch_dimensions` fix for the identical bug.
- *
- * One deliberate simplification: layout is computed once from the canvas's
- * size at load and never reflows on window resize.
- *
- * Written against the SDK as it stands after the 2026-09-22 audit. Three
- * things this example used to do by hand, kept here as a note on what the
- * API now covers:
- *   - Getting pixels into the atlas meant spawning a throwaway off-screen
- *     component with `image: { bytes }` and polling `bakedImageSize()` on
- *     every frame until a bake system happened to run. `app.loadTexture`
- *     (A-04) does it synchronously and hands back a texture.
- *   - Knowing when a morph had finished meant `setTimeout` set to the
- *     transition's own duration, plus a fudge factor.
- *     `onTransitionComplete` (A-02) reports it.
- *   - Neither of those was a framework limitation anyone had decided on;
- *     both were gaps between what Phase A designed and what the SDK
- *     exposed.
+ * To keep the example short, the layout is computed once from the canvas
+ * size at load and doesn't reflow when the window is resized.
  */
 
 import { mount, colorFrom, topLeftToWorld } from "proteus-sdk";
@@ -129,6 +101,8 @@ let vh = 0;
 let screen: Screen = "grid";
 let gridSlots: GridSlot[] = [];
 let hero: Handle | null = null;
+/** Whether the transition into the large view has finished. */
+let heroOpened = false;
 
 let backBtn: Handle | null = null;
 let caption: Handle | null = null;
@@ -141,7 +115,7 @@ function geom(cx: number, cy: number, w: number, h: number, color: Color = CARD_
   const pos = topLeftToWorld(cx, cy, vw, vh);
   return {
     position: { x: pos.x, y: pos.y, z: 0 },
-    size: { x: w, y: h },
+    size: { width: w, height: h },
     rotation: 0,
     scale: 1,
     anchor: { x: 0.5, y: 0.5 },
@@ -210,29 +184,13 @@ async function fetchImageBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/**
- * Fetch an image and pack it into the atlas, giving back a texture any
- * component can wear via `setTexture`.
- *
- * `app.loadTexture` is synchronous — the pixels are on the GPU when it
- * returns — so the only asynchrony here is the network. Nothing polls, and
- * no component is spawned just to carry the bytes.
- */
-async function fetchTexture(url: string): Promise<TextureHandle> {
-  const bytes = await fetchImageBytes(url);
-  const texture = app.loadTexture(bytes);
-  if (!texture) {
-    throw new Error(`could not decode image: ${url}`);
-  }
-  return texture;
-}
 
 /**
  * Run `fn` the first time a transition targeting `handle` completes.
  *
  * `onTransitionComplete` is persistent — it keeps firing for later
  * transitions on the same component — so anything that should happen once
- * (destroying the thing that was morphed away from, say) guards itself.
+ * (destroying the thing that was transitioned away from, say) guards itself.
  */
 function afterTransition(handle: Handle, fn: () => void) {
   let done = false;
@@ -293,28 +251,43 @@ interface GridSlot {
   photo: Photo;
 }
 
-async function buildGrid(offset: number): Promise<GridSlot[]> {
-  const photos = pickPhotos(COLS * ROWS, offset);
+interface DownloadedPhoto {
+  photo: Photo;
+  bytes: Uint8Array;
+}
+
+/** Downloads a grid's photos, all at once. */
+async function downloadGrid(offset: number): Promise<DownloadedPhoto[]> {
+  return Promise.all(
+    pickPhotos(COLS * ROWS, offset).map(async (photo) => {
+      const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
+      return { photo, bytes: await fetchImageBytes(photoUrl(photo.id, w, h)) };
+    }),
+  );
+}
+
+/**
+ * Builds the grid from downloaded photos. Each photo is loaded as a texture
+ * here, and given to its tile at once: a texture must be given to a component
+ * in the frame it's loaded.
+ */
+function buildGrid(downloaded: DownloadedPhoto[]): GridSlot[] {
   const startX = (vw - (COLS * TILE + (COLS - 1) * GAP)) / 2;
   const startY = TITLE_H + (vh - TITLE_H - (ROWS * TILE + (ROWS - 1) * GAP)) / 2;
 
-  const loaded = await Promise.all(
-    photos.map(async (photo) => {
-      const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
-      const full = await fetchTexture(photoUrl(photo.id, w, h));
-      return { photo, full };
-    }),
-  );
-
-  return loaded.map(({ photo, full }, i) => {
+  return downloaded.map(({ photo, bytes }, i) => {
     const col = i % COLS;
     const row = Math.floor(i / COLS);
     const cx = startX + col * (TILE + GAP) + TILE / 2;
     const cy = startY + row * (TILE + GAP) + TILE / 2;
 
+    const full = app.loadTexture(bytes);
+    if (!full) {
+      throw new Error(`could not decode photo ${photo.id}`);
+    }
     const handle = app.component({ geometry: geom(cx, cy, TILE, TILE), hover: { scale: 1.06 } });
     handle.setTexture(full);
-    handle.centerCropToSquare();
+    handle.cropImage({ kind: "centeredSquare" });
 
     return { handle, full, photo };
   });
@@ -343,8 +316,8 @@ async function showDetail(slot: GridSlot) {
   gridSlots = [];
 
   await enterDetail(slot.photo, slot.full, (heroHandle) => {
-    const sig = app.signal();
-    sig.set(heroHandle, slot.handle, TRANSITION);
+    const channel = app.transitionChannel();
+    channel.set(heroHandle, slot.handle, TRANSITION);
     // `set` reports completion on its `to` side — the hero — at which point
     // the tile it grew out of has finished being the exit and can go.
     afterTransition(heroHandle, () => slot.handle.destroy());
@@ -355,9 +328,9 @@ async function showDetail(slot: GridSlot) {
  * Shared hero-construction: spawns the hero already carrying `lowResSource`'s
  * baked image (the clicked tile's *uncropped* low-res fetch — see
  * `GridSlot.full`'s doc for why not the tile itself) — so `startTransition`'s
- * geometry morph scales that image up continuously instead of showing a
- * blank box — then, once both the hi-res fetch and the morph have settled,
- * cross-fades in the hi-res image via a transparent overlay rather than
+ * geometry transition scales that image up continuously instead of showing
+ * a blank box — then, once both the hi-res fetch and the transition have
+ * settled, cross-fades in the hi-res image via a transparent overlay rather than
  * swapping it in as a hard cut. The hero itself only gets the hi-res image
  * once the overlay has fully faded to opaque (so a later `splitTo`/
  * `mergeFrom` off this handle carries the sharp image, not the low-res one).
@@ -375,18 +348,30 @@ async function enterDetail(
   startTransition(heroHandle);
 
   hero = heroHandle;
+  heroOpened = false;
+  void whenSettled(heroHandle).then(() => {
+    if (hero === heroHandle) {
+      heroOpened = true;
+    }
+  });
   buildDetailUi(photo.id);
 
-  // Both the hi-res fetch and the morph have to finish before the crossfade
-  // starts: the fetch so there is something to fade in, the morph so it
-  // isn't fading in over a box that is still moving. Waiting on the real
-  // completion rather than a timer set to the transition's duration.
+  // Both the hi-res fetch and the transition have to finish before the
+  // crossfade starts: the fetch so there is something to fade in, the
+  // transition so it isn't fading in over a box that is still moving. This
+  // waits for the real completion rather than a timer set to the
+  // transition's duration.
   const [w, h] = fetchDimensions(photo.width, photo.height, 900);
-  const [hiRes] = await Promise.all([
-    fetchTexture(photoUrl(photo.id, w, h)),
+  const [hiResBytes] = await Promise.all([
+    fetchImageBytes(photoUrl(photo.id, w, h)),
     whenSettled(heroHandle),
   ]);
   if (hero !== heroHandle) return;
+
+  // Loaded only now, as it's given to the overlay below: a texture must be
+  // given to a component in the frame it's loaded.
+  const hiRes = app.loadTexture(hiResBytes);
+  if (!hiRes) return;
 
   const heroData = heroHandle.get();
   if (!heroData) return;
@@ -410,30 +395,137 @@ async function enterDetail(
 // ---------------------------------------------------------------------------
 
 async function backToGrid() {
-  if (screen !== "detail" || !hero) return;
+  // Wait until the large view has opened: it can't split while it's still
+  // moving.
+  if (screen !== "detail" || !hero || !heroOpened) return;
   const heroSource = hero;
   hero = null;
   screen = "grid";
   destroyUiChrome();
 
-  const slots = await buildGrid(Math.floor(Math.random() * PHOTOS.length));
-  if (screen !== "grid") {
-    for (const s of slots) {
-      s.handle.destroy();
-    }
-    return;
-  }
+  // The loader shows that the new grid is downloading, and plays through at
+  // least once.
+  const playedOnce = showLoader(heroSource);
+  const [downloaded] = await Promise.all([
+    downloadGrid(Math.floor(Math.random() * PHOTOS.length)),
+    playedOnce,
+  ]);
+  removeLoader();
+  if (screen !== "grid") return;
+  const slots = buildGrid(downloaded);
   wireGridTiles(slots);
 
   heroSource.splitTo(
     slots.map((s) => s.handle),
     TRANSITION,
-    { kind: "gridSlice", cols: COLS, rows: ROWS },
+    { kind: "grid", cols: COLS, rows: ROWS },
   );
   // A slicing split reports completion once, on the *source*, when every
   // target has arrived — so the hero tidies itself up the moment the last
   // tile lands.
   afterTransition(heroSource, () => heroSource.destroy());
+}
+
+// ---------------------------------------------------------------------------
+// Loader
+// ---------------------------------------------------------------------------
+
+/** The loader's text, one after another, each for a quarter of a second. */
+const LOADER_FRAMES = [
+  "Fetching Images ->",
+  "Fetching Images -->",
+  "Fetching Images --->",
+  "Fetching Images ---->",
+];
+const LOADER_FRAME_SECONDS = 0.25;
+const LOADER_W = 250;
+const LOADER_H = 44;
+const LOADER_TEXT_SIZE = 18;
+
+/**
+ * "Fetching Images" over the large view, with an arrow that grows in steps,
+ * so the wait for the new grid's photos doesn't look like the app has
+ * stopped. `update` plays it.
+ */
+interface Loader {
+  /** The dark box the text sits on. */
+  panel: Handle;
+  /** The text, a child of `panel`. */
+  label: Handle;
+  /** Seconds since the loader appeared. */
+  elapsed: number;
+  /** Which of `LOADER_FRAMES` is showing. */
+  frame: number;
+  /** Called once the loader has played through once. */
+  onPlayedOnce: () => void;
+}
+
+let loader: Loader | null = null;
+
+/**
+ * Shows the loader in the middle of `view`. The promise resolves once it has
+ * played through once.
+ */
+function showLoader(view: Handle): Promise<void> {
+  const center = view.get()?.geometry.position ?? { x: 0, y: 0, z: 0 };
+  const panel = app.component({
+    geometry: {
+      position: center,
+      size: { width: LOADER_W, height: LOADER_H },
+      rotation: 0,
+      scale: 1,
+      anchor: { x: 0.5, y: 0.5 },
+      color: colorFrom("#00000099"),
+      cornerRadius: LOADER_H / 2,
+    },
+    nonInteractive: true,
+  });
+  // The text is left-aligned, so the words stay still as the arrow grows: the
+  // label's anchor, which places its text, is its left edge. A child is
+  // placed from its parent's anchor, the panel's center.
+  const label = app.component({
+    geometry: {
+      position: { x: -LOADER_W / 2 + 24, y: 0, z: 0 },
+      size: { width: LOADER_W - 48, height: LOADER_H },
+      rotation: 0,
+      scale: 1,
+      anchor: { x: 0, y: 0.5 },
+      color: colorFrom("transparent"),
+      cornerRadius: 0,
+    },
+    nonInteractive: true,
+    text: { content: LOADER_FRAMES[0], sizePx: LOADER_TEXT_SIZE, color: CARD_COLOR },
+  });
+  panel.addChild(label);
+  return new Promise((resolve) => {
+    loader = { panel, label, elapsed: 0, frame: 0, onPlayedOnce: resolve };
+  });
+}
+
+/** Moves the loader on by `dt` seconds. */
+function advanceLoader(dt: number) {
+  if (!loader) return;
+  const before = loader.elapsed;
+  loader.elapsed += dt;
+  const once = LOADER_FRAMES.length * LOADER_FRAME_SECONDS;
+  if (before < once && loader.elapsed >= once) {
+    loader.onPlayedOnce();
+  }
+  const frame = Math.floor(loader.elapsed / LOADER_FRAME_SECONDS) % LOADER_FRAMES.length;
+  if (frame !== loader.frame) {
+    loader.frame = frame;
+    loader.label.setText({
+      content: LOADER_FRAMES[frame],
+      sizePx: LOADER_TEXT_SIZE,
+      color: CARD_COLOR,
+    });
+  }
+}
+
+function removeLoader() {
+  // Destroying the panel destroys the label, its child, too.
+  loader?.panel.destroy();
+  loader = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,8 +551,7 @@ async function main(proteusApp: ProteusApp) {
     text: { content: "Gallery", sizePx: 26, color: TEXT_COLOR },
   });
 
-  const slots = await buildGrid(0);
-  wireGridTiles(slots);
+  wireGridTiles(buildGrid(await downloadGrid(0)));
 
   console.log("[example] ready");
 }
@@ -468,5 +559,8 @@ async function main(proteusApp: ProteusApp) {
 await mount("app", {
   setup(proteusApp) {
     void main(proteusApp);
+  },
+  update(deltaSeconds) {
+    advanceLoader(deltaSeconds);
   },
 });

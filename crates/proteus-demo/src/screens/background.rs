@@ -4,10 +4,9 @@
 //! that ever changes about it.
 //!
 //! `dark` crossfades in over `light` as `Demo`'s `theme_progress` ramps
-//! toward 1 (`Demo::advance_theme`) — unconditionally, every frame,
-//! regardless of `AppState`, mirroring the original exactly (its own doc:
-//! "so a component already reflects the current theme by the time it
-//! becomes visible is true for free, with no visibility branching needed").
+//! toward 1 (`Demo::advance_theme`) — unconditionally, every tick,
+//! regardless of `AppState`, so the background already reflects the
+//! current theme whenever it's seen.
 
 use glam::{Vec2, Vec3, Vec4};
 

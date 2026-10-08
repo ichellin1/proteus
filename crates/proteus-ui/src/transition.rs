@@ -1,10 +1,13 @@
-//! Transition system — the lerp engine at the heart of Proteus.
+//! 1→1 transitions: moving an entity's geometry from one `QuadState` to
+//! another over time.
 //!
-//! Three systems run in sequence each frame:
+//! Three systems run in order each tick:
 //!
-//! 1. [`transition_setup_system`]    — converts `TransitionRequest` → `ActiveTransition`
-//! 2. [`transition_tick_system`]     — advances `t`, lerps `QuadState`
-//! 3. [`transition_complete_system`] — detects `t = 1.0`, fires event, cleans up
+//! 1. [`transition_setup_system`] turns a `TransitionRequest` into an
+//!    `ActiveTransition`;
+//! 2. [`transition_tick_system`] advances it and interpolates the `QuadState`;
+//! 3. [`transition_complete_system`] finishes the ones that reached the end
+//!    and records them in [`CompletedTransitions`].
 
 use bevy_ecs::prelude::*;
 
@@ -14,40 +17,137 @@ use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual};
 // Easing
 // ---------------------------------------------------------------------------
 
-/// A function mapping normalized time `t ∈ [0,1]` to an eased `t ∈ [0,1]`.
+/// How a transition speeds up and slows down: a curve from linear progress,
+/// `0` to `1`, to eased progress. The default is [`Easing::EaseInOutQuad`].
 ///
-/// A plain function pointer keeps `TransitionConfig: Copy` with no heap
-/// allocation. For custom easing that captures state, wrap in a newtype.
-pub type EasingFn = fn(f32) -> f32;
-
-/// t unchanged — constant velocity.
-pub fn linear(t: f32) -> f32 {
-    t
+/// For a curve that isn't built in, use [`Easing::CubicBezier`], which takes the
+/// same four numbers as CSS's `cubic-bezier()`, so a curve can be copied from CSS
+/// or any easing tool. Rust code can also pass any function with
+/// [`Easing::Custom`].
+///
+/// Eased progress may go past `0` or `1`, for a curve that overshoots and
+/// settles back. The geometry follows it, but sizes and corner radii never go
+/// below zero, and colors stay within `0`–`1`.
+///
+/// # Examples
+///
+/// ```
+/// use proteus_ui::{Easing, TransitionConfig};
+///
+/// // Overshoots its target slightly, then settles: CSS's "back out" curve.
+/// let config = TransitionConfig {
+///     duration: 0.4,
+///     easing: Easing::CubicBezier { x1: 0.34, y1: 1.56, x2: 0.64, y2: 1.0 },
+///     ..TransitionConfig::default()
+/// };
+/// assert!(config.easing.apply(0.5) > 0.5);
+/// ```
+#[derive(Copy, Clone, Debug, Default)]
+#[non_exhaustive]
+pub enum Easing {
+    /// Constant speed.
+    Linear,
+    /// Starts slowly, then speeds up.
+    EaseInQuad,
+    /// Starts quickly, then slows to a stop.
+    EaseOutQuad,
+    /// Starts slowly, speeds up, then slows to a stop. The default.
+    #[default]
+    EaseInOutQuad,
+    /// Like [`Easing::EaseOutQuad`], with a stronger slowdown at the end.
+    EaseOutCubic,
+    /// A cubic Bézier curve from `(0, 0)` to `(1, 1)` through the control
+    /// points `(x1, y1)` and `(x2, y2)`, as in CSS's
+    /// `cubic-bezier(x1, y1, x2, y2)`. `x1` and `x2` are clamped to `0`–`1`;
+    /// `y1` and `y2` may go outside it, for a curve that overshoots.
+    CubicBezier {
+        /// The first control point's x, from `0` to `1`.
+        x1: f32,
+        /// The first control point's y.
+        y1: f32,
+        /// The second control point's x, from `0` to `1`.
+        x2: f32,
+        /// The second control point's y.
+        y2: f32,
+    },
+    /// Any function from linear to eased progress, for Rust code. It should
+    /// map `0` to `0` and `1` to `1`, or the transition jumps at its start or
+    /// end.
+    Custom(fn(f32) -> f32),
 }
 
-/// Accelerates from rest.
-pub fn ease_in_quad(t: f32) -> f32 {
-    t * t
-}
-
-/// Decelerates to rest.
-pub fn ease_out_quad(t: f32) -> f32 {
-    t * (2.0 - t)
-}
-
-/// Accelerates then decelerates — the most natural feel for UI motion.
-pub fn ease_in_out_quad(t: f32) -> f32 {
-    if t < 0.5 {
-        2.0 * t * t
-    } else {
-        -1.0 + (4.0 - 2.0 * t) * t
+impl Easing {
+    /// Returns the eased progress for linear progress `t`, which is first
+    /// clamped to `0`–`1`.
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Easing::Linear => t,
+            Easing::EaseInQuad => t * t,
+            Easing::EaseOutQuad => t * (2.0 - t),
+            Easing::EaseInOutQuad => {
+                if t < 0.5 {
+                    2.0 * t * t
+                } else {
+                    -1.0 + (4.0 - 2.0 * t) * t
+                }
+            }
+            Easing::EaseOutCubic => {
+                let u = 1.0 - t;
+                1.0 - u * u * u
+            }
+            Easing::CubicBezier { x1, y1, x2, y2 } => cubic_bezier(x1, y1, x2, y2, t),
+            Easing::Custom(f) => f(t),
+        }
     }
 }
 
-/// Cubic ease-out — slightly more pronounced deceleration than quad.
-pub fn ease_out_cubic(t: f32) -> f32 {
-    let u = 1.0 - t;
-    1.0 - u * u * u
+/// Evaluates the CSS-style cubic Bézier `(x1, y1, x2, y2)` at time `t`: finds
+/// the curve parameter whose x is `t`, then returns that point's y.
+fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+    // With x1 and x2 in 0..=1, x rises steadily with the curve parameter, so
+    // there is exactly one parameter for each t.
+    let (x1, x2) = (x1.clamp(0.0, 1.0), x2.clamp(0.0, 1.0));
+    // Polynomial coefficients, so each coordinate is ((a*s + b)*s + c)*s.
+    let cx = 3.0 * x1;
+    let bx = 3.0 * (x2 - x1) - cx;
+    let ax = 1.0 - cx - bx;
+    let cy = 3.0 * y1;
+    let by = 3.0 * (y2 - y1) - cy;
+    let ay = 1.0 - cy - by;
+    let x_at = |s: f32| ((ax * s + bx) * s + cx) * s;
+    let y_at = |s: f32| ((ay * s + by) * s + cy) * s;
+    let dx_at = |s: f32| (3.0 * ax * s + 2.0 * bx) * s + cx;
+
+    // Newton's method converges in a few steps on most curves...
+    let mut s = t;
+    for _ in 0..8 {
+        let err = x_at(s) - t;
+        if err.abs() < 1e-6 {
+            return y_at(s);
+        }
+        let slope = dx_at(s);
+        if slope.abs() < 1e-6 {
+            break;
+        }
+        s -= err / slope;
+    }
+    // ...and bisection finishes the ones where the slope is too flat for it.
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    s = t;
+    for _ in 0..32 {
+        let x = x_at(s);
+        if (x - t).abs() < 1e-6 {
+            break;
+        }
+        if x < t {
+            lo = s;
+        } else {
+            hi = s;
+        }
+        s = (lo + hi) * 0.5;
+    }
+    y_at(s)
 }
 
 // ---------------------------------------------------------------------------
@@ -56,16 +156,19 @@ pub fn ease_out_cubic(t: f32) -> f32 {
 
 /// Call-site configuration for one transition.
 ///
-/// Passed inside `TransitionRequest`. The same config applies to all lerped
-/// fields for a 1→1 transition; per-child configs are used in 1→N (M3).
+/// Part of a `TransitionRequest`. It applies to every field of the geometry;
+/// splits and merges can give each piece its own.
 #[derive(Copy, Clone, Debug)]
 pub struct TransitionConfig {
-    /// Total wall-clock duration of the interpolation in seconds.
+    /// How long the transition takes, in seconds. `0.0` means instant: the
+    /// transition completes on the next tick, after any `delay`. A negative
+    /// or NaN duration logs a warning and is treated as `0.0`.
     pub duration: f32,
     /// Seconds to wait before t starts advancing. Useful for staggered animations.
     pub delay: f32,
-    /// Easing function applied to raw t before lerping.
-    pub easing: EasingFn,
+    /// How the transition speeds up and slows down. Defaults to
+    /// [`Easing::EaseInOutQuad`].
+    pub easing: Easing,
 }
 
 impl Default for TransitionConfig {
@@ -73,7 +176,7 @@ impl Default for TransitionConfig {
         Self {
             duration: 0.3,
             delay: 0.0,
-            easing: ease_in_out_quad,
+            easing: Easing::default(),
         }
     }
 }
@@ -98,22 +201,30 @@ pub struct ActiveTransition {
     /// Config (duration, easing) for this transition.
     pub config: TransitionConfig,
     /// Set to `true` by `transition_tick_system` when `raw_t >= 1.0`.
-    /// Read by `transition_complete_system` the same frame.
+    /// Read by `transition_complete_system` the same tick.
     /// Exposed `pub` so integration tests can inspect and seed this flag.
     pub is_complete: bool,
+    /// `true` for a change of interaction style, such as a hover effect,
+    /// started by [`crate::interaction::interaction_style_system`]. It leaves
+    /// the entity's `Lifecycle` alone, so the entity keeps taking input, and
+    /// its completion isn't recorded in [`CompletedTransitions`].
+    pub interaction_style: bool,
 }
 
 impl ActiveTransition {
+    /// Starts a transition from `from` to `to`. A negative or NaN
+    /// `config.duration` logs a warning and is treated as `0.0`, instant.
     pub fn new(from: QuadState, to: QuadState, config: TransitionConfig) -> Self {
-        debug_assert!(
-            config.duration > 0.0,
-            "TransitionConfig.duration must be positive (got {}); treating as instant",
+        // `!(d >= 0.0)` is true for NaN as well as for negative values.
+        let duration = if config.duration >= 0.0 {
             config.duration
-        );
-        // Clamp to 0.1 ms minimum so division in transition_tick_system never
-        // produces NaN.  A zero or negative duration is a caller error; in
-        // practice any non-zero tick will immediately satisfy raw_t >= 1.0.
-        let duration = config.duration.max(1e-4);
+        } else {
+            log::warn!(
+                "TransitionConfig::duration is {}; treating it as 0.0, instant",
+                config.duration
+            );
+            0.0
+        };
         let delay_remaining = config.delay.max(0.0);
         Self {
             from,
@@ -126,6 +237,29 @@ impl ActiveTransition {
                 easing: config.easing,
             },
             is_complete: false,
+            interaction_style: false,
+        }
+    }
+
+    /// Progress through the transition, from `0.0` to `1.0`, before easing:
+    /// `0.0` during the delay, and `1.0` as soon as the delay is over for a
+    /// duration of `0.0`.
+    pub fn raw_t(&self) -> f32 {
+        if self.delay_remaining > 0.0 {
+            0.0
+        } else if self.config.duration > 0.0 {
+            (self.elapsed / self.config.duration).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Starts a change of interaction style from `from` to `to`; see
+    /// [`ActiveTransition::interaction_style`](Self#structfield.interaction_style).
+    pub fn for_interaction_style(from: QuadState, to: QuadState, config: TransitionConfig) -> Self {
+        Self {
+            interaction_style: true,
+            ..Self::new(from, to, config)
         }
     }
 }
@@ -134,30 +268,26 @@ impl ActiveTransition {
 // TransitionComplete event
 // ---------------------------------------------------------------------------
 
-/// Single-frame message bag: entities whose transitions completed this frame.
+/// The entities whose transitions finished this tick.
 ///
-/// `transition_complete_system` clears this at the start of each frame and then
-/// appends one entry per entity that reached `t = 1.0`. The shell (or a
-/// downstream system) reads and drains the list after calling `world.update()`.
+/// `transition_complete_system` clears it each tick, then adds each entity
+/// that reached `t = 1.0`. Read it after `ProteusWorld::update`.
 #[derive(Resource, Default)]
 pub struct CompletedTransitions {
-    /// Entities whose transition finished this frame. 1→1 completions come
-    /// from [`transition_complete_system`]; group completions
-    /// (1→N, N→1) come from `topology::group_transition_complete_system` and
-    /// name the *coordinator* — the source for 1→N, the destination for N→1
-    /// — never the virtual entities, which are machinery.
+    /// The entities. For a split or merge, it is the entity coordinating it,
+    /// the source or the destination, never its virtual pieces.
     pub entities: Vec<Entity>,
 }
 
 impl CompletedTransitions {
-    /// Take all completed entities, leaving the internal list empty.
+    /// Takes this tick's completed entities, leaving the list empty, so the
+    /// same completion can't be handled twice.
     ///
-    /// Prefer this over reading `.entities` directly: `drain()` makes it
-    /// impossible to accidentally process the same completions twice.
-    ///
-    /// ```rust,ignore
-    /// for entity in world.resource_mut::<CompletedTransitions>().drain() {
-    ///     // react to entity's transition finishing
+    /// ```
+    /// # use proteus_ui::{CompletedTransitions, ProteusWorld};
+    /// # let mut world = ProteusWorld::new();
+    /// for entity in world.world.resource_mut::<CompletedTransitions>().drain() {
+    ///     // React to `entity`'s transition finishing.
     /// }
     /// ```
     pub fn drain(&mut self) -> Vec<Entity> {
@@ -169,11 +299,11 @@ impl CompletedTransitions {
 // FrameTime resource
 // ---------------------------------------------------------------------------
 
-/// Injected by the shell at the top of each frame with the actual wall-clock delta.
-///
-/// Systems read this instead of an OS clock so tests can supply controlled deltas.
+/// This tick's time step, set by `ProteusWorld::update`. Systems read it,
+/// rather than a clock, so tests can control time.
 #[derive(Resource, Default)]
 pub struct FrameTime {
+    /// Seconds since the previous tick.
     pub delta_secs: f32,
 }
 
@@ -187,30 +317,20 @@ pub struct FrameTime {
 /// `ActiveTransition`, **moves the entity to the from-state**, sets
 /// `Lifecycle::Transitioning`, and removes the request.
 ///
-/// ## Why the from-state is applied here and not left to the first tick
+/// ## Why the entity moves to the start at once
 ///
-/// A declared `from_state` means "this morph visually originates somewhere
-/// other than where the entity currently sits" — how a signal-driven 1→1 makes
-/// the destination appear to come from the source, and how
-/// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) fans N targets out of one
-/// source. Nothing used to write it to the entity; the entity only arrived at
-/// `from` as a side effect of `transition_tick_system`'s first *lerping* tick
-/// computing `lerp(from, to, ~0)`. Two consequences, both fixed by applying it
-/// at setup:
+/// A `from_state` makes a transition start somewhere other than where the
+/// entity is: a channel's `to` starts from its `from`, and a
+/// [`SplitStrategy::PerTarget`](crate::SplitStrategy::PerTarget) split starts
+/// every target from the source. The entity is moved there immediately, not on
+/// the first tick of the transition, because:
 ///
-/// - **During a `delay`,** the tick system deliberately doesn't lerp at all, so
-///   the entity stayed at its pre-transition position for the whole delay and
-///   then jumped to `from`. For a staggered `PerTarget` split that inverts the
-///   intended effect: every target sits visible at its *final* position for the
-///   length of its stagger, then snaps back to the source to animate out.
-/// - **Even at zero delay,** `ActiveTransition` is inserted through `Commands`,
-///   so the tick system doesn't observe it until the next frame — leaving
-///   exactly one rendered frame at the stale position. Where the destination
-///   entity rests at its final geometry, that frame is a flash of the end state
-///   before the animation starts.
+/// - **during a `delay`,** nothing moves, so the entity would sit at its old
+///   position, often its final one, and then jump back to the start;
+/// - **even without a delay,** the transition is only picked up a tick later,
+///   so the entity would show at its old position for one frame.
 ///
-/// With `from_state: None` the origin *is* the current state, so this write is a
-/// no-op — which is every transition the reference demo creates.
+/// With no `from_state`, the start is where the entity already is.
 pub fn transition_setup_system(
     mut commands: Commands,
     // `&Lifecycle` is intentionally excluded: any entity with a TransitionRequest
@@ -259,13 +379,17 @@ pub fn transition_tick_system(
             dt
         };
 
-        if effective_dt == 0.0 {
+        if active.delay_remaining > 0.0 {
+            continue;
+        }
+        // An instant transition completes even on a tick with no time step.
+        if effective_dt == 0.0 && active.config.duration > 0.0 {
             continue;
         }
 
         active.elapsed += effective_dt;
-        let raw_t = (active.elapsed / active.config.duration).clamp(0.0, 1.0);
-        let eased_t = (active.config.easing)(raw_t);
+        let raw_t = active.raw_t();
+        let eased_t = active.config.easing.apply(raw_t);
 
         *state = active.from.lerp(&active.to, eased_t);
 
@@ -277,26 +401,33 @@ pub fn transition_tick_system(
     }
 }
 
-/// Detects completed transitions, records them in `CompletedTransitions`, and cleans up.
+/// Finishes completed transitions and records them in `CompletedTransitions`.
 ///
 /// Runs after `transition_tick_system` in the schedule. Entities whose
 /// `ActiveTransition.is_complete` flag is set get the component removed and
-/// their `Lifecycle` restored to `Idle`.
+/// their `Lifecycle` restored to `Idle`. A change of interaction style is
+/// removed without being recorded, and its `Lifecycle` was never changed.
 ///
 /// Clears `CompletedTransitions` at the top of each call so the resource always
-/// holds exactly this frame's completions.
+/// holds exactly this tick's completions.
 pub fn transition_complete_system(
     mut commands: Commands,
     // Exclude Virtual entities — their completions are handled by
     // `group_transition_complete_system` in `topology.rs`.
-    mut query: Query<(Entity, &ActiveTransition, &mut Lifecycle), Without<Virtual>>,
+    // `Lifecycle` is optional: a change of interaction style doesn't give the
+    // entity one.
+    mut query: Query<(Entity, &ActiveTransition, Option<&mut Lifecycle>), Without<Virtual>>,
     mut completed: ResMut<CompletedTransitions>,
 ) {
     completed.entities.clear();
-    for (entity, active, mut lifecycle) in query.iter_mut() {
+    for (entity, active, lifecycle) in query.iter_mut() {
         if active.is_complete {
-            *lifecycle = Lifecycle::Idle;
-            completed.entities.push(entity);
+            if !active.interaction_style {
+                if let Some(mut lifecycle) = lifecycle {
+                    *lifecycle = Lifecycle::Idle;
+                }
+                completed.entities.push(entity);
+            }
             commands.entity(entity).remove::<ActiveTransition>();
         }
     }
@@ -336,6 +467,43 @@ mod tests {
     }
 
     // --- QuadState::lerp ---
+
+    // An overshooting easing curve passes `t` outside 0..=1 to `lerp`. The
+    // result must stay drawable: no negative size, corner radius or scale, and
+    // colors within 0..=1.
+    #[test]
+    fn lerp_past_either_end_stays_drawable() {
+        let small = QuadState {
+            size: Vec2::new(10.0, 10.0),
+            scale: 0.5,
+            corner_radius: 2.0,
+            color: Vec4::new(0.2, 0.2, 0.2, 0.5),
+            ..state_a()
+        };
+        let large = QuadState {
+            size: Vec2::new(100.0, 100.0),
+            scale: 1.0,
+            corner_radius: 20.0,
+            color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            ..state_b()
+        };
+        for t in [-0.5, 1.5] {
+            let q = small.lerp(&large, t);
+            assert!(
+                q.size.x >= 0.0 && q.size.y >= 0.0,
+                "size at {t}: {:?}",
+                q.size
+            );
+            assert!(q.corner_radius >= 0.0, "corner radius at {t}");
+            assert!(q.scale >= 0.0, "scale at {t}");
+            assert!(
+                q.color.cmpge(Vec4::ZERO).all() && q.color.cmple(Vec4::ONE).all(),
+                "color at {t}"
+            );
+        }
+        // Overshoot still moves past the target where it's safe to.
+        assert!(small.lerp(&large, 1.5).size.x > large.size.x);
+    }
 
     #[test]
     fn lerp_at_t_zero_returns_from() {
@@ -385,55 +553,139 @@ mod tests {
         assert!((out.color.y - 0.5).abs() < 1e-5, "G should be 0.5");
     }
 
-    // --- Easing functions ---
+    // --- Easing ---
+
+    const BUILT_INS: [Easing; 5] = [
+        Easing::Linear,
+        Easing::EaseInQuad,
+        Easing::EaseOutQuad,
+        Easing::EaseInOutQuad,
+        Easing::EaseOutCubic,
+    ];
 
     #[test]
-    fn easing_boundaries_all_functions() {
-        let fns: &[EasingFn] = &[
-            linear,
-            ease_in_quad,
-            ease_out_quad,
-            ease_in_out_quad,
-            ease_out_cubic,
-        ];
-        for f in fns {
-            assert!((f(0.0)).abs() < 1e-6, "f(0) should be 0");
-            assert!((f(1.0) - 1.0).abs() < 1e-6, "f(1) should be 1");
+    fn every_built_in_maps_0_to_0_and_1_to_1() {
+        for e in BUILT_INS {
+            assert!(e.apply(0.0).abs() < 1e-6, "{e:?} at 0");
+            assert!((e.apply(1.0) - 1.0).abs() < 1e-6, "{e:?} at 1");
         }
     }
 
     #[test]
     fn linear_is_identity() {
-        assert!((linear(0.3) - 0.3).abs() < 1e-6);
-        assert!((linear(0.7) - 0.7).abs() < 1e-6);
+        assert!((Easing::Linear.apply(0.3) - 0.3).abs() < 1e-6);
+        assert!((Easing::Linear.apply(0.7) - 0.7).abs() < 1e-6);
     }
 
     #[test]
-    fn ease_in_quad_slower_than_linear_at_midpoint() {
-        // ease_in starts slow, so at t=0.5 it should be behind linear
-        assert!(ease_in_quad(0.5) < 0.5);
-        assert!((ease_in_quad(0.5) - 0.25).abs() < 1e-6);
+    fn ease_in_quad_is_behind_linear_at_the_midpoint() {
+        assert!((Easing::EaseInQuad.apply(0.5) - 0.25).abs() < 1e-6);
     }
 
     #[test]
-    fn ease_out_quad_faster_than_linear_at_midpoint() {
-        // ease_out decelerates, so at t=0.5 it should be ahead of linear
-        assert!(ease_out_quad(0.5) > 0.5);
-        assert!((ease_out_quad(0.5) - 0.75).abs() < 1e-6);
+    fn ease_out_quad_is_ahead_of_linear_at_the_midpoint() {
+        assert!((Easing::EaseOutQuad.apply(0.5) - 0.75).abs() < 1e-6);
     }
 
     #[test]
-    fn ease_in_out_quad_symmetric_around_half() {
-        // should equal 0.5 at midpoint and be symmetric: f(t) = 1 - f(1-t)
-        assert!((ease_in_out_quad(0.5) - 0.5).abs() < 1e-6);
-        let t = 0.3_f32;
-        assert!((ease_in_out_quad(t) + ease_in_out_quad(1.0 - t) - 1.0).abs() < 1e-5);
+    fn ease_in_out_quad_is_symmetric_around_the_midpoint() {
+        let e = Easing::EaseInOutQuad;
+        assert!((e.apply(0.5) - 0.5).abs() < 1e-6);
+        assert!((e.apply(0.3) + e.apply(0.7) - 1.0).abs() < 1e-5);
     }
 
     #[test]
-    fn ease_out_cubic_ahead_of_ease_out_quad_at_midpoint() {
-        // cubic ease-out is more pronounced — reaches further at t=0.5
-        assert!(ease_out_cubic(0.5) > ease_out_quad(0.5));
+    fn ease_out_cubic_is_ahead_of_ease_out_quad_at_the_midpoint() {
+        assert!(Easing::EaseOutCubic.apply(0.5) > Easing::EaseOutQuad.apply(0.5));
+    }
+
+    #[test]
+    fn progress_outside_0_to_1_is_clamped() {
+        for e in BUILT_INS {
+            assert_eq!(e.apply(-0.5), e.apply(0.0), "{e:?} below 0");
+            assert_eq!(e.apply(1.5), e.apply(1.0), "{e:?} above 1");
+        }
+    }
+
+    #[test]
+    fn a_straight_bezier_is_linear() {
+        // cubic-bezier(0, 0, 1, 1) is a straight line.
+        let e = Easing::CubicBezier {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
+        };
+        for t in [0.0, 0.1, 0.25, 0.5, 0.8, 1.0] {
+            assert!((e.apply(t) - t).abs() < 1e-4, "at {t}: {}", e.apply(t));
+        }
+    }
+
+    #[test]
+    fn a_bezier_matches_css_reference_values() {
+        // CSS's `ease`, cubic-bezier(0.25, 0.1, 0.25, 1), at t = 0.5 is about
+        // 0.8024 (the same value browsers compute).
+        let ease = Easing::CubicBezier {
+            x1: 0.25,
+            y1: 0.1,
+            x2: 0.25,
+            y2: 1.0,
+        };
+        assert!(
+            (ease.apply(0.5) - 0.8024).abs() < 1e-3,
+            "{}",
+            ease.apply(0.5)
+        );
+        assert!(ease.apply(0.0).abs() < 1e-6);
+        assert!((ease.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_bezier_can_overshoot() {
+        // A "back out" curve goes past 1 before settling there.
+        let back = Easing::CubicBezier {
+            x1: 0.34,
+            y1: 1.56,
+            x2: 0.64,
+            y2: 1.0,
+        };
+        let peak = (1..100)
+            .map(|i| back.apply(i as f32 / 100.0))
+            .fold(0.0f32, f32::max);
+        assert!(peak > 1.05, "peak {peak}");
+        assert!((back.apply(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bezier_x_outside_0_to_1_is_clamped_not_broken() {
+        let e = Easing::CubicBezier {
+            x1: -2.0,
+            y1: 0.0,
+            x2: 3.0,
+            y2: 1.0,
+        };
+        let clamped = Easing::CubicBezier {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
+        };
+        for t in [0.2, 0.5, 0.9] {
+            assert!((e.apply(t) - clamped.apply(t)).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn custom_easing_calls_the_function() {
+        fn half_step(t: f32) -> f32 {
+            if t < 0.5 {
+                0.0
+            } else {
+                1.0
+            }
+        }
+        assert_eq!(Easing::Custom(half_step).apply(0.4), 0.0);
+        assert_eq!(Easing::Custom(half_step).apply(0.6), 1.0);
     }
 
     // --- TransitionConfig default ---
@@ -443,7 +695,6 @@ mod tests {
         let cfg = TransitionConfig::default();
         assert!((cfg.duration - 0.3).abs() < 1e-6);
         assert!(cfg.delay == 0.0);
-        // easing should be ease_in_out_quad
-        assert!((cfg.easing)(0.5) == ease_in_out_quad(0.5));
+        assert!(matches!(cfg.easing, Easing::EaseInOutQuad));
     }
 }

@@ -1,8 +1,8 @@
 {
-  "name": "proteus-example-gallery",
+  "name": "proteus-example-video",
   "private": true,
   "version": "0.1.0",
-  "description": "Proteus TypeScript SDK example, built incrementally.",
+  "description": "Video from the browser's own player, shown with the Proteus TypeScript SDK.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "proteus-sdk": "file:../../crates/proteus-sdk-web/ts"
+    "proteus-sdk": "file:../../../crates/proteus-sdk-web/ts"
   },
   "devDependencies": {
     "@swc/core": "1.10.16",

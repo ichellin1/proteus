@@ -1,22 +1,18 @@
-//! Integration tests for M3 topology systems.
-//!
-//! Tests cover:
-//! - `one_to_n_setup_system` (bake and slice strategies)
-//! - `n_to_one_setup_system` (slice strategy)
-//! - `group_transition_complete_system`
-//! - Button → list → button round trip
+// Tests of splits and merges: `one_to_n_setup_system` with each strategy,
+// `n_to_one_setup_system`, `group_transition_complete_system`, and a
+// button -> list -> button round trip.
 
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 use proteus_ui::{
     component::{Lifecycle, TransitionRequest, Virtual, Visibility},
     topology::{
-        group_transition_complete_system, horizontal_slices, n_to_one_setup_system,
-        one_to_n_setup_system, ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout,
-        NToOneRequest, OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
+        group_transition_complete_system, n_to_one_setup_system, one_to_n_setup_system, row_slices,
+        ActiveGroupTransition, GroupSource, GroupTarget, MergeLayout, NToOneRequest, OneToNRequest,
+        PartOfGroup, SplitStrategy, TransitionAtlasSize,
     },
     transition::{
-        linear, transition_tick_system, ActiveTransition, CompletedTransitions, FrameTime,
+        transition_tick_system, ActiveTransition, CompletedTransitions, Easing, FrameTime,
         TransitionConfig,
     },
     QuadState,
@@ -60,17 +56,17 @@ fn default_cfg() -> TransitionConfig {
     TransitionConfig {
         duration: 0.5,
         delay: 0.0,
-        easing: linear,
+        easing: Easing::Linear,
     }
 }
 
-/// Count entities in the world that carry a given component.
+// Count entities in the world that carry a given component.
 fn count_with<C: Component>(world: &mut World) -> usize {
     let mut q = world.query::<&C>();
     q.iter(world).count()
 }
 
-/// Spawn N target entities (small blue squares at evenly-spaced positions).
+// Spawn N target entities (small blue squares at evenly-spaced positions).
 fn spawn_targets(world: &mut World, n: usize) -> Vec<Entity> {
     (0..n)
         .map(|i| {
@@ -90,13 +86,13 @@ fn spawn_targets(world: &mut World, n: usize) -> Vec<Entity> {
 }
 
 // ---------------------------------------------------------------------------
-// horizontal_slices unit-level sanity checks (quick smoke tests)
+// row_slices unit-level sanity checks (quick smoke tests)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn horizontal_slices_total_width_equals_source() {
+fn row_slices_total_width_equals_source() {
     let src = red();
-    let slices = horizontal_slices(&src, 5);
+    let slices = row_slices(&src, 5);
     let total_w: f32 = slices.iter().map(|s| s.size.x).sum();
     assert!((total_w - src.size.x).abs() < 1e-3);
 }
@@ -223,7 +219,7 @@ fn per_target_1_to_n_child_configs_override_the_default() {
         TransitionConfig {
             duration: 0.1 + idx as f32 * 0.1,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         }
     }
 
@@ -264,11 +260,11 @@ fn per_target_1_to_n_child_configs_override_the_default() {
 }
 
 // ---------------------------------------------------------------------------
-// OneToNRequest — Slice strategy
+// OneToNRequest — Row strategy
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_1_to_n_creates_n_virtual_entities() {
+fn row_1_to_n_creates_n_virtual_entities() {
     let mut world = make_world();
 
     let n = 5;
@@ -288,7 +284,7 @@ fn slice_1_to_n_creates_n_virtual_entities() {
             targets: group_targets,
             default_config: default_cfg(),
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -303,7 +299,7 @@ fn slice_1_to_n_creates_n_virtual_entities() {
 }
 
 #[test]
-fn slice_1_to_n_hides_source_and_targets() {
+fn row_1_to_n_hides_source_and_targets() {
     let mut world = make_world();
 
     let n = 3;
@@ -324,7 +320,7 @@ fn slice_1_to_n_hides_source_and_targets() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();
@@ -337,7 +333,7 @@ fn slice_1_to_n_hides_source_and_targets() {
         !world.get::<Visibility>(source).unwrap().visible,
         "source should be hidden"
     );
-    // All targets must be hidden during the slice transition.
+    // All targets must be hidden during the split.
     for &t in &targets {
         assert!(
             !world.get::<Visibility>(t).unwrap().visible,
@@ -347,7 +343,7 @@ fn slice_1_to_n_hides_source_and_targets() {
 }
 
 #[test]
-fn slice_1_to_n_source_has_active_group_transition() {
+fn row_1_to_n_source_has_active_group_transition() {
     let mut world = make_world();
     let n = 3;
     let targets = spawn_targets(&mut world, n);
@@ -367,7 +363,7 @@ fn slice_1_to_n_source_has_active_group_transition() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();
@@ -380,9 +376,8 @@ fn slice_1_to_n_source_has_active_group_transition() {
         .expect("source should carry ActiveGroupTransition");
     assert_eq!(coordinator.reveal_on_complete.len(), n);
 
-    // The coordinator used to cache a `total` field; completion is now decided
-    // by counting the virtuals that actually carry `PartOfGroup(source)`, so
-    // that is what this pins.
+    // Completion is decided by counting the virtuals that carry
+    // `PartOfGroup(source)`, so that is what this pins.
     let members = world
         .query::<&PartOfGroup>()
         .iter(&world)
@@ -392,7 +387,7 @@ fn slice_1_to_n_source_has_active_group_transition() {
 }
 
 #[test]
-fn slice_1_to_n_virtuals_have_active_transitions() {
+fn row_1_to_n_virtuals_have_active_transitions() {
     let mut world = make_world();
     let n = 3;
     let targets = spawn_targets(&mut world, n);
@@ -411,7 +406,7 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
             targets: group_targets,
             default_config: default_cfg(),
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -427,11 +422,11 @@ fn slice_1_to_n_virtuals_have_active_transitions() {
 }
 
 // ---------------------------------------------------------------------------
-// Slice group transition: tick → complete lifecycle
+// Row group transition: tick → complete lifecycle
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
+fn row_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
     let mut world = make_world();
     let n = 3;
     let targets = spawn_targets(&mut world, n);
@@ -451,7 +446,7 @@ fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();
@@ -496,7 +491,7 @@ fn slice_1_to_n_complete_reveals_targets_and_despawns_virtuals() {
 }
 
 #[test]
-fn slice_1_to_n_partial_complete_does_not_finalize() {
+fn row_1_to_n_partial_complete_does_not_finalize() {
     // If only some virtuals complete, the group should NOT finalize yet.
     let mut world = make_world();
     let n = 3;
@@ -517,10 +512,10 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
             default_config: TransitionConfig {
                 duration: 1.0,
                 delay: 0.0,
-                easing: linear,
+                easing: Easing::Linear,
             },
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -560,7 +555,7 @@ fn slice_1_to_n_partial_complete_does_not_finalize() {
 }
 
 // ---------------------------------------------------------------------------
-// NToOneRequest — Slice strategy
+// NToOneRequest — Row layout
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -599,7 +594,7 @@ fn n_to_one_hides_sources_and_dest() {
                 sources,
                 default_config: default_cfg(),
                 child_configs: None,
-                layout: MergeLayout::Horizontal,
+                layout: MergeLayout::Row,
             },
         ))
         .id();
@@ -645,7 +640,7 @@ fn n_to_one_creates_n_virtual_entities() {
             sources,
             default_config: default_cfg(),
             child_configs: None,
-            layout: MergeLayout::Horizontal,
+            layout: MergeLayout::Row,
         },
     ));
 
@@ -682,7 +677,7 @@ fn n_to_one_complete_reveals_dest() {
                 sources,
                 default_config: default_cfg(),
                 child_configs: None,
-                layout: MergeLayout::Horizontal,
+                layout: MergeLayout::Row,
             },
         ))
         .id();
@@ -704,7 +699,7 @@ fn n_to_one_complete_reveals_dest() {
 }
 
 // ---------------------------------------------------------------------------
-// Round trip: button → list (1→N slice) → button (N→1 slice)
+// Round trip: button → list (a row split) → button (a row merge)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -741,7 +736,7 @@ fn round_trip_button_list_button() {
         })
         .collect();
 
-    // ----  Phase 1: button (1→N slice) → list items ----
+    // ----  Phase 1: button (row split) → list items ----
     let list_targets: Vec<GroupTarget> = list_entities
         .iter()
         .zip(list_states.iter())
@@ -756,10 +751,10 @@ fn round_trip_button_list_button() {
         default_config: TransitionConfig {
             duration: 0.3,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         },
         child_configs: None,
-        strategy: SplitStrategy::Slice,
+        strategy: SplitStrategy::Row,
     });
 
     run(&mut world, one_to_n_setup_system);
@@ -808,7 +803,7 @@ fn round_trip_button_list_button() {
     };
     assert_eq!(all_entities.len(), 4, "no entity leaks after Phase 1");
 
-    // ---- Phase 2: list items (N→1 slice) → button ----
+    // ---- Phase 2: list items (row merge) → button ----
     let sources: Vec<GroupSource> = list_entities
         .iter()
         .zip(list_states.iter())
@@ -823,10 +818,10 @@ fn round_trip_button_list_button() {
         default_config: TransitionConfig {
             duration: 0.3,
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         },
         child_configs: None,
-        layout: MergeLayout::Horizontal,
+        layout: MergeLayout::Row,
     });
 
     run(&mut world, n_to_one_setup_system);
@@ -878,16 +873,16 @@ fn round_trip_button_list_button() {
 }
 
 // ---------------------------------------------------------------------------
-// ChildConfigs — slice strategy per-child config
+// ChildConfigs — per-child config with the row strategy
 // ---------------------------------------------------------------------------
 
 #[test]
-fn slice_child_configs_set_per_virtual_duration() {
+fn row_child_configs_set_per_virtual_duration() {
     fn per_child(idx: usize, _total: usize) -> TransitionConfig {
         TransitionConfig {
             duration: 0.1 * (idx + 1) as f32, // 0.1, 0.2, 0.3
             delay: 0.0,
-            easing: linear,
+            easing: Easing::Linear,
         }
     }
 
@@ -909,7 +904,7 @@ fn slice_child_configs_set_per_virtual_duration() {
             targets: group_targets,
             default_config: default_cfg(),
             child_configs: Some((0..n).map(|i| per_child(i, n)).collect()),
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -932,17 +927,17 @@ fn slice_child_configs_set_per_virtual_duration() {
 // Edge-case / boundary
 // ---------------------------------------------------------------------------
 
-/// A `OneToNRequest` with an empty `targets` vec is a degenerate but valid
-/// call.  The system must not panic and must produce **zero** virtual entities.
-///
-/// With no children to animate there is nothing to coordinate, so
-/// `one_to_n_setup_system` should be a silent no-op with respect to virtual
-/// entity creation (both PerTarget and Slice strategies).
+// A `OneToNRequest` with an empty `targets` vec is a degenerate but valid
+// call.  The system must not panic and must produce **zero** virtual entities.
+//
+// With no children to animate there is nothing to coordinate, so
+// `one_to_n_setup_system` should be a silent no-op with respect to virtual
+// entity creation (both the PerTarget and Row strategies).
 #[test]
 fn one_to_n_with_zero_targets_is_noop() {
     let mut world = make_world();
 
-    // Slice strategy — this is the path that spawns virtual entities.
+    // Row strategy — this is the path that spawns virtual entities.
     world.spawn((
         red(),
         Lifecycle::Idle,
@@ -950,7 +945,7 @@ fn one_to_n_with_zero_targets_is_noop() {
             targets: vec![], // empty — no children
             default_config: default_cfg(),
             child_configs: None,
-            strategy: SplitStrategy::Slice,
+            strategy: SplitStrategy::Row,
         },
     ));
 
@@ -986,21 +981,14 @@ fn one_to_n_with_zero_targets_is_noop() {
 }
 
 // ---------------------------------------------------------------------------
-// A group transition whose coordinator disappears (audit C-07)
+// A split whose coordinator is destroyed
 // ---------------------------------------------------------------------------
 
-/// Destroying the coordinator mid-transition must not strand its virtuals.
-///
-/// `group_transition_complete_system` bails out when the coordinator is gone,
-/// because everything finalization needs (`reveal_on_complete`, the shared
-/// allocation, the `Lifecycle` to restore) lives on it. That left the virtual
-/// entities alive forever — still rendering, frozen at whatever `t` they
-/// reached — and leaked every `transition_atlas` region the group held.
-///
-/// Reachable from shipped code: `examples/gallery` calls `splitTo` and then
-/// destroys the source on a `setTimeout` sized to the transition. `setTimeout`
-/// keeps running while `requestAnimationFrame` is throttled, so backgrounding
-/// the tab in that window destroys the coordinator with the group in flight.
+// Destroying the coordinating entity mid-transition must remove its virtual
+// pieces and free their atlas regions. The group can't finish without the
+// coordinator, and the pieces would otherwise stay on screen, frozen. This
+// happens in practice: a web page can destroy the source on a timer while its
+// tab is in the background and animation is paused.
 #[test]
 fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() {
     let mut world = make_world();
@@ -1023,7 +1011,7 @@ fn virtuals_are_cleaned_up_when_their_coordinator_is_destroyed_mid_transition() 
                 targets: group_targets,
                 default_config: default_cfg(),
                 child_configs: None,
-                strategy: SplitStrategy::Slice,
+                strategy: SplitStrategy::Row,
             },
         ))
         .id();

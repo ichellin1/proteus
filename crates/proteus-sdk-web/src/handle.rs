@@ -1,12 +1,9 @@
-//! `Handle`/`SignalHandle`/`TextureHandle` — opaque wasm-bindgen wrappers
-//! around `proteus-sdk`'s identity tokens.
+//! JavaScript wrappers for `proteus-sdk`'s handles.
 //!
-//! Mutating operations (`.onClick`, `.addChild`, `.destroy`, ...) live on
-//! [`crate::ProteusApp`], taking a handle argument, mirroring
-//! `proteus-sdk`'s own `handle.on_click(&mut app, cb)` shape exactly (JS:
-//! `app.onClick(handle, cb)`) — the raw bridge stays a faithful 1:1 mirror;
-//! `ts/`'s hand-authored layer restores `button.onClick(cb)` ergonomics by
-//! having its `Handle` class close over its owning `ProteusApp`.
+//! Operations on a handle are methods of [`crate::ProteusApp`] that take the
+//! handle as an argument (`app.onClick(handle, cb)`), mirroring
+//! `proteus-sdk`. The TypeScript layer turns them into methods on the handle
+//! (`button.onClick(cb)`).
 
 use slotmap::Key;
 use wasm_bindgen::prelude::*;
@@ -18,26 +15,25 @@ use proteus_sdk as sdk;
 // Handle
 // ---------------------------------------------------------------------------
 
+/// A handle to a component.
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
 pub struct Handle(pub(crate) sdk::Handle);
 
 #[wasm_bindgen]
 impl Handle {
-    /// This component's entity id, as `Entity::to_bits()` cast to `f64` —
-    /// see `dto.rs`'s top doc for the precision note. Round-trips through
-    /// [`Handle::from_id`].
+    /// The component's ID: its entity's bits as a number, which is exact for
+    /// any realistic app (see the `dto` module). [`Handle::from_id`] turns it
+    /// back into a handle.
     #[wasm_bindgen(js_name = id)]
     pub fn id(&self) -> f64 {
         bevy_ecs::prelude::Entity::to_bits(self.0.id()) as f64
     }
 
-    /// Reconstruct a `Handle` from an id previously obtained from
-    /// [`Handle::id`] or a `ComponentData.children` entry. Does not check
-    /// the entity is still alive — exactly like holding onto any other stale
-    /// `Handle`: mutating methods **throw**, and `get()` returns `undefined`.
-    /// Neither panics (before this was fixed, they panicked, which on wasm
-    /// takes the whole module down — see `proteus_sdk::HandleError`).
+    /// Returns a handle for an ID from [`Handle::id`] or
+    /// `ComponentData.children`. The ID isn't checked: if its component has
+    /// been destroyed, methods that change it throw and `get` returns
+    /// `undefined`.
     #[wasm_bindgen(js_name = fromId)]
     pub fn from_id(id: f64) -> Handle {
         let entity = bevy_ecs::prelude::Entity::from_bits(id as u64);
@@ -46,40 +42,35 @@ impl Handle {
 }
 
 // ---------------------------------------------------------------------------
-// SignalHandle
+// TransitionChannel
 // ---------------------------------------------------------------------------
 
-// No methods of its own yet — `SignalHandle` is currently only ever passed
-// around opaquely (`app.signal()` → pass to `signalSet`/`signalDestroy`/
-// `onDropped`). No `impl` block needed for a struct with no exposed methods.
-#[wasm_bindgen(js_name = SignalHandle)]
+/// A handle to a transition channel. It has no methods of its own; it is
+/// passed to `channelSet`, `channelDestroy` and `onDropped`.
+#[wasm_bindgen(js_name = TransitionChannel)]
 #[derive(Clone, Copy)]
-pub struct JsSignalHandle(pub(crate) sdk::SignalHandle);
+pub struct JsTransitionChannel(pub(crate) sdk::TransitionChannel);
 
 // ---------------------------------------------------------------------------
 // TextureHandle
 // ---------------------------------------------------------------------------
 
+/// A handle to a texture in the atlas.
 #[wasm_bindgen(js_name = TextureHandle)]
 #[derive(Clone, Copy)]
 pub struct JsTextureHandle(pub(crate) sdk::TextureHandle);
 
 #[wasm_bindgen(js_class = "TextureHandle")]
 impl JsTextureHandle {
-    /// This texture's id, as `KeyData::as_ffi()` cast to `f64` — the
-    /// `slotmap` crate's own documented opaque-FFI-handle round-trip
-    /// (`as_ffi`/`from_ffi`), same shape as `Handle`'s entity-bits
-    /// conversion. Round-trips through [`JsTextureHandle::from_id`].
+    /// The texture's ID, as a number. [`JsTextureHandle::from_id`] turns it
+    /// back into a handle.
     #[wasm_bindgen(js_name = id)]
     pub fn id(&self) -> f64 {
         self.0.id().data().as_ffi() as f64
     }
 
-    /// Reconstruct a `TextureHandle` from an id previously obtained from
-    /// [`JsTextureHandle::id`]. Real texture *registration* (turning bytes
-    /// into a `main_atlas` region) isn't exposed by this crate yet — see
-    /// `proteus-sdk`'s own `TextureHandle` doc for why (M11's ref-counting
-    /// is entity-scoped, not an independent resource).
+    /// Returns a handle for an ID from [`JsTextureHandle::id`]. To add a
+    /// texture, use `loadTexture` or `bakeTexture`.
     #[wasm_bindgen(js_name = fromId)]
     pub fn from_id(id: f64) -> JsTextureHandle {
         let key_data = slotmap::KeyData::from_ffi(id as u64);
@@ -88,3 +79,14 @@ impl JsTextureHandle {
         )))
     }
 }
+
+// ---------------------------------------------------------------------------
+// VideoHandle
+// ---------------------------------------------------------------------------
+
+/// A handle to a video whose frames the app supplies. It has no methods of
+/// its own; it is passed to `uploadVideoFrame`, `releaseVideo` and
+/// `showVideo`.
+#[wasm_bindgen(js_name = VideoHandle)]
+#[derive(Clone, Copy)]
+pub struct JsVideoHandle(pub(crate) sdk::VideoHandle);

@@ -13,18 +13,17 @@ members = [
     "crates/proteus-demo",
     "crates/proteus-shell-web",
     "crates/proteus-shell-native",
+    "crates/proteus-docs",
+    "examples/gallery/rust",
+    "examples/video/rust",
+    "examples/stepper/rust",
+    "examples/menu/rust",
 ]
 
-# `cargo build`/`run`/`test`/`clippy` with no `-p`/`--workspace` operate on
-# these by default, not literally every member — proteus-shell-web can
-# never compile for a host target (wgpu::SurfaceTarget::Canvas is
-# #[cfg(web)]-gated) and pulling it into a plain `cargo run` at the
-# workspace root fails the whole build before it ever gets far enough to
-# notice proteus-shell-native's own `proteus` binary is the one (and only)
-# runnable target in this list — see scripts/git-hooks/pre-push, Makefile,
-# and .github/workflows/ci.yml for the same exclusion applied to clippy/
-# test, plus the wasm32-targeted build/clippy proteus-shell-web still gets
-# there instead.
+# What `cargo build`, `run`, `test` and `clippy` use without `-p` or
+# `--workspace`. proteus-host-web and proteus-shell-web are left out: they
+# only compile for wasm32. CI, the Makefile and scripts/git-hooks/pre-push
+# build and lint them for wasm32 separately.
 default-members = [
     "crates/proteus-gpu",
     "crates/proteus-render",
@@ -35,6 +34,11 @@ default-members = [
     "crates/proteus-host-winit",
     "crates/proteus-demo",
     "crates/proteus-shell-native",
+    "crates/proteus-docs",
+    "examples/gallery/rust",
+    "examples/video/rust",
+    "examples/stepper/rust",
+    "examples/menu/rust",
 ]
 
 [workspace.package]
@@ -52,7 +56,7 @@ bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
 etagere = "0.3"  # shelf-based 2D atlas packing (used by TextureRegistry)
 fontdue = "0.8"  # pure-Rust font rasterization — no system font dependencies
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }  # static image decode (M9.7) — pure Rust, works on native and wasm32
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }  # PNG and JPEG decoding; pure Rust, works on native and wasm32
 
 # ECS
 bevy_ecs = "0.18"  # standalone ECS runtime — does not pull in the full Bevy engine
