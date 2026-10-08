@@ -98,7 +98,7 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Clippy for wasm32 (the web crates, the docs' web snippets and the Rust examples)
-        run: cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+        run: cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
       - name: Docs (wasm32)
         # Same rationale as the `test` job's own docs step; these two crates
