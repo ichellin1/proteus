@@ -166,9 +166,15 @@ const styled = app.component({
 
 When more than one applies, the first in this list wins: disabled, pressed, focused, hover.
 
+The [menu example](../../examples/menu) uses hover, pressed and disabled styles on its items.
+
 A change of style animates over 0.15 seconds. It isn't a transition: the component keeps getting
 the pointer during it, and it doesn't call `on_transition_complete`. A component that is
 transitioning keeps its style until the transition ends, then takes the style that applies.
+
+A transition into a disabled component ends in its disabled style: a split into a menu with a
+disabled item turns that item gray on the way, rather than gray after it arrives. The hover and
+pressed styles depend on the pointer, so they apply after a transition ends.
 
 A style applies on top of where the component rests, so after the component moves, its styles
 move with it; see [Where a component rests](./components.md#where-a-component-rests).
