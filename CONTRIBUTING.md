@@ -76,12 +76,15 @@ make build-sdk-web
 builds `proteus-sdk-web` and `proteus-host-web` to WebAssembly (into `ts/pkg` and
 `ts/pkg-host`), then compiles the TypeScript package into `crates/proteus-sdk-web/ts/dist/`. The
 examples depend on it through a `file:` link, so build it first. Then, in an example's
-directory, such as `examples/gallery`:
+TypeScript directory, such as `examples/gallery/typescript`:
 
 ```bash
 npm install
 npm run dev
 ```
+
+`make example-gallery-ts`, from the root, does all of this, and rebuilds the SDK only when its
+sources have changed.
 
 ### Checks
 

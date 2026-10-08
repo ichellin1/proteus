@@ -58,3 +58,20 @@ build-sdk-web:
 	  --out-dir ../proteus-sdk-web/ts/pkg-host \
 	  --release
 	cd crates/proteus-sdk-web/ts && npm run build
+
+## The built proteus-sdk package, which the TypeScript examples use. It is
+## rebuilt when any crate's Rust, the SDK's TypeScript or Cargo.lock changed
+## since the last build.
+SDK_BUILT := crates/proteus-sdk-web/ts/dist/index.js
+SDK_SOURCES := $(shell find crates \( -name target -o -name node_modules -o -name pkg -o -name pkg-host \) -prune \
+  -o \( -name '*.rs' -o -name Cargo.toml \) -print) \
+  $(wildcard crates/proteus-sdk-web/ts/src/*.ts) Cargo.lock
+
+$(SDK_BUILT): $(SDK_SOURCES)
+	cd crates/proteus-sdk-web/ts && npm install
+	$(MAKE) build-sdk-web
+
+## Run a TypeScript example in a browser, such as `make example-gallery-ts`:
+## builds the SDK if needed, installs the example's packages and starts Vite.
+example-%-ts: $(SDK_BUILT)
+	cd examples/$*/typescript && npm install && npm run dev

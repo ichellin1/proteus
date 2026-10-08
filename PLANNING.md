@@ -4581,6 +4581,26 @@ is deployed to GitHub Pages alongside the demo.
 
 Which examples to build is decided at the start of the step.
 
+**Decided (2026-10-08).** Five examples, Rust first where an example has both languages:
+
+| Example | Rust | TypeScript | Shows |
+|---|---|---|---|
+| gallery | port | exists | 1→1 and 1→N with downloaded photos, loading images |
+| video | new | exists | Bringing your own player: `ffmpeg` natively, `<video>` on the web |
+| menu | — | new | A split into a menu and a merge back (N→1), interaction styles |
+| stepper | new | new | A sequence of screens, each transforming into the next |
+
+- **Layout:** one folder per example, a subfolder per language (`examples/gallery/rust`,
+  `examples/gallery/typescript`), and one README per example covering both, Rust first.
+- **Rust examples** are workspace crates named after the example (`publish = false`). They run
+  natively with `cargo run -p gallery`, and in a browser with `make example-gallery-web`, which
+  builds with `wasm-pack` and serves the page.
+- **TypeScript examples** run with `make example-gallery-ts`, which builds the SDK when its
+  sources have changed, installs and starts Vite. The README also gives the steps without make.
+- **Sub-commits:** 7a structure (layout, make targets, CI, README pattern); 7b gallery in Rust;
+  7c video in Rust; 7d menu in TypeScript; 7e stepper in Rust and TypeScript. Each links its
+  example from the relevant guide as it lands.
+
 - [ ] At least three complete examples in `examples/` beyond the reference demo, each showing a
   distinct use case or transition pattern.
 - [ ] Each has a README and runs with one command.

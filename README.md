@@ -37,13 +37,13 @@ and handing it to a host's `run()`. The host owns the window or canvas, the GPU 
 frame loop and input; `Engine` owns `Proteus` and calls into the app. Nothing forks a shell, and
 the same app runs on both platforms — `proteus-demo` is exactly this, and the two `proteus-shell-*`
 crates below it are thin entry points. From TypeScript, `mount()` plays the host's role instead;
-see `examples/gallery`.
+see `examples/gallery/typescript`.
 
 ## Video
 
 Video is currently **experimental**. Proteus shows video but doesn't play it: you bring your own
 player, such as the browser's `<video>` element, `ffmpeg` or a hardware decoder, and upload its
-frames to a `VideoHandle`, which components show. The current version of Proteus supports one video at a time, with frames supplied by the app; playback controls are the player's own. See `examples/video` for a
+frames to a `VideoHandle`, which components show. The current version of Proteus supports one video at a time, with frames supplied by the app; playback controls are the player's own. See `examples/video/typescript` for a
 `<video>` element in TypeScript, and the native shell's `video_player` for `ffmpeg` in Rust.
 
 ## Reference Demo
