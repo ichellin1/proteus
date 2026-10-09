@@ -1,0 +1,96 @@
+# git-cliff's settings: how CHANGELOG.md is generated from the commit history.
+# CHANGELOG.md is never edited by hand; scripts/bump-version regenerates it.
+# Commits follow Conventional Commits; see CONTRIBUTING.md.
+
+[changelog]
+header = """
+# Changelog
+
+The changes in each version of Proteus. This file is generated from the commit history; see
+RELEASING.md.
+"""
+# Each version's section. Version 0.1.0 opens with a summary of everything in
+# it: the work before it didn't use Conventional Commits, so the list below
+# the summary only covers the work that prepared the release.
+body = """
+{% if version -%}
+## {{ version | trim_start_matches(pat="v") }} ({{ timestamp | date(format="%Y-%m-%d") }})
+{%- else -%}
+## Unreleased
+{%- endif %}
+{% if version == "v0.1.0" %}
+The first release. Proteus is a UI framework whose components transform into one another
+instead of loading new screens: a button can become the panel it opens.
+
+- **Components:** shapes with a position, size, rotation, scale, color and corner radius, with
+  borders, drop shadows and glows; children placed relative to their parent; and baking, which
+  draws a component and its children as one image.
+- **Transitions:** a component moving to new geometry, one component turning into another
+  through a transition channel (1→1), a split into several (1→N) and a merge of several into
+  one (N→1), with built-in easing curves and any cubic Bézier.
+- **Interaction:** pointer events, and hover, pressed, focused and disabled styles, with hit
+  testing that follows rotation and drawing order.
+- **Content:** a line of text in the app's font, images and textures in a texture atlas that
+  makes room for new ones as needed, and video from the app's own player (experimental).
+- **Hosts:** a native host, for macOS, Windows and Linux, and a web host, with WebGPU or
+  WebGL2. Apps are written in Rust, or in TypeScript with the `proteus-sdk` npm package.
+- **Documentation:** getting-started guides, concept guides and how-tos, in Rust and
+  TypeScript; an API reference; and examples in both languages.
+
+The changes below were made while preparing this release.
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.breaking %}**Breaking:** {% endif %}{% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}
+{%- endfor %}
+{%- endfor %}
+"""
+trim = false
+footer = ""
+# The template's tags leave stray blank lines: keep one between blocks, and
+# drop them at the end, where git-cliff adds the file's final newline.
+postprocessors = [
+    { pattern = "\n{3,}", replace = "\n\n" },
+    { pattern = "\n+$", replace = "" },
+]
+
+[git]
+conventional_commits = true
+# Commits that don't follow Conventional Commits are left out.
+filter_unconventional = true
+split_commits = false
+# Only commits that one of `commit_parsers` puts in a group are listed. Older
+# commits such as `PLANNING: …` look conventional but aren't.
+filter_commits = true
+# Internal step names, from the developer release's plan, aren't changes a
+# user of Proteus would know.
+commit_preprocessors = [
+    { pattern = " \\(step [0-9][a-z]?\\)", replace = "" },
+    { pattern = " and close out step [0-9]+", replace = "" },
+]
+protect_breaking_commits = true
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"
+# The `<!-- n -->` comments order the groups; the template strips them.
+commit_parsers = [
+    # Before the developer release: covered by 0.1.0's summary.
+    { sha = "455787c0d05494c0fce10d91a7dedcaafec9ae02", skip = true },
+    { sha = "4261af436438421e4af6fd2825a72b9d61509acd", skip = true },
+    { sha = "0b418355d4f6600805ef34500a404b81122dea8c", skip = true },
+    { sha = "2ba97056c0b69a489f6323e1ac096c90c026deff", skip = true },
+    { sha = "6c17c4d31bfb60a4a2a13c9f65cac56bc3d04704", skip = true },
+    # The project's own planning notes, not part of what it ships.
+    { message = "^docs\\(planning\\)", skip = true },
+    { message = "^Merge ", skip = true },
+    { message = "^docs: close out step", skip = true },
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { message = "^refactor", group = "<!-- 3 -->Changes" },
+    { message = "^docs", group = "<!-- 4 -->Documentation" },
+    { message = "^(build|ci)", group = "<!-- 5 -->Build and release" },
+    { message = "^chore", group = "<!-- 5 -->Build and release" },
+    { message = "^(test|style)", skip = true },
+]
