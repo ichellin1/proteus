@@ -148,13 +148,13 @@ crate runs as doctests, and a check that every link between the guides resolves.
 crates only build for WebAssembly, so `make clippy` checks them instead.
 
 Some tests draw with the GPU: rendering in `proteus-render`, baking in `proteus-ui`, and textures
-in `proteus-sdk`. On a machine without a GPU they're skipped, with a message, so the tests pass
-anywhere. Set `REQUIRE_GPU=1` to make a missing GPU fail them instead, as CI does. On Linux
+in `proteus-sdk`. On a machine without a GPU, each reports itself skipped, by name
+(`skipped: <test>: no GPU adapter`), so the tests pass anywhere. Set `REQUIRE_GPU=1` to make a missing GPU fail them instead, as CI does. On Linux
 without a GPU, Mesa's software Vulkan driver gives them one, as on CI:
 
 ```bash
 sudo apt-get install libvulkan1 mesa-vulkan-drivers
-WGPU_BACKEND=vulkan REQUIRE_GPU=1 make test
+REQUIRE_GPU=1 make test
 ```
 
 The TypeScript SDK has its own checks, after `make build-sdk-web`, in

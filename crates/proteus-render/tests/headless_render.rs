@@ -4,9 +4,10 @@
 // offscreen `Rgba8Unorm` texture, reads the pixels back via a mappable buffer,
 // and asserts expected colors at specific pixel coordinates.
 //
-// If no GPU adapter is available (CI runner with no rendering support) the
-// test is skipped with a warning rather than failing. On Linux CI the test
-// requires `mesa-vulkan-drivers` (lavapipe) — see `.github/workflows/ci.yml`.
+// If no GPU adapter is available, each test reports itself skipped, by name,
+// rather than failing, unless `REQUIRE_GPU` is set, as on CI. Linux CI gets
+// an adapter from `mesa-vulkan-drivers` (lavapipe); see
+// `.github/workflows/ci.yml`.
 
 use proteus_render::{
     pack_atlas_page, AtlasConfig, MainAtlasPlacement, QuadInstance, QuadPipeline,
@@ -49,10 +50,7 @@ const BYTES_PER_ROW: u32 = WIDTH * 4;
 #[cfg(not(target_arch = "wasm32"))]
 fn headless_quad_renders_to_expected_color() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("headless_render: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 
@@ -150,10 +148,7 @@ fn headless_quad_renders_to_expected_color() {
 #[cfg(not(target_arch = "wasm32"))]
 fn glow_does_not_leak_through_transparent_texture_holes() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("headless_render: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 
@@ -271,10 +266,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
 #[cfg(not(target_arch = "wasm32"))]
 fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("headless_render: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 
@@ -379,9 +371,9 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
 #[cfg(not(target_arch = "wasm32"))]
 fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
     let Some((device, queue)) = pollster::block_on(make_device_with_large_textures(4096)) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            eprintln!("headless_render: no 4096-capable adapter — skipping (REQUIRE_GPU only demands an adapter, not a size)");
-        }
+        // Not a failure even with `REQUIRE_GPU`, which only promises an
+        // adapter: a software renderer's textures may not reach 4096 pixels.
+        report_skip("no GPU adapter whose textures reach 4096 pixels");
         return;
     };
 
@@ -451,10 +443,7 @@ fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
 #[cfg(not(target_arch = "wasm32"))]
 fn opacity_fades_the_border_shadow_and_glow() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("headless_render: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
     let mut pipeline = QuadPipeline::new(
@@ -662,13 +651,30 @@ async fn make_device_with_large_textures(
 ) -> Option<(wgpu::Device, wgpu::Queue)> {
     let (device, queue) = make_device_with_limits(wgpu::Limits::default()).await?;
     if device.limits().max_texture_dimension_2d < min_dimension {
-        eprintln!(
-            "headless_render: adapter caps max_texture_dimension_2d at {} (< {min_dimension}) — skipping",
-            device.limits().max_texture_dimension_2d,
-        );
         return None;
     }
     Some((device, queue))
+}
+
+// Reports that the running test is skipped, and why, by the test's name, which
+// the test harness gives its thread. It writes straight to stderr: the harness
+// captures `eprintln!`, so a skip would otherwise look the same as a pass.
+fn report_skip(why: &str) {
+    use std::io::Write;
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("a GPU test")
+        .to_string();
+    let _ = writeln!(std::io::stderr(), "skipped: {name}: {why}");
+}
+
+// For a test with no GPU adapter: fails if `REQUIRE_GPU` is set, as on CI,
+// where every platform's GPU tests must run, and otherwise reports the skip.
+fn no_gpu() {
+    if std::env::var("REQUIRE_GPU").is_ok() {
+        panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+    }
+    report_skip("no GPU adapter");
 }
 
 // Try to get a wgpu device suitable for headless rendering.
