@@ -14,22 +14,23 @@ use proteus_runtime::ProteusConfig;
 
 mod video_player;
 
+/// The demo's assets, which `proteus-demo` keeps for both shells.
+macro_rules! demo_asset {
+    ($path:literal) => {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../proteus-demo/assets/", $path)
+    };
+}
+
 /// Base directory for `DemoApp`'s image asset keys (`bg/…`, `icons/…`,
 /// `logo/…`, `tiger.jpg`, …), resolved by `DirHostServices::load_asset`.
-const ASSET_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/images");
+const ASSET_DIR: &str = demo_asset!("images");
 
 /// The left, center and right video tiles' files, in
 /// `screens::video_tiles`' order.
 const TILE_VIDEO_PATHS: [&str; 3] = [
-    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/videos/tiger.mp4"),
-    concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/videos/sintel_fixed.mp4"
-    ),
-    concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/videos/jellyfish_fixed.mp4"
-    ),
+    demo_asset!("videos/tiger.mp4"),
+    demo_asset!("videos/sintel.mp4"),
+    demo_asset!("videos/jellyfish.mp4"),
 ];
 
 fn main() {

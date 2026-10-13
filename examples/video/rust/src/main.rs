@@ -10,7 +10,7 @@ fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| {
         concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../crates/proteus-shell-native/assets/videos/tiger.mp4"
+            "/../../../crates/proteus-demo/assets/videos/tiger.mp4"
         )
         .to_string()
     });
