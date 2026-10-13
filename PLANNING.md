@@ -4645,47 +4645,21 @@ One version for every crate and the npm package. Library crates publish to crate
 
 #### Step 9 — Platform checks
 
-- [ ] CI builds and tests the native crates on macOS, Linux and Windows. No behaviour in
+- [x] CI builds and tests the native crates on macOS, Linux and Windows. No behaviour in
   transitions, input or text rendering differs between them.
-- [ ] Each GPU test either runs or is reported as skipped by name — never skipped silently
+- [x] Each GPU test either runs or is reported as skipped by name — never skipped silently
   (T-13). Linux uses lavapipe and Windows can use WARP; macOS runner GPU support is checked at
   the step.
-- [ ] Tests that can never run today do (T-05): the HLS manifest parser moves where
+- [x] Tests that can never run today do (T-05): the HLS manifest parser moves where
   `cargo test` reaches it. CI's lack of wasm32 tests is recorded as known (R-07).
-- [ ] The native demo is run for real on macOS. Real runs on Linux and Windows are Post-V1.
-- [ ] A native-vs-web parity checklist of V1 features is signed off after visual review.
-- [ ] The README no longer says native has only been verified on macOS, and states what is
+- [x] The native demo is run for real on macOS. Real runs on Linux and Windows are Post-V1.
+- [x] Native and web parity is signed off after visual review. A written checklist was
+  drafted, then dropped: the human compared the two shells directly.
+- [x] The README no longer says native has only been verified on macOS, and states what is
   tested where.
 
-**Parity checklist: native and web.** Each V1 feature as the reference demo shows it, run
-natively on macOS (`cargo run --release -p proteus-shell-native`) and in a browser
-(`make serve-web`). A box is ticked when that shell shows the feature working, and the same as
-the other shell. A difference is noted on the row; one that is expected says why.
-
-| Area | Check | Native | Web |
-|---|---|:---:|:---:|
-| **Startup** | Splash: the animated logo loops, the wordmark fades and slides in, then Home appears | [ ] | [ ] |
-| | The background image fills the window, and follows a resize | [ ] | [ ] |
-| **Theme** | The sun and moon toggle switches light and dark, with everything crossfading | [ ] | [ ] |
-| **Navigation** | The brand lockup, and the home and back icons: fade in, hover, and take you back | [ ] | [ ] |
-| | Home's three buttons: hover glow and scale, and each opens its screen | [ ] | [ ] |
-| **Video** | The three tiles show their box art; hover shows the dark overlay and title | [ ] | [ ] |
-| | A tile grows into the video screen, the video plays, and fades in over the box art | [ ] | [ ] |
-| | Back shrinks it to a tile, and the tiles' labels behave during the transition | [ ] | [ ] |
-| **Gallery** | Loading shows while twelve photos download, then the grid appears | [ ] | [ ] |
-| | A photo opens into the enlarged view, sharp, and closes back | [ ] | [ ] |
-| | "Fetch New Images" loads a new grid | [ ] | [ ] |
-| **Examples** | The category grid: six buttons; Layout and 3D say they aren't built yet | [ ] | [ ] |
-| | Effects: drop shadow, glow, border and opacity look the same | [ ] | [ ] |
-| | Text: sizes, colors and letter spacing; nothing clipped or blurred differently | [ ] | [ ] |
-| | Transforms and animation: rotation, scale and the continuous animation | [ ] | [ ] |
-| | Stress tests: Burst Spawn and Texture Churn run, and the demo stays smooth | [ ] | [ ] |
-| **Transitions** | Splits and merges between screens are smooth, with no flash or pop | [ ] | [ ] |
-| **Input** | Hover, press and click land on the component drawn on top, rotated ones included | [ ] | [ ] |
-| **Window** | Resizing, and moving the window between displays of different density, keeps everything in place. Text and baked content are equally soft on a high-density display on both (B-12, Post-Release) | [ ] | [ ] |
-
-Run on: macOS ___ (native); browsers: ___. Signed off: ___.
-
+**Parity, signed off 2026-10-13.** The human ran the reference demo natively on macOS and in a
+browser, and the two match.
 
 #### Step 10 — Benchmarks
 
