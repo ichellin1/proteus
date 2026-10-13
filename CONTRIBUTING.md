@@ -14,7 +14,9 @@ knows nothing about windows, canvases or GPUs. Two shells hand it to a host:
 Each shell supplies only what differs by platform: where the assets are, the window or canvas,
 and a video player. The demo itself is the same code either way.
 
-`examples/` holds apps written with the TypeScript SDK, with no Rust in the app itself.
+`examples/` holds complete apps, most in both Rust and TypeScript; see
+[examples/README.md](./examples/README.md). The published crates and the npm package are listed
+in [RELEASING.md](./RELEASING.md).
 
 ### Platform support
 
@@ -24,14 +26,41 @@ The web shell runs in any browser with WebGL2.
 
 ### Dependencies
 
-- **Rust**, through [rustup](https://rustup.rs/).
-- **Native shell:** `ffmpeg` and `ffprobe` on `PATH`. The native shell's video player,
-  `crates/proteus-shell-native/src/video_player.rs`, runs them to decode MP4. On macOS,
-  `brew install ffmpeg`. Without them, video logs a warning and is skipped; the rest of the demo
-  works.
-- **Web shell:** `wasm-pack` (`cargo install wasm-pack`), and Python 3, whose HTTP server
-  `make serve-web` uses. Any server for static files works instead.
-- **TypeScript SDK and examples:** Node 20 or later, and `wasm-pack`.
+**Rust** 1.89 or later. Check with `cargo --version`. If you don't have it, install it with
+`rustup`, Rust's installer. On macOS or Linux:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+On Windows:
+
+```bash
+winget install Rustlang.Rustup
+```
+
+**The WebAssembly target and `wasm-pack`,** for the web shell, the TypeScript SDK and the
+checks, which lint the web crates for WebAssembly:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+```
+
+**Node 20 or later,** for the TypeScript SDK and examples. On macOS, `brew install node`; on
+Windows, `winget install OpenJS.NodeJS.LTS`; on Ubuntu, `sudo apt install nodejs npm`.
+
+**Python 3,** whose HTTP server `make serve-web` and the `make example-…-web` targets use. It
+comes with macOS and most Linux distributions. Any server for static files works instead.
+
+**`ffmpeg` and `ffprobe`,** for video in the native shell and the Rust video example, which run
+them to decode MP4. On macOS, `brew install ffmpeg`; on Windows, `winget install Gyan.FFmpeg`; on
+Ubuntu, `sudo apt install ffmpeg`. Without them, video logs a warning and is skipped; the rest of
+the demo works.
+
+**Optional:** `actionlint`, which the pre-push hook runs on the GitHub workflows when it's
+installed (`brew install actionlint`), and `git-cliff`, which releasing needs
+(`cargo install git-cliff`).
 
 ### Demo assets
 
@@ -52,10 +81,16 @@ placeholders and no video.
 
 ### Running the demo
 
-Natively:
+Natively as release:
 
 ```bash
 cargo run --release -p proteus-shell-native
+```
+
+Natively as debug, Cargo's default without `--release`:
+
+```bash
+cargo run -p proteus-shell-native
 ```
 
 In a browser, the page must be served over HTTP, since it fetches its WebAssembly and assets:
@@ -66,6 +101,19 @@ make serve-web
 
 This builds the WebAssembly bundle with `wasm-pack` and serves `crates/proteus-shell-web/www/`
 on <http://localhost:8080>. `make build-web` builds it without serving.
+
+In a browser as debug:
+
+```bash
+make serve-web-debug
+```
+
+The debug build runs debug assertions and overflow checks, names Rust functions in the stack
+traces of panics, and carries debug information: with Chrome's "C/C++ DevTools Support (DWARF)"
+extension, DevTools can set breakpoints in the Rust source and step through it. It's much larger
+and slower than the release build, so animation in it isn't a guide to performance.
+`make build-web-debug` builds it without serving, and `make example-gallery-web-debug` builds
+and serves a Rust example the same way.
 
 ### The TypeScript SDK and examples
 
@@ -86,14 +134,48 @@ npm run dev
 `make example-gallery-ts`, from the root, does all of this, and rebuilds the SDK only when its
 sources have changed.
 
+### Running the tests
+
+```bash
+make test
+```
+
+runs every Rust test in the workspace, including the guides' code, which the `proteus-docs`
+crate runs as doctests, and a check that every link between the guides resolves. The two web
+crates only build for WebAssembly, so `make clippy` checks them instead.
+
+Some tests draw with the GPU: rendering in `proteus-render`, baking in `proteus-ui`, and textures
+in `proteus-sdk`. On a machine without a GPU they're skipped, with a message, so the tests pass
+anywhere. Set `REQUIRE_GPU=1` to make a missing GPU fail them instead, as CI does. On Linux
+without a GPU, Mesa's software Vulkan driver gives them one, as on CI:
+
+```bash
+sudo apt-get install libvulkan1 mesa-vulkan-drivers
+WGPU_BACKEND=vulkan REQUIRE_GPU=1 make test
+```
+
+The TypeScript SDK has its own checks, after `make build-sdk-web`, in
+`crates/proteus-sdk-web/ts`: `npx tsc --noEmit` type-checks it, `npm run check-docs` checks that
+every export is documented, and `npm run check-snippets` type-checks the guides' TypeScript.
+
 ### Checks
 
 ```bash
 make check
 ```
 
-runs the formatting, lint and test checks that CI runs. `make fmt`, `make clippy` and
-`make test` run one each.
+runs the formatting, lint, docs and test checks that CI runs: `make fmt`, `make clippy`, for
+the native and WebAssembly targets, `make docs`, with warnings as errors, and `make test`.
+
+```bash
+make install-hooks
+```
+
+installs a pre-push hook that runs the same checks except the tests before every push, and
+`actionlint` on the GitHub workflows when it's installed. Run it again when the hook changes.
+
+CI also checks code comments against this guide (`make check-comments`), the TypeScript SDK and
+its snippets, builds each example, and lints the workflows.
 
 ## Writing comments and docs
 
@@ -200,6 +282,17 @@ catches the rest.
 | **virtual** | A temporary component a split or merge creates, and removes when it completes | |
 | **all the other**, **any other** | Everything except the item just mentioned | "every other", which can also mean alternate items |
 
+## Pull requests
+
+1. Branch from `main`, and commit as described in [Commit messages](#commit-messages).
+2. Run `make check`, and the TypeScript checks if you changed the SDK.
+3. Open a pull request into `main`. CI runs on it, and a change under `crates/` also gets a
+   preview of the web demo, linked in a comment; see [RELEASING.md](./RELEASING.md).
+4. Update the guides and API docs with the code they describe. A change to the public API that
+   breaks existing code is marked as breaking in its commit.
+5. Pull requests are merged with a merge commit, not squashed, so each commit's message reaches
+   the changelog.
+
 ## Commit messages
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org). The changelog is
@@ -213,8 +306,11 @@ Body: what changed and why, wrapped at 72 columns.
 
 - The subject is imperative, lowercase after the colon, has no trailing period, and is at most
   72 characters.
-- **Types:** `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`. A
-  breaking change adds `!` after the type and a `BREAKING CHANGE:` footer.
+- **Types:** `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `style`, `build`, `ci`,
+  `chore`. A breaking change adds `!` after the type and a `BREAKING CHANGE:` footer.
+- **The subject is the changelog's line for the change,** so write it for someone who uses
+  Proteus. `test` and `style` commits, `docs(planning)` and the release commit
+  (`chore(release)`) are left out of it; see `cliff.toml`.
 - **Scopes:** the crate name without `proteus-` (`sdk`, `sdk-web`, `runtime`, `ui`, `render`,
   `gpu`, `host-winit`, `host-web`, `demo`, `shell`), or `examples`. For `docs:` commits, the
   document (`readme`, `planning`, `roadmap`, `guide`, `contributing`).

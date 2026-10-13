@@ -85,6 +85,8 @@ commit_parsers = [
     { message = "^docs\\(planning\\)", skip = true },
     { message = "^Merge ", skip = true },
     { message = "^docs: close out step", skip = true },
+    # The release commit, which only sets the version.
+    { message = "^chore\\(release\\)", skip = true },
     { message = "^feat", group = "<!-- 0 -->Features" },
     { message = "^fix", group = "<!-- 1 -->Fixes" },
     { message = "^perf", group = "<!-- 2 -->Performance" },
