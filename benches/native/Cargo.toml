@@ -11,5 +11,7 @@ publish = false
 [dependencies]
 proteus-sdk = { workspace = true }
 proteus-runtime = { workspace = true }
+# For `collect_instances`, which the `phases` mode times on its own.
+proteus-ui = { workspace = true }
 proteus-host-winit = { workspace = true }
 pollster = { workspace = true }

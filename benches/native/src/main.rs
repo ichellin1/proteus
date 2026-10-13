@@ -5,6 +5,7 @@
 //! cargo run --release -p proteus-bench                    # both scenarios
 //! cargo run --release -p proteus-bench -- still           # or one of them
 //! cargo run --release -p proteus-bench -- still 500,2000  # at other counts
+//! cargo run --release -p proteus-bench -- phases          # the CPU's phases
 //! ```
 //!
 //! Two scenarios, each at every count in [`COUNTS`]:
@@ -29,6 +30,13 @@
 //! - **Frame interval:** from the start of one frame to the start of the
 //!   next. With the GPU kept busy, that settles at the slower of the CPU and
 //!   the GPU: the frame rate an app would get, with no display to wait for.
+//!
+//! `phases` needs no GPU. It times the parts of a still frame's CPU work that
+//! run on the components themselves: `Proteus::tick`, the whole per-frame
+//! update; `Proteus::refresh_cascades`, which works out each component's
+//! visibility and opacity from its parents' (the tick works them out once
+//! too, so a frame pays for them twice); and `collect_instances`, which turns
+//! the components into what the GPU draws.
 //!
 //! The results are printed as Markdown tables, with the GPU and platform they
 //! ran on, ready to record.
@@ -232,8 +240,54 @@ fn measure(
     }
 }
 
+/// Times `tick`, `refresh_cascades` and `collect_instances` on `count` still
+/// components, with no GPU: the median of [`FRAMES`] frames each, in
+/// milliseconds.
+fn phases(count: usize) -> [f64; 3] {
+    let mut proteus = proteus_sdk::Proteus::new();
+    let mut random = Random(0x9e37_79b9_7f4a_7c15);
+    for _ in 0..count {
+        proteus.component(ComponentSpec::new(random.geometry()));
+    }
+    let mut times: [Vec<Duration>; 3] = Default::default();
+    for i in 0..WARM_UP + FRAMES {
+        let start = Instant::now();
+        proteus.tick(DT);
+        let ticked = Instant::now();
+        proteus.refresh_cascades();
+        let cascaded = Instant::now();
+        let instances = proteus_ui::collect_instances(proteus.world_mut());
+        let collected = Instant::now();
+        assert_eq!(instances.len(), count);
+        if i >= WARM_UP {
+            times[0].push(ticked - start);
+            times[1].push(cascaded - ticked);
+            times[2].push(collected - cascaded);
+        }
+    }
+    times.map(|mut t| summary(&mut t).0)
+}
+
 fn main() {
     let only = std::env::args().nth(1);
+    if only.as_deref() == Some("phases") {
+        let counts: Vec<usize> = std::env::args()
+            .nth(2)
+            .map(|list| {
+                list.split(',')
+                    .filter_map(|n| n.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_else(|| COUNTS.to_vec());
+        println!("### phases (no GPU; medians)\n");
+        println!("| Components | tick (ms) | refresh_cascades (ms) | collect_instances (ms) |");
+        println!("|---:|---:|---:|---:|");
+        for count in counts {
+            let [tick, cascades, collect] = phases(count);
+            println!("| {count} | {tick:.2} | {cascades:.2} | {collect:.2} |");
+        }
+        return;
+    }
     let scenarios: Vec<Scenario> = [Scenario::Still, Scenario::Moving]
         .into_iter()
         .filter(|s| {
@@ -248,7 +302,7 @@ fn main() {
     });
     let counts = counts.unwrap_or_else(|| COUNTS.to_vec());
     if scenarios.is_empty() || counts.is_empty() {
-        eprintln!("usage: proteus-bench [all|still|moving] [count,count,...]");
+        eprintln!("usage: proteus-bench [all|still|moving|phases] [count,count,...]");
         std::process::exit(2);
     }
 

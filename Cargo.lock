@@ -2156,6 +2156,7 @@ dependencies = [
  "proteus-host-winit",
  "proteus-runtime",
  "proteus-sdk",
+ "proteus-ui",
 ]
 
 [[package]]
