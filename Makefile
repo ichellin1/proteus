@@ -113,3 +113,8 @@ example-%-web-debug:
 	wasm-pack build examples/$*/rust --target web --dev
 	@echo "Open http://localhost:8080/examples/$*/rust/"
 	python3 -m http.server 8080
+
+## The browser benchmark: builds the SDK if needed, then serves a production
+## build of benches/browser. Open the address it prints and click Run.
+bench-browser: $(SDK_BUILT)
+	cd benches/browser && npm install && npm run build && npm run preview

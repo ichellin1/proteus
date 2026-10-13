@@ -246,6 +246,10 @@ jobs:
         working-directory: examples/menu/typescript
         run: npm ci && npm run build
 
+      - name: benches/browser — build
+        working-directory: benches/browser
+        run: npm ci && npm run build
+
       - name: examples/stepper/typescript — build
         working-directory: examples/stepper/typescript
         run: npm ci && npm run build
