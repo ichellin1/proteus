@@ -9,8 +9,8 @@ each frame. The same app runs on either host unchanged. Proteus currently ships 
 | `proteus-host-winit`, the native host | macOS, Windows and Linux, in a desktop window | Metal, DirectX 12 or Vulkan |
 | `proteus-host-web`, the web host | Browsers, on a `<canvas>`, compiled to WebAssembly | WebGPU, or WebGL2 where WebGPU isn't available |
 
-Proteus is developed and tested on macOS. Windows and Linux use the same code, through winit and
-wgpu, but aren't tested yet.
+CI builds Proteus and runs its tests on macOS, Windows and Linux, the GPU tests included. The
+demo has been run by hand on macOS; on Windows and Linux, so far only CI has run it.
 
 A TypeScript app always runs in the web host: `mount` starts it. The rest of this page is about
 Rust apps, except where it says otherwise.
