@@ -1,5 +1,5 @@
 # git-cliff's settings: how CHANGELOG.md is generated from the commit history.
-# CHANGELOG.md is never edited by hand; scripts/bump-version regenerates it.
+# CHANGELOG.md is never edited by hand; scripts/version.mjs regenerates it.
 # Commits follow Conventional Commits; see CONTRIBUTING.md.
 
 [changelog]
@@ -11,8 +11,10 @@ RELEASING.md.
 """
 # Each version's section. Version 0.1.0 opens with a summary of everything in
 # it: the work before it didn't use Conventional Commits, so the list below
-# the summary only covers the work that prepared the release.
+# the summary only covers the work that prepared the release. The blank line
+# first separates it from the one before: git-cliff trims the header's.
 body = """
+
 {% if version -%}
 ## {{ version | trim_start_matches(pat="v") }} ({{ timestamp | date(format="%Y-%m-%d") }})
 {%- else -%}
