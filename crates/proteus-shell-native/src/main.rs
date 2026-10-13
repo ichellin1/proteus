@@ -17,7 +17,11 @@ mod video_player;
 /// The demo's assets, which `proteus-demo` keeps for both shells.
 macro_rules! demo_asset {
     ($path:literal) => {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../proteus-demo/assets/", $path)
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proteus-demo/assets/",
+            $path
+        )
     };
 }
 
