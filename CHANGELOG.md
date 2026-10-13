@@ -49,3 +49,6 @@ RELEASING.md.
 - **examples:** A folder per language, make targets, and builds in CI
 - Make check and the pre-push hook run the docs build, as CI does
 - Crates ready for crates.io, and READMEs for every package
+- Generate the changelog with git-cliff
+- A script that sets and checks the version everywhere
+- Release workflow for a version tag, and a workflow lint
