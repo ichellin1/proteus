@@ -65,8 +65,9 @@ cargo run -p proteus-shell-native   # native
 make serve-web                      # web (builds, then serves on :8080)
 ```
 
-The native shell is currently only built and verified on macOS; the web shell runs in any
-WebGL2-capable browser.
+CI builds Proteus and runs its tests on macOS, Linux and Windows, the GPU tests included. The
+demo has been run by hand on macOS, natively and in a browser; on Linux and Windows, so far only
+CI has run it. The web shell runs in any browser with WebGPU or WebGL2.
 
 To build the TypeScript SDK and its example instead:
 

@@ -20,9 +20,12 @@ in [RELEASING.md](./RELEASING.md).
 
 ### Platform support
 
-The native shell is only built and tested on macOS so far. It uses `wgpu` and `winit` with no
-macOS-specific code, so Linux and Windows will likely work, but they haven't been tested yet.
-The web shell runs in any browser with WebGL2.
+CI builds the native crates and runs every test on macOS, Linux and Windows, the GPU tests
+included: Linux uses Mesa's software Vulkan driver, lavapipe, Windows uses Direct3D's software
+renderer, WARP, and macOS the runner's Metal. The demo has been run by hand on macOS, natively
+and in a browser; on Linux and Windows, so far only CI has run it. The web shell runs in any
+browser with WebGPU or WebGL2. No tests run in WebAssembly; see [Running the
+tests](#running-the-tests).
 
 ### Dependencies
 

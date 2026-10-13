@@ -4657,6 +4657,36 @@ One version for every crate and the npm package. Library crates publish to crate
 - [ ] The README no longer says native has only been verified on macOS, and states what is
   tested where.
 
+**Parity checklist: native and web.** Each V1 feature as the reference demo shows it, run
+natively on macOS (`cargo run --release -p proteus-shell-native`) and in a browser
+(`make serve-web`). A box is ticked when that shell shows the feature working, and the same as
+the other shell. A difference is noted on the row; one that is expected says why.
+
+| Area | Check | Native | Web |
+|---|---|:---:|:---:|
+| **Startup** | Splash: the animated logo loops, the wordmark fades and slides in, then Home appears | [ ] | [ ] |
+| | The background image fills the window, and follows a resize | [ ] | [ ] |
+| **Theme** | The sun and moon toggle switches light and dark, with everything crossfading | [ ] | [ ] |
+| **Navigation** | The brand lockup, and the home and back icons: fade in, hover, and take you back | [ ] | [ ] |
+| | Home's three buttons: hover glow and scale, and each opens its screen | [ ] | [ ] |
+| **Video** | The three tiles show their box art; hover shows the dark overlay and title | [ ] | [ ] |
+| | A tile grows into the video screen, the video plays, and fades in over the box art | [ ] | [ ] |
+| | Back shrinks it to a tile, and the tiles' labels behave during the transition | [ ] | [ ] |
+| **Gallery** | Loading shows while twelve photos download, then the grid appears | [ ] | [ ] |
+| | A photo opens into the enlarged view, sharp, and closes back | [ ] | [ ] |
+| | "Fetch New Images" loads a new grid | [ ] | [ ] |
+| **Examples** | The category grid: six buttons; Layout and 3D say they aren't built yet | [ ] | [ ] |
+| | Effects: drop shadow, glow, border and opacity look the same | [ ] | [ ] |
+| | Text: sizes, colors and letter spacing; nothing clipped or blurred differently | [ ] | [ ] |
+| | Transforms and animation: rotation, scale and the continuous animation | [ ] | [ ] |
+| | Stress tests: Burst Spawn and Texture Churn run, and the demo stays smooth | [ ] | [ ] |
+| **Transitions** | Splits and merges between screens are smooth, with no flash or pop | [ ] | [ ] |
+| **Input** | Hover, press and click land on the component drawn on top, rotated ones included | [ ] | [ ] |
+| **Window** | Resizing, and moving the window between displays of different density, keeps everything in place. Text and baked content are equally soft on a high-density display on both (B-12, Post-Release) | [ ] | [ ] |
+
+Run on: macOS ___ (native); browsers: ___. Signed off: ___.
+
+
 #### Step 10 — Benchmarks
 
 - [ ] The per-frame overheads the audit flagged (C-19) are measured, and fixed if they would
