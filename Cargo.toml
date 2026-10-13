@@ -54,7 +54,7 @@ categories = ["gui", "graphics", "rendering", "wasm"]
 
 [workspace.dependencies]
 # The workspace's own crates. Each carries a version as well as a path, which
-# crates.io requires of a published crate's dependencies. scripts/bump-version
+# crates.io requires of a published crate's dependencies. scripts/version.mjs
 # keeps the versions equal to the workspace version above.
 proteus-gpu = { path = "crates/proteus-gpu", version = "0.1.0" }
 proteus-render = { path = "crates/proteus-render", version = "0.1.0" }

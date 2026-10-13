@@ -2,6 +2,7 @@
 
 The changes in each version of Proteus. This file is generated from the commit history; see
 RELEASING.md.
+
 ## Unreleased
 
 ### Features
@@ -41,6 +42,7 @@ RELEASING.md.
 - **guide:** Interaction, content, configuration, and hosts
 - **how-to:** Chaining, staggering, images, easing, platform features, and tricks
 - Check links between pages
+- Complete CONTRIBUTING, and RELEASING for the library and the demo
 
 ### Build and release
 
@@ -52,3 +54,4 @@ RELEASING.md.
 - Generate the changelog with git-cliff
 - A script that sets and checks the version everywhere
 - Release workflow for a version tag, and a workflow lint
+- One copy of the demo's assets, and remove unused media and design files
