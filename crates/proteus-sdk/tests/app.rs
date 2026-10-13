@@ -723,18 +723,34 @@ fn gpu_app() -> Option<Proteus> {
     Some(app)
 }
 
-// Skips with a message, unless `REQUIRE_GPU` is set, in which case it panics.
-// CI always has a software GPU (lavapipe), so a missing adapter there means a
-// broken driver install.
+// Reports that the running test is skipped, and why, by the test's name, which
+// the test harness gives its thread. It writes straight to stderr: the harness
+// captures `eprintln!`, so a skip would otherwise look the same as a pass.
+fn report_skip(why: &str) {
+    use std::io::Write;
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("a GPU test")
+        .to_string();
+    let _ = writeln!(std::io::stderr(), "skipped: {name}: {why}");
+}
+
+// For a test with no GPU adapter: fails if `REQUIRE_GPU` is set, as on CI,
+// where every platform's GPU tests must run, and otherwise reports the skip.
+fn no_gpu() {
+    if std::env::var("REQUIRE_GPU").is_ok() {
+        panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+    }
+    report_skip("no GPU adapter");
+}
+
+// A GPU-backed app for the test, or a reported skip; see `no_gpu`.
 macro_rules! gpu_app_or_skip {
     () => {
         match gpu_app() {
             Some(app) => app,
             None => {
-                if std::env::var("REQUIRE_GPU").is_ok() {
-                    panic!("REQUIRE_GPU is set but no GPU adapter was found");
-                }
-                eprintln!("proteus-sdk app test: no GPU adapter available — skipping");
+                no_gpu();
                 return;
             }
         }
@@ -834,10 +850,7 @@ fn free_resources_decrefs_and_frees_the_texture_region() {
     use proteus_ui::{BakedComposite, CompositeTextureRef};
 
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("proteus-sdk app test: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 

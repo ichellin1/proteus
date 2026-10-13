@@ -13,8 +13,10 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: Test
+  lint:
+    # Formatting, lints and docs come out the same on every platform, so they
+    # run once, here.
+    name: Lint
     runs-on: ubuntu-latest
 
     steps:
@@ -27,13 +29,6 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
-
-      - name: Install software GPU (headless render test)
-        # lavapipe is Mesa's CPU-based Vulkan implementation — gives wgpu a
-        # real adapter on the GitHub Actions Ubuntu runner (no hardware GPU).
-        run: |
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -69,14 +64,60 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  test:
+    # Builds and tests the native crates on each desktop platform, GPU tests
+    # included: `REQUIRE_GPU` makes a missing GPU fail them rather than skip.
+    # Linux gets one from Mesa's software Vulkan driver, lavapipe; Windows
+    # from Direct3D's software renderer, WARP; macOS from the runner's Metal.
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Keep line endings as committed
+        # Windows runners convert to CRLF on checkout by default.
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install software GPU
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
+
       - name: Run tests
         run: cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
         env:
-          # Force wgpu to use the Vulkan backend so it picks up lavapipe.
-          WGPU_BACKEND: vulkan
-          # Fail the headless render test if no GPU adapter is found.
-          # On CI lavapipe always provides one; this catches broken driver installs.
           REQUIRE_GPU: 1
+
+  msrv:
+    # The oldest Rust the crates declare, `rust-version` in Cargo.toml, still
+    # builds them.
+    name: Rust 1.89
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.89
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: cargo check --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets
 
   wasm:
     # WASM output is platform-independent — one Ubuntu build is sufficient.

@@ -111,13 +111,31 @@ fn bake_system_is_noop_without_gpu_resources() {
 // textured quad, and separately proves a composite declared *after* the
 // schedule has already run once (dynamic runtime creation, not just
 // startup) bakes correctly too.
+// Reports that the running test is skipped, and why, by the test's name, which
+// the test harness gives its thread. It writes straight to stderr: the harness
+// captures `eprintln!`, so a skip would otherwise look the same as a pass.
+fn report_skip(why: &str) {
+    use std::io::Write;
+    let name = std::thread::current()
+        .name()
+        .unwrap_or("a GPU test")
+        .to_string();
+    let _ = writeln!(std::io::stderr(), "skipped: {name}: {why}");
+}
+
+// For a test with no GPU adapter: fails if `REQUIRE_GPU` is set, as on CI,
+// where every platform's GPU tests must run, and otherwise reports the skip.
+fn no_gpu() {
+    if std::env::var("REQUIRE_GPU").is_ok() {
+        panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
+    }
+    report_skip("no GPU adapter");
+}
+
 #[test]
 fn bake_system_bakes_quad_and_text_composite() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("static_bake: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 
@@ -283,10 +301,7 @@ fn bake_system_bakes_quad_and_text_composite() {
 #[test]
 fn a_bake_waits_for_its_text_and_draws_its_own_text_once() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("static_bake: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
     let pipeline = QuadPipeline::new(
@@ -363,10 +378,7 @@ fn a_bake_waits_for_its_text_and_draws_its_own_text_once() {
 #[test]
 fn a_component_larger_than_a_page_is_drawn_unbaked() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("static_bake: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
     let pipeline = QuadPipeline::new(
@@ -412,10 +424,7 @@ fn a_component_larger_than_a_page_is_drawn_unbaked() {
 #[test]
 fn bake_ref_counts_texture_and_frees_region_on_despawn() {
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("static_bake: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 
@@ -508,10 +517,7 @@ fn a_split_bakes_its_pieces_and_frees_the_transition_atlas_when_done() {
     use proteus_ui::{BakedTexture, Easing, Lifecycle, TransitionConfig, Virtual, Visibility};
 
     let Some((device, queue)) = pollster::block_on(make_device()) else {
-        if std::env::var("REQUIRE_GPU").is_ok() {
-            panic!("REQUIRE_GPU is set but no GPU adapter was found — check driver install");
-        }
-        eprintln!("static_bake: no GPU adapter available — skipping");
+        no_gpu();
         return;
     };
 
