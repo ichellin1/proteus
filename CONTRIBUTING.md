@@ -147,6 +147,10 @@ runs every Rust test in the workspace, including the guides' code, which the `pr
 crate runs as doctests, and a check that every link between the guides resolves. The two web
 crates only build for WebAssembly, so `make clippy` checks them instead.
 
+No tests run in WebAssembly, locally or on CI. So code in the web crates that can be tested
+anywhere lives in a crate that builds natively, as the web player's HLS manifest parser lives in
+`proteus-demo`, and the web crates hold only what needs a browser.
+
 Some tests draw with the GPU: rendering in `proteus-render`, baking in `proteus-ui`, and textures
 in `proteus-sdk`. On a machine without a GPU, each reports itself skipped, by name
 (`skipped: <test>: no GPU adapter`), so the tests pass anywhere. Set `REQUIRE_GPU=1` to make a missing GPU fail them instead, as CI does. On Linux
