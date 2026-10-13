@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+pub mod hls;
+
 /// One decoded frame.
 pub struct VideoFrame {
     /// Width in pixels.

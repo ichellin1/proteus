@@ -4790,6 +4790,10 @@ not V1.**
   give the bake pass a per-frame time budget that carries the rest over, and load what is
   visible first. An async `load_texture`, or one that returns a handle whose image arrives
   later, changes the API, so it is a V2 decision.
+- Tests that run in a browser. No test runs in WebAssembly today (R-07): the web crates hold
+  only what needs a browser, and anything testable natively, such as the HLS manifest parser
+  (moved to `proteus-demo` in M14 step 9), lives in a native crate. Testing the web host itself,
+  its canvas, input and asset loading, needs `wasm-bindgen-test` and a headless browser in CI.
 - An `on_destroy` callback for components and transition channels. Most destruction is started
   by the app, so it already knows, but two cases happen as side effects: destroying a parent
   destroys its children, and destroying a component destroys the channels it owns. An app holding
