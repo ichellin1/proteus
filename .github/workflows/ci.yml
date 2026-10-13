@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # release.yml runs CI before it publishes.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +37,14 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Lint the workflows
+        # actionlint catches what YAML parsing doesn't: wrong expressions,
+        # unknown keys, and shell mistakes in `run:` scripts. Pinned to a
+        # release, script and all.
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
 
       - name: Check comments
         # Paths are added as each crate is brought up to CONTRIBUTING.md's

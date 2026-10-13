@@ -6,10 +6,12 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+# The reference demo, which ships as a web page, not a crate.
+publish = false
 
 [dependencies]
-proteus-sdk = { path = "../proteus-sdk" }
-proteus-runtime = { path = "../proteus-runtime" }
+proteus-sdk = { workspace = true }
+proteus-runtime = { workspace = true }
 glam = { workspace = true }
 log = { workspace = true }
 # The gallery's nonce (see gallery_fetch.rs) needs the current time, and
@@ -22,6 +24,6 @@ web-time = "1"
 # For the tests in src/lib.rs, which inspect ECS components directly
 # (`BakedImage`, `ActiveTransition`, `Virtual`, `VideoCrossfade` and so on)
 # beyond what `Proteus::get`'s `ComponentData` exposes.
-proteus-render = { path = "../proteus-render" }
-proteus-ui = { path = "../proteus-ui" }
+proteus-render = { workspace = true }
+proteus-ui = { workspace = true }
 bevy_ecs = { workspace = true }

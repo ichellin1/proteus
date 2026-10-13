@@ -6,6 +6,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+# The reference demo, which ships as a web page, not a crate.
+publish = false
 
 [[bin]]
 name = "proteus"
@@ -14,8 +16,8 @@ path = "src/main.rs"
 [dependencies]
 # Everything but the settings lives elsewhere: the window, GPU, frame loop
 # and input in proteus-host-winit, and the demo itself in proteus-demo.
-proteus-demo = { path = "../proteus-demo" }
-proteus-runtime = { path = "../proteus-runtime" }
-proteus-host-winit = { path = "../proteus-host-winit" }
+proteus-demo = { workspace = true }
+proteus-runtime = { workspace = true }
+proteus-host-winit = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }

@@ -1,85 +1,142 @@
-# Releasing the Reference Demo (Web)
+# Releasing
 
-How to ship a change to the web build of the reference demo, viewed at
-**<https://ichellin1.github.io/proteus/>**. Four steps: review locally, open a PR, review on
-staging, merge.
+Two things ship from this repository:
 
-*Native has no release path — it's `cargo run -p
-proteus-shell-native` from source (see [CONTRIBUTING.md](./CONTRIBUTING.md#building-from-source)), nothing
-gets deployed.*
+- **The library:** eight crates on crates.io and the `proteus-sdk` package on npm, all at one
+  version. A tag releases them; see [Releasing the library](#releasing-the-library).
+- **The reference demo and the API reference,** on GitHub Pages at
+  <https://ichellin1.github.io/proteus/>. Merging into `main` deploys them; see
+  [Deploying the demo](#deploying-the-demo).
 
-## 1. Review locally
+## Releasing the library
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md#dependencies) for one-time dependency setup (Rust, wasm-pack,
-Python 3). Then, from the repo root:
+The published crates are `proteus-gpu`, `proteus-render`, `proteus-ui`, `proteus-sdk`,
+`proteus-runtime`, `proteus-host-winit`, `proteus-host-web` and `proteus-sdk-web`. The demo, its
+shells, the examples and `proteus-docs` are `publish = false`.
+
+### Choosing the version
+
+Proteus follows [Semantic Versioning](https://semver.org). Before 1.0, a release that breaks
+existing code raises the minor version (0.1 to 0.2), and any other release raises the patch
+version (0.1.0 to 0.1.1). A commit marked breaking (`feat!:`, `fix!:`) means the next release
+breaks existing code.
+
+### 1. Set the version in a pull request
 
 ```bash
-make build-web
-make serve-web
+git checkout -b release/v0.2.0 main
+node scripts/version.mjs set 0.2.0
 ```
 
-Open <http://localhost:8080> and walk through the app looking for regressions.
+`version.mjs set` changes the version everywhere: `Cargo.toml` and `Cargo.lock`, the npm package
+and the TypeScript examples, and the version requirements in the docs, such as
+`proteus-sdk = "0.2"`. It then regenerates `CHANGELOG.md` with that version's section, from the
+commits since the last release; it needs `git-cliff` (`cargo install git-cliff`).
 
-## 2. Open a pull request
+Read the new section of `CHANGELOG.md`: it becomes the GitHub Release's notes. A line that reads
+badly comes from a commit message; the changelog is never edited by hand, but a commit can be
+left out of it in `cliff.toml`. Then commit and open a pull request:
 
 ```bash
-git checkout -b my-change
-git add -A
-git commit -m "..."
-git push -u origin my-change
+git commit -am "chore(release): v0.2.0"
+git push -u origin release/v0.2.0
 gh pr create --fill
 ```
 
-(Or push the branch and click "Compare & pull request" on GitHub if you don't use `gh`.)
+### 2. Dry run
 
-This kicks off `ci.yml` (formatting, lints, tests, wasm builds) on the PR. Wait for it to pass:
+On GitHub, under Actions → Release → Run workflow, pick the release branch and enter the version.
+This runs every step of the release without publishing anything: it checks the version, runs CI,
+runs `cargo publish --dry-run` for every crate and `npm publish --dry-run`, and creates a draft
+GitHub Release with the notes. Check the draft, then delete it.
 
-```bash
-gh pr checks <PR-number>
-```
+### 3. Merge, then tag
 
-or verify it is green on GitHub.
-
-## 3. Review on staging
-
-If the PR touches anything under `crates/` (or `Cargo.toml`/`Cargo.lock`), a second workflow
-automatically builds and deploys a live preview — a real hosted URL, not localhost — to
-`https://ichellin1.github.io/proteus-staging/pr-<number>/`, and posts that URL as a comment on
-the PR. Open it and repeat the walkthrough from step 1 against the actual deployed build. It
-rebuilds on every push to the PR and tears itself down when the PR closes.
-
-(The filter is deliberately the whole workspace rather than the handful of crates the web
-build reads most directly — every crate under `crates/` either compiles into the deployed wasm
-or is cheap to rebuild, and a narrower list is one refactor away from silently skipping a
-deploy. A docs- or workflow-only PR gets no preview, which is the intent.)
-
-## 4. Merge to main
-
-Once CI is green and the staging preview looks right:
+Merge the pull request once CI and the dry run pass. Then tag the merge on `main`:
 
 ```bash
-gh pr merge <PR-number> --squash
+git checkout main
+git pull
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
-(Or the "Merge pull request" button on GitHub.) The merge itself triggers the production
-deploy — nothing further to run. Give it a minute or two, then open
-<https://ichellin1.github.io/proteus/> and confirm the change is live.
+### 4. Approve
 
-## How CI and the workflow files facilitate this
+The tag starts `release.yml`. It checks that the tag matches the version everywhere, runs CI, and
+then waits for approval: both publish jobs use the `release` environment, whose required
+reviewer approves them under the run's "Review deployments". Approval publishes the crates, in
+dependency order, and the npm package. Once both are published, it creates the GitHub Release.
 
-Three workflows under `.github/workflows/`, each doing one job in the flow above:
+### 5. Check
 
-- **`ci.yml`** — runs on every push and PR: `cargo fmt`/`clippy`/`doc`/`test` plus wasm builds
-  and the TypeScript SDK's own type-check, package check and example build. The gate step 2
-  waits on before a PR is mergeable.
-- **`staging-deploy.yml`** — runs on PR open/update/close for the paths above: builds the web
-  shell, publishes it to a per-PR subpath on a separate repo (`ichellin1/proteus-staging`, so a
-  preview can never touch production), comments the URL, and removes it when the PR closes.
-  This is what step 3 reviews.
-- **`pages.yml`** — runs on every push to `main` that touches those same paths (plus a manual
-  `workflow_dispatch` trigger, for redeploying without a new commit, or after a docs-only
-  change that the path filter skipped): builds the web shell and deploys it to GitHub Pages.
-  This is what step 4's merge triggers.
+- The crates on crates.io, and their docs on docs.rs, which builds them within the hour.
+- The package on npm.
+- The GitHub Release, with the changelog's section as its notes.
 
-Rolling back is the same shape in reverse: `git revert` the offending commit(s) on `main` and
-push (or run `gh workflow run pages.yml` to redeploy without a new commit).
+### If something fails
+
+Nothing is published until both checks and CI pass, and nothing until approval. After that:
+
+- **A crate fails to publish:** the crates before it are already on crates.io, and a version
+  can't be published twice. Fix the cause, then publish the rest by hand
+  (`cargo publish -p <crate>`), or release a patch version with the fix.
+- **A bad version is out:** crates.io can't delete a version, only yank it
+  (`cargo yank --version 0.2.0 <crate>`), which stops new projects from choosing it. npm allows
+  `npm unpublish proteus-sdk@0.2.0` within 72 hours, and `npm deprecate` after that. Either way,
+  release a fixed patch version.
+
+### Publishing credentials
+
+`release.yml` publishes with **trusted publishing**: crates.io and npm trust this repository's
+`release.yml`, running in the `release` environment, through GitHub's OIDC token, so no
+long-lived token is stored. A package must exist before trusted publishing can be linked to it,
+so the first release, v0.1.0, publishes with tokens instead:
+
+1. **Before v0.1.0,** add two repository secrets (Settings → Secrets and variables → Actions):
+   `CARGO_REGISTRY_TOKEN`, a crates.io API token with the `publish-new` and `publish-update`
+   scopes, and `NPM_TOKEN`, an npm granular access token that can publish. `release.yml` uses a
+   token when its secret is set.
+2. **After v0.1.0,** link trusted publishing: on crates.io, in each crate's Settings → Trusted
+   Publishing, and on npm, in the package's Settings → Trusted publisher. In each, give
+   repository `ichellin1/proteus`, workflow `release.yml` and environment `release`.
+3. **Then delete both secrets,** and the tokens on crates.io and npm.
+
+### The changelog over time
+
+`CHANGELOG.md` is regenerated from the whole history at each release. When it grows long, such as
+at 1.0, the older versions can move to a file of their own: generate them once with a fixed
+range (`git-cliff v0.1.0..v1.0.0 -o changelog/0.x.md`), commit that file, and have
+`version.mjs` generate `CHANGELOG.md` from `v1.0.0` on, with a link to it. Each GitHub Release
+keeps its own notes either way.
+
+## Deploying the demo
+
+The demo, and the API reference beside it, deploy to GitHub Pages from `main`. A change reaches
+them through a pull request.
+
+1. **Check it locally.** `make serve-web` builds the web demo and serves it on
+   <http://localhost:8080>; walk through it looking for regressions.
+2. **Open a pull request.** CI runs on it. If it changes anything under `crates/`, or
+   `Cargo.toml` or `Cargo.lock`, a preview of the web demo is built and deployed to
+   `https://ichellin1.github.io/proteus-staging/pr-<number>/`, and its address is posted as a
+   comment. It's rebuilt on every push, and removed when the pull request closes.
+3. **Review the preview,** as in step 1, on the real deployed build.
+4. **Merge** once CI passes and the preview looks right, with a merge commit (see
+   [CONTRIBUTING.md](./CONTRIBUTING.md#pull-requests)). The merge deploys the demo and the API
+   reference. Within a few minutes, check <https://ichellin1.github.io/proteus/>.
+
+To undo a deploy, revert the commit on `main` and push. To deploy again without a new commit,
+such as after a change the path filter skips, run the Pages workflow by hand:
+`gh workflow run pages.yml`.
+
+### The workflows
+
+- **`ci.yml`** runs on every pull request and push to `main`: formatting, clippy, docs and tests,
+  the WebAssembly builds, the TypeScript SDK's checks, the examples' builds, and a lint of the
+  workflows. `release.yml` runs it too.
+- **`staging-deploy.yml`** builds each pull request's preview and publishes it to a separate
+  repository, `ichellin1/proteus-staging`, so a preview can never touch the real site.
+- **`pages.yml`** builds the demo and the API reference on every push to `main` that touches
+  `crates/`, `Cargo.toml` or `Cargo.lock`, and deploys them to GitHub Pages.
+- **`release.yml`** releases the library; see above.

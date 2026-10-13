@@ -75,6 +75,10 @@ jobs:
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
 
+      - name: The demo's images
+        # proteus-demo keeps them for both shells; the page serves a copy.
+        run: make web-images
+
       - name: Remove wasm-pack's own pkg/.gitignore
         # wasm-pack always writes a `*` .gitignore into its own output dir
         # (so consumers don't accidentally commit build output to *their*

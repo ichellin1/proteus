@@ -6,12 +6,17 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 # Hosts depend on proteus-runtime only — it re-exports wgpu + glam at the
 # versions it builds against. winit and pollster are this host's own
 # platform concern.
-proteus-runtime = { path = "../proteus-runtime" }
+proteus-runtime = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
 log = { workspace = true }
