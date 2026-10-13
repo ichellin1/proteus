@@ -64,13 +64,16 @@ installed (`brew install actionlint`), and `git-cliff`, which releasing needs
 
 ### Demo assets
 
-The demo's images and videos are committed under each shell:
-`crates/proteus-shell-native/images/` and `assets/videos/`, and
-`crates/proteus-shell-web/www/images/` and `www/videos/`. There is nothing to download.
+The demo's images and videos are committed in `crates/proteus-demo/assets/`, one copy for both
+shells. There is nothing to download.
 
-The web shell plays HLS rather than the `.mp4` files: `www/videos/hls/{tiger,sintel,jellyfish}/`
-hold the segmented streams, made from those files by `www/videos/make_hls.sh`. Run it again if
-you replace them.
+- **The native shell** reads them there.
+- **The web shell** serves a copy of `images/` from its page, `crates/proteus-shell-web/www/`,
+  which `make web-images` makes, and which `make build-web` and the deploys make for you. The
+  copy isn't committed.
+- **Videos on the web** play as HLS, from the segmented streams committed in
+  `crates/proteus-shell-web/www/videos/hls/`. `scripts/make-hls.sh` makes them from the demo's
+  `.mp4` files, with `ffmpeg`; run it again, and commit its output, after replacing a video.
 
 To use your own assets, put them at the same paths. `DemoApp::asset_keys()` in
 `crates/proteus-demo/src/app.rs` lists every image the demo loads, and the web shell downloads

@@ -29,8 +29,8 @@ Thumbs.db
 .env
 .env.local
 
-# Scripts
-make_hls.sh
+# The demo's images, copied into the web shell's page by `make web-images`
+crates/proteus-shell-web/www/images/
 
 # Personal record of review findings; not part of the project
 REVIEW-FINDINGS.md
