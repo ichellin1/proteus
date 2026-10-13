@@ -4769,6 +4769,62 @@ load-bearing — this section tracks their *implementation*, which is deferred t
 via Capacitor is designed in M13.6 (confirmed additive to M13.1/M13.2) — also implemented in V2,
 not V1.**
 
+- **High priority: a fast path for plain components in the fragment shader.** Found by M14 step
+  10's benchmarks (2026-10-13). Proteus's GPU work, not its CPU or its WebAssembly boundary, is
+  what limits large scenes, and most of it is the fragment shader doing its full work on every
+  pixel of every component, even a plain shape with no image, border, shadow or glow.
+  - **What was measured.** Native (`benches/native`, Apple M4, Metal, 1280 × 800): the frame
+    interval is about four times the CPU time from 5,000 components up, so the GPU sets the
+    frame rate. In Chrome 155 (`benches/browser`, Proteus on WebGPU, pixel ratio 2, 60 Hz), with
+    components 20 to 200 pixels across, Proteus fell below 60 Hz at 5,000 components, while two
+    renderers written by hand with WebGL2, one draw call per component and one instanced call,
+    both held 60 Hz to 10,000; at 50,000, Proteus took 337 ms a frame and they took 50. Their
+    shader only draws a rounded rectangle. With components 4 to 8 pixels across instead, where
+    filling pixels barely matters, all three held 60 Hz up to 100,000 components: Proteus's cost
+    per component isn't what limits it. Safari 26.5 (WebGPU, 59 Hz) agreed: with large
+    components, Proteus fell to 35 ms a frame at 10,000 while the hand-written renderers held,
+    and 180 ms at 50,000 against 65 to 69. **Safari's tab crashed at 100,000 large components,**
+    probably Proteus, the slowest renderer there (about 430 ms a frame in Chrome): WebKit resets
+    a GPU process whose work runs too long. Check that first, and whether the fast path ends
+    it.
+  - **The diagnosis.** With `fs_main` in `crates/proteus-render/src/shaders/quad.wgsl` made to
+    return a flat color immediately, the native frame interval fell from 11.4 to 2.8 ms at
+    10,000 components, and from 33 to 15.7 ms at 25,000: the fragment shader is about three
+    quarters of the GPU time at 10,000. The rest, at higher counts, is vertex work, each
+    instance carrying a 160-byte `QuadInstance`, and blending where components overlap.
+  - **Where the per-pixel cost is.** `fs_main` computes the rounded rectangle's distance field,
+    always samples a texture (a component without one samples a white block in the main
+    atlas), checks for a border and a crossfade, and premultiplies. Shadow and glow work is
+    already skipped when they're off, and `vs_main` only grows the quad for an active shadow.
+  - **Approaches.** (1) An early exit in `fs_main` for plain components, from a flag in the
+    instance: the distance field and the color, with no texture sample, border or crossfade.
+    (2) A separate pipeline for plain components; harder, since drawing order must hold across
+    pipelines, so it would draw runs of consecutive plain components. (3) A smaller
+    `QuadInstance` or fewer vertex attributes, for the vertex side. Start with (1) and measure.
+  - **How to measure.** `cargo run --release -p proteus-bench -- still 10000,25000` natively, and
+    `make bench-browser`, the large scene, in a browser. The flat-color `fs_main` above bounds
+    what any change can gain. The shader draws everything, so the reference demo, its Effects
+    and Text examples especially, needs a visual check on both shells afterwards.
+- **Only redo per-frame work that changed.** Also found by M14 step 10's benchmarks. With
+  components 4 to 8 pixels across, so that filling pixels barely matters, Chrome 155 on an Apple
+  M4 (WebGPU, 60 Hz) gave these frame times: Proteus 21 ms at 250,000 components, 42 at 500,000
+  and 87 at 1,000,000; a WebGL2 renderer with a draw call per component 33, 67 and 150; and one
+  written by hand with a single instanced call held 60 Hz throughout. Safari 26.5 (WebGPU, 59
+  Hz) gave Proteus the same 22, 44 and 87 ms; the per-component renderer 74, 139 and 274; and the
+  hand-batched one 17, 21 and 38. Proteus beats drawing each component separately, which is its
+  design's claim, by about 1.7 times in Chrome and 3 in Safari, but a hand-batched renderer is
+  two to five times faster at a million, because Proteus redoes all its per-component work every
+  frame, even when nothing changed: `collect_instances` walks every component in drawing order
+  and sorts by depth, builds a 160-byte `QuadInstance` for each, and the renderer uploads all
+  of them (160 MB a frame at a million, against the hand-batched renderer's 28 bytes a
+  component). Natively, that's most of a still frame's CPU time after the cascades were fixed
+  in step 10 (`cargo run --release -p proteus-bench -- phases`). Approaches: rebuild and upload
+  only the instances of components that changed; keep the sorted drawing order until a depth or
+  the hierarchy changes; a smaller instance record, with rarely used fields such as shadow and
+  glow in a separate buffer. It only matters at hundreds of thousands of components, so it
+  comes after the shader fast path. Measure with `make bench-browser`, opened with
+  `?scenes=small&counts=100000,250000,500000,1000000`.
+
 - Where (0, 0) is. Today it is the center of the window, with y up, for top-level components;
   a child's position is relative to its parent. Many developers, on the web especially, expect
   (0, 0) at the top-left with y down. TypeScript has `topLeftToWorld` to convert, but positions

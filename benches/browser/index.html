@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Proteus browser benchmark</title>
+    <style>
+      body {
+        margin: 16px;
+        background: #111;
+        color: #ddd;
+        font: 14px/1.4 system-ui, sans-serif;
+      }
+      #stage {
+        position: relative;
+        width: 1280px;
+        height: 800px;
+      }
+      #stage canvas {
+        position: absolute;
+        inset: 0;
+        width: 1280px;
+        height: 800px;
+      }
+      #results {
+        white-space: pre-wrap;
+        background: #1c1c1c;
+        padding: 12px;
+        user-select: all;
+      }
+    </style>
+  </head>
+  <body>
+    <p>
+      <button id="run" disabled>Run</button>
+      <span id="status">Loading…</span>
+    </p>
+    <div id="stage">
+      <canvas id="proteus"></canvas>
+      <canvas id="baseline"></canvas>
+    </div>
+    <pre id="results"></pre>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
