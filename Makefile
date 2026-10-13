@@ -1,7 +1,7 @@
 # Proteus — developer convenience targets.
 # Run `make install-hooks` once after cloning to wire up the git hooks.
 
-.PHONY: install-hooks check fmt clippy docs test check-comments build-web serve-web build-sdk-web
+.PHONY: install-hooks check fmt clippy docs test check-comments web-images build-web serve-web build-web-debug serve-web-debug build-sdk-web
 
 ## Wire up the git hooks from scripts/git-hooks/ into .git/hooks/.
 install-hooks:
@@ -35,9 +35,15 @@ test:
 check-comments:
 	scripts/check-comments.sh $(PATHS)
 
+## The demo's images, which proteus-demo keeps for both shells, copied into
+## the web shell's page. The copy isn't committed.
+web-images:
+	rm -rf crates/proteus-shell-web/www/images
+	cp -R crates/proteus-demo/assets/images crates/proteus-shell-web/www/images
+
 ## Build the WebGL2 WASM demo with wasm-pack.
 ## Requires: cargo install wasm-pack
-build-web:
+build-web: web-images
 	wasm-pack build crates/proteus-shell-web \
 	  --target web \
 	  --out-dir www/pkg \
@@ -45,6 +51,18 @@ build-web:
 
 ## Serve the web demo locally (requires Python 3).
 serve-web: build-web
+	python3 -m http.server 8080 --directory crates/proteus-shell-web/www
+
+## The web demo as a debug build: debug assertions and overflow checks on,
+## Rust function names in panics, and debug info for stepping through the
+## Rust source in the browser. Much larger and slower than the release build.
+build-web-debug: web-images
+	wasm-pack build crates/proteus-shell-web \
+	  --target web \
+	  --out-dir www/pkg \
+	  --dev
+
+serve-web-debug: build-web-debug
 	python3 -m http.server 8080 --directory crates/proteus-shell-web/www
 
 ## Build the proteus-sdk npm package: wasm-pack (--target bundler, unlike
@@ -87,5 +105,11 @@ example-%-ts: $(SDK_BUILT)
 ## Requires Python 3, for the server.
 example-%-web:
 	wasm-pack build examples/$*/rust --target web --release
+	@echo "Open http://localhost:8080/examples/$*/rust/"
+	python3 -m http.server 8080
+
+## The same, as a debug build; see build-web-debug.
+example-%-web-debug:
+	wasm-pack build examples/$*/rust --target web --dev
 	@echo "Open http://localhost:8080/examples/$*/rust/"
 	python3 -m http.server 8080

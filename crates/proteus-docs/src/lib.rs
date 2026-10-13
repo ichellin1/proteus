@@ -42,6 +42,11 @@ pages! {
     how_to_tricks => "how-to/tricks.md",
 }
 
+/// `proteus-sdk`'s README, its page on crates.io. Its example is tested like
+/// the guides', though it isn't in `docs/`.
+#[doc = include_str!("../../proteus-sdk/README.md")]
+pub mod readme_proteus_sdk {}
+
 /// The snippets that use the web host; see `build.rs`.
 #[cfg(target_arch = "wasm32")]
 #[allow(dead_code, clippy::all)]

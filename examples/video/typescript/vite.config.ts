@@ -6,7 +6,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 // needed, and why their versions are pinned.
 export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
-  // Serves the native demo's sample videos, so this example needs no copy of
-  // its own: `/tiger.mp4` and so on.
-  publicDir: "../../../crates/proteus-shell-native/assets/videos",
+  // Serves the reference demo's videos, so this example needs no copy of its
+  // own: `/tiger.mp4` and so on.
+  publicDir: "../../../crates/proteus-demo/assets/videos",
 });

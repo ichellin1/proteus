@@ -57,6 +57,10 @@ jobs:
       - name: wasm-pack build (web shell)
         run: wasm-pack build crates/proteus-shell-web --target web --out-dir www/pkg
 
+      - name: The demo's images
+        # proteus-demo keeps them for both shells; the page serves a copy.
+        run: make web-images
+
       # The API reference, beside the demo: rustdoc at api/rust/ and, for the
       # web host, which only builds for wasm32, api/rust-web/; typedoc at
       # api/ts/.

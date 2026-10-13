@@ -15,7 +15,7 @@ Video is **experimental**: an app has one video at a time, with frames supplied 
 [Video](../../docs/guides/content.md#video).
 
 The video is `tiger.mp4`, from the reference demo's assets in
-`crates/proteus-shell-native/assets/videos`.
+`crates/proteus-demo/assets/videos`.
 
 ## Run it
 

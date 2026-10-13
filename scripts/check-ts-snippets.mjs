@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Type-checks every TypeScript snippet in docs/: each ```ts block becomes a
+// Type-checks every TypeScript snippet in docs/, and in the npm package's
+// README, which is its page on npm: each ```ts block becomes a
 // file in crates/proteus-sdk-web/ts/.snippets/, beside the global
 // declarations in ts-snippet-prelude.d.ts, and tsc checks them against the
 // SDK's source with tsconfig.snippets.json. Run it with `npm run check-snippets` in
@@ -29,8 +30,8 @@ mkdirSync(out, { recursive: true });
 copyFileSync(join(root, "scripts/ts-snippet-prelude.d.ts"), join(out, "prelude.d.ts"));
 
 let count = 0;
-for (const page of pages(docs)) {
-  const name = relative(docs, page).replace(/\.md$/, "").replace(/[\\/]/g, "-");
+for (const page of [...pages(docs), join(ts, "README.md")]) {
+  const name = relative(root, page).replace(/\.md$/, "").replace(/[\\/]/g, "-");
   const blocks = readFileSync(page, "utf8").matchAll(/^```(?:ts|typescript)\n([\s\S]*?)^```$/gm);
   let n = 0;
   for (const [, code] of blocks) {

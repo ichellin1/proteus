@@ -19,4 +19,10 @@ cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery
 echo "▶ cargo doc (warnings as errors)"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude proteus-shell-web --exclude proteus-host-web --no-deps
 
+if command -v actionlint >/dev/null; then
+  echo "▶ actionlint (the GitHub workflows)"
+  actionlint
+else
+  echo "▷ actionlint isn't installed; skipping the workflow lint (brew install actionlint)"
+fi
 echo "✓ pre-push checks passed"
