@@ -31,7 +31,7 @@ test:
 	cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
 
 ## Check code comments against CONTRIBUTING.md. Pass paths with PATHS=...; the default is
-## every crate and example.
+## every crate, example and benchmark.
 check-comments:
 	scripts/check-comments.sh $(PATHS)
 

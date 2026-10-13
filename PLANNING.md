@@ -4663,6 +4663,14 @@ browser, and the two match.
 
 #### Step 10 — Benchmarks
 
+**Decided (2026-10-13).** The web benchmark compares Proteus with two hand-written WebGL2
+renderers: a naive one, one draw call per component, and a batched one, one instanced draw call
+for everything. The human runs the browser benchmark on their Mac, in the browsers they use, and
+pastes the results back. Sub-commits: 10a a native benchmark (the real engine, off-screen, at
+growing component counts, still and in transitions); 10b the per-frame overhead the audit flagged
+(C-19), measured and fixed if it skews the numbers; 10c the web benchmark page; 10d the results in
+`BENCHMARKS.md`.
+
 - [ ] The per-frame overheads the audit flagged (C-19) are measured, and fixed if they would
   distort the results.
 - [ ] Native: frame time as component count grows, and under heavy transition load.
