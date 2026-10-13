@@ -4623,23 +4623,25 @@ One version for every crate and the npm package. Library crates publish to crate
   `publish = false` for the demo and shells, `rust-version`); 8b changelog; 8c version-bump
   script; 8d `release.yml`; 8e CONTRIBUTING and RELEASING; 8f repository cleanup; 8g dry run.
 
-- [ ] `cliff.toml` configures git-cliff; `CHANGELOG.md` is generated, never hand-edited. The
+- [x] `cliff.toml` configures git-cliff; `CHANGELOG.md` is generated, never hand-edited. The
   commits before M14 aren't conventional, so v0.1.0 opens with one hand-written summary.
-- [ ] A script bumps the version everywhere and regenerates the changelog; the result lands as a
+- [x] A script bumps the version everywhere and regenerates the changelog; the result lands as a
   normal pull request.
-- [ ] `release.yml` runs on a `vX.Y.Z` tag: checks that versions match, runs CI, creates the
+- [x] `release.yml` runs on a `vX.Y.Z` tag: checks that versions match, runs CI, creates the
   GitHub Release with that version's changelog as its notes, and publishes to npm and crates.io.
-- [ ] Every published crate and the npm package have complete metadata, and every dependency
+- [x] Every published crate and the npm package have complete metadata, and every dependency
   between workspace crates carries a version so crates.io accepts it.
-- [ ] `CONTRIBUTING.md` completed: building from source, running tests (including GPU tests), the
+- [x] `CONTRIBUTING.md` completed: building from source, running tests (including GPU tests), the
   pull-request process, commit conventions.
-- [ ] `RELEASING.md` covers both releasing the library and deploying the demo.
-- [ ] Repository cleanup: unused committed video removed and the HLS build script tracked
+- [x] `RELEASING.md` covers both releasing the library and deploying the demo.
+- [x] Repository cleanup: unused committed video removed and the HLS build script tracked
   (R-02); one demo asset directory instead of two drifted copies (R-03); `design/` and `brand/`
   reduced to what is source (R-04), keeping the logo assets step 13 uses. History is not
   rewritten.
-- [ ] A dry run of v0.1.0 passes end to end: a draft GitHub Release with generated notes, and
-  `npm publish --dry-run` / `cargo publish --dry-run` succeeding for every package.
+- [x] A dry run of v0.1.0 passes end to end: a draft GitHub Release with generated notes, and
+  `npm publish --dry-run` / `cargo publish --dry-run` succeeding for every package. Done on
+  2026-10-13 from `release/v0.1.0`: the version check, CI, all eight crates, the npm package
+  and a draft release whose notes matched the changelog; nothing was published.
 
 #### Step 9 — Platform checks
 

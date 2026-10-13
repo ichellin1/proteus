@@ -294,7 +294,8 @@ catches the rest.
 4. Update the guides and API docs with the code they describe. A change to the public API that
    breaks existing code is marked as breaking in its commit.
 5. Pull requests are merged with a merge commit, not squashed, so each commit's message reaches
-   the changelog.
+   the changelog. A maintainer can also merge a branch locally and push `main`, with
+   `git merge --no-ff`, which makes the same merge commit.
 
 ## Commit messages
 

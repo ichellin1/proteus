@@ -122,9 +122,9 @@ them through a pull request.
    `https://ichellin1.github.io/proteus-staging/pr-<number>/`, and its address is posted as a
    comment. It's rebuilt on every push, and removed when the pull request closes.
 3. **Review the preview,** as in step 1, on the real deployed build.
-4. **Merge** once CI passes and the preview looks right, with a merge commit (see
-   [CONTRIBUTING.md](./CONTRIBUTING.md#pull-requests)). The merge deploys the demo and the API
-   reference. Within a few minutes, check <https://ichellin1.github.io/proteus/>.
+4. **Merge** once CI passes and the preview looks right, with a merge commit, on GitHub or
+   locally (see [CONTRIBUTING.md](./CONTRIBUTING.md#pull-requests)). Pushing the merge to
+   `main` deploys the demo and the API reference. Within a few minutes, check <https://ichellin1.github.io/proteus/>.
 
 To undo a deploy, revert the commit on `main` and push. To deploy again without a new commit,
 such as after a change the path filter skips, run the Pages workflow by hand:

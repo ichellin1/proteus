@@ -55,3 +55,4 @@ RELEASING.md.
 - A script that sets and checks the version everywhere
 - Release workflow for a version tag, and a workflow lint
 - One copy of the demo's assets, and remove unused media and design files
+- A blank line before each version in the changelog
