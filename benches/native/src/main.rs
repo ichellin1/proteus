@@ -2,19 +2,22 @@
 //! with the real engine and renderer, drawing off-screen.
 //!
 //! ```text
-//! cargo run --release -p proteus-bench                    # both scenarios
-//! cargo run --release -p proteus-bench -- still           # or one of them
-//! cargo run --release -p proteus-bench -- still 500,2000  # at other counts
+//! cargo run --release -p proteus-bench                    # every scene
+//! cargo run --release -p proteus-bench -- small           # or one of them
+//! cargo run --release -p proteus-bench -- small 500,2000  # at other counts
 //! cargo run --release -p proteus-bench -- phases          # the CPU's phases
 //! ```
 //!
-//! Two scenarios, each at every count in [`COUNTS`]:
+//! Three scenes, each at every count in [`COUNTS`], the same as the browser
+//! benchmark's, `benches/browser`: N components with random positions and
+//! colors, and sizes that depend on the scene.
 //!
-//! - **still:** N components with random positions, sizes and colors, which
-//!   don't change.
-//! - **moving:** the same, but every component is always in a transition:
-//!   each moves to a new random place every half second, as the previous
-//!   move ends.
+//! - **small:** 4 to 8 pixels across, still. Filling pixels barely matters,
+//!   so what's left is the cost per component.
+//! - **large:** 20 to 200 pixels across, still, overlapping many times at high
+//!   counts, so filling pixels dominates.
+//! - **moving:** 10 to 40 pixels across, every one always moving: each gets a
+//!   new random place every half second and moves there over half a second.
 //!
 //! Each frame runs the engine, `Engine::frame`, exactly as a host does, into
 //! a 1280 × 800 texture rather than a window, so the display's refresh rate
@@ -67,15 +70,28 @@ const MOVE: f32 = 0.5;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Scenario {
-    Still,
+    Small,
+    Large,
     Moving,
 }
 
 impl Scenario {
+    const ALL: [Self; 3] = [Self::Small, Self::Large, Self::Moving];
+
     fn name(self) -> &'static str {
         match self {
-            Self::Still => "still",
+            Self::Small => "small",
+            Self::Large => "large",
             Self::Moving => "moving",
+        }
+    }
+
+    /// The components' size range, from and to, and corner radius, in pixels.
+    fn sizes(self) -> (f32, f32, f32) {
+        match self {
+            Self::Small => (4.0, 8.0, 2.0),
+            Self::Large => (20.0, 200.0, 8.0),
+            Self::Moving => (10.0, 40.0, 4.0),
         }
     }
 }
@@ -97,19 +113,25 @@ impl Random {
         low + (high - low) * self.next()
     }
 
-    /// A random place, size and color for a component, inside the window.
-    /// Positions are measured from its center.
-    fn geometry(&mut self) -> QuadState {
-        let size = Vec2::new(self.between(20.0, 200.0), self.between(20.0, 200.0));
+    /// A random place inside the window. Positions are measured from its
+    /// center.
+    fn position(&mut self) -> Vec3 {
+        Vec3::new(
+            self.between(-(SIZE.0 as f32) / 2.0, SIZE.0 as f32 / 2.0),
+            self.between(-(SIZE.1 as f32) / 2.0, SIZE.1 as f32 / 2.0),
+            0.0,
+        )
+    }
+
+    /// A random size, place and color for a component of `scenario`.
+    fn geometry(&mut self, scenario: Scenario) -> QuadState {
+        let (min, max, radius) = scenario.sizes();
+        let size = Vec2::new(self.between(min, max), self.between(min, max));
         QuadState {
-            position: Vec3::new(
-                self.between(-(SIZE.0 as f32) / 2.0, SIZE.0 as f32 / 2.0),
-                self.between(-(SIZE.1 as f32) / 2.0, SIZE.1 as f32 / 2.0),
-                0.0,
-            ),
+            position: self.position(),
             size,
             color: Vec4::new(self.next(), self.next(), self.next(), 1.0),
-            corner_radius: 8.0,
+            corner_radius: radius,
             ..Default::default()
         }
     }
@@ -119,7 +141,8 @@ impl Random {
 struct Scene {
     scenario: Scenario,
     count: usize,
-    components: Vec<Handle>,
+    /// Each component, and its geometry as created.
+    components: Vec<(Handle, QuadState)>,
     random: Random,
     /// Seconds until the moving scenario's next round of moves.
     next_move: f32,
@@ -128,9 +151,9 @@ struct Scene {
 impl App for Scene {
     fn setup(&mut self, f: &mut Frame) {
         for _ in 0..self.count {
-            let geometry = self.random.geometry();
-            self.components
-                .push(f.proteus.component(ComponentSpec::new(geometry)));
+            let geometry = self.random.geometry(self.scenario);
+            let handle = f.proteus.component(ComponentSpec::new(geometry.clone()));
+            self.components.push((handle, geometry));
         }
     }
 
@@ -148,9 +171,13 @@ impl App for Scene {
             delay: 0.0,
             easing: Easing::EaseInOutQuad,
         };
-        for &component in &self.components {
-            let to = self.random.geometry();
-            let _ = component.animate_to(f.proteus, to, config);
+        // A new place for each, keeping its size and color.
+        for (handle, geometry) in &self.components {
+            let to = QuadState {
+                position: self.random.position(),
+                ..geometry.clone()
+            };
+            let _ = handle.animate_to(f.proteus, to, config);
         }
     }
 }
@@ -247,7 +274,7 @@ fn phases(count: usize) -> [f64; 3] {
     let mut proteus = proteus_sdk::Proteus::new();
     let mut random = Random(0x9e37_79b9_7f4a_7c15);
     for _ in 0..count {
-        proteus.component(ComponentSpec::new(random.geometry()));
+        proteus.component(ComponentSpec::new(random.geometry(Scenario::Large)));
     }
     let mut times: [Vec<Duration>; 3] = Default::default();
     for i in 0..WARM_UP + FRAMES {
@@ -288,7 +315,7 @@ fn main() {
         }
         return;
     }
-    let scenarios: Vec<Scenario> = [Scenario::Still, Scenario::Moving]
+    let scenarios: Vec<Scenario> = Scenario::ALL
         .into_iter()
         .filter(|s| {
             only.as_deref()
@@ -302,7 +329,7 @@ fn main() {
     });
     let counts = counts.unwrap_or_else(|| COUNTS.to_vec());
     if scenarios.is_empty() || counts.is_empty() {
-        eprintln!("usage: proteus-bench [all|still|moving|phases] [count,count,...]");
+        eprintln!("usage: proteus-bench [all|small|large|moving|phases] [count,count,...]");
         std::process::exit(2);
     }
 
