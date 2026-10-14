@@ -181,8 +181,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
         pivoted.x * sin_r + pivoted.y * cos_r,
     );
 
-    // Translate to world space and project.
-    let world = vec4(rotated + in.inst_position.xy, in.inst_position.z, 1.0);
+    // Translate to world space and project. `z` is left out: it only orders
+    // components, which the instance order already does, and as a depth it
+    // would clip any component outside the projection's depth range.
+    let world = vec4(rotated + in.inst_position.xy, 0.0, 1.0);
     out.clip_position = uniforms.view_projection * world;
 
     // local_pos is the inflated centered position: the pixel coordinate relative

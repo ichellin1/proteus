@@ -548,6 +548,72 @@ fn opacity_fades_the_border_shadow_and_glow() {
     }
 }
 
+// `z` only orders components, through the order of the instances, so a
+// component is drawn whatever its `z`. Passed into the clip-space depth, where
+// the projection keeps only 0 to 1,000, it would clip away a component below 0
+// or above 1,000, which would still take clicks.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn quads_are_drawn_whatever_their_z() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        no_gpu();
+        return;
+    };
+    let mut pipeline = QuadPipeline::new(
+        &device,
+        &queue,
+        FORMAT,
+        16,
+        AtlasConfig::default(),
+        DEFAULT_TRANSITION_ATLAS_SIZE,
+    );
+    pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+
+    // Four 16×16 quads side by side along the middle row, each red.
+    let zs = [-1.0, 0.0, 999.0, 2000.0];
+    let instances: Vec<QuadInstance> = zs
+        .iter()
+        .enumerate()
+        .map(|(i, &z)| QuadInstance {
+            position: [-24.0 + 16.0 * i as f32, 0.0, z],
+            size: [16.0, 16.0],
+            rotation: 0.0,
+            scale: 1.0,
+            anchor: [0.5, 0.5],
+            color: [1.0, 0.0, 0.0, 1.0],
+            opacity: 1.0,
+            corner_radius: 0.0,
+            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+            atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
+            base_uv_offset: [0.0, 0.0],
+            base_uv_scale: [0.0, 0.0],
+            crossfade_t: 0.0,
+            border_width: 0.0,
+            border_color: [0.0, 0.0, 0.0, 0.0],
+            border_offset: 0.0,
+            shadow_params: [0.0, 0.0, 0.0, 0.0],
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
+            base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+        })
+        .collect();
+    let black = wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let pixels = render_and_read_back(&device, &queue, &mut pipeline, &instances, black);
+
+    for (i, z) in zs.iter().enumerate() {
+        // The center of quad `i`: columns 8 + 16i, the middle row.
+        let col = 8 + 16 * i as u32;
+        let off = ((HEIGHT / 2) * BYTES_PER_ROW + col * 4) as usize;
+        let red = pixels[off];
+        assert!(red > 200, "the quad at z = {z} wasn't drawn (red = {red})");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

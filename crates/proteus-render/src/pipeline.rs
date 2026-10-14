@@ -936,7 +936,8 @@ impl QuadPipeline {
     /// Orthographic projection for a viewport of `width` × `height` pixels.
     ///
     /// - Origin at viewport center, Y-up, 1 unit = 1 pixel.
-    /// - Depth range: Z 0 → 1000 maps to NDC 0 → 1 (wgpu convention).
+    /// - The shader draws every quad at depth 0, so `z` doesn't matter here;
+    ///   components are ordered by the order of their instances.
     /// - Pass the viewport's size in logical pixels: one unit is one logical
     ///   pixel, and the surface's scale factor doesn't affect it.
     pub fn ortho(width: f32, height: f32) -> glam::Mat4 {

@@ -22,7 +22,7 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct QuadVertex {
-    /// Object-space position (x, y). Z is always 0 — depth comes from the instance.
+    /// Object-space position (x, y).
     pub position: [f32; 2],
     /// UV coordinates for this corner of the unit quad.
     pub uv: [f32; 2],
@@ -88,7 +88,8 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 pub struct QuadInstance {
     // --- Transform ---
     /// Position in world units. Instances are drawn in buffer order, so the
-    /// last is on top; `collect_instances` orders them.
+    /// last is on top; `collect_instances` orders them, using `z`. The shader
+    /// doesn't read `z`.
     pub position: [f32; 3], // offset   0, size 12
     /// Component size in pixels (width, height).
     pub size: [f32; 2], // offset  12, size  8
