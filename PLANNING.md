@@ -4671,13 +4671,13 @@ growing component counts, still and in transitions); 10b the per-frame overhead 
 (C-19), measured and fixed if it skews the numbers; 10c the web benchmark page; 10d the results in
 `BENCHMARKS.md`.
 
-- [ ] The per-frame overheads the audit flagged (C-19) are measured, and fixed if they would
+- [x] The per-frame overheads the audit flagged (C-19) are measured, and fixed if they would
   distort the results.
-- [ ] Native: frame time as component count grows, and under heavy transition load.
-- [ ] Web: the WebAssembly renderer against a hand-written TypeScript/WebGL2 baseline, per the
+- [x] Native: frame time as component count grows, and under heavy transition load.
+- [x] Web: the WebAssembly renderer against a hand-written TypeScript/WebGL2 baseline, per the
   method in `BENCHMARKS.md`, with a batched baseline added or the naive baseline's limits stated
   plainly.
-- [ ] `BENCHMARKS.md` has real results with hardware and browser recorded, and the harness is in
+- [x] `BENCHMARKS.md` has real results with hardware and browser recorded, and the harness is in
   the repo so anyone can rerun it.
 
 #### Step 11 — Architecture document, and archive the V1 planning
@@ -4787,6 +4787,11 @@ not V1.**
     probably Proteus, the slowest renderer there (about 430 ms a frame in Chrome): WebKit resets
     a GPU process whose work runs too long. Check that first, and whether the fast path ends
     it.
+  - **Uneven frames.** Once the GPU is the limit, Proteus's frame times are uneven too: with
+    large components, its p99 is about twice its median from 5,000 up, in both browsers and
+    from TypeScript and Rust alike (at 10,000, 41.2 ms with a p99 of 72.4 in Chrome, and 39
+    with 77 in Safari), while the hand-written renderers mostly stay within 15%. Check whether
+    the fast path evens them out.
   - **The diagnosis.** With `fs_main` in `crates/proteus-render/src/shaders/quad.wgsl` made to
     return a flat color immediately, the native frame interval fell from 11.4 to 2.8 ms at
     10,000 components, and from 33 to 15.7 ms at 25,000: the fragment shader is about three
@@ -4801,7 +4806,7 @@ not V1.**
     (2) A separate pipeline for plain components; harder, since drawing order must hold across
     pipelines, so it would draw runs of consecutive plain components. (3) A smaller
     `QuadInstance` or fewer vertex attributes, for the vertex side. Start with (1) and measure.
-  - **How to measure.** `cargo run --release -p proteus-bench -- still 10000,25000` natively, and
+  - **How to measure.** `cargo run --release -p proteus-bench -- large 10000,25000` natively, and
     `make bench-browser`, the large scene, in a browser. The flat-color `fs_main` above bounds
     what any change can gain. The shader draws everything, so the reference demo, its Effects
     and Text examples especially, needs a visual check on both shells afterwards.
@@ -4813,9 +4818,15 @@ not V1.**
   That's the frame every half second where every component gets its new `animateTo`: one call
   from TypeScript into WebAssembly per component, each passing a geometry object that
   `serde-wasm-bindgen` converts, about 2.3 µs a call. (CSS, animating the same moves with
-  transitions, fell to 20 frames a second at 5,000 components and 10 at 10,000.) Approach: a
-  call that starts many transitions at once, such as `app.animateMany(handles, targets, config)`
-  with the targets in a `Float32Array`, so the cost is one crossing and a copy. Measure with
+  transitions, fell to 20 frames a second at 5,000 components and 10 at 10,000.) The same app
+  written in Rust, `benches/browser/rust`, making the same `animate_to` calls inside WebAssembly,
+  had a 99th percentile of 21.6 ms at 10,000, 37 at 50,000 and 77 at 100,000: about 0.6 µs a
+  call, the cost of starting a transition itself. So about 1.6 µs of TypeScript's 2.2, three
+  quarters, is the crossing and the conversion. Safari 26.5 agreed, with a costlier crossing:
+  TypeScript's 99th percentile was 364 ms at 100,000 against Rust's 83, about 0.7 µs a call in
+  Rust and 2.8 more for the crossing. Approach: a call that starts many transitions
+  at once, such as `app.animateMany(handles, targets, config)` with the targets in a
+  `Float32Array`, so the cost is one crossing and a copy, close to Rust's. Measure with
   `make bench-browser`, opened with `?scenes=moving`, watching the p99 column.
 - **Only redo per-frame work that changed.** Also found by M14 step 10's benchmarks. With
   components 4 to 8 pixels across, so that filling pixels barely matters, Chrome 155 on an Apple
