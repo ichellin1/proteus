@@ -11,12 +11,18 @@
  * CSS redraws every frame; and moving, where every component is always
  * moving, in `motion.ts`, which CSS joins.
  *
- * Proteus runs through the TypeScript SDK, on its own canvas; its frames are
- * timed from `mount`'s `update` function, which runs once a frame. Each of
- * the others has its own canvas, or for CSS a `div`, of the same size.
+ * Proteus runs twice: through the TypeScript SDK, its frames timed from
+ * `mount`'s `update` function, which runs once a frame; and as an app written
+ * in Rust, `../rust`, which reports its frames itself. Both draw with the
+ * same web host and renderer; the Rust app makes its calls without crossing
+ * from JavaScript. Each of the others has its own canvas, or for CSS a `div`,
+ * of the same size.
  */
 
 import { mount, type Handle, type ProteusApp } from "proteus-sdk";
+
+// The same app in Rust, compiled to WebAssembly: `../rust`. `make bench-browser` builds it.
+import * as rust from "../rust/pkg/proteus_bench_web";
 
 import { batched, canvas2d, type MakeRenderer, naive } from "./baselines";
 import { cssScene } from "./css";
@@ -54,6 +60,7 @@ const runButton = document.getElementById("run") as HTMLButtonElement;
 const resetButton = document.getElementById("reset") as HTMLButtonElement;
 const surfaces = {
   proteus: document.getElementById("proteus") as HTMLCanvasElement,
+  proteusRust: document.getElementById("proteus-rust") as HTMLCanvasElement,
   webgl: document.getElementById("webgl") as HTMLCanvasElement,
   canvas2d: document.getElementById("canvas2d") as HTMLCanvasElement,
   css: document.getElementById("css")!,
@@ -155,6 +162,9 @@ function animationFrames(draw: (now: number) => void) {
 
 // --- Proteus ----------------------------------------------------------------
 
+/** Room for the largest scene asked for: Proteus draws at most 4096 a frame by default. */
+const maxInstances = Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(...counts))));
+
 let proteus: ProteusApp | undefined;
 /** Called from `mount`'s `update`, once a frame, while Proteus is being timed. */
 let proteusFrame: ((now: number) => void) | undefined;
@@ -169,9 +179,20 @@ await mount("proteus", {
   config: {
     render: { clearColor: [0, 0, 0, 1] },
     // Room for the largest scene: the default draws at most 4096 a frame.
-    memory: { maxInstances: Math.max(4096, 2 ** Math.ceil(Math.log2(Math.max(...counts)))) },
+    memory: { maxInstances },
   },
 });
+await rust.start("proteus-rust", maxInstances);
+
+async function timeProteusRust(kind: SceneKind, count: number): Promise<Timing> {
+  rust.show(kind, count);
+  const timing = await timeFrames((onFrame) => {
+    rust.on_frame(onFrame);
+    return () => rust.stop_frames();
+  });
+  rust.clear();
+  return timing;
+}
 
 async function timeProteus(kind: SceneKind, count: number): Promise<Timing> {
   const app = proteus!;
@@ -264,7 +285,12 @@ interface Contender {
   time: (kind: SceneKind, count: number) => Promise<Timing>;
 }
 
-const PROTEUS: Contender = { title: "Proteus", surface: "proteus", time: timeProteus };
+const PROTEUS: Contender = { title: "Proteus (TypeScript)", surface: "proteus", time: timeProteus };
+const PROTEUS_RUST: Contender = {
+  title: "Proteus (Rust)",
+  surface: "proteusRust",
+  time: timeProteusRust,
+};
 const CSS: Contender = { title: "CSS", surface: "css", time: (_, count) => timeCss(count) };
 const CANVAS_2D: Contender = {
   title: "Canvas 2D",
@@ -284,9 +310,9 @@ const BATCHED: Contender = {
 
 /** The renderers in each scene: CSS only moves, since a still page of `div`s costs nothing. */
 const CONTENDERS: Record<SceneKind, Contender[]> = {
-  small: [PROTEUS, CANVAS_2D, NAIVE, BATCHED],
-  large: [PROTEUS, CANVAS_2D, NAIVE, BATCHED],
-  moving: [PROTEUS, CSS, CANVAS_2D, NAIVE, BATCHED],
+  small: [PROTEUS, PROTEUS_RUST, CANVAS_2D, NAIVE, BATCHED],
+  large: [PROTEUS, PROTEUS_RUST, CANVAS_2D, NAIVE, BATCHED],
+  moving: [PROTEUS, PROTEUS_RUST, CSS, CANVAS_2D, NAIVE, BATCHED],
 };
 const LIMITS: Record<SceneKind, number> = {
   small: Infinity,

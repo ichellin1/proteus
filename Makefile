@@ -20,7 +20,7 @@ fmt:
 ## pass and checked separately against their real target. Mirrors ci.yml.
 clippy:
 	cargo clippy --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets --all-features -- -D warnings
-	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+	cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu -p proteus-bench-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
 ## Build the API docs with warnings as errors, as CI does: a broken link in a
 ## doc comment fails.
@@ -117,4 +117,5 @@ example-%-web-debug:
 ## The browser benchmark: builds the SDK if needed, then serves a production
 ## build of benches/browser. Open the address it prints and click Run.
 bench-browser: $(SDK_BUILT)
+	wasm-pack build benches/browser/rust --target bundler --release
 	cd benches/browser && npm install && npm run build && npm run preview
