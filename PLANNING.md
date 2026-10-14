@@ -4945,14 +4945,14 @@ not V1.**
     context; if not, swap in a new `<canvas>` element. A short experiment settles it.
   - Rare on desktop; more common on phones, when the browser reclaims a background tab's
     memory, and after GPU driver resets.
-- 3D. Components are flat today: `z` only orders drawing (B-32: a `z` outside 0 to 1,000 isn't
-  drawn), `rotation` turns them in the screen's plane, the projection is orthographic, and there
-  is no depth buffer. VISION's principle 9 has components exist and transition in 3D space.
-  That needs a perspective projection, rotation about any axis, depth (a depth buffer, or
-  sorting by distance, which transparency needs anyway), hit testing by casting a ray from the
-  pointer, and bakes and transitions that work in 3D. Geometry other than quads comes after:
-  VISION's "Future Geometry Types" weighs one instance buffer per geometry type against packing
-  all geometry into shared buffers. The XR shell below depends on this.
+- 3D. Components are flat today: `z` only orders drawing, `rotation` turns them in the screen's
+  plane, the projection is orthographic, and there is no depth buffer. VISION's principle 9 has
+  components exist and transition in 3D space. That needs a perspective projection, rotation about
+  any axis, depth (a depth buffer, or sorting by distance, which transparency needs anyway), hit
+  testing by casting a ray from the pointer, and bakes and transitions that work in 3D. Geometry
+  other than quads comes after: VISION's "Future Geometry Types" weighs one instance buffer per
+  geometry type against packing all geometry into shared buffers. The XR shell below depends on
+  this.
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)
