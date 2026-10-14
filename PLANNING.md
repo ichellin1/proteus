@@ -4810,7 +4810,29 @@ not V1.**
     instance: the distance field and the color, with no texture sample, border or crossfade.
     (2) A separate pipeline for plain components; harder, since drawing order must hold across
     pipelines, so it would draw runs of consecutive plain components. (3) A smaller
-    `QuadInstance` or fewer vertex attributes, for the vertex side. Start with (1) and measure.
+    `QuadInstance` or fewer vertex attributes, for the vertex side. (4) Skip pixels that a
+    later opaque component covers; see the next point. Start with (1) and measure; (4) is
+    independent of the others, and helps most where many opaque components overlap.
+  - **Skipping covered pixels with a depth buffer** (the human's suggestion, 2026-10-14). Today
+    every component's every pixel runs `fs_main`, even where a later component covers it
+    completely; with large components stacked many times, as in the large scene, most of that
+    work is thrown away. A GPU can reject a pixel before running the fragment shader if a depth
+    test fails. A sketch: a first pass draws each opaque component's interior, front to back,
+    writing only depth, with a trivial shader; then the main pass draws everything in its usual
+    order, testing depth without writing it, so covered pixels are rejected before `fs_main`
+    runs. Depth comes from each instance's place in the drawing order, not from `z`, which the
+    shader doesn't read (B-32). Open questions:
+    - **What counts as opaque.** A component with an opaque color, full opacity and no
+      crossfade, whose texture is opaque: the white block is, text never is, and an image would
+      need a flag recorded when it's decoded. Only the interior inside the rounded corners and
+      the antialiased edge can write depth.
+    - **`discard`.** `fs_main` discards pixels outside the shape and its shadow, which on some
+      GPUs stops early depth testing. The main pass doesn't write depth, which should keep early
+      rejection working, but check on Metal, Vulkan, DirectX 12 and WebGL2.
+    - **Costs.** A depth texture the size of the surface, the first pass's vertex work, and a
+      second instance order. Bakes would need it too, or skip it.
+    - Measure on the large scene against (1), and on the small scene to check it costs nothing
+      where components don't overlap.
   - **How to measure.** `cargo run --release -p proteus-bench -- large 10000,25000` natively, and
     `make bench-browser`, the large scene, in a browser. The flat-color `fs_main` above bounds
     what any change can gain. The shader draws everything, so the reference demo, its Effects
