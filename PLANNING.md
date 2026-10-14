@@ -4805,6 +4805,18 @@ not V1.**
     `make bench-browser`, the large scene, in a browser. The flat-color `fs_main` above bounds
     what any change can gain. The shader draws everything, so the reference demo, its Effects
     and Text examples especially, needs a visual check on both shells afterwards.
+- **Start many transitions in one call, from TypeScript.** Found by M14 step 10's browser
+  benchmark, in its moving scene: N components 10 to 40 pixels across, each given a new target
+  with `animateTo` every half second. In Chrome 155 on an Apple M4 (WebGPU, 60 Hz), Proteus held
+  a 16.7 ms median frame up to 100,000 moving components, so running the transitions is cheap;
+  but its 99th percentile was 38 ms at 10,000, 65 at 25,000, 118 at 50,000 and 235 at 100,000.
+  That's the frame every half second where every component gets its new `animateTo`: one call
+  from TypeScript into WebAssembly per component, each passing a geometry object that
+  `serde-wasm-bindgen` converts, about 2.3 µs a call. (CSS, animating the same moves with
+  transitions, fell to 20 frames a second at 5,000 components and 10 at 10,000.) Approach: a
+  call that starts many transitions at once, such as `app.animateMany(handles, targets, config)`
+  with the targets in a `Float32Array`, so the cost is one crossing and a copy. Measure with
+  `make bench-browser`, opened with `?scenes=moving`, watching the p99 column.
 - **Only redo per-frame work that changed.** Also found by M14 step 10's benchmarks. With
   components 4 to 8 pixels across, so that filling pixels barely matters, Chrome 155 on an Apple
   M4 (WebGPU, 60 Hz) gave these frame times: Proteus 21 ms at 250,000 components, 42 at 500,000
