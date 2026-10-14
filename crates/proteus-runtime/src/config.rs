@@ -470,39 +470,18 @@ impl Default for TextConfig {
 // ResourceConfig
 // ---------------------------------------------------------------------------
 
-/// Image and texture loading settings.
-#[derive(Debug, Clone, Copy)]
+/// Image and texture loading settings. The default keeps images at full size
+/// and bakes text and images whether or not their component is visible.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ResourceConfig {
     /// Scale images down so their longer side is at most this many pixels,
     /// unless the image sets its own
     /// [`max_side`](proteus_ui::Image::max_side). `None` keeps full size, up
     /// to an atlas page: a larger image is scaled down to fit the page.
     pub image_max_side: Option<u32>,
-    /// Whether the atlas may evict textures to make room. Not read yet:
-    /// least-recently-used textures are always evicted.
-    pub eviction: EvictionPolicy,
     /// Wait to bake a component's text or image until the component is
     /// visible.
     pub lazy_load: bool,
-}
-
-/// Whether the atlas may evict textures to make room for new ones.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvictionPolicy {
-    /// Evict the least recently used textures first.
-    Lru,
-    /// Never evict; a texture that doesn't fit fails to load.
-    Never,
-}
-
-impl Default for ResourceConfig {
-    fn default() -> Self {
-        Self {
-            image_max_side: None,
-            eviction: EvictionPolicy::Lru,
-            lazy_load: false,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
