@@ -40,21 +40,19 @@ Many components converge into one. All N source components animate toward the si
 
 All transitions are driven by **interpolation between two geometric states**: the "from" state (the current component or set of components) and the "to" state (the target component or set of components).
 
-Every interpolatable property — position (x, y), size (width, height), shape (corner radii, path control points), color, opacity, content — is a value that can be lerped.
+Today, a component's geometry is interpolated: its position, size, rotation, scale, anchor point, color and corner radius. Its content, such as text and images, changes by crossfading instead: in a split or merge, each piece fades from an image of where it starts to an image of where it ends. Interpolating opacity, and shapes defined by paths rather than rounded rectangles, are future directions.
 
-The initial implementation uses **linear interpolation (lerp)** as the foundation. This is intentional. A well-timed linear transition is already smooth and visually clear. It also establishes the contract: every transition is a parameterized walk from 0.0 to 1.0 between two states.
+Every transition is a parameterized walk from 0.0 to 1.0 between two states. Progress first passes through an **easing curve**, which shapes how the transition speeds up and slows down, and the geometry is then interpolated linearly at the eased progress. The default curve is **ease-in-out**: it starts slowly, speeds up, then slows to a stop.
 
 ### Extensible Interpolation
 
-Because transitions are parameterized at the framework level, the interpolation function is **pluggable**. Linear is the default, but any function that maps `t ∈ [0, 1] → [0, 1]` can be substituted:
+Because transitions are parameterized at the framework level, the easing curve is **pluggable**: any function that maps `t ∈ [0, 1]` to eased progress can be used, including one that overshoots past 1 and settles back. Proteus provides:
 
-- Standard easing curves (ease-in, ease-out, ease-in-out)
-- Spring physics (overshoot, settle)
-- Bounce
-- Custom bezier curves
-- Procedural / GPU-computed curves
+- Linear, the standard ease-in, ease-out and ease-in-out curves, and a stronger ease-out
+- Cubic Bézier curves, taking the same four numbers as CSS's `cubic-bezier()`, so a curve can be copied from CSS or a design tool
+- Any custom function, from Rust
 
-This extensibility is built into the architecture from the start, even though the first implementation only uses lerp.
+Bounce and spring-like curves can be written as custom functions. Physics-driven springs, which depend on velocity rather than progress alone, and procedural or GPU-computed curves are future directions.
 
 ### More Complex Effects (Future)
 
@@ -168,7 +166,7 @@ below.
 
 ## Roadmap
 
-The detailed project roadmap — milestones, post-release scope, and planning phases — lives in [ROADMAP.md](./ROADMAP.md) (sequencing) and [PLANNING.md](./PLANNING.md) (architecture decisions and definitions of done). VISION.md intentionally does not duplicate them; those two are the source of truth for sequencing, milestones, and build decisions.
+Where Proteus is going lives in [ROADMAP.md](./ROADMAP.md), and the decisions and definitions of done for the work underway in [PLANNING.md](./PLANNING.md); how Proteus is built is in [ARCHITECTURE.md](./ARCHITECTURE.md). VISION.md intentionally does not duplicate them.
 
 ---
 
