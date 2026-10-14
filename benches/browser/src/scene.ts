@@ -9,18 +9,21 @@
  * - **Small:** components 4 to 8 pixels across. Even 50,000 cover the canvas
  *   only about twice, so per-pixel work stays small, and what's left is each
  *   renderer's cost per component: preparing it, uploading it and drawing it.
+ * - **Moving:** components 10 to 40 pixels across, about the size of an
+ *   interface's, every one always moving; see `motion.ts`.
  */
 
 /** The page's drawing area, in CSS pixels. */
 export const WIDTH = 1280;
 export const HEIGHT = 800;
 
-export type SceneKind = "large" | "small";
+export type SceneKind = "small" | "large" | "moving";
 
 /** Each kind of scene's component sizes, from and to, and corner radius, in CSS pixels. */
 export const SCENES: Record<SceneKind, { min: number; max: number; radius: number }> = {
   large: { min: 20, max: 200, radius: 8 },
   small: { min: 4, max: 8, radius: 2 },
+  moving: { min: 10, max: 40, radius: 4 },
 };
 
 /** One component: its center and size in CSS pixels from the top-left, and its color. */
@@ -39,7 +42,7 @@ export interface Rect {
  * the same scene. JavaScript has no 64-bit integers outside `BigInt`, which
  * this uses.
  */
-class Random {
+export class Random {
   private state = 0x9e3779b97f4a7c15n;
   private static readonly MASK = (1n << 64n) - 1n;
 

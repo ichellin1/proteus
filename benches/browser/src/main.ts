@@ -1,22 +1,26 @@
 /**
- * The browser benchmark: Proteus against two renderers written by hand with
- * WebGL2, drawing the same scene at growing component counts. Open the page,
- * click Run, and copy the results.
+ * The browser benchmark: Proteus against the other common ways to draw on the
+ * web, at growing component counts. Open the page, click Run, and copy the
+ * results.
  *
- * Each renderer redraws the whole scene every frame. What's measured is the
- * time between animation frames, the frame rate a user sees. A browser caps
- * that at the display's refresh rate, which the page measures first: a
- * renderer at the cap is keeping up, and the counts where each falls below it
- * are what to compare.
+ * What's measured is the time between animation frames, the frame rate a
+ * user sees. A browser caps that at the display's refresh rate, which the
+ * page measures first: a renderer at the cap is keeping up, and the counts
+ * where each falls below it are what to compare. Three scenes, in
+ * `scene.ts`: small and large components, still, which every renderer but
+ * CSS redraws every frame; and moving, where every component is always
+ * moving, in `motion.ts`, which CSS joins.
  *
  * Proteus runs through the TypeScript SDK, on its own canvas; its frames are
- * timed from `mount`'s `update` function, which runs once a frame. The
- * hand-written renderers share a second canvas of the same size.
+ * timed from `mount`'s `update` function, which runs once a frame. Each of
+ * the others has its own canvas, or for CSS a `div`, of the same size.
  */
 
 import { mount, type Handle, type ProteusApp } from "proteus-sdk";
 
-import { batched, naive, type Renderer } from "./baselines";
+import { batched, canvas2d, type MakeRenderer, naive } from "./baselines";
+import { cssScene } from "./css";
+import { Motion } from "./motion";
 import { HEIGHT, scene, SCENES, type SceneKind, WIDTH } from "./scene";
 
 /** The counts measured, unless the page's address gives others: `?counts=100,5000`. Past
@@ -31,6 +35,14 @@ const WARM_UP_LIMIT = 2_000;
  * that Safari resets its GPU process and the tab crashes.
  */
 const LARGE_LIMIT = 50_000;
+/**
+ * A renderer slower than this, in milliseconds a frame, is skipped at the
+ * scene's larger counts: below 10 frames a second it's unusable, and larger
+ * counts would take minutes and risk crashing the tab.
+ */
+const SLOW_LIMIT = 100;
+/** Where the run's progress is kept, so a crashed tab can resume. */
+const STORAGE_KEY = "proteus-bench";
 /** The most frames timed at each count. */
 const FRAMES = 300;
 /** The most time spent timing one count, in milliseconds: the naive renderer gets slow. */
@@ -39,8 +51,13 @@ const TIME_LIMIT = 15_000;
 const status = document.getElementById("status")!;
 const output = document.getElementById("results")!;
 const runButton = document.getElementById("run") as HTMLButtonElement;
-const proteusCanvas = document.getElementById("proteus") as HTMLCanvasElement;
-const baselineCanvas = document.getElementById("baseline") as HTMLCanvasElement;
+const resetButton = document.getElementById("reset") as HTMLButtonElement;
+const surfaces = {
+  proteus: document.getElementById("proteus") as HTMLCanvasElement,
+  webgl: document.getElementById("webgl") as HTMLCanvasElement,
+  canvas2d: document.getElementById("canvas2d") as HTMLCanvasElement,
+  css: document.getElementById("css")!,
+};
 
 const params = new URLSearchParams(location.search);
 const counts =
@@ -50,8 +67,8 @@ const counts =
     .map(Number)
     .filter((n) => n > 0) ?? COUNTS;
 /** The scenes run, unless the address names some: `?scenes=small`. */
-const scenes = (params.get("scenes")?.split(",") ?? ["small", "large"]).filter(
-  (kind): kind is SceneKind => kind === "small" || kind === "large",
+const scenes = (params.get("scenes")?.split(",") ?? ["small", "large", "moving"]).filter(
+  (kind): kind is SceneKind => kind in SCENES,
 );
 
 // --- What Proteus logs at startup: the adapter, and so WebGPU or WebGL2 ----
@@ -120,12 +137,12 @@ function timeFrames(subscribe: (onFrame: (now: number) => void) => () => void): 
 }
 
 /** Frames from `requestAnimationFrame`, calling `draw` in each. */
-function animationFrames(draw: () => void) {
+function animationFrames(draw: (now: number) => void) {
   return (onFrame: (now: number) => void) => {
     let running = true;
     const tick = (now: number) => {
       if (!running) return;
-      draw();
+      draw(now);
       onFrame(now);
       requestAnimationFrame(tick);
     };
@@ -158,22 +175,34 @@ await mount("proteus", {
 
 async function timeProteus(kind: SceneKind, count: number): Promise<Timing> {
   const app = proteus!;
+  const rects = scene(kind, count);
   // Proteus measures from the center of the canvas, with y up.
-  const handles: Handle[] = scene(kind, count).map((r) =>
-    app.component({
-      geometry: {
-        position: { x: r.x - WIDTH / 2, y: HEIGHT / 2 - r.y, z: 0 },
-        size: { width: r.width, height: r.height },
-        rotation: 0,
-        scale: 1,
-        anchor: { x: 0.5, y: 0.5 },
-        color: { r: r.r, g: r.g, b: r.b, a: 1 },
-        cornerRadius: SCENES[kind].radius,
-      },
-    }),
-  );
+  const geometry = (x: number, y: number, i: number) => ({
+    position: { x: x - WIDTH / 2, y: HEIGHT / 2 - y, z: 0 },
+    size: { width: rects[i].width, height: rects[i].height },
+    rotation: 0,
+    scale: 1,
+    anchor: { x: 0.5, y: 0.5 },
+    color: { r: rects[i].r, g: rects[i].g, b: rects[i].b, a: 1 },
+    cornerRadius: SCENES[kind].radius,
+  });
+  const handles: Handle[] = rects.map((r, i) => app.component({ geometry: geometry(r.x, r.y, i) }));
+  const motion = kind === "moving" ? new Motion(rects) : undefined;
   const timing = await timeFrames((onFrame) => {
-    proteusFrame = onFrame;
+    proteusFrame = (now) => {
+      // A new move for every component, every half second, which Proteus
+      // animates itself.
+      const targets = motion?.retarget(now);
+      if (targets) {
+        handles.forEach((handle, i) =>
+          handle.animateTo(geometry(targets[i * 2], targets[i * 2 + 1], i), {
+            duration: 0.5,
+            easing: "easeInOutQuad",
+          }),
+        );
+      }
+      onFrame(now);
+    };
     return () => {
       proteusFrame = undefined;
     };
@@ -182,26 +211,93 @@ async function timeProteus(kind: SceneKind, count: number): Promise<Timing> {
   return timing;
 }
 
-// --- The hand-written renderers -----------------------------------------------
+// --- The others ---------------------------------------------------------------
 
 const density = window.devicePixelRatio;
-baselineCanvas.width = WIDTH * density;
-baselineCanvas.height = HEIGHT * density;
-const gl = baselineCanvas.getContext("webgl2", { antialias: false })!;
+for (const canvas of [surfaces.webgl, surfaces.canvas2d]) {
+  canvas.width = WIDTH * density;
+  canvas.height = HEIGHT * density;
+}
+const gl = surfaces.webgl.getContext("webgl2", { antialias: false })!;
+const context = surfaces.canvas2d.getContext("2d")!;
+context.scale(density, density);
 
-async function timeBaseline(make: typeof naive, kind: SceneKind, count: number): Promise<Timing> {
-  const renderer: Renderer = make(gl, scene(kind, count), SCENES[kind].radius);
-  const timing = await timeFrames(animationFrames(() => renderer.draw()));
+/** Times a renderer that redraws every frame, at fixed positions or moving ones. */
+async function timeRedrawn(make: MakeRenderer, kind: SceneKind, count: number): Promise<Timing> {
+  const rects = scene(kind, count);
+  const motion = new Motion(rects);
+  const renderer = make(rects, motion.current, SCENES[kind].radius);
+  const timing = await timeFrames(
+    animationFrames((now) => {
+      if (kind === "moving") {
+        motion.retarget(now);
+        motion.advance(now);
+      }
+      renderer.draw();
+    }),
+  );
   renderer.dispose();
+  return timing;
+}
+
+async function timeCss(count: number): Promise<Timing> {
+  const css = cssScene(surfaces.css, scene("moving", count), SCENES.moving.radius);
+  const timing = await timeFrames(animationFrames((now) => css.frame(now)));
+  css.dispose();
   return timing;
 }
 
 // --- The run ------------------------------------------------------------------
 
-function show(which: "proteus" | "baseline") {
-  proteusCanvas.style.visibility = which === "proteus" ? "visible" : "hidden";
-  baselineCanvas.style.visibility = which === "baseline" ? "visible" : "hidden";
+type Surface = keyof typeof surfaces;
+
+function show(which: Surface) {
+  for (const [name, element] of Object.entries(surfaces)) {
+    element.style.visibility = name === which ? "visible" : "hidden";
+  }
 }
+
+/** Each renderer: its column title, the surface it draws on, and how to time it. */
+interface Contender {
+  title: string;
+  surface: Surface;
+  time: (kind: SceneKind, count: number) => Promise<Timing>;
+}
+
+const PROTEUS: Contender = { title: "Proteus", surface: "proteus", time: timeProteus };
+const CSS: Contender = { title: "CSS", surface: "css", time: (_, count) => timeCss(count) };
+const CANVAS_2D: Contender = {
+  title: "Canvas 2D",
+  surface: "canvas2d",
+  time: (kind, count) => timeRedrawn(canvas2d(context), kind, count),
+};
+const NAIVE: Contender = {
+  title: "Naive WebGL2",
+  surface: "webgl",
+  time: (kind, count) => timeRedrawn(naive(gl), kind, count),
+};
+const BATCHED: Contender = {
+  title: "Batched WebGL2",
+  surface: "webgl",
+  time: (kind, count) => timeRedrawn(batched(gl), kind, count),
+};
+
+/** The renderers in each scene: CSS only moves, since a still page of `div`s costs nothing. */
+const CONTENDERS: Record<SceneKind, Contender[]> = {
+  small: [PROTEUS, CANVAS_2D, NAIVE, BATCHED],
+  large: [PROTEUS, CANVAS_2D, NAIVE, BATCHED],
+  moving: [PROTEUS, CSS, CANVAS_2D, NAIVE, BATCHED],
+};
+const LIMITS: Record<SceneKind, number> = {
+  small: Infinity,
+  large: LARGE_LIMIT,
+  moving: Infinity,
+};
+const TITLES: Record<SceneKind, string> = {
+  small: `Small components (${SCENES.small.min}–${SCENES.small.max} px), still: the cost per component`,
+  large: `Large components (${SCENES.large.min}–${SCENES.large.max} px), still: filling pixels dominates`,
+  moving: `Moving components (${SCENES.moving.min}–${SCENES.moving.max} px): every one always moving`,
+};
 
 function environment(refresh: number): string {
   const debug = gl.getExtension("WEBGL_debug_renderer_info");
@@ -215,58 +311,158 @@ function environment(refresh: number): string {
   ].join("\n");
 }
 
+// --- Progress, kept across a crash ---------------------------------------------
+
+/**
+ * The run so far. It's saved after every measurement, and before each one
+ * starts, it records which: if the tab crashes, the page finds that on
+ * reload, marks it "crashed", and resumes after it.
+ */
+interface Progress {
+  /** The page's address settings the run is for. */
+  settings: string;
+  refresh?: number;
+  /** Each measurement's cell, by `scene|count|renderer`. */
+  cells: Record<string, string>;
+  /** Each renderer left out of the rest of a scene, by `scene|renderer`, and why. */
+  dropped: Record<string, string>;
+  /** The measurement under way, if any. */
+  running?: string;
+}
+
+function load(): Progress {
+  const fresh: Progress = { settings: location.search, cells: {}, dropped: {} };
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Progress | null;
+    return saved && saved.settings === location.search ? saved : fresh;
+  } catch {
+    return fresh;
+  }
+}
+
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+  } catch {
+    // Without storage, a crash loses the run, but it still runs.
+  }
+}
+
+const progress = load();
+if (progress.running) {
+  // The tab crashed during this measurement.
+  const [kind, count, title] = progress.running.split("|");
+  progress.cells[progress.running] = "crashed | —";
+  progress.dropped[`${kind}|${title}`] = `crashed at ${count}`;
+  progress.running = undefined;
+  save();
+}
+
 const ms = (t: Timing) => `${t.median.toFixed(2)} | ${t.p99.toFixed(2)}`;
+
+/** The measurements of `kind` still to make, in order. */
+function remaining(kind: SceneKind): [number, Contender][] {
+  return counts
+    .filter((n) => n <= LIMITS[kind])
+    .flatMap((count) => CONTENDERS[kind].map((c): [number, Contender] => [count, c]))
+    .filter(([count, c]) => progress.cells[`${kind}|${count}|${c.title}`] === undefined);
+}
 
 async function run() {
   runButton.disabled = true;
-  output.textContent = "";
-  show("baseline");
-  status.textContent = "Measuring the refresh rate…";
-  const refresh = (await timeFrames(animationFrames(() => {}))).median;
+  resetButton.disabled = true;
+  if (progress.refresh === undefined) {
+    show("webgl");
+    status.textContent = "Measuring the refresh rate…";
+    progress.refresh = (await timeFrames(animationFrames(() => {}))).median;
+    save();
+  }
 
-  const tables: Record<SceneKind, string[]> = { large: [], small: [] };
   for (const kind of scenes) {
-    for (const count of counts.filter((n) => kind === "small" || n <= LARGE_LIMIT)) {
-      show("proteus");
-      status.textContent = `${kind} scene, ${count} components: Proteus…`;
-      const p = await timeProteus(kind, count);
-      show("baseline");
-      status.textContent = `${kind} scene, ${count} components: naive WebGL2…`;
-      const n = await timeBaseline(naive, kind, count);
-      status.textContent = `${kind} scene, ${count} components: batched WebGL2…`;
-      const b = await timeBaseline(batched, kind, count);
-      tables[kind].push(`| ${count} | ${ms(p)} | ${ms(n)} | ${ms(b)} |`);
-      output.textContent = report(refresh, tables);
+    for (const [count, contender] of remaining(kind)) {
+      const cell = `${kind}|${count}|${contender.title}`;
+      const dropped = progress.dropped[`${kind}|${contender.title}`];
+      if (dropped) {
+        progress.cells[cell] = "skipped | —";
+        continue;
+      }
+      show(contender.surface);
+      status.textContent = `${kind} scene, ${count} components: ${contender.title}…`;
+      progress.running = cell;
+      save();
+      try {
+        const timing = await contender.time(kind, count);
+        progress.cells[cell] = ms(timing);
+        if (timing.median >= SLOW_LIMIT) {
+          progress.dropped[`${kind}|${contender.title}`] =
+            `slower than ${SLOW_LIMIT} ms a frame at ${count}`;
+        }
+      } catch (error) {
+        console.error(error);
+        progress.cells[cell] = "failed | —";
+        progress.dropped[`${kind}|${contender.title}`] = `failed at ${count}: ${String(error)}`;
+      }
+      progress.running = undefined;
+      save();
+      output.textContent = report();
     }
   }
   status.textContent = "Done. Copy the results below.";
+  runButton.textContent = "Run";
   runButton.disabled = false;
+  resetButton.disabled = false;
 }
 
-function report(refresh: number, tables: Record<SceneKind, string[]>): string {
-  const table = (kind: SceneKind, title: string) =>
-    tables[kind].length === 0
-      ? []
-      : [
-          "",
-          `### ${title}`,
-          "",
-          "Frame interval, median and p99, in milliseconds:",
-          "",
-          "| Components | Proteus | p99 | Naive WebGL2 | p99 | Batched WebGL2 | p99 |",
-          "|---:|---:|---:|---:|---:|---:|---:|",
-          ...tables[kind],
-        ];
-  return [
-    environment(refresh),
-    ...table("small", `Small components (${SCENES.small.min}–${SCENES.small.max} px): the cost per component`),
-    ...table("large", `Large components (${SCENES.large.min}–${SCENES.large.max} px): filling pixels dominates`),
-    ...(tables.large.length > 0 && counts.some((n) => n > LARGE_LIMIT)
-      ? ["", `The large scene stops at ${LARGE_LIMIT}: past it, Safari's tab crashes.`]
-      : []),
-  ].join("\n");
+function report(): string {
+  const lines = [environment(progress.refresh ?? 0)];
+  for (const kind of scenes) {
+    const titles = CONTENDERS[kind].map((c) => c.title);
+    const rows = counts
+      .filter((n) => n <= LIMITS[kind])
+      .map((count) => titles.map((title) => progress.cells[`${kind}|${count}|${title}`]))
+      .map((cells, i) => ({ count: counts.filter((n) => n <= LIMITS[kind])[i], cells }))
+      .filter(({ cells }) => cells.some((c) => c !== undefined));
+    if (rows.length === 0) continue;
+    lines.push(
+      "",
+      `### ${TITLES[kind]}`,
+      "",
+      "Frame interval, median and p99, in milliseconds:",
+      "",
+      `| Components | ${titles.map((t) => `${t} | p99`).join(" | ")} |`,
+      `|---:|${titles.map(() => "---:|---:").join("|")}|`,
+      ...rows.map(({ count, cells }) => `| ${count} | ${cells.map((c) => c ?? "… | …").join(" | ")} |`),
+    );
+    const notes = titles
+      .map((title) => [title, progress.dropped[`${kind}|${title}`]])
+      .filter(([, why]) => why)
+      .map(([title, why]) => `- ${title}: ${why}; skipped after that.`);
+    if (notes.length > 0) lines.push("", ...notes);
+    if (kind === "large" && counts.some((n) => n > LARGE_LIMIT)) {
+      lines.push("", `The large scene stops at ${LARGE_LIMIT}: past it, Safari's tab crashes.`);
+    }
+  }
+  return lines.join("\n");
 }
 
 runButton.addEventListener("click", () => void run());
-status.textContent = "Ready. Keep this tab in front while it runs: a hidden tab stops drawing.";
-runButton.disabled = false;
+resetButton.addEventListener("click", () => {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing saved to remove.
+  }
+  location.reload();
+});
+
+const started = Object.keys(progress.cells).length > 0;
+const unfinished = scenes.some((kind) => remaining(kind).length > 0);
+if (started) output.textContent = report();
+runButton.textContent = started && unfinished ? "Resume" : "Run";
+status.textContent = started
+  ? unfinished
+    ? "A run was under way, and is saved: Resume carries on from where it stopped."
+    : "The last run is complete; its results are below. Start over to run again."
+  : "Ready. Keep this tab in front while it runs: a hidden tab stops drawing.";
+runButton.disabled = started && !unfinished;
+resetButton.disabled = !started;

@@ -15,11 +15,16 @@
         width: 1280px;
         height: 800px;
       }
-      #stage canvas {
+      #stage > * {
         position: absolute;
         inset: 0;
         width: 1280px;
         height: 800px;
+      }
+      #css {
+        overflow: hidden;
+        background: black;
+        visibility: hidden;
       }
       #results {
         white-space: pre-wrap;
@@ -32,11 +37,14 @@
   <body>
     <p>
       <button id="run" disabled>Run</button>
+      <button id="reset" disabled>Start over</button>
       <span id="status">Loading…</span>
     </p>
     <div id="stage">
       <canvas id="proteus"></canvas>
-      <canvas id="baseline"></canvas>
+      <canvas id="webgl"></canvas>
+      <canvas id="canvas2d"></canvas>
+      <div id="css"></div>
     </div>
     <pre id="results"></pre>
     <script type="module" src="/src/main.ts"></script>
