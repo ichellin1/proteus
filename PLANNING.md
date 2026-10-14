@@ -4680,13 +4680,16 @@ growing component counts, still and in transitions); 10b the per-frame overhead 
 - [x] `BENCHMARKS.md` has real results with hardware and browser recorded, and the harness is in
   the repo so anyone can rerun it.
 
-#### Step 11 — Architecture document, and archive the V1 planning
+#### Step 11 — Architecture document
 
-- [ ] `ARCHITECTURE.md` at the repo root, written from the current code: crates and layers, the
+The V1 planning is archived in step 12, in the commit that starts V2's, so PLANNING stays live
+until there is a new one (decided 2026-10-14).
+
+- [x] `ARCHITECTURE.md` at the repo root, written from the current code: crates and layers, the
   component model and per-frame order, rendering (one instanced draw, atlases, baking),
   transitions and the three topologies, input, texture lifetime, the app/host contract, and a
   short list of key design decisions with a paragraph each.
-- [ ] The rendering section explains why, not just what: each frame, every visible component's
+- [x] The rendering section explains why, not just what: each frame, every visible component's
   data is collected and copied to the GPU in one go, then drawn with one draw call; one draw
   call means one pipeline, so one shader (`quad.wgsl`) handles every feature, each switched on
   or off by the instance's data. Trade-offs: all 16 vertex attribute slots are in use, so new
@@ -4695,14 +4698,16 @@ growing component counts, still and in transitions); 10b the per-frame overhead 
   components that use it, and needs an atlas version so bakes and transitions can capture
   those components. It suits features on their own layer better than ones mixed through the
   scene.
-- [ ] Every claim in it checked against the code.
+- [x] Every claim in it checked against the code.
+
+#### Step 12 — Archive the V1 planning, and start V2
+
 - [ ] This file, the V1 `ROADMAP.md` and the audit move to `docs/archive/`, each with a line at the
   top saying it is archived and where to look instead. D-16 (the missing link to the original
-  proof of concept) is noted there or dropped.
+  proof of concept) is dropped, and the archive says so.
 - [ ] No live document links into the archive except as history. `VISION.md` stays.
-
-#### Step 12 — Start V2
-
+- [ ] M14's unfinished steps (the README and the release) carry over into the new PLANNING as
+  its first section, and are ticked there.
 - [ ] A new `PLANNING.md` and `ROADMAP.md` at the repo root for V2. The first V2 milestone is
   **V2 Planning**; everything else on the V2 roadmap is an unordered candidate list until it runs.
 - [ ] The candidate list includes every Post-Release item below and every audit finding left for
@@ -4916,6 +4921,38 @@ not V1.**
   group transitions (M9.6).
 - Real runs of the native host on Linux and Windows. V1 tests both in CI but has only been run
   by hand on macOS (M14 step 9).
+- Keyboard input. Neither host reads key events, and the schedule's navigation stage, which
+  would move keyboard focus, does nothing yet. Both hosts would report keys to the engine, and
+  navigation would move focus between components; the same work serves a TV remote, whose
+  buttons arrive as key events (M13.3, M13.7).
+- Recovering a lost GPU context on the web. The web host logs the loss and reconfigures the
+  surface when the browser restores the context, but rebuilds nothing, so the canvas stays blank
+  until the page reloads. Recovery would recreate the renderer and its pipeline, and bake every
+  resident texture again (designed in M13.2, then narrowed to logging).
+  - **Keep the regions.** The texture registry and its allocators are CPU memory and survive the
+    loss. Upload each texture into the region it had, and components' texture coordinates stay
+    valid, with nothing in the component model changed.
+  - **Where the pixels come from.** Text stays on its entity after baking (`Text`), and an image
+    keeps its file's bytes (`Image`), so both can be baked again; the player's next frame
+    restores video; a split or merge in progress can finish at once or bake both ends again.
+    Two kinds aren't kept: textures from `bake_texture` and `load_texture`, whose pixels go
+    straight to the GPU, and components made with `.bake()`, whose children were destroyed.
+    Options: keep a CPU copy (memory up to the main atlas's size), ask the app to supply them
+    again through an `on_context_restored` callback, or keep a `.bake()` component's data
+    rather than destroying its children. A mix is likely.
+  - **Check first.** On WebGPU, a lost device is replaced by requesting a new one. On WebGL2, it
+    isn't known whether wgpu can set up again on the same canvas after the browser restores the
+    context; if not, swap in a new `<canvas>` element. A short experiment settles it.
+  - Rare on desktop; more common on phones, when the browser reclaims a background tab's
+    memory, and after GPU driver resets.
+- 3D. Components are flat today: `z` only orders drawing (B-32: a `z` outside 0 to 1,000 isn't
+  drawn), `rotation` turns them in the screen's plane, the projection is orthographic, and there
+  is no depth buffer. VISION's principle 9 has components exist and transition in 3D space.
+  That needs a perspective projection, rotation about any axis, depth (a depth buffer, or
+  sorting by distance, which transparency needs anyway), hit testing by casting a ray from the
+  pointer, and bakes and transitions that work in 3D. Geometry other than quads comes after:
+  VISION's "Future Geometry Types" weighs one instance buffer per geometry type against packing
+  all geometry into shared buffers. The XR shell below depends on this.
 - Text Phase 2: multi-line text and layout (line breaking, alignment, line height)
 - Text Phase 3: bidirectional text (LTR/RTL, Unicode bidi algorithm)
 - Text Phase 4: inline styles (mixed bold, italic, size, color within a text run)

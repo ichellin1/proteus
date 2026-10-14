@@ -137,13 +137,17 @@ mod tests {
         found
     }
 
+    /// Pages outside `docs/` whose links are checked too, relative to `docs/`.
+    /// They have no Rust snippets, so they aren't in `pages!`.
+    const OTHER_PAGES: &[&str] = &["../ARCHITECTURE.md"];
+
     // A link to a page that moved, or to a heading that was renamed, would
     // otherwise only be found by a reader.
     #[test]
     fn every_link_in_docs_resolves() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
         let mut broken = Vec::new();
-        for page in PAGES {
+        for page in PAGES.iter().chain(OTHER_PAGES) {
             let path = root.join(page);
             let text = std::fs::read_to_string(&path).unwrap();
             for link in links(&text) {
