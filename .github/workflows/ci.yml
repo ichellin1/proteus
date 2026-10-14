@@ -196,11 +196,10 @@ jobs:
         run: wasm-pack build crates/proteus-sdk-web --target bundler --out-dir ts/pkg
 
       - name: wasm-pack build (proteus-host-web)
-        # M13.2: the ts/ package's mount() wrapper needs this crate's own
+        # The ts/ package's mount() wrapper needs this crate's own
         # wasm-pack output (ts/pkg-host) alongside proteus-sdk-web's own
-        # (ts/pkg) — see PLANNING.md's M13.2 section for why bundling both
-        # into one npm package is sound despite being two separate wasm
-        # binaries.
+        # (ts/pkg). ARCHITECTURE.md's TypeScript section explains why
+        # bundling two separate wasm modules into one npm package is sound.
         run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host
 
       - name: Install Node toolchain
