@@ -1,8 +1,13 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ichellin1/proteus/main/brand/logo/assets/lockup-color-dark.png">
+    <img alt="Proteus" src="https://raw.githubusercontent.com/ichellin1/proteus/main/brand/logo/assets/lockup-color-light.png" width="210">
+  </picture>
+</p>
+
 # proteus-sdk
 
-The Proteus app API: create components, transition them, and handle input.
-
-Part of [Proteus](https://github.com/ichellin1/proteus).
+The app API of [Proteus](https://github.com/ichellin1/proteus), a rendering framework designed around a new UX paradigm: **UI components are metamorphic.** They do not navigate to new screens or swap out for different components — they *transform* into them. A button can become a list. A list can collapse back into a button. A list item can become a video player. The component does not disappear; it *shapeshifts*, and the transition between one form and another is a first-class, visually continuous experience.
 
 ```toml
 [dependencies]
@@ -52,9 +57,17 @@ fn main() {
 }
 ```
 
-The same app runs in a browser with `proteus-host-web`. [Getting started in Rust](https://github.com/ichellin1/proteus/blob/main/docs/getting-started/rust.md)
-walks through both, and the [guides](https://github.com/ichellin1/proteus/tree/main/docs) cover each part. Proteus also has a
-[TypeScript SDK](https://www.npmjs.com/package/proteus-sdk).
+The same app runs in a browser with `proteus-host-web`.
+
+## Learn more
+
+- [Getting started in Rust](https://github.com/ichellin1/proteus/blob/main/docs/getting-started/rust.md),
+  natively and in a browser.
+- [Guides](https://github.com/ichellin1/proteus/tree/main/docs): the concepts, and how-tos.
+- [API reference](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/).
+- [Examples](https://github.com/ichellin1/proteus/tree/main/examples), and
+  [the reference demo](https://ichellin1.github.io/proteus/), running in your browser.
+- Proteus also has a [TypeScript SDK](https://www.npmjs.com/package/proteus-sdk).
 
 ## License
 
