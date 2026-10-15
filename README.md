@@ -5,6 +5,14 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="https://crates.io/crates/proteus-sdk"><img alt="crates.io" src="https://img.shields.io/crates/v/proteus-sdk"></a>
+  <a href="https://docs.rs/proteus-sdk"><img alt="docs.rs" src="https://img.shields.io/docsrs/proteus-sdk"></a>
+  <a href="https://www.npmjs.com/package/proteus-sdk"><img alt="npm" src="https://img.shields.io/npm/v/proteus-sdk"></a>
+  <a href="https://github.com/ichellin1/proteus/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ichellin1/proteus/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="#license"><img alt="License: MIT or Apache 2.0" src="https://img.shields.io/badge/license-MIT%20or%20Apache%202.0-blue"></a>
+</p>
+
 Proteus is a rendering framework designed around a new UX paradigm: **UI components are metamorphic.** They do not navigate to new screens or swap out for different components — they *transform* into them. A button can become a list. A list can collapse back into a button. A list item can become a video player. The component does not disappear; it *shapeshifts*, and the transition between one form and another is a first-class, visually continuous experience.
 
 Performance-minded, it draws with the GPU and significantly outperforms CSS transitions in benchmark testing on both Chrome and Safari. Proteus runs both natively in Mac, Windows and Linux OSs and in browsers that support WebGL2. Apps are written in Rust or TypeScript. The TypeScript SDK is a thin layer over the Rust API, and the API is designed so other languages can be added the same way.

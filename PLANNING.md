@@ -40,9 +40,12 @@ at finished docs, examples and benchmarks.
 
 ### Release — v0.1.0
 
-- [ ] The release process in [RELEASING.md](./RELEASING.md) runs for real: tag, changelog,
+- [x] The release process in [RELEASING.md](./RELEASING.md) runs for real: tag, changelog,
   GitHub Release, npm and crates.io. Publishing cannot be undone, so it goes ahead only on
   explicit approval.
+- **Released (2026-10-15).** npm and the first five crates published from the workflow;
+  crates.io's limit on new crates stopped it there, and the last three, and the GitHub Release,
+  were published by hand. RELEASING now covers both.
 
 ## V2 Planning
 
