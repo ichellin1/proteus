@@ -21,8 +21,7 @@ body = """
 ## Unreleased
 {%- endif %}
 {% if version == "v0.1.0" %}
-The first release. Proteus is a UI framework whose components transform into one another
-instead of loading new screens: a button can become the panel it opens.
+The first release of Proteus.
 
 - **Components:** shapes with a position, size, rotation, scale, color and corner radius, with
   borders, drop shadows and glows; children placed relative to their parent; and baking, which
@@ -70,7 +69,7 @@ filter_commits = true
 # user of Proteus would know.
 commit_preprocessors = [
     { pattern = " \\(step [0-9][a-z]?\\)", replace = "" },
-    { pattern = " and close out step [0-9]+", replace = "" },
+    { pattern = ",? and close out step [0-9]+", replace = "" },
 ]
 protect_breaking_commits = true
 tag_pattern = "v[0-9]*"
@@ -85,6 +84,11 @@ commit_parsers = [
     { sha = "6c17c4d31bfb60a4a2a13c9f65cac56bc3d04704", skip = true },
     # The project's own planning notes, not part of what it ships.
     { message = "^docs\\(planning\\)", skip = true },
+    { sha = "ff09723cdd9f68f7d7f4ed00a6ca8e74311be8c0", skip = true },
+    { sha = "1c37bb0985818fe58970fbf3f3dd61e6e9bc4965", skip = true },
+    # A clip of the demo, added to the README and then removed again.
+    { sha = "3445b77db210e9713b1a394c1541892c637d4c2c", skip = true },
+    { sha = "e4364a8519e41b3361a36b29659cc8cd69b79265", skip = true },
     { message = "^Merge ", skip = true },
     { message = "^docs: close out step", skip = true },
     # The release commit, which only sets the version.
