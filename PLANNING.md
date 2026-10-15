@@ -27,11 +27,14 @@ at finished docs, examples and benchmarks.
 
 - [ ] The Proteus logo at the top, switching between the light and dark lockups to match the
   reader's theme (`brand/logo/assets/`).
-- [ ] In order: what Proteus is in a sentence or two, a picture or short clip of the demo, a
-  quickstart, install instructions for Rust and TypeScript, links to the docs, examples, demo
-  and architecture, project status (0.x is an early release), and license.
+- [ ] In order: what Proteus is, a picture or short clip of the demo, links to the
+  getting-started guides for Rust and TypeScript, links to the docs, examples, demo and
+  architecture, project status (0.x is an early release), and license.
+- **Decided (2026-10-14):** the README links to the getting-started guides for the quickstart
+  and install instructions rather than repeating their code, so there is one copy to keep up to
+  date, and it is already checked in CI.
 - [ ] Renders correctly on GitHub, npm and crates.io; images use URLs that work off GitHub.
-- [ ] The quickstart code is checked in CI like the guides' snippets.
+- [ ] The README's links resolve, checked by `proteus-docs`'s link test.
 
 ### Release — v0.1.0
 

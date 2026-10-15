@@ -148,7 +148,12 @@ mod tests {
     /// `docs/`, along with every design note. They have no Rust snippets, so
     /// they aren't in `pages!`, and unlike the guides they may link to the
     /// planning pages. The archive isn't checked: it is kept as it was.
-    const OTHER_PAGES: &[&str] = &["../ARCHITECTURE.md", "../ROADMAP.md", "../PLANNING.md"];
+    const OTHER_PAGES: &[&str] = &[
+        "../README.md",
+        "../ARCHITECTURE.md",
+        "../ROADMAP.md",
+        "../PLANNING.md",
+    ];
 
     // A link to a page that moved, or to a heading that was renamed, would
     // otherwise only be found by a reader.
