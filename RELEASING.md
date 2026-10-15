@@ -79,28 +79,72 @@ dependency order, and the npm package. Once both are published, it creates the G
 Nothing is published until both checks and CI pass, and nothing until approval. After that:
 
 - **A crate fails to publish:** the crates before it are already on crates.io, and a version
-  can't be published twice. Fix the cause, then publish the rest by hand
-  (`cargo publish -p <crate>`), or release a patch version with the fix.
+  can't be published twice, so running the workflow again would fail at the first of them. Fix
+  the cause, then [publish the rest by hand](#publishing-the-rest-by-hand), or release a patch
+  version with the fix.
+- **crates.io answers "429 Too Many Requests"** for a crate published for the first time: an
+  account can publish five new crates at once, then about one every ten minutes, and the message
+  says when to try again. It only happens when a release adds new crates, since new versions of
+  existing crates have a much higher limit. v0.1.0, which published all eight for the first
+  time, stopped after five. Wait, then [publish the rest by hand](#publishing-the-rest-by-hand).
 - **A bad version is out:** crates.io can't delete a version, only yank it
   (`cargo yank --version 0.2.0 <crate>`), which stops new projects from choosing it. npm allows
   `npm unpublish proteus-sdk@0.2.0` within 72 hours, and `npm deprecate` after that. Either way,
   release a fixed patch version.
 
+#### Publishing the rest by hand
+
+1. On crates.io, under Account Settings → API Tokens, create a token with the `publish-new` and
+   `publish-update` scopes, limited to the crates `proteus-*`, that expires soon.
+2. Check out the release's tag, and give Cargo the token; `cargo login` asks for it:
+
+   ```bash
+   git checkout v0.2.0
+   cargo login
+   ```
+
+3. Publish each crate that isn't on crates.io yet, in this order: `proteus-gpu`,
+   `proteus-render`, `proteus-ui`, `proteus-sdk`, `proteus-runtime`, `proteus-sdk-web`,
+   `proteus-host-winit`, then `proteus-host-web`, which only builds for WebAssembly. For example:
+
+   ```bash
+   cargo publish -p proteus-host-winit
+   cargo publish -p proteus-host-web --target wasm32-unknown-unknown
+   ```
+
+4. Remove the token from your machine with `cargo logout`, and delete it on crates.io.
+5. The workflow creates the GitHub Release only once both publish jobs succeed, so create it by
+   hand, with the version's section of `CHANGELOG.md` as its notes:
+
+   ```bash
+   awk -v heading="## 0.2.0 (" 'index($0, heading) == 1 { found = 1; next }
+     found && /^## / { exit } found { print }' CHANGELOG.md > notes.md
+   gh release create v0.2.0 --verify-tag --title v0.2.0 --notes-file notes.md
+   ```
+
 ### Publishing credentials
 
 `release.yml` publishes with **trusted publishing**: crates.io and npm trust this repository's
 `release.yml`, running in the `release` environment, through GitHub's OIDC token, so no
-long-lived token is stored. A package must exist before trusted publishing can be linked to it,
-so the first release, v0.1.0, publishes with tokens instead:
+long-lived token is stored anywhere. Each crate is linked in its Settings → Trusted Publishing
+on crates.io, and the npm package in its Settings → Trusted publisher, with repository
+`ichellin1/proteus`, workflow `release.yml` and environment `release`.
 
-1. **Before v0.1.0,** add two repository secrets (Settings → Secrets and variables → Actions):
+On npm, a trusted publisher must be used to publish within 48 hours of being added, or it
+lapses. If npm shows it as lapsed, or still "Pending validation" past its date, add it again
+just before tagging the next release, so that release's publish validates it.
+
+**A release that adds a new crate or package** needs a token for it, since trusted publishing
+can only be linked to a package that already exists. `release.yml` uses a token whenever its
+secret is set:
+
+1. Before tagging, add the repository secret (Settings → Secrets and variables → Actions):
    `CARGO_REGISTRY_TOKEN`, a crates.io API token with the `publish-new` and `publish-update`
-   scopes, and `NPM_TOKEN`, an npm granular access token that can publish. `release.yml` uses a
-   token when its secret is set.
-2. **After v0.1.0,** link trusted publishing: on crates.io, in each crate's Settings → Trusted
-   Publishing, and on npm, in the package's Settings → Trusted publisher. In each, give
-   repository `ichellin1/proteus`, workflow `release.yml` and environment `release`.
-3. **Then delete both secrets,** and the tokens on crates.io and npm.
+   scopes, or `NPM_TOKEN`, an npm granular access token that can publish.
+2. Release as usual. Remember crates.io's limit on new crates; see
+   [If something fails](#if-something-fails).
+3. Link trusted publishing for the new crate or package, as above.
+4. Delete the secret, and the token on crates.io or npm.
 
 ### The changelog over time
 
