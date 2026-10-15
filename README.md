@@ -9,6 +9,10 @@ Proteus is a rendering framework designed around a new UX paradigm: **UI compone
 
 Performance-minded, it draws with the GPU and significantly outperforms CSS transitions in benchmark testing on both Chrome and Safari. Proteus runs both natively in Mac, Windows and Linux OSs and in browsers that support WebGL2. Apps are written in Rust or TypeScript. The TypeScript SDK is a thin layer over the Rust API, and the API is designed so other languages can be added the same way.
 
+<p align="center">
+  <img alt="A Proteus component transforming into another" src="https://raw.githubusercontent.com/ichellin1/proteus/main/docs/media/demo.gif" width="800">
+</p>
+
 ## Get started
 
 - [Getting started in Rust](./docs/getting-started/rust.md): create a project, write a first
