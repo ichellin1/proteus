@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ichellin1/proteus/main/brand/logo/assets/lockup-color-dark.png">
+    <img alt="Proteus" src="https://raw.githubusercontent.com/ichellin1/proteus/main/brand/logo/assets/lockup-color-light.png" width="210">
+  </picture>
+</p>
+
 # proteus-sdk
 
 The TypeScript SDK for [Proteus](https://github.com/ichellin1/proteus), a UI framework whose components transform into one
@@ -47,8 +54,16 @@ await mount("app", {
 });
 ```
 
-[Getting started in TypeScript](https://github.com/ichellin1/proteus/blob/main/docs/getting-started/typescript.md) walks
-through it step by step, and the [guides](https://github.com/ichellin1/proteus/tree/main/docs) cover each part.
+## Learn more
+
+- [Getting started in TypeScript](https://github.com/ichellin1/proteus/blob/main/docs/getting-started/typescript.md),
+  step by step.
+- [Guides](https://github.com/ichellin1/proteus/tree/main/docs): the concepts, and how-tos.
+- [API reference](https://ichellin1.github.io/proteus/api/ts/).
+- [Examples](https://github.com/ichellin1/proteus/tree/main/examples), and
+  [the reference demo](https://ichellin1.github.io/proteus/), running in your browser.
+- Proteus is written in Rust, and its [Rust crates](https://crates.io/crates/proteus-sdk) can be
+  used directly.
 
 ## License
 
