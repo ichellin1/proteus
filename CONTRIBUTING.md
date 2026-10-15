@@ -20,9 +20,12 @@ in [RELEASING.md](./RELEASING.md).
 
 ### Platform support
 
-The native shell is only built and tested on macOS so far. It uses `wgpu` and `winit` with no
-macOS-specific code, so Linux and Windows will likely work, but they haven't been tested yet.
-The web shell runs in any browser with WebGL2.
+CI builds the native crates and runs every test on macOS, Linux and Windows, the GPU tests
+included: Linux uses Mesa's software Vulkan driver, lavapipe, Windows uses Direct3D's software
+renderer, WARP, and macOS the runner's Metal. The demo has been run by hand on macOS, natively
+and in a browser; on Linux and Windows, so far only CI has run it. The web shell runs in any
+browser with WebGPU or WebGL2. No tests run in WebAssembly; see [Running the
+tests](#running-the-tests).
 
 ### Dependencies
 
@@ -147,14 +150,18 @@ runs every Rust test in the workspace, including the guides' code, which the `pr
 crate runs as doctests, and a check that every link between the guides resolves. The two web
 crates only build for WebAssembly, so `make clippy` checks them instead.
 
+No tests run in WebAssembly, locally or on CI. So code in the web crates that can be tested
+anywhere lives in a crate that builds natively, as the web player's HLS manifest parser lives in
+`proteus-demo`, and the web crates hold only what needs a browser.
+
 Some tests draw with the GPU: rendering in `proteus-render`, baking in `proteus-ui`, and textures
-in `proteus-sdk`. On a machine without a GPU they're skipped, with a message, so the tests pass
-anywhere. Set `REQUIRE_GPU=1` to make a missing GPU fail them instead, as CI does. On Linux
+in `proteus-sdk`. On a machine without a GPU, each reports itself skipped, by name
+(`skipped: <test>: no GPU adapter`), so the tests pass anywhere. Set `REQUIRE_GPU=1` to make a missing GPU fail them instead, as CI does. On Linux
 without a GPU, Mesa's software Vulkan driver gives them one, as on CI:
 
 ```bash
 sudo apt-get install libvulkan1 mesa-vulkan-drivers
-WGPU_BACKEND=vulkan REQUIRE_GPU=1 make test
+REQUIRE_GPU=1 make test
 ```
 
 The TypeScript SDK has its own checks, after `make build-sdk-web`, in
@@ -294,7 +301,8 @@ catches the rest.
 4. Update the guides and API docs with the code they describe. A change to the public API that
    breaks existing code is marked as breaking in its commit.
 5. Pull requests are merged with a merge commit, not squashed, so each commit's message reaches
-   the changelog.
+   the changelog. A maintainer can also merge a branch locally and push `main`, with
+   `git merge --no-ff`, which makes the same merge commit.
 
 ## Commit messages
 

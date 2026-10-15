@@ -9,7 +9,8 @@
 //   - Cargo.toml: the workspace version, and the version on each of the
 //     workspace's own crates in [workspace.dependencies];
 //   - Cargo.lock, through `cargo update --workspace`;
-//   - the npm package and the TypeScript examples: package.json, and in
+//   - the npm package, the TypeScript examples and the browser benchmark:
+//     package.json, and in
 //     package-lock.json their own version and the SDK version they link to;
 //   - the version requirements in the docs and crate READMEs, such as
 //     `proteus-sdk = "0.1"`;
@@ -65,12 +66,13 @@ for (const [, name, found] of internalCrates) {
 // --- npm packages ---------------------------------------------------------
 
 const sdk = "crates/proteus-sdk-web/ts";
-const examples = readdirSync(join(root, "examples"), { withFileTypes: true })
+const apps = readdirSync(join(root, "examples"), { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => `examples/${entry.name}/typescript`)
+  .concat(["benches/browser"])
   .filter((dir) => existsSync(join(root, dir, "package.json")));
 
-for (const dir of [sdk, ...examples]) {
+for (const dir of [sdk, ...apps]) {
   const pkgFile = `${dir}/package.json`;
   const pkg = JSON.parse(readFileSync(join(root, pkgFile), "utf8"));
   const lockFile = `${dir}/package-lock.json`;

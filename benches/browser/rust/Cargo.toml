@@ -1,0 +1,23 @@
+[package]
+name = "proteus-bench-web"
+description = "The browser benchmark's Proteus app written in Rust, beside the TypeScript one."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# It only builds for WebAssembly; natively the crate is empty.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+proteus-sdk = { workspace = true }
+proteus-runtime = { workspace = true }
+proteus-host-web = { workspace = true }
+wasm-bindgen = { workspace = true }
+# The code wasm-bindgen generates for the `async fn start` export needs it.
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Performance"] }

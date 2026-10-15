@@ -1,79 +1,45 @@
-# Proteus
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/ichellin1/proteus/main/brand/logo/assets/lockup-color-dark.png">
+    <img alt="Proteus" src="https://raw.githubusercontent.com/ichellin1/proteus/main/brand/logo/assets/lockup-color-light.png" width="210">
+  </picture>
+</p>
 
-Proteus is a cross-platform UI framework written in Rust. Its defining idea: **UI components are metamorphic.** They do not load into new screens or swap out for different components — they *transform* into them. A button can become a list, a list item can become a video player, and the transition between forms is a first-class, visually continuous experience. Rendering is GPU-native via wgpu — **WebGL2** on the web (via WASM, with automatic **WebGPU** upgrade where available) and **Vulkan / Metal / DirectX 12** on native platforms.
+Proteus is a rendering framework designed around a new UX paradigm: **UI components are metamorphic.** They do not navigate to new screens or swap out for different components — they *transform* into them. A button can become a list. A list can collapse back into a button. A list item can become a video player. The component does not disappear; it *shapeshifts*, and the transition between one form and another is a first-class, visually continuous experience.
 
-## Read First
+Performance-minded, it draws with the GPU and significantly outperforms CSS transitions in benchmark testing on both Chrome and Safari. Proteus runs both natively in Mac, Windows and Linux OSs and in browsers that support WebGL2. Apps are written in Rust or TypeScript. The TypeScript SDK is a thin layer over the Rust API, and the API is designed so other languages can be added the same way.
 
-→ [Guides](./docs/README.md) — getting started, concepts and how-tos, in Rust and TypeScript
-→ API reference — [Rust](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/) and
-  [TypeScript](https://ichellin1.github.io/proteus/api/ts/)
-→ [VISION.md](./VISION.md) — the philosophy and principles
-→ [ROADMAP.md](./ROADMAP.md) — milestones and sequencing
-→ [CONTRIBUTING.md](./CONTRIBUTING.md) — building from source, and how code and docs are written
-→ [RELEASING.md](./RELEASING.md) — release strategy and deploy steps for the web reference demo
+## Get started
 
-## Crate Structure
+- [Getting started in Rust](./docs/getting-started/rust.md): create a project, write a first
+  app, and run it in a desktop window and in a browser.
+- [Getting started in TypeScript](./docs/getting-started/typescript.md): install the SDK from
+  npm, set up Vite, and run the app in a browser.
 
-```
-crates/
-  proteus-gpu/          # Layer 0: surface + device/queue/swap-chain setup, shared by both hosts
-  proteus-render/       # Layer 1: instanced render pipeline, atlases, offscreen bake pipeline
-  proteus-ui/           # Layer 2: metamorphic component model, transition topologies
-  proteus-sdk/          # Layer 2.5: generic app-authoring API (component/transition channel/texture) — headless
-  proteus-sdk-web/      # Layer 2.5 (web): wasm-bindgen bridge + npm-publishable TypeScript SDK (ts/)
-  proteus-runtime/      # Layer 2.75: Renderer + Engine + the App / HostServices contracts
-  proteus-host-winit/   # Layer 3: native host — winit window, frame loop, file-backed assets
-  proteus-host-web/     # Layer 3: wasm host — canvas, rAF loop, fetched assets
-  proteus-demo/         # the reference demo, written once as an App
-  proteus-shell-native/ # Layer 4: a `main()` that hands the demo to proteus-host-winit
-  proteus-shell-web/    # Layer 4: a wasm entry point that hands it to proteus-host-web
-examples/
-  gallery/              # the TypeScript front door — the SDK driven from TS, no Rust
-  video/                # video from the browser's own <video> player, in TypeScript
-```
+## Learn more
 
-**Writing an app** means implementing `proteus_runtime::App` (`setup` once, `update` per frame)
-and handing it to a host's `run()`. The host owns the window or canvas, the GPU surface, the
-frame loop and input; `Engine` owns `Proteus` and calls into the app. Nothing forks a shell, and
-the same app runs on both platforms — `proteus-demo` is exactly this, and the two `proteus-shell-*`
-crates below it are thin entry points. From TypeScript, `mount()` plays the host's role instead;
-see `examples/gallery/typescript`.
+- [Guides](./docs/README.md): getting started, the concepts, and how-tos, in Rust and
+  TypeScript.
+- API reference: [Rust](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/) and
+  [TypeScript](https://ichellin1.github.io/proteus/api/ts/).
+- [Examples](./examples/README.md): a photo gallery, a menu, an onboarding flow and video, in
+  both languages.
+- [The reference demo](https://ichellin1.github.io/proteus/), running in your browser.
+- [Architecture](./ARCHITECTURE.md): how Proteus is built, and why.
+- [Benchmarks](./BENCHMARKS.md): how fast it draws, against CSS, Canvas 2D and hand-written
+  WebGL2.
+- [Vision](./VISION.md) and [roadmap](./ROADMAP.md): where Proteus is going.
+- [Contributing](./CONTRIBUTING.md): building from source, and how code and docs are written.
 
-## Video
+## Status
 
-Video is currently **experimental**. Proteus shows video but doesn't play it: you bring your own
-player, such as the browser's `<video>` element, `ffmpeg` or a hardware decoder, and upload its
-frames to a `VideoHandle`, which components show. The current version of Proteus supports one video at a time, with frames supplied by the app; playback controls are the player's own. See `examples/video` for `ffmpeg`
-on the desktop and a `<video>` element in a browser, in Rust and TypeScript.
+Proteus is at 0.1, an early release: its API may change from one 0.x version to the next. Video
+is experimental. [ARCHITECTURE.md](./ARCHITECTURE.md#known-limits) lists the known limits,
+each planned to be addressed in a future release.
 
-## Reference Demo
-
-The **[reference demo](https://ichellin1.github.io/proteus/)** shows Proteus in action across
-three sections: real video playback, a photo gallery backed by live image fetches, and a set of
-framework examples (effects, text, transforms, stress tests).
-
-## Build & Run Reference Demo
-
-One `proteus-demo` crate drives both platforms; each shell just picks the host.
-
-See **[CONTRIBUTING.md](./CONTRIBUTING.md#building-from-source)** for dependencies, demo
-assets, and full run and test instructions for both shells. Quick version, once the
-dependencies are installed:
-
-```
-cargo run -p proteus-shell-native   # native
-make serve-web                      # web (builds, then serves on :8080)
-```
-
-The native shell is currently only built and verified on macOS; the web shell runs in any
-WebGL2-capable browser.
-
-To build the TypeScript SDK and its example instead:
-
-```
-make build-sdk-web                  # wasm + tsc, into crates/proteus-sdk-web/ts/dist
-```
+CI builds Proteus and runs its tests, GPU tests included, on macOS, Linux and Windows. It has
+been run by hand on macOS, natively and in a browser.
 
 ## License
 
-Licensed under either of [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE) at your option.
+Licensed under either of [MIT](./LICENSE-MIT) or [Apache 2.0](./LICENSE-APACHE), at your option.

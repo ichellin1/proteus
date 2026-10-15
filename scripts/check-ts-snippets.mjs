@@ -17,10 +17,14 @@ const ts = join(root, "crates/proteus-sdk-web/ts");
 const out = join(ts, ".snippets");
 
 
+// Folders in docs/ that hold project records rather than guides: the design
+// notes, and V1's archived planning.
+const records = new Set([join(docs, "design"), join(docs, "archive")]);
+
 function pages(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) return pages(path);
+    if (entry.isDirectory()) return records.has(path) ? [] : pages(path);
     return entry.name.endsWith(".md") ? [path] : [];
   });
 }

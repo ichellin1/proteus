@@ -148,6 +148,29 @@ pub fn resolve_world_position_query(
 // Cascade systems
 // ---------------------------------------------------------------------------
 
+/// Sets `entity`'s computed value to `value`, writing only if it changed.
+///
+/// The cascade systems walk every entity every frame, so writing each value
+/// unconditionally, through `Commands`, cost more than the rest of a still
+/// frame's update put together. An existing value is updated in place, and
+/// only if it differs, which also leaves it unmarked as changed; an entity
+/// with no value yet, such as a new one, gets it through `Commands`.
+fn set_computed<C: Component<Mutability = bevy_ecs::component::Mutable> + PartialEq>(
+    entity: Entity,
+    value: C,
+    computed: &mut Query<&mut C>,
+    commands: &mut Commands,
+) {
+    match computed.get_mut(entity) {
+        Ok(mut current) => {
+            current.set_if_neq(value);
+        }
+        Err(_) => {
+            commands.entity(entity).insert(value);
+        }
+    }
+}
+
 /// Cascades [`crate::Visibility`] down the hierarchy into
 /// [`EffectiveVisibility`]: a hidden parent hides its whole subtree, whatever
 /// each descendant's own visibility.
@@ -159,6 +182,7 @@ pub fn visibility_system(
     roots: Query<(Entity, Option<&crate::component::Visibility>), Without<ChildOf>>,
     children_q: Query<&Children>,
     vis_q: Query<Option<&crate::component::Visibility>>,
+    mut computed: Query<&mut EffectiveVisibility>,
 ) {
     fn cascade(
         entity: Entity,
@@ -166,6 +190,7 @@ pub fn visibility_system(
         commands: &mut Commands,
         children_q: &Query<&Children>,
         vis_q: &Query<Option<&crate::component::Visibility>>,
+        computed: &mut Query<&mut EffectiveVisibility>,
     ) {
         let own_visible = vis_q
             .get(entity)
@@ -174,24 +199,32 @@ pub fn visibility_system(
             .map(|v| v.visible)
             .unwrap_or(true);
         let effective = parent_effective && own_visible;
-        commands
-            .entity(entity)
-            .insert(EffectiveVisibility(effective));
+        set_computed(entity, EffectiveVisibility(effective), computed, commands);
         if let Ok(children) = children_q.get(entity) {
             for child in children.iter() {
-                cascade(child, effective, commands, children_q, vis_q);
+                cascade(child, effective, commands, children_q, vis_q, computed);
             }
         }
     }
 
     for (root, vis) in roots.iter() {
         let own_visible = vis.map(|v| v.visible).unwrap_or(true);
-        commands
-            .entity(root)
-            .insert(EffectiveVisibility(own_visible));
+        set_computed(
+            root,
+            EffectiveVisibility(own_visible),
+            &mut computed,
+            &mut commands,
+        );
         if let Ok(children) = children_q.get(root) {
             for child in children.iter() {
-                cascade(child, own_visible, &mut commands, &children_q, &vis_q);
+                cascade(
+                    child,
+                    own_visible,
+                    &mut commands,
+                    &children_q,
+                    &vis_q,
+                    &mut computed,
+                );
             }
         }
     }
@@ -207,6 +240,7 @@ pub fn opacity_system(
     roots: Query<(Entity, Option<&Opacity>), Without<ChildOf>>,
     children_q: Query<&Children>,
     op_q: Query<Option<&Opacity>>,
+    mut computed: Query<&mut EffectiveOpacity>,
 ) {
     fn cascade(
         entity: Entity,
@@ -214,23 +248,31 @@ pub fn opacity_system(
         commands: &mut Commands,
         children_q: &Query<&Children>,
         op_q: &Query<Option<&Opacity>>,
+        computed: &mut Query<&mut EffectiveOpacity>,
     ) {
         let own = op_q.get(entity).ok().flatten().copied().unwrap_or_default();
         let effective = parent_effective * own.0;
-        commands.entity(entity).insert(EffectiveOpacity(effective));
+        set_computed(entity, EffectiveOpacity(effective), computed, commands);
         if let Ok(children) = children_q.get(entity) {
             for child in children.iter() {
-                cascade(child, effective, commands, children_q, op_q);
+                cascade(child, effective, commands, children_q, op_q, computed);
             }
         }
     }
 
     for (root, op) in roots.iter() {
         let own = op.copied().unwrap_or_default();
-        commands.entity(root).insert(EffectiveOpacity(own.0));
+        set_computed(root, EffectiveOpacity(own.0), &mut computed, &mut commands);
         if let Ok(children) = children_q.get(root) {
             for child in children.iter() {
-                cascade(child, own.0, &mut commands, &children_q, &op_q);
+                cascade(
+                    child,
+                    own.0,
+                    &mut commands,
+                    &children_q,
+                    &op_q,
+                    &mut computed,
+                );
             }
         }
     }
@@ -391,6 +433,46 @@ mod tests {
             Some(&EffectiveVisibility(false)),
             "child declares itself visible, but a hidden parent must still make it effectively invisible"
         );
+    }
+
+    // After the first run, each entity has its computed values, so a later
+    // change updates them in place. It must still reach the whole subtree,
+    // and leave the values of entities it didn't change unmarked as changed.
+    #[test]
+    fn a_later_change_updates_computed_values_in_place() {
+        let mut world = World::new();
+        let parent = world.spawn((Visibility::VISIBLE, Opacity(1.0))).id();
+        let child = world
+            .spawn((Visibility::VISIBLE, Opacity(0.5), ChildOf(parent)))
+            .id();
+        let other = world.spawn((Visibility::VISIBLE, Opacity(1.0))).id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems((visibility_system, opacity_system));
+        schedule.run(&mut world);
+        world.clear_trackers();
+
+        world
+            .entity_mut(parent)
+            .insert((Visibility::HIDDEN, Opacity(0.5)));
+        schedule.run(&mut world);
+
+        assert_eq!(
+            world.get::<EffectiveVisibility>(child),
+            Some(&EffectiveVisibility(false)),
+            "hiding the parent hides its child"
+        );
+        let effective = world.get::<EffectiveOpacity>(child).unwrap().0;
+        assert!(
+            (effective - 0.25).abs() < 1e-5,
+            "expected 0.25, got {effective}"
+        );
+        let other_changed = world
+            .entity(other)
+            .get_ref::<EffectiveVisibility>()
+            .unwrap()
+            .is_changed();
+        assert!(!other_changed, "an unchanged value isn't written again");
     }
 
     #[test]

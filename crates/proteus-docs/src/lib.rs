@@ -60,10 +60,17 @@ mod tests {
 
     use super::PAGES;
 
+    /// Folders in `docs/` that hold project records rather than guides: the
+    /// design notes, and V1's archived planning. Neither has snippets to test.
+    const RECORDS: &[&str] = &["design", "archive"];
+
     fn markdown_pages(dir: &Path, root: &Path, out: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
+                if dir == root && RECORDS.iter().any(|r| path.ends_with(r)) {
+                    continue;
+                }
                 markdown_pages(&path, root, out);
             } else if path.extension().is_some_and(|e| e == "md") {
                 let relative = path.strip_prefix(root).unwrap();
@@ -137,20 +144,39 @@ mod tests {
         found
     }
 
+    /// Pages outside the guides whose links are checked too, relative to
+    /// `docs/`, along with every design note. They have no Rust snippets, so
+    /// they aren't in `pages!`, and unlike the guides they may link to the
+    /// planning pages. The archive isn't checked: it is kept as it was.
+    const OTHER_PAGES: &[&str] = &[
+        "../README.md",
+        "../ARCHITECTURE.md",
+        "../ROADMAP.md",
+        "../PLANNING.md",
+    ];
+
     // A link to a page that moved, or to a heading that was renamed, would
     // otherwise only be found by a reader.
     #[test]
     fn every_link_in_docs_resolves() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let mut design_notes = Vec::new();
+        markdown_pages(&root.join("design"), &root, &mut design_notes);
+        let guides = PAGES.iter().map(|p| (p.to_string(), true));
+        let others = OTHER_PAGES
+            .iter()
+            .map(|p| p.to_string())
+            .chain(design_notes)
+            .map(|p| (p, false));
         let mut broken = Vec::new();
-        for page in PAGES {
-            let path = root.join(page);
+        for (page, is_guide) in guides.chain(others) {
+            let path = root.join(&page);
             let text = std::fs::read_to_string(&path).unwrap();
             for link in links(&text) {
                 if link.starts_with("http://") || link.starts_with("https://") {
                     continue;
                 }
-                if link.contains("PLANNING") {
+                if is_guide && link.contains("PLANNING") {
                     broken.push(format!("{page}: {link} links to PLANNING"));
                     continue;
                 }
