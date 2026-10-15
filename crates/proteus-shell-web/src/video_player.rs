@@ -292,7 +292,7 @@ async fn run_source_open(
         return Ok(());
     }
     let manifest_text = String::from_utf8_lossy(&manifest_bytes).into_owned();
-    let manifest = parse_hls_manifest(&manifest_text)
+    let manifest = proteus_demo::video::hls::parse(&manifest_text)
         .map_err(|e| JsValue::from_str(&format!("{manifest_url}: {e}")))?;
 
     media_source.set_duration(manifest.duration);
@@ -353,64 +353,6 @@ async fn append_buffer(source_buffer: &SourceBuffer, mut bytes: Vec<u8>) -> Resu
     Ok(())
 }
 
-/// A parsed HLS manifest: the init segment, the media segments, and their
-/// total duration.
-struct HlsManifest {
-    init_uri: String,
-    segment_uris: Vec<String>,
-    duration: f64,
-}
-
-/// Parses a single-stream HLS manifest: one `#EXT-X-MAP` init segment and a
-/// list of `#EXTINF` segments. Streams with several bitrates aren't
-/// supported.
-fn parse_hls_manifest(text: &str) -> Result<HlsManifest, String> {
-    let lines: Vec<&str> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    let mut init_uri = None;
-    let mut duration = 0.0;
-    let mut segment_uris = Vec::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(rest) = line.strip_prefix("#EXT-X-MAP:") {
-            if let Some(start) = rest.find("URI=\"") {
-                let after = &rest[start + "URI=\"".len()..];
-                if let Some(end) = after.find('"') {
-                    init_uri = Some(after[..end].to_string());
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("#EXTINF:") {
-            duration += parse_leading_f64(rest);
-            if let Some(next) = lines.get(i + 1) {
-                if !next.starts_with('#') {
-                    segment_uris.push(next.to_string());
-                }
-            }
-        }
-    }
-
-    match init_uri {
-        Some(init_uri) if !segment_uris.is_empty() => Ok(HlsManifest {
-            init_uri,
-            segment_uris,
-            duration,
-        }),
-        _ => Err("HLS manifest: missing init segment or media segments".to_string()),
-    }
-}
-
-/// Parses the number at the start of `s` and ignores the rest, like
-/// JavaScript's `parseFloat`: `#EXTINF:6.006,` has a trailing comma.
-fn parse_leading_f64(s: &str) -> f64 {
-    let end = s
-        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
-        .unwrap_or(s.len());
-    s[..end].parse().unwrap_or(0.0)
-}
-
 fn request_animation_frame(f: &Closure<dyn FnMut(f64)>) {
     web_sys::window()
         .expect("no window")
@@ -443,29 +385,4 @@ async fn fetch_bytes(url: &str, signal: Option<&web_sys::AbortSignal>) -> Result
     }
     let buf = JsFuture::from(resp.array_buffer()?).await?;
     Ok(js_sys::Uint8Array::new(&buf).to_vec())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_init_uri_and_segments_in_order() {
-        let manifest = "#EXTM3U\n#EXT-X-MAP:URI=\"init.m4s\"\n#EXTINF:6.006,\nseg_0.m4s\n#EXTINF:2.002,\nseg_1.m4s\n#EXT-X-ENDLIST\n";
-        let parsed = parse_hls_manifest(manifest).unwrap();
-        assert_eq!(parsed.init_uri, "init.m4s");
-        assert_eq!(parsed.segment_uris, vec!["seg_0.m4s", "seg_1.m4s"]);
-        assert!((parsed.duration - 8.008).abs() < 1e-9);
-    }
-
-    #[test]
-    fn missing_init_or_segments_is_an_error() {
-        assert!(parse_hls_manifest("#EXTM3U\n#EXTINF:6.006,\nseg_0.m4s\n").is_err());
-        assert!(parse_hls_manifest("#EXTM3U\n#EXT-X-MAP:URI=\"init.m4s\"\n").is_err());
-    }
-
-    #[test]
-    fn parse_leading_f64_stops_at_trailing_comma() {
-        assert!((parse_leading_f64("6.006,") - 6.006).abs() < 1e-9);
-    }
 }

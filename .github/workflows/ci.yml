@@ -13,8 +13,10 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: Test
+  lint:
+    # Formatting, lints and docs come out the same on every platform, so they
+    # run once, here.
+    name: Lint
     runs-on: ubuntu-latest
 
     steps:
@@ -27,13 +29,6 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
-
-      - name: Install software GPU (headless render test)
-        # lavapipe is Mesa's CPU-based Vulkan implementation — gives wgpu a
-        # real adapter on the GitHub Actions Ubuntu runner (no hardware GPU).
-        run: |
-          sudo apt-get update -y -qq
-          sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -49,7 +44,7 @@ jobs:
       - name: Check comments
         # Paths are added as each crate is brought up to CONTRIBUTING.md's
         # comment rules.
-        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs examples Cargo.toml
+        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs examples benches Cargo.toml
 
       - name: Clippy
         # proteus-shell-web / proteus-host-web are wasm32-only
@@ -69,14 +64,60 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  test:
+    # Builds and tests the native crates on each desktop platform, GPU tests
+    # included: `REQUIRE_GPU` makes a missing GPU fail them rather than skip.
+    # Linux gets one from Mesa's software Vulkan driver, lavapipe; Windows
+    # from Direct3D's software renderer, WARP; macOS from the runner's Metal.
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Keep line endings as committed
+        # Windows runners convert to CRLF on checkout by default.
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install software GPU
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq libvulkan1 mesa-vulkan-drivers
+
       - name: Run tests
         run: cargo test --workspace --exclude proteus-shell-web --exclude proteus-host-web
         env:
-          # Force wgpu to use the Vulkan backend so it picks up lavapipe.
-          WGPU_BACKEND: vulkan
-          # Fail the headless render test if no GPU adapter is found.
-          # On CI lavapipe always provides one; this catches broken driver installs.
           REQUIRE_GPU: 1
+
+  msrv:
+    # The oldest Rust the crates declare, `rust-version` in Cargo.toml, still
+    # builds them.
+    name: Rust 1.89
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        uses: dtolnay/rust-toolchain@1.89
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: cargo check --workspace --exclude proteus-shell-web --exclude proteus-host-web --all-targets
 
   wasm:
     # WASM output is platform-independent — one Ubuntu build is sufficient.
@@ -108,7 +149,7 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Clippy for wasm32 (the web crates, the docs' web snippets and the Rust examples)
-        run: cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
+        run: cargo clippy -p proteus-shell-web -p proteus-host-web -p proteus-docs -p gallery -p video -p stepper -p menu -p proteus-bench-web --target wasm32-unknown-unknown --all-targets --all-features -- -D warnings
 
       - name: Docs (wasm32)
         # Same rationale as the `test` job's own docs step; these two crates
@@ -155,11 +196,10 @@ jobs:
         run: wasm-pack build crates/proteus-sdk-web --target bundler --out-dir ts/pkg
 
       - name: wasm-pack build (proteus-host-web)
-        # M13.2: the ts/ package's mount() wrapper needs this crate's own
+        # The ts/ package's mount() wrapper needs this crate's own
         # wasm-pack output (ts/pkg-host) alongside proteus-sdk-web's own
-        # (ts/pkg) — see PLANNING.md's M13.2 section for why bundling both
-        # into one npm package is sound despite being two separate wasm
-        # binaries.
+        # (ts/pkg). ARCHITECTURE.md's TypeScript section explains why
+        # bundling two separate wasm modules into one npm package is sound.
         run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host
 
       - name: Install Node toolchain
@@ -204,6 +244,12 @@ jobs:
       - name: examples/menu/typescript — build
         working-directory: examples/menu/typescript
         run: npm ci && npm run build
+
+      - name: benches/browser — build
+        # The page imports the same app in Rust, from benches/browser/rust.
+        run: |
+          wasm-pack build benches/browser/rust --target bundler
+          cd benches/browser && npm ci && npm run build
 
       - name: examples/stepper/typescript — build
         working-directory: examples/stepper/typescript

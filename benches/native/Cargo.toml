@@ -1,0 +1,17 @@
+[package]
+name = "proteus-bench"
+description = "Measures Proteus's native frame time as the component count grows, still and in transitions."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+proteus-sdk = { workspace = true }
+proteus-runtime = { workspace = true }
+# For `collect_instances`, which the `phases` mode times on its own.
+proteus-ui = { workspace = true }
+proteus-host-winit = { workspace = true }
+pollster = { workspace = true }

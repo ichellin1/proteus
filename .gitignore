@@ -12,7 +12,7 @@ pkg-host/
 node_modules/
 
 # don't commit design assets now
-design/
+/design/
 
 # Editor
 .vscode/
