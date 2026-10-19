@@ -1,6 +1,6 @@
 # Bake at the display's resolution
 
-**Status:** a V2 candidate. A known shortcoming, listed in
+**Status:** a candidate. A known shortcoming, listed in
 [ARCHITECTURE.md](../../ARCHITECTURE.md#known-limits).
 
 Nothing that draws into a texture reads the display's scale factor. Text is rasterized at

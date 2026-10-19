@@ -1,6 +1,6 @@
 # Video: playback controls, several videos, and video in splits and merges
 
-**Status:** a V2 candidate. Video is experimental in V1.
+**Status:** a candidate. Video is experimental in v0.1.0.
 
 Proteus shows video but doesn't play it: the app brings its own player and uploads each frame
 with `VideoHandle::upload_frame` (see [ARCHITECTURE.md](../../ARCHITECTURE.md#apps-and-hosts)).
