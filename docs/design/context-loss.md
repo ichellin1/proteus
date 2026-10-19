@@ -1,6 +1,6 @@
 # Recovering a lost GPU context on the web
 
-**Status:** a V2 candidate. A known shortcoming, listed in
+**Status:** a candidate. A known shortcoming, listed in
 [ARCHITECTURE.md](../../ARCHITECTURE.md#known-limits).
 
 A browser can take a page's GPU context away: when it reclaims a background tab's memory, most

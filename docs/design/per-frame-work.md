@@ -1,6 +1,6 @@
 # Only redo per-frame work that changed
 
-**Status:** a V2 candidate. Found by the M14 benchmarks; see [BENCHMARKS.md](../../BENCHMARKS.md).
+**Status:** a candidate. Found by the M14 benchmarks; see [BENCHMARKS.md](../../BENCHMARKS.md).
 It only matters at hundreds of thousands of components, so it comes after the
 [shader fast path](./shader-fast-path.md).
 
