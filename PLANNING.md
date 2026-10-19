@@ -37,12 +37,42 @@ done, the candidates are unordered.
 - **Decided (2026-10-19): work independent of a release is tracked in ROADMAP too,** in a
   section of its own. Rewriting the history to shrink the repository is the first such task,
   done early.
+- **Decided (2026-10-19): a draft order of releases,** v0.2.0 to v0.8.0, is in ROADMAP. Each
+  release is planned in detail when it comes up, and its scope can change then. Only the next
+  release has a section here.
 - [x] ROADMAP and PLANNING plan by release rather than milestone.
-- [ ] Every candidate in ROADMAP is placed in a release, kept as a candidate for later, or
+- [x] Every candidate in ROADMAP is placed in a release, kept as a candidate for later, or
   dropped with a reason.
-- [ ] The releases are in ROADMAP in order, each with a definition of done here.
+- [x] The releases are in ROADMAP in order.
 - [ ] The two high-priority candidates, the shader fast path and rounded corners on baked
   slices, are decided first.
+
+## v0.2.0 — Rendering limits
+
+**Draft (2026-10-19).** The scope from ROADMAP's draft order, not yet planned in detail; this
+section is revised when it is. Sharper, faster and steadier rendering: the known limits in how
+Proteus draws.
+
+- [ ] **The shader fast path:** plain components, with no image, border, shadow or glow, skip
+  the shader's full per-pixel work, and pixels a later opaque component covers aren't shaded.
+  The benchmarks are run again and BENCHMARKS updated, checking whether frame times even out
+  and whether Safari's tab still crashes at 100,000 large components.
+  [Design note](./docs/design/shader-fast-path.md)
+- [ ] **Rounded corners on baked slices** stay round while a slice is drawn smaller than its
+  bake. [Design note](./docs/design/shared-bake-corners.md)
+- [ ] `quad.wgsl` is split into named parts with its output unchanged, before the fast path
+  changes it.
+- [ ] The test that checks the shader's atlas-page layout against Rust's survives the shader
+  being reformatted.
+- [ ] Text and baked components are baked at the display's resolution and drawn at their
+  logical size. [Design note](./docs/design/bake-resolution.md)
+- [ ] Each frame collects, sorts and uploads only the components that changed.
+  [Design note](./docs/design/per-frame-work.md)
+- [ ] Benchmarks run regularly and catch regressions.
+- [ ] Rust has equivalents of TypeScript's `topLeftToWorld` and `worldToTopLeft`, and the
+  guides make the origin and the conversion clear in both languages.
+- [ ] ARCHITECTURE's known limits no longer list what this release fixes.
+- [ ] Released through the process in [RELEASING.md](./RELEASING.md).
 
 ## Standing decisions
 
