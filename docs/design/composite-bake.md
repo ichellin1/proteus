@@ -1,6 +1,6 @@
 # A composite-bake transition strategy
 
-**Status:** a V2 candidate, to take or drop deliberately. Designed in V1's planning as
+**Status:** a candidate, to take or drop deliberately. Designed in V1's planning as
 "Strategy 1 — Bake", and never built.
 
 Before a split or merge starts, flatten the N side into a single texture, run one ordinary 1→1

@@ -1,8 +1,9 @@
 # Only redo per-frame work that changed
 
-**Status:** a V2 candidate. Found by the M14 benchmarks; see [BENCHMARKS.md](../../BENCHMARKS.md).
-It only matters at hundreds of thousands of components, so it comes after the
-[shader fast path](./shader-fast-path.md).
+**Status:** planned for v0.2.0. Found by the M14 benchmarks; see
+[BENCHMARKS.md](../../BENCHMARKS.md). On the benchmarks' Apple M4 it only matters at hundreds of
+thousands of components, but there are reports of fans turning on with Proteus on low-end
+devices, such as an old Chromebook, where this work may be part of the cause.
 
 ## What was measured
 

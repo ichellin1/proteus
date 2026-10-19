@@ -1,6 +1,6 @@
 # Restoring evicted textures
 
-**Status:** a V2 candidate.
+**Status:** a candidate.
 
 The main atlas evicts only textures no component uses (see
 [ARCHITECTURE.md](../../ARCHITECTURE.md#texture-lifetime)). Three related features need more:
