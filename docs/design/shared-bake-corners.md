@@ -1,6 +1,6 @@
 # Rounded corners on the slices of a baked split or merge
 
-**Status:** a V2 candidate, **high priority**.
+**Status:** a candidate, **high priority**.
 
 In a split, each virtual component fades from its slice of the source's bake to its target's
 bake (a merge is the reverse; see [ARCHITECTURE.md](../../ARCHITECTURE.md#splits-and-merges)).

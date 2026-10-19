@@ -4719,23 +4719,36 @@ until there is a new one (decided 2026-10-14).
 - [x] The new PLANNING states its own rule: it records decisions and definitions of done, and
   reasoning longer than a paragraph goes in a separate design note.
 
+These two steps carried over into the root PLANNING when this file was archived, and were
+finished there; they are copied back here as they ended, on 2026-10-19.
+
 #### Step 13 — README
 
 The README is what everyone sees first, on GitHub, npm and crates.io. Done last, so it can point
 at finished docs, examples and benchmarks.
 
-- [ ] The Proteus logo at the top, switching between the light and dark lockups to match the
+- [x] The Proteus logo at the top, switching between the light and dark lockups to match the
   reader's theme (`brand/logo/assets/`).
-- [ ] In order: what Proteus is in a sentence or two, a picture or short clip of the demo, a
-  quickstart, install instructions for TypeScript and Rust, links to the docs, examples, demo
-  and architecture, project status (0.x is an early release), and license.
+- [x] In order: what Proteus is, links to the getting-started guides for Rust and TypeScript,
+  links to the docs, examples, demo and architecture, project status (0.x is an early release),
+  and license.
+- **Decided (2026-10-14):** no picture or clip of the demo. A GIF was tried and found
+  distracting; the README links to the live demo instead.
+- **Decided (2026-10-14):** the README links to the getting-started guides for the quickstart
+  and install instructions rather than repeating their code, so there is one copy to keep up to
+  date, and it is already checked in CI.
 - [ ] Renders correctly on GitHub, npm and crates.io; images use URLs that work off GitHub.
-- [ ] The quickstart code is checked in CI like the guides' snippets.
+  Moved to ROADMAP, as work independent of a release.
+- [x] The README's links resolve, checked by `proteus-docs`'s link test.
 
 #### Release — v0.1.0
 
-- [ ] The step 8 release process runs for real: tag, changelog, GitHub Release, npm and crates.io.
-  Publishing cannot be undone, so it goes ahead only on explicit approval.
+- [x] The release process in [RELEASING.md](../../RELEASING.md) runs for real: tag, changelog,
+  GitHub Release, npm and crates.io. Publishing cannot be undone, so it goes ahead only on
+  explicit approval.
+- **Released (2026-10-15).** npm and the first five crates published from the workflow;
+  crates.io's limit on new crates stopped it there, and the last three, and the GitHub Release,
+  were published by hand. RELEASING now covers both.
 
 #### Where the previous checklist went
 

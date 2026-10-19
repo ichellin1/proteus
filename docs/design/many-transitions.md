@@ -1,6 +1,6 @@
 # Start many transitions in one call, from TypeScript
 
-**Status:** a V2 candidate. Found by the M14 browser benchmark; see
+**Status:** a candidate. Found by the M14 browser benchmark; see
 [BENCHMARKS.md](../../BENCHMARKS.md).
 
 ## What was measured

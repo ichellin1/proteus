@@ -1,6 +1,6 @@
 # A fast path for plain components in the shader
 
-**Status:** a V2 candidate, **high priority**. Found by the M14 benchmarks; see
+**Status:** a candidate, **high priority**. Found by the M14 benchmarks; see
 [BENCHMARKS.md](../../BENCHMARKS.md).
 
 Proteus's GPU work, not its CPU or its WebAssembly boundary, is what limits large scenes, and

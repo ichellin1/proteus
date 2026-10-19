@@ -1,28 +1,48 @@
 # Proteus — Roadmap
 
-Where Proteus is going. [PLANNING.md](./PLANNING.md) records the decisions and definitions of
-done for the work underway, and the [design notes](./docs/design/README.md) hold the reasoning
-behind planned work.
+Where Proteus is going, release by release. [PLANNING.md](./PLANNING.md) records the decisions
+and definitions of done for the work underway, and the [design notes](./docs/design/README.md)
+hold the reasoning behind planned work.
+
+## How releases are planned
+
+- **Features ship by version.** Each release, such as v0.2 or v0.3, has a theme and a fixed
+  scope, and ships when that scope is done, not on a date.
+- **Small fixes ride along** in the next feature release. One found after a release ships can
+  go out in a patch release, such as v0.2.1.
+- **Candidates are weighed in this order:** fixing known limits and known issues; what outside
+  developers need to build real apps; effects, such as blur; then other platforms.
+- **Work that isn't part of any release,** such as upkeep of the repository, is listed under
+  [Independent of a release](#independent-of-a-release), and done when it's ready.
 
 ## Where things stand
 
-**V1** is Proteus's first developer release, v0.1.0: the component model and its three
-transition shapes, GPU rendering natively and on the web, Rust and TypeScript SDKs, a native and
-a web host, guides, examples and benchmarks. [ARCHITECTURE.md](./ARCHITECTURE.md) describes how
-it is built, and lists its known limits. It was built in milestones M0 to M14, whose roadmap
-and planning are kept in [docs/archive](./docs/archive/) as history.
+v0.1.0, Proteus's first developer release, shipped on 2026-10-15: the component model and its
+three transition shapes, GPU rendering natively and on the web, Rust and TypeScript SDKs, a
+native and a web host, guides, examples and benchmarks. [ARCHITECTURE.md](./ARCHITECTURE.md)
+describes how it is built, and lists its known limits. It was built in milestones M0 to M14,
+whose roadmap and planning are kept in [docs/archive](./docs/archive/) as history. "V1" in those
+documents means v0.1.0, and "V2" means everything after it.
 
-M14, the developer release, finishes with the README and publishing v0.1.0; see PLANNING.
+## Next: release planning
 
-## Next: V2 Planning
+Decides the releases: which candidates each takes, in what order, each with a definition of done
+in PLANNING. Until it's done, the candidates below are unordered.
 
-The first V2 milestone. It decides what V2 is: which candidates below it takes, in what order,
-grouped into milestones, each with a definition of done in PLANNING. Until it runs, the
-candidates are unordered.
+## Independent of a release
 
-## V2 candidates
+Tied to no version; each is done when it's ready.
 
-Unordered within each area. **High priority** marks findings for V2 Planning to weigh first.
+- **Repository size:** the history still carries assets removed from the tree. Rewriting it
+  changes every commit's hash, the v0.1.0 tag's included, and anyone with a clone or a fork
+  has to clone again, so it is done early, while few have.
+- **The README on GitHub, npm and crates.io:** check that it renders correctly on all three,
+  and that its images load off GitHub. Left over from v0.1.0.
+
+## Candidates
+
+Unordered within each area. **High priority** marks findings for release planning to weigh
+first.
 
 ### Rendering and performance
 
@@ -97,8 +117,9 @@ Unordered within each area. **High priority** marks findings for V2 Planning to 
 - Advanced transition effects, such as particle dissolution and fluid deformation.
 - A layout system (`VStack`, `HStack`, `Grid`), with positions relative to the parent, and items
   that glide to their new places when the layout changes.
-- Where (0, 0) is: the top-left with y down, as many web developers expect, or positions as they
-  are, with layouts placing components.
+- Top-left coordinates in Rust: Rust equivalents of TypeScript's `topLeftToWorld` and
+  `worldToTopLeft`, and guides that make the origin, the viewport's center with y up, and the
+  conversion clear in both languages. The origin itself stays where it is.
 - Borders that sit inside, centered on, or outside a component's geometry, and a border offset
   that moves the border a set distance in from or out past the edge, like CSS's
   `outline-offset`. Only inner borders draw today. The instance already carries a placement, in
@@ -139,12 +160,10 @@ Unordered within each area. **High priority** marks findings for V2 Planning to 
 - Other language bindings, such as Python, Swift and Kotlin.
 - Real runs of the native host on Linux and Windows, which CI tests but nobody has run by hand.
 
-### Tests, tooling and the repository
+### Tests and tooling
 
 - Tests that run in a browser, for the web host itself.
 - Benchmarks that run regularly and catch regressions.
 - The reference demo uses interaction styles, rather than its own hover code.
 - The test that checks the shader's atlas-page layout against Rust's breaks when the shader is
   reformatted.
-- Repository size: the history still carries assets removed from the tree.
-- Dogfooding: a personal website built with Proteus.
