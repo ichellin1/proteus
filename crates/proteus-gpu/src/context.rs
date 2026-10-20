@@ -39,7 +39,9 @@ pub struct SurfaceRequest {
     /// Device limits. A native host asks for [`wgpu::Limits::default()`], the
     /// web host for [`wgpu::Limits::downlevel_webgl2_defaults()`] so that the
     /// WebGL2 fallback works. Proteus's default settings fit the WebGL2 limits;
-    /// larger ones, such as `ProteusConfig::desktop()`, need more.
+    /// larger ones, such as `ProteusConfig::desktop()`, need more. The device
+    /// gets them all except the largest texture size, which is raised to what
+    /// the GPU supports, so the swap chain can be as large as the display.
     pub limits: wgpu::Limits,
 }
 
@@ -58,10 +60,19 @@ impl GpuSurface {
         target: impl Into<wgpu::SurfaceTarget<'static>>,
         request: SurfaceRequest,
     ) -> Result<Self, GpuError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        // A browser can expose WebGPU with no adapter behind it, as Chrome
+        // does on many Chromebooks. `Instance::new` would still choose WebGPU
+        // there, and no adapter would be found; this checks for one first,
+        // and falls back to WebGL2 without it. Natively it's `Instance::new`.
+        let descriptor = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+        };
+        // WebGL2 can't create a surface for a canvas without a display
+        // handle, and a canvas doesn't carry one. A native window does.
+        #[cfg(target_arch = "wasm32")]
+        let descriptor = descriptor.with_display_handle(Box::new(WebDisplay));
+        let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
 
         let surface = instance.create_surface(target)?;
 
@@ -74,11 +85,22 @@ impl GpuSurface {
             .await
             .map_err(|_| GpuError::NoAdapter)?;
 
+        // The swap chain is as large as the window or canvas, so it may be as
+        // large as the GPU allows, whatever the request holds textures to.
+        // WebGPU raises a lower limit to its own default, but WebGL2 keeps it:
+        // at WebGL2's 2048, a canvas 1280 wide at a pixel ratio of 2 fails.
+        let max_texture_dimension_2d = adapter
+            .limits()
+            .max_texture_dimension_2d
+            .max(request.limits.max_texture_dimension_2d);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some(request.label),
                 required_features: wgpu::Features::empty(),
-                required_limits: request.limits,
+                required_limits: wgpu::Limits {
+                    max_texture_dimension_2d,
+                    ..request.limits
+                },
                 memory_hints: Default::default(),
                 ..Default::default()
             })
@@ -148,4 +170,17 @@ fn preferred_format(caps: &wgpu::SurfaceCapabilities) -> wgpu::TextureFormat {
         .find(|f| !f.is_srgb())
         .copied()
         .unwrap_or(caps.formats[0])
+}
+
+/// The display a canvas belongs to: the web has only one, so there is
+/// nothing to hold.
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+struct WebDisplay;
+
+#[cfg(target_arch = "wasm32")]
+impl wgpu::rwh::HasDisplayHandle for WebDisplay {
+    fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        Ok(wgpu::rwh::DisplayHandle::web())
+    }
 }
