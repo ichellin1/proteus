@@ -135,9 +135,6 @@ What outside developers need to build real apps.
 
 Tied to no version; each is done when it's ready.
 
-- **Repository size:** the history still carries assets removed from the tree. Rewriting it
-  changes every commit's hash, the v0.1.0 tag's included, and anyone with a clone or a fork
-  has to clone again, so it is done early, while few have.
 - **The README on GitHub, npm and crates.io:** check that it renders correctly on all three,
   and that its images load off GitHub. Left over from v0.1.0.
 
