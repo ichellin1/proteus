@@ -3,6 +3,22 @@
 The changes in each version of Proteus. This file is generated from the commit history; see
 RELEASING.md.
 
+## 0.1.1 (2026-10-20)
+
+### Fixes
+
+- **gpu:** Make the WebGL2 fallback work
+
+### Documentation
+
+- Badges in the README, and finishing a release by hand
+- Plan by release instead of milestones
+- A draft release order, and v0.2.0's planning
+- Skip drawing idle frames in v0.2.0
+
+### Build and release
+
+- **cliff:** Point skipped commits at the rewritten history
 ## 0.1.0 (2026-10-15)
 
 The first release of Proteus.
