@@ -84,11 +84,11 @@ commit_parsers = [
     { sha = "6c17c4d31bfb60a4a2a13c9f65cac56bc3d04704", skip = true },
     # The project's own planning notes, not part of what it ships.
     { message = "^docs\\(planning\\)", skip = true },
-    { sha = "ff09723cdd9f68f7d7f4ed00a6ca8e74311be8c0", skip = true },
-    { sha = "1c37bb0985818fe58970fbf3f3dd61e6e9bc4965", skip = true },
+    { sha = "12bc867023f3a4a3c16957c94f235f9fd002d7ec", skip = true },
+    { sha = "6d33b67dd510e6e4868d5c76498ba7f6bf3d7c60", skip = true },
     # A clip of the demo, added to the README and then removed again.
-    { sha = "3445b77db210e9713b1a394c1541892c637d4c2c", skip = true },
-    { sha = "e4364a8519e41b3361a36b29659cc8cd69b79265", skip = true },
+    { sha = "151456cbfd69ed7dd85f8025084ee0390e1cda0d", skip = true },
+    { sha = "3121b9afe65bafbbc54dc3ac1b607a51f1d56d63", skip = true },
     { message = "^Merge ", skip = true },
     { message = "^docs: close out step", skip = true },
     # The release commit, which only sets the version.
