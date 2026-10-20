@@ -52,32 +52,89 @@ done, the candidates are unordered.
 
 ## v0.2.0 — Rendering limits
 
-**Draft (2026-10-19).** The scope from ROADMAP's draft order, not yet planned in detail; this
-section is revised when it is. Sharper, faster and steadier rendering: the known limits in how
-Proteus draws.
+Sharper, faster and steadier rendering: the known limits in how Proteus draws. The scope is
+from ROADMAP's draft order; the steps are in the order they're built.
 
-- [ ] **The shader fast path:** plain components, with no image, border, shadow or glow, skip
-  the shader's full per-pixel work, and pixels a later opaque component covers aren't shaded.
-  The benchmarks are run again and BENCHMARKS updated, checking whether frame times even out
-  and whether Safari's tab still crashes at 100,000 large components.
-  [Design note](./docs/design/shader-fast-path.md)
-- [ ] **Rounded corners on baked slices** stay round while a slice is drawn smaller than its
-  bake. [Design note](./docs/design/shared-bake-corners.md)
-- [ ] `quad.wgsl` is split into named parts with its output unchanged, before the fast path
-  changes it.
+- **Decided (2026-10-20): the order.** Skipping idle frames comes early, since it answers the
+  reports of fans turning on with Proteus on low-end devices. The instance's 16 vertex attribute
+  slots are all in use, and per-frame work, the fast path and the corners all want to change
+  it, so the corners approach is decided before per-frame work changes the instance. Bakes move
+  to the display's resolution before the corners are fixed, so the fix is tuned against the
+  final bake sizes. The high-priority candidates are decided first, as release planning asked,
+  but built where the order puts them.
+
+### Step 1 — Benchmarks that run regularly
+
+A baseline before any performance work, so every later step is measured against it.
+
+- [ ] The CPU-phases benchmark (`cargo run --release -p proteus-bench -- phases`) runs in CI and
+  catches regressions. The GPU benchmarks, native and in a browser, are run by hand at each
+  step.
+- [ ] CPU and GPU use with the reference demo sitting still are measured, on a low-end device or
+  with Chrome's CPU throttling, as the baseline for step 2.
+
+### Step 2 — Skip idle frames
+
+- [ ] A frame in which nothing changed isn't drawn: no running transition, input, change to a
+  component, pending bake or new video frame. A coarse check is enough; it doesn't wait for
+  step 4's tracking.
+- [ ] A test for each of those shows the frame is drawn when it changes.
+- [ ] Step 1's still-screen measurement is taken again, and shows the difference.
+
+### Step 3 — Decide the corners approach
+
+- [ ] One of the approaches in the [design note](./docs/design/shared-bake-corners.md) is
+  decided, before step 4 changes the instance: a mask per shared bake, a radius per corner, or
+  mipmaps for bakes. What it needs from the instance, if anything, is recorded here.
+
+### Step 4 — Per-frame work
+
+- [ ] Each frame collects, sorts and uploads only the components that changed, and keeps the
+  drawing order until a `z` or the hierarchy changes.
+  [Design note](./docs/design/per-frame-work.md)
+- [ ] If rarely used fields, such as shadow and glow, move out of `QuadInstance`, the attribute
+  slots it frees are left for steps 6 and 8.
+- [ ] Step 2's check for a changed frame uses this tracking.
+- [ ] Measured against step 1's baseline.
+
+### Step 5 — Split `quad.wgsl`
+
+- [ ] `quad.wgsl` is split into named parts with its output unchanged.
 - [ ] The test that checks the shader's atlas-page layout against Rust's survives the shader
   being reformatted.
+
+### Step 6 — The shader fast path
+
+[Design note](./docs/design/shader-fast-path.md)
+
+- [ ] Plain components, with no image, border, shadow or glow, exit `fs_main` early, without the
+  texture sample, border or crossfade. Measured against step 1's baseline.
+- [ ] Pixels a later opaque component covers aren't shaded, with a depth buffer, measured on the
+  large scene against the early exit and on the small scene to check it costs nothing there.
+- [ ] BENCHMARKS updated, checking whether frame times even out and whether Safari's tab still
+  crashes at 100,000 large components.
+- [ ] The reference demo, its Effects and Text examples especially, is checked on both shells.
+
+### Step 7 — Bake at the display's resolution
+
 - [ ] Text and baked components are baked at the display's resolution and drawn at their
-  logical size. [Design note](./docs/design/bake-resolution.md)
-- [ ] Each frame collects, sorts and uploads only the components that changed.
-  [Design note](./docs/design/per-frame-work.md)
-- [ ] A frame in which nothing changed isn't drawn: no running transition, input, change to a
-  component, pending bake or new video frame. A test for each of those shows the frame is
-  drawn when it changes. CPU and GPU use with the reference demo sitting still are measured
-  before and after, on a low-end device or with Chrome's CPU throttling.
-- [ ] Benchmarks run regularly and catch regressions.
+  logical size, and baked again when the scale factor changes.
+  [Design note](./docs/design/bake-resolution.md)
+
+### Step 8 — Rounded corners on baked slices
+
+- [ ] With step 3's approach, a slice's corners stay round while it is drawn smaller than its
+  bake. [Design note](./docs/design/shared-bake-corners.md)
+
+### Any time — Top-left coordinates in Rust
+
+Independent of the other steps.
+
 - [ ] Rust has equivalents of TypeScript's `topLeftToWorld` and `worldToTopLeft`, and the
   guides make the origin and the conversion clear in both languages.
+
+### Step 9 — Close out
+
 - [ ] ARCHITECTURE's known limits no longer list what this release fixes.
 - [ ] Released through the process in [RELEASING.md](./RELEASING.md).
 

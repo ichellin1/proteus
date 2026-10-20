@@ -31,31 +31,33 @@ done in PLANNING, when it comes up, and its scope can change then.
 
 ### v0.2.0 — Rendering limits
 
-Sharper, faster and steadier rendering: the known limits in how Proteus draws.
+Sharper, faster and steadier rendering: the known limits in how Proteus draws. In the order
+they're built; PLANNING has the steps.
 
-- **High priority: a fast path for plain components in the shader.** Per-pixel work, not the
-  number of components, limits large, overlapping scenes; it also makes frame times uneven. Also
-  covers skipping pixels a later opaque component covers.
-  [Design note](./docs/design/shader-fast-path.md)
-- **High priority: rounded corners on the slices of a baked split or merge** alias toward
-  square while a slice is drawn smaller than its bake.
-  [Design note](./docs/design/shared-bake-corners.md)
+- Benchmarks that run regularly and catch regressions.
+- Skip drawing a frame when nothing changed: no running transition, input, change to a
+  component, pending bake or new video frame. Both hosts draw every frame today, even on a still
+  screen, which may be why fans turn on with Proteus on low-end devices. A coarse check comes
+  first, and per-frame work's tracking refines it.
+- Only redo per-frame work that changed: collect, sort and upload only the components that
+  changed. [Design note](./docs/design/per-frame-work.md)
 - Split `quad.wgsl` into named parts, keeping its output identical, before custom shaders need
   reusable pieces. Done before the fast path, which changes the same shader.
 - The test that checks the shader's atlas-page layout against Rust's breaks when the shader is
   reformatted.
+- **High priority: a fast path for plain components in the shader.** Per-pixel work, not the
+  number of components, limits large, overlapping scenes; it also makes frame times uneven. Also
+  covers skipping pixels a later opaque component covers.
+  [Design note](./docs/design/shader-fast-path.md)
 - Bake text and components at the display's resolution, so they are as sharp as shapes the
   shader draws. [Design note](./docs/design/bake-resolution.md)
-- Only redo per-frame work that changed: collect, sort and upload only the components that
-  changed. [Design note](./docs/design/per-frame-work.md)
-- Skip drawing a frame when nothing changed: no running transition, input, change to a
-  component, pending bake or new video frame. Both hosts draw every frame today, even on a still
-  screen, which may be why fans turn on with Proteus on low-end devices. Builds on the same
-  change tracking as per-frame work.
-- Benchmarks that run regularly and catch regressions.
+- **High priority: rounded corners on the slices of a baked split or merge** alias toward
+  square while a slice is drawn smaller than its bake.
+  [Design note](./docs/design/shared-bake-corners.md)
 - Top-left coordinates in Rust: Rust equivalents of TypeScript's `topLeftToWorld` and
   `worldToTopLeft`, and guides that make the origin, the viewport's center with y up, and the
-  conversion clear in both languages. The origin itself stays where it is.
+  conversion clear in both languages. The origin itself stays where it is. Independent of the
+  rest, so done at any point.
 
 ### v0.3.0 — Keyboard and focus
 
