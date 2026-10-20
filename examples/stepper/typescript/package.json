@@ -1,7 +1,7 @@
 {
   "name": "proteus-example-stepper",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An onboarding flow whose steps transform into one another, built with the Proteus TypeScript SDK.",
   "type": "module",
   "scripts": {

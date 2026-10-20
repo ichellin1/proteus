@@ -1,6 +1,6 @@
 {
   "name": "proteus-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for Proteus, a UI framework whose components transform into other components instead of loading new screens. Draws with WebGPU or WebGL2.",
   "type": "module",
   "license": "MIT OR Apache-2.0",
