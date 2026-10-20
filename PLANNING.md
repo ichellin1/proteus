@@ -75,6 +75,10 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 - [ ] CPU and GPU use with the reference demo sitting still are measured, on a low-end device or
   with Chrome's CPU throttling, as the baseline for step 2.
+- [ ] The browser benchmark is published beside the demo, at `/bench/` on GitHub Pages and in
+  each pull request's staging preview, so people with other machines can run it and send the
+  results. Its saved progress is kept apart for each address, since production and staging
+  share an origin. BENCHMARKS gives the address and what to send.
 
 ### Step 2 — Skip idle frames
 

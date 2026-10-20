@@ -34,6 +34,8 @@ done in PLANNING, when it comes up, and its scope can change then.
 Sharper, faster and steadier rendering: the known limits in how Proteus draws. In the order
 they're built; PLANNING has the steps.
 
+- The browser benchmark published beside the demo, and in each pull request's staging preview,
+  so it can be run on other people's machines.
 - Skip drawing a frame when nothing changed: no running transition, input, change to a
   component, pending bake or new video frame. Both hosts draw every frame today, even on a still
   screen, which may be why fans turn on with Proteus on low-end devices. A coarse check comes
