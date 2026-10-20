@@ -40,6 +40,9 @@ done, the candidates are unordered.
 - **Decided (2026-10-19): a draft order of releases,** v0.2.0 to v0.8.0, is in ROADMAP. Each
   release is planned in detail when it comes up, and its scope can change then. Only the next
   release has a section here.
+- **Decided (2026-10-20): v0.2.0 skips drawing frames in which nothing changed.** Letting the
+  frame loop sleep as well is risky for little gain, so it stays a candidate, to try as a proof
+  of concept after the planned releases.
 - [x] ROADMAP and PLANNING plan by release rather than milestone.
 - [x] Every candidate in ROADMAP is placed in a release, kept as a candidate for later, or
   dropped with a reason.
@@ -68,6 +71,10 @@ Proteus draws.
   logical size. [Design note](./docs/design/bake-resolution.md)
 - [ ] Each frame collects, sorts and uploads only the components that changed.
   [Design note](./docs/design/per-frame-work.md)
+- [ ] A frame in which nothing changed isn't drawn: no running transition, input, change to a
+  component, pending bake or new video frame. A test for each of those shows the frame is
+  drawn when it changes. CPU and GPU use with the reference demo sitting still are measured
+  before and after, on a low-end device or with Chrome's CPU throttling.
 - [ ] Benchmarks run regularly and catch regressions.
 - [ ] Rust has equivalents of TypeScript's `topLeftToWorld` and `worldToTopLeft`, and the
   guides make the origin and the conversion clear in both languages.
