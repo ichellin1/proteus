@@ -48,6 +48,10 @@ Sharper, faster and steadier rendering: the known limits in how Proteus draws.
   shader draws. [Design note](./docs/design/bake-resolution.md)
 - Only redo per-frame work that changed: collect, sort and upload only the components that
   changed. [Design note](./docs/design/per-frame-work.md)
+- Skip drawing a frame when nothing changed: no running transition, input, change to a
+  component, pending bake or new video frame. Both hosts draw every frame today, even on a still
+  screen, which may be why fans turn on with Proteus on low-end devices. Builds on the same
+  change tracking as per-frame work.
 - Benchmarks that run regularly and catch regressions.
 - Top-left coordinates in Rust: Rust equivalents of TypeScript's `topLeftToWorld` and
   `worldToTopLeft`, and guides that make the origin, the viewport's center with y up, and the
@@ -143,6 +147,9 @@ Not yet placed in a release. Unordered within each area.
 
 ### Rendering and performance
 
+- Let the frame loop sleep while nothing changes, waking for input, a resize or the app asking
+  for a frame. Needs a new API for apps that animate in `update`, and gains little over
+  skipping drawing, so it's tried as a proof of concept after the planned releases.
 - 3D, and geometry other than rectangles. [Design note](./docs/design/3d.md)
 
 ### Text
