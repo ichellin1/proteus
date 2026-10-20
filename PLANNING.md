@@ -62,14 +62,17 @@ from ROADMAP's draft order; the steps are in the order they're built.
   to the display's resolution before the corners are fixed, so the fix is tuned against the
   final bake sizes. The high-priority candidates are decided first, as release planning asked,
   but built where the order puts them.
+- **Decided (2026-10-20): benchmarks don't run in CI.** Timings on shared runners are noisy,
+  and comparing them reliably is more machinery than it's worth for now. Regressions are caught
+  by running the benchmarks by hand at each step and comparing with the results in BENCHMARKS,
+  which are updated whenever a step makes Proteus faster. Running them in CI stays a candidate
+  in ROADMAP.
 
-### Step 1 — Benchmarks that run regularly
+### Step 1 — Baseline
 
-A baseline before any performance work, so every later step is measured against it.
+A baseline before any performance work, so every later step is measured against it: the
+results in BENCHMARKS, and the reference demo on a still screen.
 
-- [ ] The CPU-phases benchmark (`cargo run --release -p proteus-bench -- phases`) runs in CI and
-  catches regressions. The GPU benchmarks, native and in a browser, are run by hand at each
-  step.
 - [ ] CPU and GPU use with the reference demo sitting still are measured, on a low-end device or
   with Chrome's CPU throttling, as the baseline for step 2.
 
