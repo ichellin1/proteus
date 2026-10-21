@@ -309,16 +309,21 @@ To keep the results in a file:
 cargo run --release -p proteus-bench > results.md
 ```
 
-**In a browser:**
+**In a browser:** the page is published at <https://ichellin1.github.io/proteus/bench/>, so it
+runs on any machine with nothing to build. Each pull request's staging preview has its own, at
+`bench/` under the preview's address. To build and serve it yourself instead:
 
 ```bash
 make bench-browser
 ```
 
-builds the SDK if it has changed, and the Rust app, then builds the page and serves it. Open
-the address it prints, usually <http://localhost:4173>, click **Run**, and keep the tab in front
-until it's done: a hidden tab stops drawing. It prints the browser, GPU, pixel ratio, refresh
-rate and Proteus's adapter, then the tables, ready to copy.
+builds the SDK if it has changed, and the Rust app, then builds the page and serves it, usually
+at <http://localhost:4173>.
+
+Click **Run**, and keep the tab in front until it's done: a hidden tab stops drawing. It prints
+the browser, GPU, pixel ratio, refresh rate and Proteus's adapter, then the tables, ready to
+copy. To send results from your machine, send everything it printed, and say what the machine
+is.
 
 The page takes two settings, in its address, both optional:
 

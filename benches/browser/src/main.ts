@@ -47,8 +47,11 @@ const LARGE_LIMIT = 50_000;
  * counts would take minutes and risk crashing the tab.
  */
 const SLOW_LIMIT = 100;
-/** Where the run's progress is kept, so a crashed tab can resume. */
-const STORAGE_KEY = "proteus-bench";
+/**
+ * Where the run's progress is kept, so a crashed tab can resume. Kept apart
+ * for each path: the published page and every staging preview share an origin.
+ */
+const STORAGE_KEY = `proteus-bench:${location.pathname}`;
 /** The most frames timed at each count. */
 const FRAMES = 300;
 /** The most time spent timing one count, in milliseconds: the naive renderer gets slow. */

@@ -17,6 +17,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "benches/browser/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch: {}
 
@@ -86,6 +87,17 @@ jobs:
           cd crates/proteus-sdk-web/ts
           npm ci
           npx typedoc src/index.ts --excludeInternal --out ../../proteus-shell-web/www/api/ts
+
+      - name: The browser benchmark
+        # At bench/, beside the demo, for anyone to run on their own machine.
+        # It imports the TypeScript SDK built above, and the same app in Rust.
+        run: |
+          (cd crates/proteus-sdk-web/ts && npm run build)
+          wasm-pack build benches/browser/rust --target bundler
+          cd benches/browser
+          npm ci
+          npm run build
+          cp -r dist ../../crates/proteus-shell-web/www/bench
 
       - name: Disable Jekyll processing
         run: touch crates/proteus-shell-web/www/.nojekyll
