@@ -73,8 +73,10 @@ from ROADMAP's draft order; the steps are in the order they're built.
 A baseline before any performance work, so every later step is measured against it: the
 results in BENCHMARKS, and the reference demo on a still screen.
 
-- [ ] CPU and GPU use with the reference demo sitting still are measured, on a low-end device or
-  with Chrome's CPU throttling, as the baseline for step 2.
+- [x] CPU and GPU use with the reference demo sitting still are measured, on a low-end device or
+  with Chrome's CPU throttling, as the baseline for step 2. On a Lenovo Chromebook with Intel i3 processor, in
+  ChromeOS's Diagnostics, with the demo on WebGL2: 8 to 11% CPU with the demo still, against 3%
+  without it. It never overheated.
 - [ ] The browser benchmark is published beside the demo, at `/bench/` on GitHub Pages and in
   each pull request's staging preview, so people with other machines can run it and send the
   results. Its saved progress is kept apart for each address, since production and staging
