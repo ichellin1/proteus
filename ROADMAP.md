@@ -34,7 +34,8 @@ done in PLANNING, when it comes up, and its scope can change then.
 Sharper, faster and steadier rendering: the known limits in how Proteus draws. In the order
 they're built; PLANNING has the steps.
 
-- Benchmarks that run regularly and catch regressions.
+- The browser benchmark published beside the demo, and in each pull request's staging preview,
+  so it can be run on other people's machines.
 - Skip drawing a frame when nothing changed: no running transition, input, change to a
   component, pending bake or new video frame. Both hosts draw every frame today, even on a still
   screen, which may be why fans turn on with Proteus on low-end devices. A coarse check comes
@@ -190,6 +191,9 @@ Not yet placed in a release. Unordered within each area.
 
 ### Tests and tooling
 
+- Benchmarks that run in CI and catch regressions. Shared runners' timings are too noisy to
+  compare with stored results, so each change would be compared against its base branch on the
+  same runner.
 - Tests that run in a browser, for the web host itself.
 - Real runs of the native host on Linux and Windows, which CI tests but nobody has run by hand.
 
