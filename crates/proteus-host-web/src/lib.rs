@@ -76,7 +76,11 @@ use web_sys::HtmlCanvasElement;
 /// `Engine`, and `js_app` runs `Proteus` and a `Renderer` itself, calling
 /// JavaScript for `update`.
 pub(crate) trait FrameDriver {
-    fn frame(&mut self, dt_secs: f32, target: &wgpu::TextureView);
+    /// Runs a frame up to drawing it, and returns whether it looks different
+    /// from the last one; see `Engine::update`.
+    fn update(&mut self, dt_secs: f32) -> bool;
+    /// Draws the frame `update` prepared into `target`.
+    fn draw(&mut self, target: &wgpu::TextureView);
     fn resize(&mut self, viewport: Viewport);
     fn pointer_moved(&mut self, pos: Option<Vec2>);
     fn pointer_pressed(&mut self);
@@ -133,6 +137,11 @@ pub(crate) struct WebLoop<D: FrameDriver + 'static> {
     last_frame: Option<f64>,
     // Set when the WebGL context is lost; frames are skipped while it is.
     context_lost: bool,
+    // Draw the next frame even if nothing in it changed: the canvas is new,
+    // was resized, or its surface or context was lost, or a changed frame
+    // couldn't be drawn. A frame that isn't drawn leaves the canvas showing
+    // the last one.
+    must_draw: bool,
 }
 
 impl<D: FrameDriver + 'static> WebLoop<D> {
@@ -144,6 +153,7 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             inbox: Rc::default(),
             last_frame: None,
             context_lost: false,
+            must_draw: true,
         }
     }
 
@@ -174,6 +184,13 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         };
         self.last_frame = Some(ts_ms);
 
+        let changed = self.driver.update(dt);
+        if !changed && !self.must_draw {
+            return;
+        }
+        // Until it's presented, the canvas doesn't show this frame.
+        self.must_draw = true;
+
         let frame = match self.surface.surface().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
@@ -188,8 +205,9 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        self.driver.frame(dt, &view);
+        self.driver.draw(&view);
         frame.present();
+        self.must_draw = false;
     }
 
     /// Applies what the listeners recorded since the last frame. Pointer
@@ -219,6 +237,8 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             // returns has a time step of zero rather than the whole time it
             // was hidden.
             self.last_frame = None;
+            // The browser may have discarded the canvas's image meanwhile.
+            self.must_draw = true;
         }
         if inbox.context_lost {
             self.context_lost = true;
@@ -227,6 +247,7 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             self.surface.reconfigure();
             self.context_lost = false;
             self.last_frame = None;
+            self.must_draw = true;
         }
     }
 
@@ -236,6 +257,8 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         }
         let viewport = self.surface.resize(css_width, css_height);
         self.driver.resize(viewport);
+        // Resizing the canvas clears it.
+        self.must_draw = true;
     }
 }
 

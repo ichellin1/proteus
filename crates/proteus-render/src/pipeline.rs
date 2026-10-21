@@ -144,6 +144,11 @@ pub struct QuadPipeline {
 
     /// Sub-region allocator for `transition_atlas`. See `transition_atlas` module docs.
     transition_allocator: crate::transition_atlas::TransitionAtlasAllocator,
+
+    /// Counts the changes to what a draw reads other than the instances: the
+    /// projection, the atlases and the video texture. See
+    /// [`Self::content_version`].
+    content_version: std::sync::atomic::AtomicU64,
 }
 
 // `QuadPipeline` is an ECS resource, so that systems can bake textures.
@@ -434,6 +439,7 @@ impl QuadPipeline {
             transition_allocator: crate::transition_atlas::TransitionAtlasAllocator::new(
                 transition_atlas_size,
             ),
+            content_version: Default::default(),
         }
     }
 
@@ -441,11 +447,26 @@ impl QuadPipeline {
     // Per-frame API
     // ---------------------------------------------------------------------------
 
+    /// A number that changes whenever something a draw reads changes, other
+    /// than the instances: the projection, a texture written or baked into an
+    /// atlas, or a video frame. With the same instances and the same version,
+    /// a draw produces the same image, so a renderer can skip it.
+    pub fn content_version(&self) -> u64 {
+        self.content_version
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn content_changed(&self) {
+        self.content_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Uploads the view/projection matrix. Call it before [`Self::draw`]
     /// whenever the viewport changes.
     pub fn set_view_projection(&self, queue: &wgpu::Queue, matrix: glam::Mat4) {
         let data: [[f32; 4]; 4] = matrix.to_cols_array_2d();
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&data));
+        self.content_changed();
     }
 
     /// Uploads this frame's instances. Instances beyond `max_instances` are
@@ -530,6 +551,7 @@ impl QuadPipeline {
             width * height * 4,
         );
 
+        self.content_changed();
         let mut premultiplied = rgba_data.to_vec();
         crate::static_texture::premultiply_alpha(&mut premultiplied);
 
@@ -702,6 +724,7 @@ impl QuadPipeline {
         dest_layer: u32,
         pad: u32,
     ) {
+        self.content_changed();
         let (x, y, w, h) = region;
 
         // Without a gutter, `region`'s edge pixels in the atlas would be
@@ -876,6 +899,7 @@ impl QuadPipeline {
             );
             return;
         }
+        self.content_changed();
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.video_atlas,
@@ -1057,6 +1081,7 @@ impl QuadPipeline {
     /// This is called by [`init_video`], [`suspend_video`], and [`resume_video`]
     /// whenever the video texture is swapped for a different allocation.
     fn rebuild_atlas_bind_group(&mut self, device: &wgpu::Device) {
+        self.content_changed();
         let main_view = Self::create_main_atlas_view(&self.main_atlas);
         let transition_view = self.transition_atlas.create_view(&Default::default());
         let video_view = self.video_atlas.create_view(&Default::default());

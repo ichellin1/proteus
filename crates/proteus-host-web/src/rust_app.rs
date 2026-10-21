@@ -73,9 +73,13 @@ pub(crate) struct RustDriver<A: App, S: HostServices> {
 }
 
 impl<A: App, S: HostServices> FrameDriver for RustDriver<A, S> {
-    fn frame(&mut self, dt_secs: f32, target: &wgpu::TextureView) {
+    fn update(&mut self, dt_secs: f32) -> bool {
         self.engine
-            .frame(dt_secs, target, &mut self.app, &mut self.services);
+            .update(dt_secs, &mut self.app, &mut self.services)
+    }
+
+    fn draw(&mut self, target: &wgpu::TextureView) {
+        self.engine.draw(target);
     }
 
     fn resize(&mut self, viewport: Viewport) {

@@ -304,6 +304,11 @@ export interface ProteusConfigOverrides {
   frame?: {
     /** The longest time step one frame can take, so a tab returning from the background doesn't jump ahead. */
     dtClampSecs?: number;
+    /**
+     * Skip drawing a frame that would look the same as the last one, such as a still screen.
+     * `update` still runs every frame. Default `true`; `false` draws every frame.
+     */
+    skipIdleFrames?: boolean;
   };
   /** Image and texture loading. */
   resources?: {

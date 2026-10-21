@@ -132,6 +132,13 @@ Each frame the renderer collects every visible component's data into a list of
 instanced draw call**: a unit quad, drawn once per instance. However many components there
 are, the CPU issues one upload and one draw.
 
+A frame that would look the same as the last one isn't drawn. The renderer compares the
+instances with the last frame's, and `QuadPipeline` counts every change to what a draw reads
+besides them: the projection, the atlases and the video texture. If neither changed, the host
+skips acquiring, drawing and presenting a surface texture, and the screen keeps the last frame,
+so a still screen costs the GPU nothing. The app's `update` still runs every frame.
+`FrameConfig::skip_idle_frames` turns it off.
+
 ### One draw call, one shader
 
 One draw call means one pipeline, so one shader, `quad.wgsl`, draws every component and every
@@ -344,7 +351,7 @@ own player.
 
 **A host is a crate, not a trait.** Each owns its platform's window or canvas, GPU surface,
 event loop, input, and viewport, and provides its own `run` function, which creates an
-`Engine` and calls `Engine::frame` each frame. What hosts share is in the layers below them:
+`Engine` and calls `Engine::update` each frame, then `Engine::draw` if the frame changed. What hosts share is in the layers below them:
 `proteus-gpu` sets up the device the same way on every platform, and `proteus-runtime` runs the
 frame. `proteus-host-winit` reads assets from a directory. `proteus-host-web` can only fetch
 asynchronously, so `PreloadedHostServices` downloads a list of assets before the app starts and
@@ -422,7 +429,8 @@ These are known shortcomings, each planned to be addressed in a future release:
   every component is a rectangle.
 - Per-pixel work in the shader, rather than the number of components, limits large,
   overlapping scenes.
-- Every frame collects and uploads every component, even those that haven't changed.
+- Every frame collects every component, even those that haven't changed, and uploads them all
+  when any has.
 - Text and baked components are baked at logical-pixel resolution, so they are slightly soft
   on high-density displays.
 - Text is a single line.

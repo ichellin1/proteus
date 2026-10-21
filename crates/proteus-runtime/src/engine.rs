@@ -7,8 +7,13 @@
 //! Proteus::tick(dt)          input, channel requests, transitions, then callbacks
 //! App::update(frame, dt)     the app reacts to this frame's events
 //! Proteus::refresh_cascades  recompute visibility and opacity after update's changes
-//! Renderer::render(target)   bake pending text and images, then draw
+//! Renderer::prepare          bake pending text and images, collect, upload if changed
+//! Renderer::draw(target)     draw, if the frame changed
 //! ```
+//!
+//! [`Engine::frame`] runs all of it and always draws. A host that skips
+//! frames that didn't change calls [`Engine::update`] and, only when it
+//! returns `true`, acquires a surface texture and calls [`Engine::draw`].
 //!
 //! `App::update` runs after the tick so it can react to what just happened,
 //! such as a click or a finished transition. A transition it starts begins on
@@ -81,7 +86,7 @@ impl Engine {
     }
 
     /// Runs one frame and draws it into `target`, a surface texture the host
-    /// has acquired.
+    /// has acquired, whether or not anything changed.
     ///
     /// 1. Clamps `dt` to [`crate::config::FrameConfig::dt_clamp_secs`].
     /// 2. Calls [`Proteus::tick`]: input, channel requests, transitions, then callbacks.
@@ -99,6 +104,15 @@ impl Engine {
         app: &mut dyn App,
         services: &mut dyn HostServices,
     ) {
+        self.update(dt, app, services);
+        self.draw(target);
+    }
+
+    /// Runs one frame up to drawing it: steps 1 to 4 of [`Engine::frame`],
+    /// then [`Renderer::prepare`]. Returns whether the frame looks different
+    /// from the last one, and so needs [`Engine::draw`]; see
+    /// [`Renderer::prepare`].
+    pub fn update(&mut self, dt: f32, app: &mut dyn App, services: &mut dyn HostServices) -> bool {
         let dt = dt.min(self.dt_clamp_secs);
         self.proteus.tick(dt);
 
@@ -112,7 +126,13 @@ impl Engine {
         }
 
         self.proteus.refresh_cascades();
-        self.renderer.render(&mut self.proteus, target);
+        self.renderer.prepare(&mut self.proteus)
+    }
+
+    /// Draws the frame [`Engine::update`] prepared into `target`, a surface
+    /// texture the host has acquired.
+    pub fn draw(&mut self, target: &wgpu::TextureView) {
+        self.renderer.draw(&mut self.proteus, target);
     }
 
     /// Reports a new drawable area to the renderer and the app. The host

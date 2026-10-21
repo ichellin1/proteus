@@ -96,11 +96,11 @@ struct JsDriver {
 }
 
 impl FrameDriver for JsDriver {
-    /// Runs one frame in the same order as `Engine::frame`, calling the
+    /// Runs one frame in the same order as `Engine::update`, calling the
     /// JavaScript `update` in place of `App::update`. The `Proteus` borrow is
     /// released before `update` runs, since `update` may call back into the
     /// app.
-    fn frame(&mut self, dt_secs: f32, target: &wgpu::TextureView) {
+    fn update(&mut self, dt_secs: f32) -> bool {
         self.proteus.borrow_mut().tick(dt_secs);
 
         if let Some(update) = &self.update {
@@ -110,7 +110,11 @@ impl FrameDriver for JsDriver {
         }
 
         self.proteus.borrow_mut().refresh_cascades();
-        self.renderer.render(&mut self.proteus.borrow_mut(), target);
+        self.renderer.prepare(&mut self.proteus.borrow_mut())
+    }
+
+    fn draw(&mut self, target: &wgpu::TextureView) {
+        self.renderer.draw(&mut self.proteus.borrow_mut(), target);
     }
 
     fn resize(&mut self, viewport: Viewport) {

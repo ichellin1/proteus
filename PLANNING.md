@@ -84,10 +84,10 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 ### Step 2 — Skip idle frames
 
-- [ ] A frame in which nothing changed isn't drawn: no running transition, input, change to a
+- [x] A frame in which nothing changed isn't drawn: no running transition, input, change to a
   component, pending bake or new video frame. A coarse check is enough; it doesn't wait for
   step 4's tracking.
-- [ ] A test for each of those shows the frame is drawn when it changes.
+- [x] A test for each of those shows the frame is drawn when it changes.
 - [ ] Step 1's still-screen measurement is taken again, and shows the difference.
 
 ### Step 3 — Decide the corners approach
