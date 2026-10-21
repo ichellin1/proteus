@@ -120,8 +120,10 @@ crashes can resume, with the crash noted.
 
 ## Results
 
-All on a MacBook Air (Apple M4, 10 CPU cores, 24 GB) running macOS 26.5.2, in October 2026. The
-Air has no fan, so a long run can slow as it warms; each table is from one run.
+Natively, in Chrome and in Safari, on a MacBook Air (Apple M4, 10 CPU cores, 24 GB) running
+macOS 26.5.2, in October 2026. The Air has no fan, so a long run can slow as it warms; each
+table is from one run. Then on a low-end machine: in Chrome on a two-year-old Chromebook, with
+WebGL2.
 
 ### Native
 
@@ -271,6 +273,54 @@ Canvas 2D and the naive WebGL2 renderer were skipped once they were slower than 
 | 25,000 | 17 (95) | 17 (23) | skipped | 23 (28) | 17 (23) | 17 (27) |
 | 50,000 | 17 (169) | 17 (34) | skipped | 49 (62) | 17 (30) | 17 (46) |
 | 100,000 | 17 (364) | 17 (83) | skipped | 111 (134) | 32 (61) | 19 (55) |
+
+### A Chromebook
+
+Chrome 154 on ChromeOS, on a two-year-old Chromebook with Intel's integrated graphics
+(Alder Lake GT2). Its browser has no WebGPU adapter, so Proteus draws with WebGL2, as on most
+low-end devices. 60 Hz display, pixel ratio 1.25. Frame interval medians in milliseconds, with
+the p99 in brackets wherever it's more than 15% above the median; 16.7 is the display's cap.
+
+**Small components:**
+
+| Components | Proteus (TypeScript) | Proteus (Rust) | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
+|---:|---:|---:|---:|---:|---:|
+| 100 to 5,000 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
+| 10,000 | 16.7 | 16.7 | 16.7 (33.4) | 16.7 | 16.7 |
+| 25,000 | 16.7 | 16.7 | 49.9 (116.6) | 16.7 | 16.7 |
+| 50,000 | 16.7 | 16.7 | 116.6 (166.7) | 16.7 | 16.7 |
+| 100,000 | 16.6 (22.2) | 17.0 (20.3) | skipped | 33.3 (50.0) | 16.7 |
+
+Canvas 2D was skipped once it was slower than 100 ms a frame.
+
+**Large components.** Proteus was skipped once it was slower than 100 ms a frame:
+
+| Components | Proteus (TypeScript) | Proteus (Rust) | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
+| 1,000 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
+| 5,000 | 33.2 | 32.9 (40.4) | 16.7 | 16.7 | 16.7 |
+| 10,000 | 50.3 (67.9) | 50.2 (68.5) | 33.3 (83.3) | 16.7 (33.4) | 16.7 (33.4) |
+| 25,000 | 134.1 | 133.5 | 83.3 (200.0) | 50.0 (83.4) | 50.0 (66.7) |
+| 50,000 | skipped | skipped | 200.0 (250.1) | 116.6 (150.0) | 100.0 (116.8) |
+
+**Moving components.** CSS was skipped once it was slower than 100 ms a frame, and Canvas 2D at
+100,000:
+
+| Components | Proteus (TypeScript) | Proteus (Rust) | CSS | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
+| 1,000 | 16.7 | 16.7 | 16.7 (33.3) | 16.7 | 16.7 | 16.7 |
+| 5,000 | 16.7 (20.8) | 16.7 (20.4) | 83.4 (250.0) | 16.7 | 16.7 | 16.7 |
+| 10,000 | 16.7 (29.2) | 16.7 (22.4) | 283.4 (533.5) | 33.3 (50.0) | 16.7 | 16.7 |
+| 25,000 | 16.7 (70.5) | 16.7 (23.8) | skipped | 66.6 (150.0) | 16.7 | 16.7 |
+| 50,000 | 16.8 (163.3) | 17.0 (61.0) | skipped | 150.0 (183.4) | 16.7 (33.4) | 16.7 (33.4) |
+| 100,000 | 23.1 (385.8) | 32.0 (135.2) | skipped | skipped | 49.9 | 33.3 (50.1) |
+
+What holds on the Mac holds here. Proteus keeps the display's full rate with 100,000 small
+components, and with 50,000 always moving, where CSS fell to 12 fps at 5,000. Per-pixel work
+limits it sooner: with large components it falls below 60 fps at 5,000, and at 25,000 takes
+134 ms a frame, against 50 for the hand-written WebGL2 renderers.
 
 ## Running them
 
