@@ -207,6 +207,9 @@ pub async fn start(canvas_id: String, max_instances: u32) -> Result<(), JsValue>
     let mut config = ProteusConfig::web();
     config.render.clear_color = [0.0, 0.0, 0.0, 1.0];
     config.memory.max_instances = max_instances;
+    // Draw every frame, as the other renderers do. A still scene would
+    // otherwise be drawn once, and its frame rate would mean nothing.
+    config.frame.skip_idle_frames = false;
     let services = proteus_host_web::PreloadedHostServices::fetch("", &[]).await;
     proteus_host_web::run(Bench::default(), &canvas_id, config, services).await
 }
