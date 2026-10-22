@@ -148,10 +148,25 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 [Design note](./docs/design/shader-fast-path.md)
 
-- [ ] Plain components, with no image, border, shadow or glow, exit `fs_main` early, without the
-  texture sample, border or crossfade. Measured against step 1's baseline.
+- [x] Plain components, with no image, border, shadow or glow, exit `fs_main` early, without the
+  texture sample, border or crossfade. Measured against step 1's baseline. The early exit alone
+  saved only 8%: measured natively, the full shader's size, not its work, is most of the cost,
+  since the GPU sets aside room for its most demanding path whichever path a pixel takes. So
+  plain components get a pipeline of their own; see the decision below. The values passed from
+  the vertex stage are `flat` where they're the same at every corner, which is all but the
+  pixel's position.
+- **Decided (2026-10-22): a second pipeline for plain components,** a solid color with no
+  texture, border, shadow, glow or crossfade, drawn in runs in drawing order, a draw call each.
+  A run gets its own call only if it covers at least a 64 × 64 area or has 32 components, so a
+  button's background between labels doesn't cost one; past 256 runs, everything is drawn in
+  one call. It draws exactly the same pixels, checked by a test, and
+  `RenderConfig::plain_pipeline` turns it off. Natively, the large scene's frame went from
+  108.7 to 51.6 ms at 100,000, from 25.7 to 11.8 at 25,000 and from 10.3 to 5.3 at 10,000; the
+  small and moving scenes didn't change.
 - [ ] A component that only shows video, with no border, shadow or glow, takes a fast path too,
-  sampling the video texture and nothing else. Measured with the demo's video full screen; the
+  sampling the video texture and nothing else. Built: it takes the full shader's shorter path,
+  for any component with no border, shadow, glow or crossfade, which samples its one texture and
+  nothing else. Still to measure. Measured with the demo's video full screen; the
   saving is expected to be small next to the cost of getting frames to the GPU, which v0.5.0
   addresses.
 - [ ] Pixels a later opaque component covers aren't shaded, with a depth buffer, measured on the

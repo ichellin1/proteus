@@ -281,6 +281,12 @@ export interface ProteusConfigOverrides {
       | "mailbox";
     /** Which GPU to prefer on a device that has more than one. */
     powerPreference?: "none" | "lowPower" | "highPerformance";
+    /**
+     * Draw plain components, a solid color with no texture, border, shadow, glow or crossfade,
+     * with a second, smaller shader, which the GPU runs faster. The two draw the same pixels.
+     * Default `true`; `false` draws everything with the one full shader, in one draw call.
+     */
+    plainPipeline?: boolean;
   };
   /** GPU memory: atlas and instance-buffer sizes. */
   memory?: {

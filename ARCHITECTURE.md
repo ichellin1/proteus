@@ -128,8 +128,9 @@ frame, which is why the engine recomputes them after `update`.
 ## Rendering
 
 The renderer keeps every visible component's data as a list of `QuadInstance`s on the GPU, and
-draws them all with **one instanced draw call**: a unit quad, drawn once per instance. However
-many components there are, the CPU issues one draw.
+draws them with **instanced draw calls**: a unit quad, drawn once per instance. However many
+components there are, the CPU issues one draw, or a few when the plain pipeline draws some of
+them; see below.
 
 The list is kept from frame to frame by an `InstanceCache` (`proteus-ui`), which uses
 `bevy_ecs`'s change detection to redo only the components whose data changed, and their
@@ -146,11 +147,11 @@ skips acquiring, drawing and presenting a surface texture, and the screen keeps 
 so a still screen costs the GPU nothing. The app's `update` still runs every frame.
 `FrameConfig::skip_idle_frames` turns it off.
 
-### One draw call, one shader
+### One shader, and a plain pipeline
 
-One draw call means one pipeline, so one shader draws every component and every
-feature. A component's features are switched on or off by its instance data, not by choosing
-a different shader:
+One shader, in named parts under `proteus-render/src/shaders/quad/`, draws every component and
+every feature. A component's features are switched on or off by its instance data, not by
+choosing a different shader:
 
 - **The shape** is a rounded rectangle drawn with a signed distance field, antialiased over
   one pixel.
@@ -171,10 +172,23 @@ drawn; beyond that, the topmost are dropped with a warning.
 **What this costs.** The CPU's work per frame grows with the number of components only in
 collecting and uploading their data, which is what makes Proteus fast with many components;
 [BENCHMARKS.md](./BENCHMARKS.md) measures it against one draw call per component. The cost is
-on the GPU: every pixel of every component runs the whole shader, including the texture
-sample and the checks for a border and a crossfade, even for a plain shape. With large
-components overlapping many times, this per-pixel work, not the CPU, is what limits the frame
-rate.
+on the GPU, in the pixels: with large components overlapping many times, per-pixel work, not
+the CPU, is what limits the frame rate. A component with no border, shadow, glow or crossfade
+takes a shorter path through the shader, but that saves little, since a GPU sets aside room
+for a shader's most demanding path whichever path a pixel takes, and the full shader's size
+limits how many pixels it runs at once.
+
+**The plain pipeline.** So a second pipeline, with a small shader of its own (`vs_plain` and
+`fs_plain`), draws **plain components**: a solid color with no texture, border, shadow, glow or
+crossfade, which are most of a UI's area: backgrounds, cards, buttons, tiles, bars and
+scrims. It draws exactly the pixels the full shader would, and at 100,000 large components
+natively it takes half the time. The instances are drawn in runs, in drawing order, a draw
+call each, switching pipelines between them; a run of plain components gets its own only if it
+covers at least a 64 × 64 area in all, or has at least 32 components, and the rest are drawn
+by the full pipeline with their neighbors. A frame that would need more than 256 runs is drawn
+in one call by the full pipeline. `RenderConfig::plain_pipeline` turns it off, drawing
+everything with the full shader in one call; baking into the atlases always uses the full
+shader.
 
 ### The instance and its limits
 

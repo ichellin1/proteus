@@ -50,6 +50,8 @@ pub struct RenderDto {
     pub present_mode: Option<String>,
     #[serde(default)]
     pub power_preference: Option<String>,
+    #[serde(default)]
+    pub plain_pipeline: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -144,6 +146,9 @@ impl ProteusConfigDto {
             }
             if let Some(p) = &r.power_preference {
                 config.render.power_preference = power_preference(p)?;
+            }
+            if let Some(v) = r.plain_pipeline {
+                config.render.plain_pipeline = v;
             }
         }
         if let Some(m) = &self.memory {
