@@ -17,6 +17,6 @@ These are working notes for contributors, not guides; for using Proteus, see the
 | [context-loss](./context-loss.md) | Recovering a lost GPU context on the web |
 | [3d](./3d.md) | 3D, and geometry other than rectangles |
 | [texture-restoration](./texture-restoration.md) | Evicting, moving and releasing textures still in use |
-| [video](./video.md) | Playback controls, several videos, and video in splits and merges |
+| [video](./video.md) | Copying frames to the GPU, punch-through video, playback controls, several videos, and video in splits and merges |
 | [many-transitions](./many-transitions.md) | Starting many transitions in one call from TypeScript |
 | [composite-bake](./composite-bake.md) | Transitioning a flattened subtree as one quad |
