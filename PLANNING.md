@@ -88,7 +88,10 @@ results in BENCHMARKS, and the reference demo on a still screen.
   component, pending bake or new video frame. A coarse check is enough; it doesn't wait for
   step 4's tracking.
 - [x] A test for each of those shows the frame is drawn when it changes.
-- [ ] Step 1's still-screen measurement is taken again, and shows the difference.
+- [x] Step 1's still-screen measurement is taken again, and shows the difference. On the same
+  Chromebook, with the demo still: 4 to 5% CPU, down from 8 to 11%, against 3% without the
+  demo, and the CPU at 30 °C rather than 32. What's left is `update`, the tick and collecting the instances, which still run every
+  frame; step 4 reduces the collecting.
 
 ### Step 3 — Decide the corners approach
 
@@ -118,6 +121,10 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 - [ ] Plain components, with no image, border, shadow or glow, exit `fs_main` early, without the
   texture sample, border or crossfade. Measured against step 1's baseline.
+- [ ] A component that only shows video, with no border, shadow or glow, takes a fast path too,
+  sampling the video texture and nothing else. Measured with the demo's video full screen; the
+  saving is expected to be small next to the cost of getting frames to the GPU, which v0.5.0
+  addresses.
 - [ ] Pixels a later opaque component covers aren't shaded, with a depth buffer, measured on the
   large scene against the early exit and on the small scene to check it costs nothing there.
 - [ ] BENCHMARKS updated, checking whether frame times even out and whether Safari's tab still

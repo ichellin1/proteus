@@ -79,14 +79,20 @@ they're built; PLANNING has the steps.
 
 ### v0.5.0 — Video
 
+- Copying frames from a `<video>` element straight to the GPU, instead of reading them back
+  through a canvas.
+  [Design note](./docs/design/video.md#copying-frames-straight-to-the-gpu-on-the-web)
+- Punch-through video, as an alternative to drawing video on a component: the platform shows
+  the video itself, in a region the app leaves clear, with no frames copied at all. For full
+  screen video on low-end devices, and for protected (DRM) video, which can't be drawn into a
+  texture. It gives up most transitions and effects on the video. The web first, with a
+  `<video>` element; native hosts after.
+  [Design note](./docs/design/video.md#punch-through-video)
 - A video handle with playback controls (play, pause, seek, loop, volume, an "ended" event),
   designed around bringing your own player.
   [Design note](./docs/design/video.md#a-video-handle-with-playback-controls)
 - Several videos at once, each with its own texture. A new video replaces the old one today.
   [Design note](./docs/design/video.md#several-videos-at-once)
-- Copying frames from a `<video>` element straight to the GPU, instead of reading them back
-  through a canvas.
-  [Design note](./docs/design/video.md#copying-frames-straight-to-the-gpu-on-the-web)
 - Video that keeps playing through splits and merges, which today show a frozen frame.
   [Design note](./docs/design/video.md#live-video-during-splits-and-merges)
 
