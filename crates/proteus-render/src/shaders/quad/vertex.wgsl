@@ -46,45 +46,57 @@ struct VertexOut {
     // Always centered regardless of anchor setting.
     // When shadow is active, fragments outside the main shape (in the shadow area)
     // have |local_pos| > half_size; the shadow SDF handles them correctly.
+    // The only value that varies across the quad, so the only one interpolated.
     @location(0)                     local_pos:       vec2<f32>,
+
+    // The rest are the same at every vertex of an instance, so they're `flat`:
+    // the GPU passes them to each fragment as they are, rather than
+    // interpolating them, which would give the same values for more work.
+
     // Half-extents of the original (un-inflated) component in pixels.
-    @location(1)                     half_size:       vec2<f32>,
+    @location(1)  @interpolate(flat) half_size:       vec2<f32>,
 
     // Raw UV parameters — .xy = offset, .zw = scale — passed through from the
     // instance buffer without baking in.uv.  The fragment shader derives the
     // actual sample coordinate from local_pos + half_size so that shadow/glow
     // inflation does not distort textured content (video, BakedText).
-    @location(2)                     uv_params:       vec4<f32>,  // primary (to-state)
-    @location(3)                     base_uv_params:  vec4<f32>,  // from-state crossfade
+    @location(2)  @interpolate(flat) uv_params:       vec4<f32>,  // primary (to-state)
+    @location(3)  @interpolate(flat) base_uv_params:  vec4<f32>,  // from-state crossfade
 
     // Fragment-stage per-instance data
-    @location(4)                     color:           vec4<f32>,
-    @location(5)                     opacity:         f32,
-    @location(6)                     corner_radii:    vec4<f32>, // tl, tr, br, bl
-    @location(7)                     crossfade_t:     f32,
-    @location(8)                     border_width:    f32,
-    @location(9)                     border_color:    vec4<f32>,
-    @location(10)                    border_offset:   f32,
-    @location(11) @interpolate(flat) atlas_page:      u32,  // flat — no interpolation for integers
+    @location(4)  @interpolate(flat) color:           vec4<f32>,
+    @location(5)  @interpolate(flat) opacity:         f32,
+    @location(6)  @interpolate(flat) corner_radii:    vec4<f32>, // tl, tr, br, bl
+    @location(7)  @interpolate(flat) crossfade_t:     f32,
+    @location(8)  @interpolate(flat) border_width:    f32,
+    @location(9)  @interpolate(flat) border_color:    vec4<f32>,
+    @location(10) @interpolate(flat) border_offset:   f32,
+    @location(11) @interpolate(flat) atlas_page:      u32,
 
     // Drop shadow / glow
-    @location(12)                    shadow_params:   vec4<f32>, // (offset_x, offset_y, softness, spread)
-    @location(13)                    shadow_color:    vec4<f32>, // RGBA; alpha == 0.0 = no shadow
+    @location(12) @interpolate(flat) shadow_params:   vec4<f32>, // (offset_x, offset_y, softness, spread)
+    @location(13) @interpolate(flat) shadow_color:    vec4<f32>, // RGBA; alpha == 0.0 = no shadow
 
-    @location(14) @interpolate(flat) base_atlas_page: u32,  // flat — which atlas base_uv samples from
+    @location(14) @interpolate(flat) base_atlas_page: u32,  // which atlas base_uv samples from
 }
 
-@vertex
-fn vs_main(in: VertexIn) -> VertexOut {
-    var out: VertexOut;
+// Where an instance's vertex goes: its clip-space position, and its position
+// relative to the component's center, in pixels, with the component's half
+// size. Both pipelines' vertex stages place quads with it, so they line up
+// exactly.
+struct Placed {
+    clip_position: vec4<f32>,
+    local_pos:     vec2<f32>,
+    half_size:     vec2<f32>,
+}
+
+fn place(in: VertexIn) -> Placed {
+    var out: Placed;
 
     // Unpack packed fields.
     let inst_size          = in.inst_size_rot_scale.xy;
     let inst_rotation      = in.inst_size_rot_scale.z;
     let inst_scale         = in.inst_size_rot_scale.w;
-    let inst_opacity       = in.inst_border_offset_opacity.y;
-    let inst_crossfade_t   = in.inst_crossfade_bw.x;
-    let inst_border_width  = in.inst_crossfade_bw.y;
 
     let shadow_offset_x = in.inst_shadow_params.x;
     let shadow_offset_y = in.inst_shadow_params.y;
@@ -147,6 +159,17 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // takes over.
     out.local_pos = centered;
     out.half_size = half;
+    return out;
+}
+
+@vertex
+fn vs_main(in: VertexIn) -> VertexOut {
+    var out: VertexOut;
+    let placed = place(in);
+    out.clip_position = placed.clip_position;
+    out.local_pos     = placed.local_pos;
+    out.half_size     = placed.half_size;
+
 
     // Pass raw UV parameters through to the fragment stage.  The fragment shader
     // derives the sample coordinate from local_pos + half_size rather than from
@@ -156,10 +179,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.base_uv_params = in.inst_base_uv;  // .xy = base_offset, .zw = base_scale
 
     out.color         = in.inst_color;
-    out.opacity       = inst_opacity;
+    out.opacity       = in.inst_border_offset_opacity.y;
     out.corner_radii  = in.inst_corner_radii;
-    out.crossfade_t   = inst_crossfade_t;
-    out.border_width  = inst_border_width;
+    out.crossfade_t   = in.inst_crossfade_bw.x;
+    out.border_width  = in.inst_crossfade_bw.y;
     out.border_color  = in.inst_border_color;
     out.border_offset = in.inst_border_offset_opacity.x;
     out.atlas_page    = in.inst_atlas_page;

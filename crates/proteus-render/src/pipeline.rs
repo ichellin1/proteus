@@ -149,6 +149,71 @@ pub struct QuadPipeline {
     /// projection, the atlases and the video texture. See
     /// [`Self::content_version`].
     content_version: std::sync::atomic::AtomicU64,
+
+    // The plain pipeline, for plain components; see `set_plain_pipeline`.
+    // `None` while it's off.
+    plain_pipeline: Option<wgpu::RenderPipeline>,
+    // What the plain pipeline is built from, kept so it can be built later.
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    surface_format: wgpu::TextureFormat,
+    // The uploaded instances in drawing order, as runs drawn by one pipeline
+    // or the other: `true` for the plain pipeline. One full run while the
+    // plain pipeline is off.
+    runs: Vec<(std::ops::Range<u32>, bool)>,
+}
+
+/// A run of plain instances gets a draw call with the plain pipeline if it
+/// covers at least this many square pixels in all, or has at least
+/// [`MIN_PLAIN_COUNT`] instances. Smaller ones are drawn by the full pipeline
+/// with their neighbors, which draws them the same, since a draw call costs
+/// more than it saves on a few small components.
+const MIN_PLAIN_AREA: f32 = 64.0 * 64.0;
+const MIN_PLAIN_COUNT: usize = 32;
+/// The most runs drawn separately. A frame that would need more is drawn in
+/// one call by the full pipeline.
+const MAX_RUNS: usize = 256;
+
+/// Whether the plain pipeline draws `instance` exactly as the full one does: a
+/// solid color, sampling the main atlas's white block, with no border, shadow,
+/// glow or crossfade. `fs_plain` in the shader assumes it.
+fn is_plain(instance: &QuadInstance) -> bool {
+    instance.uv_offset == QuadPipeline::WHITE_PIXEL_UV_OFFSET
+        && instance.uv_scale == QuadPipeline::WHITE_PIXEL_UV_SCALE
+        && instance.atlas_page == 0
+        && instance.border_width <= 0.0
+        && instance.shadow_color[3] <= 0.0
+        && instance.crossfade_t <= 0.0
+}
+
+/// Splits `instances`, in drawing order, into runs for one pipeline or the
+/// other: `true` for the plain pipeline. Runs of plain instances too small to
+/// be worth a draw call join the full pipeline's, and if there would be more
+/// than [`MAX_RUNS`], everything is one full run.
+fn plain_runs(instances: &[QuadInstance]) -> Vec<(std::ops::Range<u32>, bool)> {
+    let mut runs: Vec<(std::ops::Range<u32>, bool)> = Vec::new();
+    let mut i = 0;
+    while i < instances.len() {
+        let start = i;
+        let plain = is_plain(&instances[i]);
+        let mut area = 0.0;
+        while i < instances.len() && is_plain(&instances[i]) == plain {
+            let [w, h] = instances[i].size;
+            let scale = instances[i].scale;
+            area += (w * scale * h * scale).abs();
+            i += 1;
+        }
+        let plain = plain && (i - start >= MIN_PLAIN_COUNT || area >= MIN_PLAIN_AREA);
+        let range = start as u32..i as u32;
+        match runs.last_mut() {
+            Some((last, last_plain)) if *last_plain == plain => last.end = range.end,
+            _ => runs.push((range, plain)),
+        }
+    }
+    if runs.len() > MAX_RUNS {
+        runs = vec![(0..instances.len() as u32, false)];
+    }
+    runs
 }
 
 // `QuadPipeline` is an ECS resource, so that systems can bake textures.
@@ -291,13 +356,19 @@ impl QuadPipeline {
         // targets the swapchain (`surface_format`), but baking into `main_atlas`
         // (always `Rgba8Unorm`, see `create_atlases`) needs a second pipeline
         // sharing everything else (shader, layout, vertex/instance buffers).
-        let pipeline =
-            Self::build_render_pipeline(device, &shader, &pipeline_layout, surface_format);
+        let pipeline = Self::build_render_pipeline(
+            device,
+            &shader,
+            &pipeline_layout,
+            surface_format,
+            ("vs_main", "fs_main"),
+        );
         let atlas_pipeline = Self::build_render_pipeline(
             device,
             &shader,
             &pipeline_layout,
             wgpu::TextureFormat::Rgba8Unorm,
+            ("vs_main", "fs_main"),
         );
 
         // --- Static geometry buffers ---
@@ -440,6 +511,11 @@ impl QuadPipeline {
                 transition_atlas_size,
             ),
             content_version: Default::default(),
+            plain_pipeline: None,
+            shader,
+            pipeline_layout,
+            surface_format,
+            runs: Vec::new(),
         }
     }
 
@@ -488,6 +564,34 @@ impl QuadPipeline {
                 bytemuck::cast_slice(&instances[..count]),
             );
         }
+        self.split_runs(&instances[..count]);
+    }
+
+    /// Turns the plain pipeline on or off. On, plain components, a solid color
+    /// with no texture, border, shadow, glow or crossfade, are drawn by a
+    /// second, smaller shader, which the GPU runs faster; off, everything is
+    /// drawn by the full shader. Both draw the same pixels. It takes effect
+    /// from the next upload.
+    pub fn set_plain_pipeline(&mut self, device: &wgpu::Device, on: bool) {
+        self.plain_pipeline = on.then(|| {
+            Self::build_render_pipeline(
+                device,
+                &self.shader,
+                &self.pipeline_layout,
+                self.surface_format,
+                ("vs_plain", "fs_plain"),
+            )
+        });
+        self.runs = vec![(0..self.instance_count, false)];
+    }
+
+    /// Splits the uploaded `instances` into runs for each pipeline.
+    fn split_runs(&mut self, instances: &[QuadInstance]) {
+        self.runs = if self.plain_pipeline.is_some() {
+            plain_runs(instances)
+        } else {
+            vec![(0..instances.len() as u32, false)]
+        };
     }
 
     /// Uploads only `ranges` of `instances`, which are the whole frame's: the
@@ -512,6 +616,8 @@ impl QuadPipeline {
                 bytemuck::cast_slice(&instances[range.start..end]),
             );
         }
+        let count = instances.len().min(max);
+        self.split_runs(&instances[..count]);
     }
 
     /// Draws the uploaded instances in `pass`. Call it after
@@ -526,7 +632,28 @@ impl QuadPipeline {
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..6, 0, 0..self.instance_count);
+        let Some(plain_pipeline) = &self.plain_pipeline else {
+            pass.draw_indexed(0..6, 0, 0..self.instance_count);
+            return;
+        };
+        // Run by run, in drawing order, switching pipelines between them. The
+        // bind groups and buffers are the same for both.
+        let mut plain_set = false;
+        for (range, plain) in &self.runs {
+            let range = range.start..range.end.min(self.instance_count);
+            if range.is_empty() {
+                continue;
+            }
+            if *plain != plain_set {
+                pass.set_pipeline(if *plain {
+                    plain_pipeline
+                } else {
+                    &self.pipeline
+                });
+                plain_set = *plain;
+            }
+            pass.draw_indexed(0..6, 0, range);
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -1018,29 +1145,32 @@ impl QuadPipeline {
     // Internal helpers
     // ---------------------------------------------------------------------------
 
-    /// Builds a quad render pipeline targeting `color_format`. Used to create
+    /// Builds a quad render pipeline targeting `color_format`, with the
+    /// shader's vertex and fragment entry points `entry_points`. Used to create
     /// both `pipeline` (swapchain format) and `atlas_pipeline` (`main_atlas`'s
     /// `Rgba8Unorm` format) from identical shader/layout/vertex state — see
     /// the field doc comments on `QuadPipeline::atlas_pipeline` for why two
-    /// pipelines are needed at all.
+    /// pipelines are needed at all — and the plain pipeline, with the plain
+    /// entry points.
     fn build_render_pipeline(
         device: &wgpu::Device,
         shader: &wgpu::ShaderModule,
         pipeline_layout: &wgpu::PipelineLayout,
         color_format: wgpu::TextureFormat,
+        entry_points: (&str, &str),
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("quad_pipeline"),
             layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: Some("vs_main"),
+                entry_point: Some(entry_points.0),
                 buffers: &[quad_vertex_layout(), QuadInstance::buffer_layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(entry_points.1),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
                     // Premultiplied alpha: src + (1 - src_alpha) * dst. `fs_main`
@@ -1209,5 +1339,83 @@ impl QuadPipeline {
         });
 
         (main_atlas, transition_atlas)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytemuck::Zeroable;
+
+    use super::*;
+    use crate::pack_atlas_page;
+
+    fn plain(size: f32) -> QuadInstance {
+        let mut q = QuadInstance::zeroed();
+        q.size = [size, size];
+        q.scale = 1.0;
+        q
+    }
+
+    fn bordered() -> QuadInstance {
+        let mut q = plain(50.0);
+        q.border_width = 2.0;
+        q
+    }
+
+    #[test]
+    fn only_a_solid_color_with_no_effects_is_plain() {
+        assert!(is_plain(&plain(10.0)));
+        let mut q = plain(10.0);
+        q.uv_scale = [0.5, 0.5];
+        assert!(!is_plain(&q), "a texture");
+        let mut q = plain(10.0);
+        q.atlas_page = pack_atlas_page(crate::ATLAS_SELECTOR_VIDEO, 0);
+        assert!(!is_plain(&q), "video");
+        assert!(!is_plain(&bordered()), "a border");
+        let mut q = plain(10.0);
+        q.shadow_color = [0.0, 0.0, 0.0, 0.5];
+        assert!(!is_plain(&q), "a shadow or glow");
+        let mut q = plain(10.0);
+        q.crossfade_t = 0.5;
+        assert!(!is_plain(&q), "a crossfade");
+    }
+
+    #[test]
+    fn runs_keep_drawing_order_and_skip_small_plain_runs() {
+        // A large plain one, two small ones, then a large one again, each
+        // between bordered ones.
+        let instances = [
+            plain(100.0),
+            bordered(),
+            plain(8.0),
+            plain(8.0),
+            bordered(),
+            plain(80.0),
+        ];
+        assert_eq!(
+            plain_runs(&instances),
+            vec![(0..1, true), (1..5, false), (5..6, true)],
+            "the small ones join the full pipeline's run"
+        );
+    }
+
+    #[test]
+    fn many_small_plain_components_are_a_run() {
+        let instances: Vec<QuadInstance> = (0..MIN_PLAIN_COUNT).map(|_| plain(4.0)).collect();
+        assert_eq!(
+            plain_runs(&instances),
+            vec![(0..MIN_PLAIN_COUNT as u32, true)]
+        );
+    }
+
+    #[test]
+    fn too_many_runs_are_drawn_as_one() {
+        let instances: Vec<QuadInstance> = (0..MAX_RUNS + 2)
+            .map(|i| if i % 2 == 0 { plain(100.0) } else { bordered() })
+            .collect();
+        assert_eq!(
+            plain_runs(&instances),
+            vec![(0..instances.len() as u32, false)]
+        );
     }
 }
