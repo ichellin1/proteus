@@ -141,7 +141,7 @@ fn headless_quad_renders_to_expected_color() {
 // through that hole — not the glow's own color.
 //
 // Checks the `shadow_alpha *= smoothstep(-1.0, 1.0, dist)` interior mask in
-// `quad.wgsl`. Without it, `shadow_alpha` stays roughly constant across the
+// the shader's `fragment.wgsl`. Without it, `shadow_alpha` stays roughly constant across the
 // component's whole interior, not just near the edge. That only shows where
 // the texture is transparent; under opaque content it's hidden.
 #[test]
@@ -252,8 +252,8 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
 }
 
 // Checks that the main-atlas page is used all the way through: by
-// `write_to_main_atlas`'s `origin.z`, the array bind group, and `quad.wgsl`'s
-// `textureSampleLevel(main_atlas, ..., layer, 0.0)`.
+// `write_to_main_atlas`'s `origin.z`, the array bind group, and the shader's
+// `sample_atlas`, in `fill.wgsl`.
 //
 // Writes solid red into page 1 at (8, 8), leaving page 0 at that same (x, y) untouched (still
 // zero-initialized, i.e. transparent). Renders two quads with *identical* UVs side by side —

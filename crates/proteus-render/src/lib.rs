@@ -42,4 +42,15 @@ pub use texture_registry::{
 pub use transition_atlas::{TransitionAllocId, TransitionAtlasAllocator, TransitionRegion};
 
 /// The WGSL source for the instanced quad shader, embedded at compile time.
-pub const QUAD_SHADER_SRC: &str = include_str!("shaders/quad.wgsl");
+///
+/// It's written in named parts, in `shaders/quad/`, joined here into one
+/// shader: the bindings, the vertex stage, the shape, the fill, the effects,
+/// and the fragment stage that draws each pixel from them.
+pub const QUAD_SHADER_SRC: &str = concat!(
+    include_str!("shaders/quad/bindings.wgsl"),
+    include_str!("shaders/quad/vertex.wgsl"),
+    include_str!("shaders/quad/shape.wgsl"),
+    include_str!("shaders/quad/fill.wgsl"),
+    include_str!("shaders/quad/effects.wgsl"),
+    include_str!("shaders/quad/fragment.wgsl"),
+);

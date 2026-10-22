@@ -36,7 +36,7 @@ pub fn decode_image(bytes: &[u8]) -> Result<DecodedImage, String> {
 /// is straight-alpha RGBA, a multiple of 4 bytes long.
 ///
 /// The main atlas is stored premultiplied so that bilinear filtering is
-/// correct where alpha changes; see `unpremultiply` in `quad.wgsl`.
+/// correct where alpha changes; see `unpremultiply` in the shader's `fill.wgsl`.
 /// [`crate::QuadPipeline::write_to_main_atlas`] calls it on every upload, so
 /// callers pass straight alpha. Pixels with alpha 0 or 255 are unchanged.
 pub fn premultiply_alpha(rgba: &mut [u8]) {

@@ -136,9 +136,13 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 ### Step 5 — Split `quad.wgsl`
 
-- [ ] `quad.wgsl` is split into named parts with its output unchanged.
-- [ ] The test that checks the shader's atlas-page layout against Rust's survives the shader
-  being reformatted.
+- [x] `quad.wgsl` is split into named parts with its output unchanged. Six parts in
+  `crates/proteus-render/src/shaders/quad/`, joined into one shader at compile time: the
+  bindings, the vertex stage, the shape, the fill, the effects, and `fs_main`, which now reads
+  as those steps in turn. A scene with every feature rendered identically, byte for byte,
+  before and after.
+- [x] The test that checks the shader's atlas-page layout against Rust's survives the shader
+  being reformatted: it parses the shader with naga and compares the constants' values.
 
 ### Step 6 — The shader fast path
 
