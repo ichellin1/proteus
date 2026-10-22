@@ -183,6 +183,9 @@ await mount("proteus", {
     render: { clearColor: [0, 0, 0, 1] },
     // Room for the largest scene: the default draws at most 4096 a frame.
     memory: { maxInstances },
+    // Draw every frame, as the other renderers do. A still scene would
+    // otherwise be drawn once, and its frame rate would mean nothing.
+    frame: { skipIdleFrames: false },
   },
 });
 await rust.start("proteus-rust", maxInstances);

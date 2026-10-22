@@ -40,8 +40,8 @@ proteus-render                                            the pipeline, the shad
 
 These are published. The rest of the workspace isn't: `proteus-demo`, the reference demo,
 written once as an `App`; `proteus-shell-native` and `proteus-shell-web`, which hand the demo
-to a host; the examples under `examples/`; the benchmarks under `benches/`; and
-`proteus-docs`, which tests the guides' code and links.
+to a host; the examples under `examples/`; the benchmarks under `benches/`; apps for checking
+rendering by eye under `checks/`; and `proteus-docs`, which tests the guides' code and links.
 
 ## Components
 
@@ -127,14 +127,21 @@ frame, which is why the engine recomputes them after `update`.
 
 ## Rendering
 
-Each frame the renderer collects every visible component's data into a list of
-`QuadInstance`s, copies the list to the GPU in one upload, and draws them all with **one
-instanced draw call**: a unit quad, drawn once per instance. However many components there
-are, the CPU issues one upload and one draw.
+The renderer keeps every visible component's data as a list of `QuadInstance`s on the GPU, and
+draws them all with **one instanced draw call**: a unit quad, drawn once per instance. However
+many components there are, the CPU issues one draw.
 
-A frame that would look the same as the last one isn't drawn. The renderer compares the
-instances with the last frame's, and `QuadPipeline` counts every change to what a draw reads
-besides them: the projection, the atlases and the video texture. If neither changed, the host
+The list is kept from frame to frame by an `InstanceCache` (`proteus-ui`), which uses
+`bevy_ecs`'s change detection to redo only the components whose data changed, and their
+children, and reports which ranges of the list changed, so only those are uploaded. The drawing
+order is worked out again, with every instance, only when a component is added or removed, the
+hierarchy changes, or a `z` changes, or when most components changed at once.
+`collect_instances` works the same list out from scratch, and the cache's tests check it always
+matches.
+
+A frame that would look the same as the last one isn't drawn. The cache reports whether any
+instance changed, and `QuadPipeline` counts every change to what a draw reads besides them: the
+projection, the atlases and the video texture. If neither changed, the host
 skips acquiring, drawing and presenting a surface texture, and the screen keeps the last frame,
 so a still screen costs the GPU nothing. The app's `update` still runs every frame.
 `FrameConfig::skip_idle_frames` turns it off.
@@ -171,7 +178,8 @@ rate.
 
 ### The instance and its limits
 
-A `QuadInstance` is 160 bytes, so 10,000 components upload about 1.6 MB a frame. Its fields are
+A `QuadInstance` is 164 bytes, so 10,000 components that all change upload about 1.6 MB a frame.
+Each corner has its own radius, as a 16-bit float, so that four fit where one did. Its fields are
 packed into **all 16 vertex attribute slots**, the most wgpu's default limits allow, natively
 and in WebGL2: two for the unit quad and fourteen for the instance. New per-component data has
 to be packed into existing fields, as `atlas_page` already packs the atlas selector and the page
@@ -429,8 +437,6 @@ These are known shortcomings, each planned to be addressed in a future release:
   every component is a rectangle.
 - Per-pixel work in the shader, rather than the number of components, limits large,
   overlapping scenes.
-- Every frame collects every component, even those that haven't changed, and uploads them all
-  when any has.
 - Text and baked components are baked at logical-pixel resolution, so they are slightly soft
   on high-density displays.
 - Text is a single line.

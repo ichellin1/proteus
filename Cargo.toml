@@ -20,6 +20,7 @@ members = [
     "examples/menu/rust",
     "benches/native",
     "benches/browser/rust",
+    "checks/corners",
 ]
 
 # What `cargo build`, `run`, `test` and `clippy` use without `-p` or
@@ -42,6 +43,7 @@ default-members = [
     "examples/stepper/rust",
     "examples/menu/rust",
     "benches/native",
+    "checks/corners",
 ]
 
 [workspace.package]
@@ -73,6 +75,9 @@ proteus-demo = { path = "crates/proteus-demo", version = "0.1.1" }
 # "webgl" is required for the WebGL2 backend on wasm — without it, web builds are WebGPU-only
 wgpu = { version = "29", features = ["wgsl", "webgl"] }
 bytemuck = { version = "1", features = ["derive"] }
+# 16-bit floats, for the instance's corner radii. wgpu's shader compiler
+# already depends on it.
+half = "2"
 glam = "0.29"
 etagere = "0.3"  # shelf-based 2D atlas packing (used by TextureRegistry)
 fontdue = "0.8"  # pure-Rust font rasterization — no system font dependencies

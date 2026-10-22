@@ -39,7 +39,10 @@
 //! update; `Proteus::refresh_cascades`, which works out each component's
 //! visibility and opacity from its parents' (the tick works them out once
 //! too, so a frame pays for them twice); and `collect_instances`, which turns
-//! the components into what the GPU draws.
+//! every component into what the GPU draws, from scratch. Then it times what
+//! the renderer does instead, `InstanceCache::update`, which redoes only the
+//! components that changed: on a still frame, and on a frame where 1% of the
+//! components moved.
 //!
 //! The results are printed as Markdown tables, with the GPU and platform they
 //! ran on, ready to record.
@@ -267,16 +270,18 @@ fn measure(
     }
 }
 
-/// Times `tick`, `refresh_cascades` and `collect_instances` on `count` still
-/// components, with no GPU: the median of [`FRAMES`] frames each, in
-/// milliseconds.
-fn phases(count: usize) -> [f64; 3] {
+/// Times `tick`, `refresh_cascades`, `collect_instances` and
+/// `InstanceCache::update` on `count` still components, then
+/// `InstanceCache::update` with 1% of them moving, with no GPU: the median of
+/// [`FRAMES`] frames each, in milliseconds.
+fn phases(count: usize) -> [f64; 5] {
     let mut proteus = proteus_sdk::Proteus::new();
     let mut random = Random(0x9e37_79b9_7f4a_7c15);
-    for _ in 0..count {
-        proteus.component(ComponentSpec::new(random.geometry(Scenario::Large)));
-    }
-    let mut times: [Vec<Duration>; 3] = Default::default();
+    let handles: Vec<Handle> = (0..count)
+        .map(|_| proteus.component(ComponentSpec::new(random.geometry(Scenario::Large))))
+        .collect();
+    let mut cache = proteus_ui::InstanceCache::default();
+    let mut times: [Vec<Duration>; 5] = Default::default();
     for i in 0..WARM_UP + FRAMES {
         let start = Instant::now();
         proteus.tick(DT);
@@ -285,11 +290,33 @@ fn phases(count: usize) -> [f64; 3] {
         let cascaded = Instant::now();
         let instances = proteus_ui::collect_instances(proteus.world_mut());
         let collected = Instant::now();
+        cache.update(proteus.world_mut());
+        let updated = Instant::now();
         assert_eq!(instances.len(), count);
+        assert_eq!(cache.instances().len(), count);
         if i >= WARM_UP {
             times[0].push(ticked - start);
             times[1].push(cascaded - ticked);
             times[2].push(collected - cascaded);
+            times[3].push(updated - collected);
+        }
+    }
+    // Every frame, a different 1% of the components move a pixel.
+    let moving = (count / 100).max(1);
+    for i in 0..WARM_UP + FRAMES {
+        for handle in handles.iter().cycle().skip(i * moving).take(moving) {
+            let mut geometry = proteus.get(*handle).expect("alive").geometry;
+            geometry.position.x += 1.0;
+            handle
+                .set_declared_geometry(&mut proteus, geometry)
+                .expect("alive");
+        }
+        proteus.tick(DT);
+        proteus.refresh_cascades();
+        let start = Instant::now();
+        cache.update(proteus.world_mut());
+        if i >= WARM_UP {
+            times[4].push(start.elapsed());
         }
     }
     times.map(|mut t| summary(&mut t).0)
@@ -307,11 +334,16 @@ fn main() {
             })
             .unwrap_or_else(|| COUNTS.to_vec());
         println!("### phases (no GPU; medians)\n");
-        println!("| Components | tick (ms) | refresh_cascades (ms) | collect_instances (ms) |");
-        println!("|---:|---:|---:|---:|");
+        println!(
+            "| Components | tick (ms) | refresh_cascades (ms) | collect_instances (ms) \
+             | cache, still (ms) | cache, 1% moving (ms) |"
+        );
+        println!("|---:|---:|---:|---:|---:|---:|");
         for count in counts {
-            let [tick, cascades, collect] = phases(count);
-            println!("| {count} | {tick:.2} | {cascades:.2} | {collect:.2} |");
+            let [tick, cascades, collect, still, moving] = phases(count);
+            println!(
+                "| {count} | {tick:.2} | {cascades:.2} | {collect:.2} | {still:.2} | {moving:.2} |"
+            );
         }
         return;
     }

@@ -175,6 +175,9 @@ Not yet placed in a release. Unordered within each area.
 - Evicting, moving and releasing textures still in use, with a way to restore them.
   [Design note](./docs/design/texture-restoration.md)
 - Animated images, such as GIFs and sprite sheets, with every frame packed into the atlas.
+- Mipmaps for the atlases, so text, images and bakes drawn smaller than their texture don't
+  shimmer or alias. Costs a third more atlas memory, a pass after each bake, and padding so
+  atlas regions don't bleed into each other at the smaller levels.
 
 ### Transitions and components
 
@@ -201,5 +204,8 @@ Not yet placed in a release. Unordered within each area.
   compare with stored results, so each change would be compared against its base branch on the
   same runner.
 - Tests that run in a browser, for the web host itself.
+- The browser benchmark noticing when the browser resets the GPU, and marking that measurement,
+  rather than timing frames that no longer draw anything. Safari resets it during the largest
+  large-component measurements.
 - Real runs of the native host on Linux and Windows, which CI tests but nobody has run by hand.
 

@@ -490,6 +490,30 @@ impl QuadPipeline {
         }
     }
 
+    /// Uploads only `ranges` of `instances`, which are the whole frame's: the
+    /// rest is the same as the last upload. Ranges past `max_instances` are
+    /// cut off, as [`Self::upload_instances`] drops instances there.
+    pub fn upload_instance_ranges(
+        &mut self,
+        queue: &wgpu::Queue,
+        instances: &[QuadInstance],
+        ranges: &[std::ops::Range<usize>],
+    ) {
+        let max = self.max_instances as usize;
+        let stride = std::mem::size_of::<QuadInstance>();
+        for range in ranges {
+            let end = range.end.min(max);
+            if range.start >= end {
+                continue;
+            }
+            queue.write_buffer(
+                &self.instance_buffer,
+                (range.start * stride) as wgpu::BufferAddress,
+                bytemuck::cast_slice(&instances[range.start..end]),
+            );
+        }
+    }
+
     /// Draws the uploaded instances in `pass`. Call it after
     /// [`Self::upload_instances`].
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

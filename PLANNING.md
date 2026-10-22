@@ -95,19 +95,44 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 ### Step 3 — Decide the corners approach
 
-- [ ] One of the approaches in the [design note](./docs/design/shared-bake-corners.md) is
+- [x] One of the approaches in the [design note](./docs/design/shared-bake-corners.md) is
   decided, before step 4 changes the instance: a mask per shared bake, a radius per corner, or
   mipmaps for bakes. What it needs from the instance, if anything, is recorded here.
+- **Decided (2026-10-22): a radius per corner.** A slice at one of the source's corners gets
+  that corner's radius and its other corners none, and the shader draws the curve at whatever
+  size the slice is drawn, as it already does for a whole component. A mask would be minified
+  like the bake, and alias the same way; mipmaps cost a third more atlas memory, a mip pass
+  after each bake, and padding against bleeding between atlas regions, so they stay a
+  candidate for minified content in general. **The instance needs** four corner radii in place
+  of `corner_radius`, packed as `Float16x4`, four more bytes; it fits without a new attribute
+  slot by pairing `border_offset`, alone in slot 12, with `opacity`, which frees slot 6 for the
+  radii. Step 4 owns the final layout.
+- **Decided (2026-10-22): the source is baked with square corners.** `checks/corners` shows a
+  second problem besides the aliasing: a corner slice crossfades between two corner shapes,
+  the curve baked into the source's image and the target's own, which the shader draws. With a
+  radius per corner, a piece has one curve for its whole transition, going from its corner of
+  the source to the target's, and the shader clips both images with it. A curve baked into the
+  image would show through once the shader's is tighter, so the bake has none. Still open, for
+  step 8: a source with a border, whose border baked square would be square inside at the
+  corners.
 
 ### Step 4 — Per-frame work
 
-- [ ] Each frame collects, sorts and uploads only the components that changed, and keeps the
+- [x] Each frame collects, sorts and uploads only the components that changed, and keeps the
   drawing order until a `z` or the hierarchy changes.
   [Design note](./docs/design/per-frame-work.md)
-- [ ] If rarely used fields, such as shadow and glow, move out of `QuadInstance`, the attribute
-  slots it frees are left for steps 6 and 8.
-- [ ] Step 2's check for a changed frame uses this tracking.
-- [ ] Measured against step 1's baseline.
+- [x] If rarely used fields, such as shadow and glow, move out of `QuadInstance`, the attribute
+  slots it frees are left for steps 6 and 8. They stay: uploading only what changed makes the
+  instance's size matter less, and step 3's radii fit without a new slot. The instance now has
+  four corner radii as `Float16x4` in slot 6, and `opacity` beside `border_offset` in slot 12:
+  164 bytes. The shader shapes each corner by its own radius; every component still gives all
+  four the same one, until step 8.
+- [x] Step 2's check for a changed frame uses this tracking.
+- [x] Measured against step 1's baseline, and BENCHMARKS updated. Natively, a still frame of
+  100,000 small components takes 1.3 ms of CPU, against 7.9 before; the moving scene is
+  unchanged. In the browsers, half a million small components now draw at the display's full
+  rate, and a million take 24 to 30 ms a frame, against 85 to 89 before: as fast as the
+  hand-batched renderer in Safari, and 1.7 times slower in Chrome, against 3 and 5 before.
 
 ### Step 5 — Split `quad.wgsl`
 
@@ -140,7 +165,9 @@ results in BENCHMARKS, and the reference demo on a still screen.
 ### Step 8 — Rounded corners on baked slices
 
 - [ ] With step 3's approach, a slice's corners stay round while it is drawn smaller than its
-  bake. [Design note](./docs/design/shared-bake-corners.md)
+  bake, and change size as one curve, with no crossfade between two corner shapes. Checked with
+  `cargo run --release -p check-corners`, on a fill, an image and a border.
+  [Design note](./docs/design/shared-bake-corners.md)
 
 ### Any time — Top-left coordinates in Rust
 

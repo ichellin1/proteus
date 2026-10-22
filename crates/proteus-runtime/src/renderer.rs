@@ -4,10 +4,10 @@
 //!
 //! 1. bakes pending [`Text`](proteus_ui::Text) into the atlas;
 //! 2. decodes and bakes pending [`Image`](proteus_ui::Image)s;
-//! 3. collects every visible component's data (position, size, colors,
-//!    texture coordinates and so on) with [`proteus_ui::collect_instances`];
-//! 4. compares it with the last frame's, and copies it to the GPU in one go if
-//!    it changed.
+//! 3. brings every visible component's data (position, size, colors, texture
+//!    coordinates and so on) up to date with a [`proteus_ui::InstanceCache`],
+//!    which redoes only the components that changed;
+//! 4. copies what changed to the GPU.
 //!
 //! Then [`Renderer::draw`] draws every component with one draw call into the
 //! given target. A frame that would look the same as the last one, because
@@ -28,7 +28,7 @@
 
 use proteus_render::{GpuContext, QuadPipeline};
 use proteus_sdk::Proteus;
-use proteus_ui::{collect_instances, TransitionAtlasSize};
+use proteus_ui::{InstanceCache, InstanceChanges, TransitionAtlasSize};
 
 use crate::bake;
 use crate::config::{FontSource, ProteusConfig};
@@ -40,8 +40,8 @@ pub struct Renderer {
     font_atlas: proteus_render::FontAtlas,
     config: ProteusConfig,
     viewport: Viewport,
-    /// The instances last uploaded, to compare the next frame's with.
-    uploaded: Vec<proteus_render::QuadInstance>,
+    /// Every component's instances, kept from frame to frame.
+    instances: InstanceCache,
     /// [`QuadPipeline::content_version`] when the last frame was prepared, or
     /// `None` before the first.
     content_version: Option<u64>,
@@ -118,7 +118,7 @@ impl Renderer {
             font_atlas,
             config,
             viewport,
-            uploaded: Vec::new(),
+            instances: InstanceCache::default(),
             content_version: None,
         }
     }
@@ -150,8 +150,8 @@ impl Renderer {
         self.draw(proteus, target);
     }
 
-    /// Bakes pending text and images, collects every visible component, and
-    /// uploads them if they changed. Returns whether this frame would look
+    /// Bakes pending text and images, brings every visible component's
+    /// instances up to date, and uploads the ones that changed. Returns whether this frame would look
     /// different from the last one prepared: the components' data changed, or
     /// a texture or the projection did. Always `true` with
     /// [`FrameConfig::skip_idle_frames`](crate::config::FrameConfig::skip_idle_frames)
@@ -174,12 +174,17 @@ impl Renderer {
             lazy_load,
         );
 
-        let instances = collect_instances(world);
+        let changes = self.instances.update(world);
         let mut pipeline = world.resource_mut::<QuadPipeline>();
-        let instances_changed = instances != self.uploaded;
-        if instances_changed {
-            pipeline.upload_instances(&gpu.queue, &instances);
-            self.uploaded = instances;
+        let instances_changed = changes != InstanceChanges::None;
+        match changes {
+            InstanceChanges::None => {}
+            InstanceChanges::Ranges(ranges) => {
+                pipeline.upload_instance_ranges(&gpu.queue, self.instances.instances(), &ranges);
+            }
+            InstanceChanges::All => {
+                pipeline.upload_instances(&gpu.queue, self.instances.instances());
+            }
         }
         // Read after the bakes and the upload, which may change it.
         let version = pipeline.content_version();
