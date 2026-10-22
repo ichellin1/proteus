@@ -1,13 +1,19 @@
 //! [`Renderer`]: draws a frame.
 //!
-//! Each frame it:
+//! Each frame, [`Renderer::prepare`]:
 //!
 //! 1. bakes pending [`Text`](proteus_ui::Text) into the atlas;
 //! 2. decodes and bakes pending [`Image`](proteus_ui::Image)s;
 //! 3. collects every visible component's data (position, size, colors,
 //!    texture coordinates and so on) with [`proteus_ui::collect_instances`];
-//! 4. copies that data to the GPU in one go, then draws every component with
-//!    one draw call into the given target.
+//! 4. compares it with the last frame's, and copies it to the GPU in one go if
+//!    it changed.
+//!
+//! Then [`Renderer::draw`] draws every component with one draw call into the
+//! given target. A frame that would look the same as the last one, because
+//! neither the components' data nor any texture changed, needn't be drawn:
+//! `prepare` says whether it changed, so a host can skip acquiring and
+//! presenting a surface texture as well.
 //!
 //! The shader is the same for every component; only the data differs.
 //! Components are drawn in the order collected, so later ones are on top. At
@@ -34,6 +40,11 @@ pub struct Renderer {
     font_atlas: proteus_render::FontAtlas,
     config: ProteusConfig,
     viewport: Viewport,
+    /// The instances last uploaded, to compare the next frame's with.
+    uploaded: Vec<proteus_render::QuadInstance>,
+    /// [`QuadPipeline::content_version`] when the last frame was prepared, or
+    /// `None` before the first.
+    content_version: Option<u64>,
 }
 
 impl Renderer {
@@ -107,6 +118,8 @@ impl Renderer {
             font_atlas,
             config,
             viewport,
+            uploaded: Vec::new(),
+            content_version: None,
         }
     }
 
@@ -129,9 +142,26 @@ impl Renderer {
             );
     }
 
-    /// Draws one frame into `target`, a surface texture the host has acquired.
-    /// It advances nothing: [`Proteus::tick`] has already run.
+    /// Draws one frame into `target`, a surface texture the host has acquired:
+    /// [`Renderer::prepare`], then [`Renderer::draw`], whether or not the
+    /// frame changed. It advances nothing: [`Proteus::tick`] has already run.
     pub fn render(&mut self, proteus: &mut Proteus, target: &wgpu::TextureView) {
+        self.prepare(proteus);
+        self.draw(proteus, target);
+    }
+
+    /// Bakes pending text and images, collects every visible component, and
+    /// uploads them if they changed. Returns whether this frame would look
+    /// different from the last one prepared: the components' data changed, or
+    /// a texture or the projection did. Always `true` with
+    /// [`FrameConfig::skip_idle_frames`](crate::config::FrameConfig::skip_idle_frames)
+    /// off.
+    ///
+    /// When it returns `false`, the last frame drawn is still correct, and the
+    /// host can skip [`Renderer::draw`]. A host that skips a changed frame,
+    /// because it couldn't acquire a surface texture, must draw the next one
+    /// whatever this returns.
+    pub fn prepare(&mut self, proteus: &mut Proteus) -> bool {
         let gpu = proteus.world().resource::<GpuContext>().clone();
         let world = proteus.world_mut();
 
@@ -145,11 +175,25 @@ impl Renderer {
         );
 
         let instances = collect_instances(world);
-        if !instances.is_empty() {
-            world
-                .resource_mut::<QuadPipeline>()
-                .upload_instances(&gpu.queue, &instances);
+        let mut pipeline = world.resource_mut::<QuadPipeline>();
+        let instances_changed = instances != self.uploaded;
+        if instances_changed {
+            pipeline.upload_instances(&gpu.queue, &instances);
+            self.uploaded = instances;
         }
+        // Read after the bakes and the upload, which may change it.
+        let version = pipeline.content_version();
+        let content_changed = self.content_version != Some(version);
+        self.content_version = Some(version);
+
+        instances_changed || content_changed || !self.config.frame.skip_idle_frames
+    }
+
+    /// Draws the instances [`Renderer::prepare`] uploaded into `target`, a
+    /// surface texture the host has acquired, clearing it first.
+    pub fn draw(&mut self, proteus: &mut Proteus, target: &wgpu::TextureView) {
+        let gpu = proteus.world().resource::<GpuContext>().clone();
+        let world = proteus.world();
 
         let mut encoder = gpu
             .device
@@ -173,10 +217,243 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !instances.is_empty() {
-                world.resource::<QuadPipeline>().draw(&mut pass);
-            }
+            // Draws nothing when there are no instances.
+            world.resource::<QuadPipeline>().draw(&mut pass);
         }
         gpu.queue.submit([encoder.finish()]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::{Vec2, Vec3, Vec4};
+    use proteus_sdk::{ComponentSpec, Easing, Handle, QuadState, TransitionConfig};
+    use proteus_ui::{StyleOverride, Text};
+
+    use super::*;
+    use crate::app::gpu_tests::headless_device;
+
+    const DT: f32 = 1.0 / 60.0;
+
+    /// A renderer drawing into a texture, run a frame at a time as a host
+    /// runs it.
+    struct Scene {
+        proteus: Proteus,
+        renderer: Renderer,
+        target: wgpu::TextureView,
+    }
+
+    impl Scene {
+        fn new(config: ProteusConfig) -> Option<Self> {
+            let Some((device, queue)) = pollster::block_on(headless_device()) else {
+                eprintln!("proteus-runtime: no GPU adapter available — skipping");
+                return None;
+            };
+            let mut proteus = Proteus::new();
+            let renderer = Renderer::new(
+                &mut proteus,
+                &device,
+                &queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                Viewport::new(Vec2::new(64.0, 64.0), 1.0),
+                config,
+            );
+            let target = device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: 64,
+                        height: 64,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default());
+            Some(Self {
+                proteus,
+                renderer,
+                target,
+            })
+        }
+
+        /// A 20 × 20 component at the center, which turns red under the
+        /// pointer.
+        fn square(&mut self) -> Handle {
+            self.proteus.component(
+                ComponentSpec::new(QuadState {
+                    size: Vec2::new(20.0, 20.0),
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                    ..Default::default()
+                })
+                .hover(StyleOverride {
+                    color: Some(Vec4::new(1.0, 0.0, 0.0, 1.0)),
+                    ..Default::default()
+                }),
+            )
+        }
+
+        /// Runs a frame as a host does, and returns whether it was drawn.
+        fn frame(&mut self) -> bool {
+            self.proteus.tick(DT);
+            self.proteus.refresh_cascades();
+            let changed = self.renderer.prepare(&mut self.proteus);
+            if changed {
+                self.renderer.draw(&mut self.proteus, &self.target);
+            }
+            changed
+        }
+
+        /// Runs frames until one isn't drawn, as on a still screen.
+        fn settle(&mut self) {
+            for _ in 0..10 {
+                if !self.frame() {
+                    return;
+                }
+            }
+            panic!("the screen never went still");
+        }
+    }
+
+    #[test]
+    fn a_still_frame_isnt_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        scene.square();
+        assert!(scene.frame(), "the first frame is drawn");
+        scene.settle();
+        assert!(!scene.frame());
+        assert!(!scene.frame());
+    }
+
+    #[test]
+    fn every_frame_of_a_running_transition_is_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        let square = scene.square();
+        scene.settle();
+        square
+            .animate_to(
+                &mut scene.proteus,
+                QuadState {
+                    position: Vec3::new(10.0, 0.0, 0.0),
+                    size: Vec2::new(20.0, 20.0),
+                    color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                    ..Default::default()
+                },
+                TransitionConfig {
+                    duration: 0.2,
+                    delay: 0.0,
+                    easing: Easing::Linear,
+                },
+            )
+            .unwrap();
+        // 0.2 seconds is 12 frames; the transition starts on the next.
+        for i in 0..12 {
+            assert!(scene.frame(), "frame {i} of the transition is drawn");
+        }
+        scene.settle();
+    }
+
+    #[test]
+    fn input_that_changes_a_style_is_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        scene.square();
+        scene.settle();
+        scene.proteus.pointer_moved(Some(Vec2::ZERO));
+        assert!(scene.frame(), "the hover style is drawn");
+    }
+
+    #[test]
+    fn input_that_changes_nothing_isnt_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        scene.square();
+        scene.settle();
+        // Over the empty corner, away from the square.
+        scene.proteus.pointer_moved(Some(Vec2::new(25.0, 25.0)));
+        scene.proteus.pointer_pressed();
+        assert!(!scene.frame());
+        scene.proteus.pointer_released();
+        assert!(!scene.frame());
+    }
+
+    #[test]
+    fn a_changed_component_is_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        let square = scene.square();
+        scene.settle();
+        square.set_opacity(&mut scene.proteus, 0.5).unwrap();
+        assert!(scene.frame());
+        scene.settle();
+        square.destroy(&mut scene.proteus).unwrap();
+        assert!(scene.frame(), "a component removed is drawn too");
+    }
+
+    #[test]
+    fn text_that_bakes_is_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        let square = scene.square();
+        scene.settle();
+        square
+            .set_text(&mut scene.proteus, Text::new("Hi", 12.0))
+            .unwrap();
+        assert!(scene.frame());
+        assert!(square.baked_text_size(&scene.proteus).is_some());
+    }
+
+    #[test]
+    fn a_new_video_frame_is_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        scene.square();
+        let video = scene.proteus.create_video();
+        let pixels = [255u8; 4 * 4 * 4];
+        assert!(video.upload_frame(&mut scene.proteus, 4, 4, &pixels));
+        scene.settle();
+        // The same size reuses the texture, so only its pixels change.
+        assert!(video.upload_frame(&mut scene.proteus, 4, 4, &pixels));
+        assert!(scene.frame());
+    }
+
+    #[test]
+    fn a_resize_is_drawn() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        scene.square();
+        scene.settle();
+        scene.renderer.resize(
+            &mut scene.proteus,
+            Viewport::new(Vec2::new(32.0, 32.0), 1.0),
+        );
+        assert!(scene.frame());
+    }
+
+    #[test]
+    fn with_skip_idle_frames_off_every_frame_is_drawn() {
+        let mut config = ProteusConfig::default();
+        config.frame.skip_idle_frames = false;
+        let Some(mut scene) = Scene::new(config) else {
+            return;
+        };
+        scene.square();
+        for _ in 0..5 {
+            assert!(scene.frame());
+        }
     }
 }

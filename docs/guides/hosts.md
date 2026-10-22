@@ -18,7 +18,8 @@ Rust apps, except where it says otherwise.
 ## The app
 
 A Rust app implements `App`. The host calls `setup` once, before the first frame, and `update`
-every frame after the frame's events and callbacks have run, and before it draws:
+every frame after the frame's events and callbacks have run, and before it draws. A frame that
+would look the same as the last one isn't drawn, but `update` still runs:
 
 #### Rust
 

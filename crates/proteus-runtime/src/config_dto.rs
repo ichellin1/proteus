@@ -77,6 +77,8 @@ pub struct AtlasDto {
 pub struct FrameDto {
     #[serde(default)]
     pub dt_clamp_secs: Option<f32>,
+    #[serde(default)]
+    pub skip_idle_frames: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -163,6 +165,9 @@ impl ProteusConfigDto {
         if let Some(f) = &self.frame {
             if let Some(v) = f.dt_clamp_secs {
                 config.frame.dt_clamp_secs = v;
+            }
+            if let Some(v) = f.skip_idle_frames {
+                config.frame.skip_idle_frames = v;
             }
         }
         if let Some(r) = &self.resources {

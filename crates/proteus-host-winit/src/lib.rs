@@ -12,7 +12,8 @@
 //! ```
 //!
 //! It handles the window, the frame loop, pointer input, resizing and changes of
-//! display scale. Assets are read from a directory ([`DirHostServices`]).
+//! display scale. A frame that would look the same as the last one isn't drawn
+//! or presented; the loop then waits for the display's next frame instead. Assets are read from a directory ([`DirHostServices`]).
 //! Keyboard input is not handled yet, and the surface is not recreated after
 //! the app is suspended, which only happens on mobile platforms.
 
@@ -33,7 +34,7 @@ use proteus_runtime::{
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 // ---------------------------------------------------------------------------
@@ -246,6 +247,12 @@ struct Running {
     engine: Engine,
     services: Box<dyn HostServices>,
     last_frame: Instant,
+    /// Draw the next frame even if nothing in it changed: the surface is new,
+    /// was resized or lost, or a changed frame couldn't be drawn.
+    must_draw: bool,
+    /// Whether the last frame was presented. Presenting waits for the display,
+    /// which paces the loop; a frame that wasn't has to wait for it instead.
+    presented: bool,
 }
 
 impl Running {
@@ -256,12 +263,33 @@ impl Running {
         self.gpu.resize(width, height);
         self.engine
             .resize(viewport_for(&self.window, width, height));
+        self.must_draw = true;
+    }
+
+    /// When the next frame is due: one display refresh after the last, at 60
+    /// Hz if the display doesn't say.
+    fn next_frame_due(&self) -> Instant {
+        let millihertz = self
+            .window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .filter(|&mhz| mhz > 0)
+            .unwrap_or(60_000);
+        self.last_frame + Duration::from_secs_f64(1000.0 / f64::from(millihertz))
     }
 
     fn render(&mut self, app: &mut dyn App) {
         // `Engine::frame` clamps this; the host only measures it.
         let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
+        self.presented = false;
+
+        let changed = self.engine.update(dt, app, self.services.as_mut());
+        if !changed && !self.must_draw {
+            return;
+        }
+        // Until it's presented, the screen doesn't show this frame.
+        self.must_draw = true;
 
         let frame = match self.gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
@@ -281,8 +309,10 @@ impl Running {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        self.engine.frame(dt, &view, app, self.services.as_mut());
+        self.engine.draw(&view);
         frame.present();
+        self.must_draw = false;
+        self.presented = true;
     }
 }
 
@@ -334,14 +364,26 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
             engine,
             services,
             last_frame: Instant::now(),
+            must_draw: true,
+            presented: false,
         };
         running.window.request_redraw();
         self.running = Some(running);
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(running) = self.running.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(running) = self.running.as_ref() else {
+            return;
+        };
+        // A presented frame waited for the display, so the next can start
+        // now. One that wasn't would start at once and spin the CPU, so it
+        // waits for the display's next frame.
+        let due = running.next_frame_due();
+        if running.presented || Instant::now() >= due {
+            event_loop.set_control_flow(ControlFlow::Wait);
             running.window.request_redraw();
+        } else {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(due));
         }
     }
 

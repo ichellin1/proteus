@@ -341,6 +341,11 @@ pub struct FrameConfig {
     /// Keep ticking while the window or tab is hidden, instead of pausing.
     /// Not read yet.
     pub tick_while_hidden: bool,
+    /// Skip drawing a frame that would look the same as the last one, such as
+    /// a still screen: nothing moving, nothing changed, no new video frame.
+    /// The app's `update` still runs every frame. Turn it off to draw every
+    /// frame, as before, for example to compare the power used.
+    pub skip_idle_frames: bool,
 }
 
 impl Default for FrameConfig {
@@ -348,6 +353,7 @@ impl Default for FrameConfig {
         Self {
             dt_clamp_secs: 0.05,
             tick_while_hidden: false,
+            skip_idle_frames: true,
         }
     }
 }
