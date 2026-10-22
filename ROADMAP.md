@@ -175,6 +175,9 @@ Not yet placed in a release. Unordered within each area.
 - Evicting, moving and releasing textures still in use, with a way to restore them.
   [Design note](./docs/design/texture-restoration.md)
 - Animated images, such as GIFs and sprite sheets, with every frame packed into the atlas.
+- Mipmaps for the atlases, so text, images and bakes drawn smaller than their texture don't
+  shimmer or alias. Costs a third more atlas memory, a pass after each bake, and padding so
+  atlas regions don't bleed into each other at the smaller levels.
 
 ### Transitions and components
 

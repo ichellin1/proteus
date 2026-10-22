@@ -1,0 +1,17 @@
+[package]
+name = "check-corners"
+description = "A window for checking rounded corners by eye: three components whose corners change from a full circle to square and back, in a transition."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+proteus-sdk = { workspace = true }
+proteus-runtime = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+proteus-host-winit = { workspace = true }
+env_logger = { workspace = true }

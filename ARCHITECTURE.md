@@ -40,8 +40,8 @@ proteus-render                                            the pipeline, the shad
 
 These are published. The rest of the workspace isn't: `proteus-demo`, the reference demo,
 written once as an `App`; `proteus-shell-native` and `proteus-shell-web`, which hand the demo
-to a host; the examples under `examples/`; the benchmarks under `benches/`; and
-`proteus-docs`, which tests the guides' code and links.
+to a host; the examples under `examples/`; the benchmarks under `benches/`; apps for checking
+rendering by eye under `checks/`; and `proteus-docs`, which tests the guides' code and links.
 
 ## Components
 

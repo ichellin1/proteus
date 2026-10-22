@@ -3,7 +3,7 @@
 # "Terminology"): no milestone numbers, audit IDs, dates or references to external documents,
 # and "transition" rather than "morph".
 #
-# Usage: scripts/check-comments.sh [PATH...]    (default: crates examples benches)
+# Usage: scripts/check-comments.sh [PATH...]    (default: crates examples benches checks)
 #
 # Scans .rs, .ts and .wgsl files. Only comment text is checked: `//` comments, and `*` lines
 # inside TypeScript block comments. A line containing `check-comments: allow` is skipped.
@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if [ "$#" -eq 0 ]; then
-  set -- crates examples benches
+  set -- crates examples benches checks
 fi
 
 # name|grep flags|pattern
