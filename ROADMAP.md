@@ -204,5 +204,8 @@ Not yet placed in a release. Unordered within each area.
   compare with stored results, so each change would be compared against its base branch on the
   same runner.
 - Tests that run in a browser, for the web host itself.
+- The browser benchmark noticing when the browser resets the GPU, and marking that measurement,
+  rather than timing frames that no longer draw anything. Safari resets it during the largest
+  large-component measurements.
 - Real runs of the native host on Linux and Windows, which CI tests but nobody has run by hand.
 

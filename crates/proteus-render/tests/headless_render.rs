@@ -78,7 +78,7 @@ fn headless_quad_renders_to_expected_color() {
         anchor: [0.5, 0.5],
         color: [1.0, 0.0, 0.0, 1.0], // red
         opacity: 1.0,
-        corner_radius: 0.0, // sharp corners — no SDF rounding at edges
+        corner_radii: [0; 4], // sharp corners — no SDF rounding at edges
         uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
         uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
         atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
@@ -196,7 +196,7 @@ fn glow_does_not_leak_through_transparent_texture_holes() {
         anchor: [0.5, 0.5],
         color: [1.0, 1.0, 1.0, 1.0], // untinted
         opacity: 1.0,
-        corner_radius: 0.0,
+        corner_radii: [0; 4],
         uv_offset,
         uv_scale,
         // The page the region is actually on; it isn't always 0.
@@ -306,7 +306,7 @@ fn content_written_to_a_nonzero_main_atlas_page_renders_from_that_page() {
         anchor: [0.5, 0.5],
         color: [1.0, 0.0, 0.0, 1.0], // red tint — visible only where the sampled alpha is opaque
         opacity: 1.0,
-        corner_radius: 0.0,
+        corner_radii: [0; 4],
         uv_offset,
         uv_scale,
         atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, page),
@@ -398,7 +398,7 @@ fn untextured_quad_renders_at_full_intensity_on_a_non_default_page_size() {
         anchor: [0.5, 0.5],
         color: [1.0, 0.0, 0.0, 1.0], // red
         opacity: 1.0,
-        corner_radius: 0.0,
+        corner_radii: [0; 4],
         uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
         uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
         atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
@@ -465,7 +465,7 @@ fn opacity_fades_the_border_shadow_and_glow() {
         anchor: [0.5, 0.5],
         color: [0.0, 0.0, 0.0, 0.0],
         opacity: 1.0,
-        corner_radius: 0.0,
+        corner_radii: [0; 4],
         uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
         uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
         atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
@@ -582,7 +582,7 @@ fn quads_are_drawn_whatever_their_z() {
             anchor: [0.5, 0.5],
             color: [1.0, 0.0, 0.0, 1.0],
             opacity: 1.0,
-            corner_radius: 0.0,
+            corner_radii: [0; 4],
             uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
             uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
             atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),

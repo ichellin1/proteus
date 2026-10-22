@@ -79,7 +79,7 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 /// The GPU data for one component's quad, packed into the instance buffer
 /// each frame and uploaded in one transfer.
 ///
-/// Size: 160 bytes, so 1000 components take about 160 KB.
+/// Size: 164 bytes, so 1000 components take about 164 KB.
 ///
 /// The field offsets must match `buffer_layout()` and the `@location`
 /// attributes in `quad.wgsl`.
@@ -104,10 +104,16 @@ pub struct QuadInstance {
     // --- Visual ---
     /// RGBA color tint (0.0–1.0). Alpha affects color tint independently of `opacity`.
     pub color: [f32; 4], // offset  36, size 16
-    /// Whole-component opacity multiplier (0.0–1.0). Applied on top of `color.a`.
-    pub opacity: f32, // offset  52, size  4
-    /// Corner radius in pixels, evaluated as an SDF. 0.0 = sharp corners.
-    pub corner_radius: f32, // offset  56, size  4
+    /// Each corner's radius in pixels, top-left, top-right, bottom-right,
+    /// bottom-left, as 16-bit floats. Set it with [`Self::set_corner_radii`].
+    /// The shader draws the corners with a signed distance function, so they
+    /// stay smooth at any size. 0 is a sharp corner.
+    ///
+    /// Half floats, so that four fit where one 32-bit radius did: every vertex
+    /// attribute location is in use (see [`QuadInstance::buffer_layout`]).
+    /// They hold whole pixels exactly up to 2048, and to within a pixel up to
+    /// 4096, far beyond any corner.
+    pub corner_radii: [u16; 4], // offset  52, size  8
 
     // --- Atlas UV (current/target state) ---
     /// Sub-region origin within `main_atlas` or `transition_atlas`.
@@ -142,13 +148,16 @@ pub struct QuadInstance {
     pub border_color: [f32; 4], // offset 104, size 16
     /// Border placement: -1.0 = inner, 0.0 = center, 1.0 = outer.
     pub border_offset: f32, // offset 120, size  4
+    /// Whole-component opacity multiplier (0.0–1.0). Applied on top of `color.a`.
+    /// Next to `border_offset` so the two share an attribute location.
+    pub opacity: f32, // offset 124, size  4
 
     // --- Drop shadow ---
     /// Shadow params: [offset_x, offset_y, softness, spread] in world-space pixels.
     /// `shadow_color.a == 0` disables the shadow (zero-cost in shader).
-    pub shadow_params: [f32; 4], // offset 124, size 16
+    pub shadow_params: [f32; 4], // offset 128, size 16
     /// Shadow color RGBA.  Alpha = 0 means no shadow.
-    pub shadow_color: [f32; 4], // offset 140, size 16
+    pub shadow_color: [f32; 4], // offset 144, size 16
 
     // --- Crossfade start atlas ---
     /// Which atlas `base_uv_offset` and `base_uv_scale` sample during a
@@ -156,10 +165,34 @@ pub struct QuadInstance {
     /// by default. It lets the start of a crossfade be in a different atlas from
     /// the end: for example, an image in the main atlas fading into playing
     /// video, which keeps playing rather than being frozen into a bake.
-    pub base_atlas_page: u32, // offset 156, size 4
-} // total       160 bytes
+    pub base_atlas_page: u32, // offset 160, size 4
+} // total       164 bytes
 
 impl QuadInstance {
+    /// Sets every corner's radius, in pixels: top-left, top-right,
+    /// bottom-right, bottom-left.
+    pub fn set_corner_radii(&mut self, radii: [f32; 4]) {
+        self.corner_radii = Self::pack_corner_radii(radii);
+    }
+
+    /// Corner radii in pixels, top-left, top-right, bottom-right, bottom-left,
+    /// packed for [`Self::corner_radii`](field@Self::corner_radii).
+    pub fn pack_corner_radii(radii: [f32; 4]) -> [u16; 4] {
+        radii.map(|r| half::f16::from_f32(r).to_bits())
+    }
+
+    /// Sets all four corners to the same radius, in pixels.
+    pub fn set_corner_radius(&mut self, radius: f32) {
+        self.set_corner_radii([radius; 4]);
+    }
+
+    /// Each corner's radius in pixels, as [`Self::set_corner_radii`] takes
+    /// them, after rounding to 16 bits.
+    pub fn corner_radii(&self) -> [f32; 4] {
+        self.corner_radii
+            .map(|bits| half::f16::from_bits(bits).to_f32())
+    }
+
     /// Returns the wgpu vertex buffer layout for the instance buffer (step per instance).
     ///
     /// Shader locations start at 2 (0 and 1 are used by `QuadVertex`).
@@ -173,16 +206,16 @@ impl QuadInstance {
     /// |   3 | Float32x4  |  12 –  28  | size.xy, rotation, scale                   |
     /// |   4 | Float32x2  |  28 –  36  | anchor                                     |
     /// |   5 | Float32x4  |  36 –  52  | color                                      |
-    /// |   6 | Float32x2  |  52 –  60  | opacity, corner_radius                     |
+    /// |   6 | Float16x4  |  52 –  60  | corner_radii (tl, tr, br, bl)              |
     /// |   7 | Float32x4  |  60 –  76  | uv_offset.xy, uv_scale.xy                  |
     /// |   8 | Uint32     |  76 –  80  | atlas_page                                 |
     /// |   9 | Float32x4  |  80 –  96  | base_uv_offset.xy, base_uv_scale.xy        |
     /// |  10 | Float32x2  |  96 – 104  | crossfade_t, border_width                  |
     /// |  11 | Float32x4  | 104 – 120  | border_color                               |
-    /// |  12 | Float32    | 120 – 124  | border_offset                              |
-    /// |  13 | Float32x4  | 124 – 140  | shadow_params (offset_x, offset_y, softness, spread) |
-    /// |  14 | Float32x4  | 140 – 156  | shadow_color                               |
-    /// |  15 | Uint32     | 156 – 160  | base_atlas_page                            |
+    /// |  12 | Float32x2  | 120 – 128  | border_offset, opacity                     |
+    /// |  13 | Float32x4  | 128 – 144  | shadow_params (offset_x, offset_y, softness, spread) |
+    /// |  14 | Float32x4  | 144 – 160  | shadow_color                               |
+    /// |  15 | Uint32     | 160 – 164  | base_atlas_page                            |
     ///
     /// Total: 14 instance attributes + 2 vertex attributes = 16. Limit is 16.
     ///
@@ -220,11 +253,11 @@ impl QuadInstance {
                     shader_location: 5,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // loc 6: opacity + corner_radius  (packed — contiguous bytes 52–60)
+                // loc 6: corner_radii, four half floats (bytes 52–60)
                 wgpu::VertexAttribute {
                     offset: 52,
                     shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Float16x4,
                 },
                 // loc 7: uv_offset.xy + uv_scale.xy  (packed — contiguous bytes 60–76)
                 wgpu::VertexAttribute {
@@ -256,27 +289,27 @@ impl QuadInstance {
                     shader_location: 11,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // loc 12: border_offset
+                // loc 12: border_offset + opacity  (packed — contiguous bytes 120–128)
                 wgpu::VertexAttribute {
                     offset: 120,
                     shader_location: 12,
-                    format: wgpu::VertexFormat::Float32,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
                 // loc 13: shadow_params (offset_x, offset_y, softness, spread)
                 wgpu::VertexAttribute {
-                    offset: 124,
+                    offset: 128,
                     shader_location: 13,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 // loc 14: shadow_color (rgba)
                 wgpu::VertexAttribute {
-                    offset: 140,
+                    offset: 144,
                     shader_location: 14,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 // loc 15: base_atlas_page (u32)
                 wgpu::VertexAttribute {
-                    offset: 156,
+                    offset: 160,
                     shader_location: 15,
                     format: wgpu::VertexFormat::Uint32,
                 },
@@ -287,7 +320,7 @@ impl QuadInstance {
 
 // Fails to compile if `QuadInstance`'s size changes, so that
 // `buffer_layout()`'s offsets are checked.
-const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 160);
+const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 164);
 
 // ---------------------------------------------------------------------------
 // atlas_page bit packing
@@ -350,8 +383,7 @@ mod tests {
         assert_eq!(offset_of!(QuadInstance, scale), 24);
         assert_eq!(offset_of!(QuadInstance, anchor), 28);
         assert_eq!(offset_of!(QuadInstance, color), 36);
-        assert_eq!(offset_of!(QuadInstance, opacity), 52);
-        assert_eq!(offset_of!(QuadInstance, corner_radius), 56);
+        assert_eq!(offset_of!(QuadInstance, corner_radii), 52);
         assert_eq!(offset_of!(QuadInstance, uv_offset), 60);
         assert_eq!(offset_of!(QuadInstance, uv_scale), 68);
         assert_eq!(offset_of!(QuadInstance, atlas_page), 76);
@@ -361,14 +393,25 @@ mod tests {
         assert_eq!(offset_of!(QuadInstance, border_width), 100);
         assert_eq!(offset_of!(QuadInstance, border_color), 104);
         assert_eq!(offset_of!(QuadInstance, border_offset), 120);
-        assert_eq!(offset_of!(QuadInstance, shadow_params), 124);
-        assert_eq!(offset_of!(QuadInstance, shadow_color), 140);
-        assert_eq!(offset_of!(QuadInstance, base_atlas_page), 156);
+        assert_eq!(offset_of!(QuadInstance, opacity), 124);
+        assert_eq!(offset_of!(QuadInstance, shadow_params), 128);
+        assert_eq!(offset_of!(QuadInstance, shadow_color), 144);
+        assert_eq!(offset_of!(QuadInstance, base_atlas_page), 160);
     }
 
     #[test]
     fn quad_instance_total_size() {
-        assert_eq!(std::mem::size_of::<QuadInstance>(), 160);
+        assert_eq!(std::mem::size_of::<QuadInstance>(), 164);
+    }
+
+    #[test]
+    fn corner_radii_round_trip_through_half_floats() {
+        let mut instance = QuadInstance::zeroed();
+        instance.set_corner_radii([0.0, 10.0, 2048.0, 12.5]);
+        assert_eq!(instance.corner_radii(), [0.0, 10.0, 2048.0, 12.5]);
+        // Above 2048, half floats step by 2 pixels.
+        instance.set_corner_radius(4097.0);
+        assert!((instance.corner_radii()[0] - 4097.0).abs() <= 1.0);
     }
 
     // -----------------------------------------------------------------------

@@ -29,6 +29,7 @@ pub mod effects;
 pub mod hierarchy;
 pub mod image;
 pub mod input;
+mod instance_cache;
 pub mod interaction;
 pub mod schedule;
 pub mod spawn_order;
@@ -61,6 +62,7 @@ pub use input::{
     quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, PointerInput,
     PressedEntity,
 };
+pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{
     interaction_style_system, InteractionDef, InteractionState, InteractionStateKind, StyleOverride,
 };

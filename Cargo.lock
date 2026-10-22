@@ -2263,6 +2263,7 @@ dependencies = [
  "etagere",
  "fontdue",
  "glam 0.29.3",
+ "half",
  "image",
  "log",
  "pollster",

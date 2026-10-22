@@ -15,6 +15,7 @@ readme = "README.md"
 [dependencies]
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
+half = { workspace = true }
 glam = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }

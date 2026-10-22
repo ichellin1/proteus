@@ -64,8 +64,9 @@ struct VertexIn {
     @location(3)  inst_size_rot_scale: vec4<f32>,
     @location(4)  inst_anchor:         vec2<f32>,  // Y-down screen: [0,0]=top-left [0.5,0.5]=center [1,1]=bottom-right
     @location(5)  inst_color:          vec4<f32>,
-    // .x = opacity, .y = corner_radius (pixels)
-    @location(6)  inst_opacity_radius: vec2<f32>,
+    // Each corner's radius in pixels: top-left, top-right, bottom-right,
+    // bottom-left. Half floats in the instance buffer, widened by the GPU.
+    @location(6)  inst_corner_radii:   vec4<f32>,
     // .xy = uv_offset, .zw = uv_scale
     @location(7)  inst_uv:             vec4<f32>,
     @location(8)  inst_atlas_page:     u32,        // packed: selector | (main_atlas page << ATLAS_PAGE_SHIFT)
@@ -74,7 +75,8 @@ struct VertexIn {
     // .x = crossfade_t, .y = border_width (0.0 = no border)
     @location(10) inst_crossfade_bw:   vec2<f32>,
     @location(11) inst_border_color:   vec4<f32>,
-    @location(12) inst_border_offset:  f32,        // -1.0 inner / 0.0 center / 1.0 outer
+    // .x = border_offset (-1.0 inner / 0.0 center / 1.0 outer), .y = opacity
+    @location(12) inst_border_offset_opacity: vec2<f32>,
     // .x = shadow offset X, .y = shadow offset Y, .z = softness (px), .w = spread (px)
     @location(13) inst_shadow_params:  vec4<f32>,
     @location(14) inst_shadow_color:   vec4<f32>,  // RGBA; alpha == 0.0 disables shadow
@@ -105,7 +107,7 @@ struct VertexOut {
     // Fragment-stage per-instance data
     @location(4)                     color:           vec4<f32>,
     @location(5)                     opacity:         f32,
-    @location(6)                     corner_radius:   f32,
+    @location(6)                     corner_radii:    vec4<f32>, // tl, tr, br, bl
     @location(7)                     crossfade_t:     f32,
     @location(8)                     border_width:    f32,
     @location(9)                     border_color:    vec4<f32>,
@@ -127,8 +129,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     let inst_size          = in.inst_size_rot_scale.xy;
     let inst_rotation      = in.inst_size_rot_scale.z;
     let inst_scale         = in.inst_size_rot_scale.w;
-    let inst_opacity       = in.inst_opacity_radius.x;
-    let inst_corner_radius = in.inst_opacity_radius.y;
+    let inst_opacity       = in.inst_border_offset_opacity.y;
     let inst_crossfade_t   = in.inst_crossfade_bw.x;
     let inst_border_width  = in.inst_crossfade_bw.y;
 
@@ -203,11 +204,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     out.color         = in.inst_color;
     out.opacity       = inst_opacity;
-    out.corner_radius = inst_corner_radius;
+    out.corner_radii  = in.inst_corner_radii;
     out.crossfade_t   = inst_crossfade_t;
     out.border_width  = inst_border_width;
     out.border_color  = in.inst_border_color;
-    out.border_offset = in.inst_border_offset;
+    out.border_offset = in.inst_border_offset_opacity.x;
     out.atlas_page    = in.inst_atlas_page;
     out.shadow_params = in.inst_shadow_params;
     out.shadow_color  = in.inst_shadow_color;
@@ -223,10 +224,15 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
 // Signed distance field for a rounded rectangle, centered at the origin.
 // Returns: negative inside the shape, positive outside, zero at the edge.
-//   p         — fragment position relative to rect center (pixels)
+//   p         — fragment position relative to rect center (pixels), y up
 //   half_size — half-extents of the rect (pixels)
-//   r         — corner radius (pixels); 0.0 = sharp corners
-fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {
+//   radii     — each corner's radius (pixels): top-left, top-right,
+//               bottom-right, bottom-left; 0.0 = a sharp corner
+// Each quadrant of the rect is shaped by its own corner's radius.
+fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    let top    = select(radii.x, radii.y, p.x > 0.0);
+    let bottom = select(radii.w, radii.z, p.x > 0.0);
+    let r      = select(bottom, top, p.y > 0.0);
     let q = abs(p) - half_size + vec2(r, r);
     return length(max(q, vec2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
@@ -263,8 +269,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // The shadow shape is the main rounded rect, expanded by spread and shifted
         // by the shadow offset.  A higher softness value widens the penumbra.
         let shadow_half_size = in.half_size + vec2(shadow_spread, shadow_spread);
-        let shadow_radius    = in.corner_radius + shadow_spread;
-        let shadow_dist      = sdf_rounded_rect(in.local_pos - shadow_offset, shadow_half_size, shadow_radius);
+        let shadow_radii     = in.corner_radii + vec4(shadow_spread);
+        let shadow_dist      = sdf_rounded_rect(in.local_pos - shadow_offset, shadow_half_size, shadow_radii);
         // Clamp softness so smoothstep never has a zero-width range.
         let softness   = max(shadow_softness, 0.5);
         shadow_alpha   = (1.0 - smoothstep(-softness, softness, shadow_dist)) * in.shadow_color.a;
@@ -272,7 +278,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // --- Shape SDF ---
     // dist < 0 inside the rounded rect, > 0 outside.
-    let dist       = sdf_rounded_rect(in.local_pos, in.half_size, in.corner_radius);
+    let dist       = sdf_rounded_rect(in.local_pos, in.half_size, in.corner_radii);
     // 1-pixel antialiased edge. edge_alpha → 0 as dist → +1 (outside the shape).
     let edge_alpha = 1.0 - smoothstep(-1.0, 1.0, dist);
 

@@ -65,7 +65,6 @@
 //!
 //! Hidden entities are left out. An entity with no `Visibility` is visible.
 
-use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use glam::Vec4;
 
@@ -76,12 +75,10 @@ use proteus_render::{
 
 use crate::{
     bake::BakedComposite,
-    draw_order::rank_cmp,
     effects::{Border, DropShadow, Glow},
-    hierarchy::{compose_with_parent, EffectiveOpacity, EffectiveVisibility, Opacity},
-    spawn_order::SpawnOrder,
+    hierarchy::{EffectiveOpacity, Opacity},
     video::{VideoCrossfade, VideoPlayer},
-    ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual, Visibility,
+    ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,7 +179,7 @@ pub fn quad_state_to_instance(
         anchor: qs.anchor.to_array(),
         color: qs.color.to_array(),
         opacity: 1.0,
-        corner_radius: qs.corner_radius,
+        corner_radii: QuadInstance::pack_corner_radii([qs.corner_radius; 4]),
         uv_offset,
         uv_scale,
         atlas_page,
@@ -207,7 +204,12 @@ pub fn quad_state_to_instance(
 
 /// Appends one entity's instances to `out`: its background, and its text if it
 /// has any.
-fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec<QuadInstance>) {
+pub(crate) fn push_entity_instances(
+    world: &World,
+    e: Entity,
+    qs: &QuadState,
+    out: &mut Vec<QuadInstance>,
+) {
     // The cascaded opacity if computed, else the entity's own, for tests that
     // skip the schedule, else opaque.
     let effective_opacity = world
@@ -323,10 +325,6 @@ fn push_entity_instances(world: &World, e: Entity, qs: &QuadState, out: &mut Vec
     }
 }
 
-/// A top-level entity's data, read before drawing starts: its `QuadState`, its
-/// own and cascaded visibility (`None` if absent), and its `SpawnOrder`.
-type RootSnapshot = (Entity, QuadState, Option<bool>, Option<bool>, SpawnOrder);
-
 /// Returns every visible entity as [`QuadInstance`]s, in drawing order.
 ///
 /// Call it once per frame after the tick, and pass the result to
@@ -337,95 +335,19 @@ type RootSnapshot = (Entity, QuadState, Option<bool>, Option<bool>, SpawnOrder);
 /// Each top-level entity (one without a [`ChildOf`]) is drawn, then its
 /// children, depth first, so a child is always drawn over its parent.
 /// Top-level entities are drawn in order of `QuadState::position.z`, lowest
-/// first, and then of [`SpawnOrder`], earliest first, so among entities with
-/// the same `z`, the one created last is on top. Each entity's children are
-/// ordered the same way, by their own `z`. See `crate::draw_order`.
+/// first, and then of [`SpawnOrder`](crate::spawn_order::SpawnOrder), earliest
+/// first, so among entities with the same `z`, the one created last is on top.
+/// Each entity's children are ordered the same way, by their own `z`. See
+/// `crate::draw_order`.
+///
+/// It works everything out from scratch. The renderer keeps an
+/// [`InstanceCache`](crate::InstanceCache) instead, which redoes only what
+/// changed and always matches this.
 ///
 /// The order is worked out explicitly rather than taken from how `bevy_ecs`
 /// stores entities, which has no reliable relationship to creation order.
 pub fn collect_instances(world: &mut World) -> Vec<QuadInstance> {
-    // Top-level entities: a QuadState and no ChildOf. Read them all first, so
-    // the query's borrow ends before the recursive walk reads the world.
-    let mut roots: Vec<RootSnapshot> = {
-        let mut q = world.query_filtered::<(
-            Entity,
-            &QuadState,
-            Option<&Visibility>,
-            Option<&EffectiveVisibility>,
-            Option<&SpawnOrder>,
-        ), Without<ChildOf>>();
-        q.iter(world)
-            .map(|(e, qs, vis, eff_vis, spawn_order)| {
-                (
-                    e,
-                    qs.clone(),
-                    vis.map(|v| v.visible),
-                    eff_vis.map(|v| v.0),
-                    // An entity without a SpawnOrder, such as one in a test
-                    // world with no hooks, sorts last among equals.
-                    spawn_order.copied().unwrap_or(SpawnOrder(u64::MAX)),
-                )
-            })
-            .collect()
-    };
-    roots.sort_by(|a, b| rank_cmp((a.1.position.z, a.4), (b.1.position.z, b.4)));
-
-    let mut out = Vec::new();
-    for (e, local_qs, vis, eff_vis, _spawn_order) in roots {
-        // A top-level entity's QuadState is already in world space.
-        collect_subtree(world, e, &local_qs, vis, eff_vis, false, &mut out);
-    }
-    out
-}
-
-/// Appends `entity`'s instances, then each child's in drawing order, with
-/// each child placed in the world by [`compose_with_parent`].
-fn collect_subtree(
-    world: &World,
-    entity: Entity,
-    world_qs: &QuadState,
-    vis: Option<bool>,
-    eff_vis: Option<bool>,
-    force_visible: bool,
-    out: &mut Vec<QuadInstance>,
-) {
-    // The cascaded visibility if computed, else the entity's own, for tests
-    // that skip the schedule, else visible.
-    let visible = force_visible || eff_vis.unwrap_or_else(|| vis.unwrap_or(true));
-    if visible {
-        push_entity_instances(world, entity, world_qs, out);
-    }
-
-    let Some(children) = world.get::<Children>(entity) else {
-        return;
-    };
-    // Siblings are drawn by their own `z`, then creation order, like
-    // top-level entities; see `crate::draw_order`.
-    let mut children: Vec<Entity> = children.iter().collect();
-    let rank = |e: Entity| {
-        let z = world.get::<QuadState>(e).map_or(0.0, |qs| qs.position.z);
-        let spawn = world
-            .get::<SpawnOrder>(e)
-            .copied()
-            .unwrap_or(SpawnOrder(u64::MAX));
-        (z, spawn)
-    };
-    children.sort_by(|a, b| rank_cmp(rank(*a), rank(*b)));
-    for child in children {
-        let Some(child_local) = world.get::<QuadState>(child) else {
-            continue;
-        };
-        let child_world = compose_with_parent(world_qs, child_local);
-        let child_vis = world.get::<Visibility>(child).map(|v| v.visible);
-        let child_eff_vis = world.get::<EffectiveVisibility>(child).map(|v| v.0);
-        collect_subtree(
-            world,
-            child,
-            &child_world,
-            child_vis,
-            child_eff_vis,
-            force_visible,
-            out,
-        );
-    }
+    let mut cache = crate::InstanceCache::default();
+    cache.rebuild(world);
+    cache.instances().to_vec()
 }
