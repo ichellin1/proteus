@@ -29,7 +29,7 @@ proteus-render                                            the pipeline, the shad
 
 | Crate | What it holds |
 |---|---|
-| `proteus-render` | The instanced pipeline, its shader `quad.wgsl`, the texture atlases and their registry, text rasterizing and image decoding. Knows nothing about components. |
+| `proteus-render` | The instanced pipeline, its shader (in named parts under `shaders/quad/`), the texture atlases and their registry, text rasterizing and image decoding. Knows nothing about components. |
 | `proteus-ui` | The component model on `bevy_ecs`: geometry, the hierarchy, transitions in all three shapes, input and hit testing, interaction styles, component baking, and turning the world into instances to draw. |
 | `proteus-sdk` | The API an app uses: `Proteus`, which holds the app's components, and the handles it returns. It draws nothing itself. |
 | `proteus-gpu` | Creates a wgpu device, queue and configured surface from a platform's surface, the same way on every platform. |
@@ -148,7 +148,7 @@ so a still screen costs the GPU nothing. The app's `update` still runs every fra
 
 ### One draw call, one shader
 
-One draw call means one pipeline, so one shader, `quad.wgsl`, draws every component and every
+One draw call means one pipeline, so one shader draws every component and every
 feature. A component's features are switched on or off by its instance data, not by choosing
 a different shader:
 
@@ -183,7 +183,7 @@ Each corner has its own radius, as a 16-bit float, so that four fit where one di
 packed into **all 16 vertex attribute slots**, the most wgpu's default limits allow, natively
 and in WebGL2: two for the unit quad and fourteen for the instance. New per-component data has
 to be packed into existing fields, as `atlas_page` already packs the atlas selector and the page
-number into one integer. The layout is listed in `QuadInstance::buffer_layout`, and `quad.wgsl`
+number into one integer. The layout is listed in `QuadInstance::buffer_layout`, and the shader's `vertex.wgsl`
 must match it.
 
 A second pipeline, with a different shader for some components, is possible, but it costs a

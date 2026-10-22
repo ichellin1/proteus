@@ -82,7 +82,7 @@ pub fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 /// Size: 164 bytes, so 1000 components take about 164 KB.
 ///
 /// The field offsets must match `buffer_layout()` and the `@location`
-/// attributes in `quad.wgsl`.
+/// attributes in the shader's `vertex.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct QuadInstance {
@@ -124,7 +124,7 @@ pub struct QuadInstance {
     /// select the atlas (`ATLAS_SELECTOR_MAIN` = 0, `ATLAS_SELECTOR_TRANSITION`
     /// = 1, `ATLAS_SELECTOR_VIDEO` = 2); bits 8–31 are the main-atlas page,
     /// since the other atlases have one page. Build it with [`pack_atlas_page`]
-    /// and read it with [`unpack_atlas_page`]; `shaders/quad.wgsl` uses the same
+    /// and read it with [`unpack_atlas_page`]; the shader's `bindings.wgsl` uses the same
     /// layout.
     ///
     /// Packed into one field because every vertex attribute location is in use
@@ -325,9 +325,9 @@ const _QUAD_INSTANCE_SIZE: () = assert!(std::mem::size_of::<QuadInstance>() == 1
 // ---------------------------------------------------------------------------
 // atlas_page bit packing
 //
-// These four constants and the two functions below are mirrored verbatim in
-// `shaders/quad.wgsl`. `wgsl_atlas_page_bit_layout_matches_rust` (below) fails the build if the
-// two ever drift.
+// The selector mask and page shift are mirrored in the shader's `bindings.wgsl`.
+// `wgsl_atlas_page_bit_layout_matches_rust` (below) parses the shader and fails the tests if
+// their values ever drift.
 // ---------------------------------------------------------------------------
 
 /// [`QuadInstance::atlas_page`]/[`QuadInstance::base_atlas_page`] selector: sample `main_atlas`
@@ -418,7 +418,7 @@ mod tests {
     // Transform math tests — mirrors the WGSL vertex shader logic in Rust so
     // we can verify correctness without spinning up a GPU.
     //
-    // Shader reference (quad.wgsl vs_main):
+    // Shader reference (vertex.wgsl vs_main):
     //   scaled_size  = inst_size * inst_scale
     //   centered     = vertex_pos * scaled_size        ← unit quad vertex
     //   anchor_shift = (anchor - 0.5) * scaled_size * [1,-1]  ← Y-down→Y-up flip
@@ -560,7 +560,7 @@ mod tests {
     // Without the flip, textures (BakedText, VideoPlayer) appear upside-down.
     // -----------------------------------------------------------------------
 
-    // Mirror of the fragment-shader UV computation from quad.wgsl.
+    // Mirror of the fragment shader's `texture_position`, in fill.wgsl.
     fn compute_norm_uv(local_pos: glam::Vec2, half_size: glam::Vec2) -> glam::Vec2 {
         let safe_half = half_size.max(glam::Vec2::splat(0.5));
         let raw = (local_pos + safe_half) / (safe_half * 2.0);
@@ -714,19 +714,34 @@ mod tests {
 
     #[test]
     fn wgsl_atlas_page_bit_layout_matches_rust() {
-        // quad.wgsl copies these constants, since WGSL can't include Rust. If one
-        // side changes without the other, the main atlas samples the wrong page;
-        // this catches it in tests instead.
-        let src = crate::QUAD_SHADER_SRC;
-        let mask_line = format!("ATLAS_SELECTOR_MASK: u32 = {ATLAS_SELECTOR_MASK:#04X}u");
-        let shift_line = format!("ATLAS_PAGE_SHIFT:    u32 = {ATLAS_PAGE_SHIFT}u");
-        assert!(
-            src.contains(&mask_line),
-            "quad.wgsl's atlas_page bit layout drifted from mesh.rs's — expected to find {mask_line:?} in quad.wgsl"
+        // The shader copies these constants, since WGSL can't include Rust. If
+        // one side changes without the other, the main atlas samples the wrong
+        // page; this catches it in tests instead. The shader is parsed, so its
+        // formatting doesn't matter, only the values.
+        use wgpu::naga;
+
+        let module =
+            naga::front::wgsl::parse_str(crate::QUAD_SHADER_SRC).expect("the shader parses");
+        let value = |name: &str| -> u32 {
+            let (_, constant) = module
+                .constants
+                .iter()
+                .find(|(_, c)| c.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("the shader declares {name}"));
+            match module.global_expressions[constant.init] {
+                naga::Expression::Literal(naga::Literal::U32(v)) => v,
+                ref other => panic!("{name} is a u32 literal in the shader, not {other:?}"),
+            }
+        };
+        assert_eq!(
+            value("ATLAS_SELECTOR_MASK"),
+            ATLAS_SELECTOR_MASK,
+            "the shader's ATLAS_SELECTOR_MASK drifted from mesh.rs's"
         );
-        assert!(
-            src.contains(&shift_line),
-            "quad.wgsl's atlas_page bit layout drifted from mesh.rs's — expected to find {shift_line:?} in quad.wgsl"
+        assert_eq!(
+            value("ATLAS_PAGE_SHIFT"),
+            ATLAS_PAGE_SHIFT,
+            "the shader's ATLAS_PAGE_SHIFT drifted from mesh.rs's"
         );
     }
 }

@@ -336,7 +336,7 @@ fn rotated_parent_rotates_interactable_childs_hit_region_too() {
 
 // `QuadState::anchor` is the *screen* convention — `(0, 0)` pins the
 // component's **top**-left corner at `position` — while hit-testing works in
-// world space, where Y increases upward. `quad.wgsl` reconciles the two by
+// world space, where Y increases upward. the shader's `vertex.wgsl` reconciles the two by
 // negating Y in its `anchor_shift`; `quad_contains` has to do the same, so a
 // `(0, 0)`-anchored quad occupies the rectangle to the right of and *below*
 // its position (below = smaller world Y).

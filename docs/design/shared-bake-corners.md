@@ -14,7 +14,7 @@ The two ends treat corners differently, in `one_to_n_setup_system` and `n_to_one
   rounded, and the bake already contains the source's rounded edges, so the slice shows them as
   they were baked.
 
-The atlases have no mipmaps (`quad.wgsl` samples level 0), so when a virtual is drawn much
+The atlases have no mipmaps (the shader samples level 0), so when a virtual is drawn much
 smaller than its bake, which is routine partway through a transition, the bake's antialiased
 edge is undersampled and the rounding aliases toward square. Seen on the reference demo's
 video tiles and the gallery's grid transitions. The demo's workaround is a smaller corner

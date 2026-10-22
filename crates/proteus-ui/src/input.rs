@@ -153,7 +153,7 @@ pub struct Interactable;
 /// `anchor` uses the screen convention — `[0,0]` is the component's *top*-left,
 /// `[1,1]` its bottom-right — while `local` here is world-space, Y-up. The two
 /// disagree on Y, so the Y extents are **not** the mirror of the X ones. Derived
-/// from `quad.wgsl`'s own `anchor_shift` (`(anchor - 0.5) * size * vec2(1, -1)`,
+/// from the shader's own `anchor_shift`, in `vertex.wgsl` (`(anchor - 0.5) * size * vec2(1, -1)`,
 /// applied to a unit quad vertex `v ∈ [-0.5, 0.5]`, Y-up):
 ///
 /// ```text

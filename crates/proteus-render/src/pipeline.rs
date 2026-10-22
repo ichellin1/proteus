@@ -670,8 +670,8 @@ impl QuadPipeline {
 
     /// Renders `instances` into a `width × height` region of
     /// `transition_atlas` — the atlas the fragment shader's crossfade path
-    /// reads `base_uv_offset`/`base_uv_scale` from (see `quad.wgsl`:
-    /// `if in.crossfade_t > 0.0 { ... transition_atlas ... }`).
+    /// reads `base_uv_offset`/`base_uv_scale` from (see `fill_color` in the
+    /// shader's `fill.wgsl`).
     ///
     /// Splits and merges use it so that each piece fades from a slice of the
     /// source's appearance: the source is baked once, each piece's

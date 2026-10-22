@@ -30,7 +30,7 @@ plain shape with no image, border, shadow or glow.
 
 ## The diagnosis
 
-With `fs_main` in `crates/proteus-render/src/shaders/quad.wgsl` made to return a flat color
+With `fs_main`, the shader's fragment stage, made to return a flat color
 immediately, the native frame interval fell from 11.4 to 2.8 ms at 10,000 components, and from
 33 to 15.7 ms at 25,000: the fragment shader is about three quarters of the GPU time at 10,000.
 The rest, at higher counts, is vertex work, each instance carrying a 160-byte `QuadInstance`,
