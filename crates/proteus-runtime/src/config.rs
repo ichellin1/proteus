@@ -306,6 +306,13 @@ pub struct RenderConfig {
     /// always single-sampled. Rounded corners, shadows and glows are smooth
     /// regardless, but the straight edges of a rotated component are not.
     pub msaa_samples: u32,
+    /// Draw plain components, a solid color with no texture, border, shadow,
+    /// glow or crossfade, with a second, smaller shader, which the GPU runs
+    /// faster; most of a UI's area is usually plain. The two draw the same
+    /// pixels. Off, everything is drawn by the one full shader, in one draw
+    /// call, as before; on, runs of plain components big enough to be worth it
+    /// get draw calls of their own.
+    pub plain_pipeline: bool,
 }
 
 impl Default for RenderConfig {
@@ -315,6 +322,7 @@ impl Default for RenderConfig {
             present_mode: wgpu::PresentMode::AutoVsync,
             power_preference: wgpu::PowerPreference::HighPerformance,
             msaa_samples: 1,
+            plain_pipeline: true,
         }
     }
 }

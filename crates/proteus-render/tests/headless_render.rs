@@ -614,6 +614,95 @@ fn quads_are_drawn_whatever_their_z() {
     }
 }
 
+// The plain pipeline draws plain components exactly as the full one does, so
+// turning it on changes no pixel: here, over a mix of plain components, large
+// and small, and ones with a border, shadow or glow, which the full pipeline
+// still draws between them.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_plain_pipeline_draws_the_same_pixels() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        no_gpu();
+        return;
+    };
+    let plain = |x: f32, y: f32, w: f32, h: f32, radius: f32, color: [f32; 4]| {
+        let mut q = QuadInstance {
+            position: [x, y, 0.0],
+            size: [w, h],
+            rotation: 0.0,
+            scale: 1.0,
+            anchor: [0.5, 0.5],
+            color,
+            opacity: 1.0,
+            corner_radii: [0; 4],
+            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+            atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
+            base_uv_offset: [0.0, 0.0],
+            base_uv_scale: [0.0, 0.0],
+            crossfade_t: 0.0,
+            border_width: 0.0,
+            border_color: [0.0; 4],
+            border_offset: 0.0,
+            shadow_params: [0.0; 4],
+            shadow_color: [0.0; 4],
+            base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+        };
+        q.set_corner_radii([radius, radius * 0.5, 0.0, radius]);
+        q
+    };
+    let mut instances = vec![
+        // A large plain one, alone between others: a run of its own.
+        plain(-2.0, 2.0, 66.0, 64.0, 12.0, [0.2, 0.5, 0.9, 1.0]),
+    ];
+    let mut bordered = plain(10.0, -6.0, 30.0, 30.0, 8.0, [0.9, 0.3, 0.2, 1.0]);
+    bordered.border_width = 3.0;
+    bordered.border_color = [1.0, 1.0, 1.0, 1.0];
+    bordered.border_offset = -1.0;
+    instances.push(bordered);
+    // Small plain ones, too small for a run of their own.
+    instances.push(plain(-20.0, -20.0, 6.0, 6.0, 3.0, [0.1, 0.9, 0.4, 1.0]));
+    instances.push(plain(-12.0, -20.0, 6.0, 6.0, 3.0, [0.9, 0.9, 0.1, 0.5]));
+    let mut glowing = plain(16.0, 18.0, 20.0, 14.0, 6.0, [0.6, 0.2, 0.8, 1.0]);
+    glowing.shadow_params = [0.0, 0.0, 6.0, 0.0];
+    glowing.shadow_color = [1.0, 0.8, 0.2, 0.9];
+    instances.push(glowing);
+    // A translucent, rotated, faded plain one over the rest, large enough for a
+    // run of its own too.
+    let mut over = plain(4.0, 2.0, 70.0, 60.0, 14.0, [1.0, 0.5, 0.0, 0.6]);
+    over.rotation = 0.3;
+    over.opacity = 0.7;
+    instances.push(over);
+
+    let black = wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let draw = |plain_pipeline: bool| {
+        let mut pipeline = QuadPipeline::new(
+            &device,
+            &queue,
+            FORMAT,
+            16,
+            AtlasConfig::default(),
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        );
+        pipeline.set_plain_pipeline(&device, plain_pipeline);
+        pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+        render_and_read_back(&device, &queue, &mut pipeline, &instances, black)
+    };
+    let full = draw(false);
+    let with_plain = draw(true);
+    assert!(full.iter().any(|&b| b != 0), "the scene draws something");
+    assert!(
+        full == with_plain,
+        "the plain pipeline changed {} bytes",
+        full.iter().zip(&with_plain).filter(|(a, b)| a != b).count()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

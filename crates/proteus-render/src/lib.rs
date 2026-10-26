@@ -45,7 +45,8 @@ pub use transition_atlas::{TransitionAllocId, TransitionAtlasAllocator, Transiti
 ///
 /// It's written in named parts, in `shaders/quad/`, joined here into one
 /// shader: the bindings, the vertex stage, the shape, the fill, the effects,
-/// and the fragment stage that draws each pixel from them.
+/// the fragment stage that draws each pixel from them, and the plain
+/// pipeline's smaller entry points.
 pub const QUAD_SHADER_SRC: &str = concat!(
     include_str!("shaders/quad/bindings.wgsl"),
     include_str!("shaders/quad/vertex.wgsl"),
@@ -53,4 +54,5 @@ pub const QUAD_SHADER_SRC: &str = concat!(
     include_str!("shaders/quad/fill.wgsl"),
     include_str!("shaders/quad/effects.wgsl"),
     include_str!("shaders/quad/fragment.wgsl"),
+    include_str!("shaders/quad/plain.wgsl"),
 );

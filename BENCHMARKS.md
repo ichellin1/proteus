@@ -63,6 +63,11 @@ change is also in [CHANGELOG.md](./CHANGELOG.md), under the release it shipped i
 | | | Safari, small scene, frame at 1,000,000 | 88 ms | 24 ms |
 | | | Chrome, small scene, frame at 1,000,000 | 85 ms | 27 ms |
 | | | Both browsers, most small components at the display's full rate | 100,000 | 500,000 |
+| v0.2.0 | Plain components drawn by a pipeline of their own | Native, large still scene, frame at 100,000 | 108.7 ms | 51.6 ms |
+| | | Native, large still scene, frame at 10,000 | 10.3 ms | 5.3 ms |
+| | | Chrome, large still scene, frame at 25,000 | 95 ms | 48 ms |
+| | | Safari, large still scene, frame at 25,000 | 96 ms | 51 ms |
+| | | Both browsers, most large components at the display's full rate | 5,000 | 10,000 (Safari), almost (Chrome, 19 ms) |
 
 ## How it's measured
 

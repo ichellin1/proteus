@@ -4,6 +4,13 @@
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    // Most components have no border, shadow, glow or crossfade, and most of
+    // those have no texture either. They take a shorter path, with the same
+    // result as the full one below.
+    if in.border_width <= 0.0 && in.shadow_color.a <= 0.0 && in.crossfade_t <= 0.0 {
+        return without_effects(in);
+    }
+
     // The shadow, computed first so that shadow-only fragments outside the
     // main shape aren't discarded.
     var shadow = shadow_alpha(in.local_pos, in.half_size, in.corner_radii, in.shadow_params, in.shadow_color);
@@ -59,4 +66,24 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     return over_shadow(main_color, shadow, in.shadow_color.rgb);
+}
+
+// A pixel of a component with no border, shadow, glow or crossfade: the full
+// path in `fs_main`, without the steps that change nothing for it. A component
+// with no texture samples the white block, which is exactly 1, so its color is
+// its own, without sampling at all.
+fn without_effects(in: VertexOut) -> vec4<f32> {
+    let edge = edge_alpha(sdf_rounded_rect(in.local_pos, in.half_size, in.corner_radii));
+    if edge <= 0.0 {
+        discard;
+    }
+
+    var fill = in.color;
+    let white_block = in.atlas_page == 0u && all(in.uv_params == vec4(0.0));
+    if !white_block {
+        let norm_uv = texture_position(in.local_pos, in.half_size);
+        fill = sample_atlas(in.atlas_page, in.uv_params.xy + norm_uv * in.uv_params.zw) * in.color;
+    }
+    fill.a *= in.opacity * edge;
+    return over_shadow(fill, 0.0, in.shadow_color.rgb);
 }

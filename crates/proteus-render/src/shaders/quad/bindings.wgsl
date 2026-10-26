@@ -10,6 +10,7 @@
 //   fill.wgsl      — the component's own color: its texture, crossfade and tint
 //   effects.wgsl   — the shadow or glow, the border, and compositing them
 //   fragment.wgsl  — each pixel, from those parts in turn
+//   plain.wgsl     — the plain pipeline's entry points, for a solid color
 //
 // Bind group 0:  uniform buffer   — view/projection matrix (one upload per frame)
 // Bind group 1:  main_atlas       — long-lived textures (text, images, baked components);

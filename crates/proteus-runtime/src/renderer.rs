@@ -82,7 +82,7 @@ impl Renderer {
             );
         }
 
-        let pipeline = QuadPipeline::new(
+        let mut pipeline = QuadPipeline::new(
             device,
             queue,
             surface_format,
@@ -90,6 +90,7 @@ impl Renderer {
             mem.main_atlas,
             mem.transition_atlas_size,
         );
+        pipeline.set_plain_pipeline(device, config.render.plain_pipeline);
         pipeline.set_view_projection(
             queue,
             QuadPipeline::ortho(viewport.logical_size.x, viewport.logical_size.y),
