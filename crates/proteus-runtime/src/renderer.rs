@@ -91,6 +91,7 @@ impl Renderer {
             mem.transition_atlas_size,
         );
         pipeline.set_plain_pipeline(device, config.render.plain_pipeline);
+        pipeline.set_skip_covered_pixels(device, config.render.skip_covered_pixels);
         pipeline.set_view_projection(
             queue,
             QuadPipeline::ortho(viewport.logical_size.x, viewport.logical_size.y),
@@ -199,7 +200,13 @@ impl Renderer {
     /// surface texture the host has acquired, clearing it first.
     pub fn draw(&mut self, proteus: &mut Proteus, target: &wgpu::TextureView) {
         let gpu = proteus.world().resource::<GpuContext>().clone();
+        let size = target.texture().size();
+        proteus
+            .world_mut()
+            .resource_mut::<QuadPipeline>()
+            .prepare_depth(&gpu.device, size.width, size.height);
         let world = proteus.world();
+        let pipeline = world.resource::<QuadPipeline>();
 
         let mut encoder = gpu
             .device
@@ -218,13 +225,13 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: pipeline.depth_attachment(),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             // Draws nothing when there are no instances.
-            world.resource::<QuadPipeline>().draw(&mut pass);
+            pipeline.draw(&mut pass);
         }
         gpu.queue.submit([encoder.finish()]);
     }

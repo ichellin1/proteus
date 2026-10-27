@@ -166,7 +166,8 @@ choosing a different shader:
   baked image as its texture.
 
 Drawing order is the order of the instances: `collect_instances` sorts them, so later ones
-are on top, and no depth buffer is used. At most `ProteusConfig.memory.max_instances` are
+are on top. A depth buffer is used only to skip covered pixels, below, with each instance's
+place in that order as its depth. At most `ProteusConfig.memory.max_instances` are
 drawn; beyond that, the topmost are dropped with a warning.
 
 **What this costs.** The CPU's work per frame grows with the number of components only in
@@ -189,6 +190,19 @@ by the full pipeline with their neighbors. A frame that would need more than 256
 in one call by the full pipeline. `RenderConfig::plain_pipeline` turns it off, drawing
 everything with the full shader in one call; baking into the atlases always uses the full
 shader.
+
+**Skipping covered pixels.** Where opaque components are stacked, most pixels would be shaded
+only to be painted over. So a depth pre-pass (`depth.wgsl`) runs first, in the same render
+pass: every instance's depth is its place in drawing order, `1 − (index + 1) / 2²⁴`, later ones
+nearer and each exact in a 32-bit float, and opaque components, a solid color with full alpha
+and opacity, write depth over the rectangle well inside their rounded corners and antialiased
+edge, inset by their largest radius and 2 pixels, where they're certainly fully opaque. The
+pre-pass shades nothing: its fragment stage does no work and writes no color. The main
+pipelines then test depth without writing it, so the GPU rejects a pixel a later opaque
+component covers before running the fragment shader, while the cover passes at its own depth.
+It draws exactly the same pixels, checked by a test. The depth buffer is the size of the target,
+cleared at the start of the pass and not stored, so on a tile-based GPU it never leaves the
+tile. `RenderConfig::skip_covered_pixels` turns it off; baking doesn't use it.
 
 ### The instance and its limits
 
@@ -449,8 +463,8 @@ These are known shortcomings, each planned to be addressed in a future release:
 
 - Proteus is 2D: components can't be placed, rotated or seen in perspective in 3D space, and
   every component is a rectangle.
-- Per-pixel work in the shader, rather than the number of components, limits large,
-  overlapping scenes.
+- Per-pixel work in the shader limits large scenes where translucent, textured or bordered
+  components overlap: only a solid, opaque component hides what's behind it from the shader.
 - Text and baked components are baked at logical-pixel resolution, so they are slightly soft
   on high-density displays.
 - Text is a single line.

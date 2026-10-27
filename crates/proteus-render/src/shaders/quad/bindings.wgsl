@@ -11,6 +11,7 @@
 //   effects.wgsl   — the shadow or glow, the border, and compositing them
 //   fragment.wgsl  — each pixel, from those parts in turn
 //   plain.wgsl     — the plain pipeline's entry points, for a solid color
+//   depth.wgsl     — the depth pre-pass, for skipping covered pixels
 //
 // Bind group 0:  uniform buffer   — view/projection matrix (one upload per frame)
 // Bind group 1:  main_atlas       — long-lived textures (text, images, baked components);

@@ -1,8 +1,9 @@
 # A fast path for plain components in the shader
 
 **Status:** in v0.2.0. The early exit, approach 1, saved only 8%, so plain components got a
-pipeline of their own, approach 2, which halved the large scene's frame natively; see PLANNING's
-step 6 and ARCHITECTURE's [plain pipeline](../../ARCHITECTURE.md#one-shader-and-a-plain-pipeline).
+pipeline of their own, approach 2, which halved the large scene's frame natively; skipping
+covered pixels, approach 4, then took a further 90% off it. See PLANNING's step 6 and
+ARCHITECTURE's [plain pipeline](../../ARCHITECTURE.md#one-shader-and-a-plain-pipeline).
 Found by the M14 benchmarks; see [BENCHMARKS.md](../../BENCHMARKS.md).
 
 Proteus's GPU work, not its CPU or its WebAssembly boundary, is what limits large scenes, and

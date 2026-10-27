@@ -313,6 +313,12 @@ pub struct RenderConfig {
     /// call, as before; on, runs of plain components big enough to be worth it
     /// get draw calls of their own.
     pub plain_pipeline: bool,
+    /// Don't shade the pixels of a component that a later opaque one covers,
+    /// a solid color with full alpha and opacity: a depth pre-pass marks them,
+    /// and the GPU skips them. It draws the same pixels; it saves the most
+    /// where opaque components are stacked, such as a dialog over a screen, and
+    /// costs a depth buffer the size of the window.
+    pub skip_covered_pixels: bool,
 }
 
 impl Default for RenderConfig {
@@ -323,6 +329,7 @@ impl Default for RenderConfig {
             power_preference: wgpu::PowerPreference::HighPerformance,
             msaa_samples: 1,
             plain_pipeline: true,
+            skip_covered_pixels: true,
         }
     }
 }

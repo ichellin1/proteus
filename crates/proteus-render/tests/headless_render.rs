@@ -703,6 +703,92 @@ fn the_plain_pipeline_draws_the_same_pixels() {
     );
 }
 
+// Skipping the pixels a later opaque component covers draws exactly the same
+// pixels: here, over a stack of overlapping components, opaque and
+// translucent, rounded and rotated, some with a border or shadow, drawn with
+// both pipelines.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn skipping_covered_pixels_draws_the_same_pixels() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        no_gpu();
+        return;
+    };
+    let mut instances = Vec::new();
+    for i in 0..24 {
+        let f = i as f32;
+        let mut q = QuadInstance {
+            position: [-20.0 + f * 1.7, 18.0 - f * 1.5, 0.0],
+            size: [30.0 + (i % 5) as f32 * 4.0, 22.0 + (i % 3) as f32 * 6.0],
+            rotation: if i % 7 == 3 { 0.4 } else { 0.0 },
+            scale: 1.0,
+            anchor: [0.5, 0.5],
+            color: [
+                0.1 + 0.035 * f,
+                0.8 - 0.03 * f,
+                0.5,
+                if i % 6 == 5 { 0.5 } else { 1.0 },
+            ],
+            opacity: if i % 9 == 8 { 0.6 } else { 1.0 },
+            corner_radii: [0; 4],
+            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+            atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
+            base_uv_offset: [0.0, 0.0],
+            base_uv_scale: [0.0, 0.0],
+            crossfade_t: 0.0,
+            border_width: 0.0,
+            border_color: [0.0; 4],
+            border_offset: 0.0,
+            shadow_params: [0.0; 4],
+            shadow_color: [0.0; 4],
+            base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+        };
+        q.set_corner_radius((i % 4) as f32 * 4.0);
+        if i % 8 == 2 {
+            q.border_width = 2.0;
+            q.border_color = [1.0, 1.0, 1.0, 1.0];
+            q.border_offset = -1.0;
+        }
+        if i % 10 == 4 {
+            q.shadow_params = [2.0, -2.0, 3.0, 0.0];
+            q.shadow_color = [0.0, 0.0, 0.0, 0.6];
+        }
+        instances.push(q);
+    }
+
+    let black = wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let draw = |plain_pipeline: bool, skip_covered: bool| {
+        let mut pipeline = QuadPipeline::new(
+            &device,
+            &queue,
+            FORMAT,
+            32,
+            AtlasConfig::default(),
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        );
+        pipeline.set_plain_pipeline(&device, plain_pipeline);
+        pipeline.set_skip_covered_pixels(&device, skip_covered);
+        pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+        render_and_read_back(&device, &queue, &mut pipeline, &instances, black)
+    };
+    let drawn = draw(false, false);
+    for plain_pipeline in [false, true] {
+        let skipping = draw(plain_pipeline, true);
+        assert!(
+            drawn == skipping,
+            "skipping covered pixels, with the plain pipeline {}, changed {} bytes",
+            if plain_pipeline { "on" } else { "off" },
+            drawn.iter().zip(&skipping).filter(|(a, b)| a != b).count()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -733,6 +819,8 @@ fn render_and_read_back(
     let render_view = render_target.create_view(&Default::default());
 
     pipeline.upload_instances(queue, instances);
+    // Only while skipping covered pixels is on.
+    pipeline.prepare_depth(device, WIDTH, HEIGHT);
 
     let readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("headless_readback"),
@@ -754,7 +842,7 @@ fn render_and_read_back(
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: pipeline.depth_attachment(),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,

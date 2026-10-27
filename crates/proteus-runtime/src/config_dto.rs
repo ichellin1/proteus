@@ -52,6 +52,8 @@ pub struct RenderDto {
     pub power_preference: Option<String>,
     #[serde(default)]
     pub plain_pipeline: Option<bool>,
+    #[serde(default)]
+    pub skip_covered_pixels: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -149,6 +151,9 @@ impl ProteusConfigDto {
             }
             if let Some(v) = r.plain_pipeline {
                 config.render.plain_pipeline = v;
+            }
+            if let Some(v) = r.skip_covered_pixels {
+                config.render.skip_covered_pixels = v;
             }
         }
         if let Some(m) = &self.memory {

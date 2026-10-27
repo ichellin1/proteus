@@ -287,6 +287,12 @@ export interface ProteusConfigOverrides {
      * Default `true`; `false` draws everything with the one full shader, in one draw call.
      */
     plainPipeline?: boolean;
+    /**
+     * Don't shade the pixels of a component that a later opaque one covers, a solid color with
+     * full alpha and opacity. It draws the same pixels, and saves the most where opaque
+     * components are stacked. Default `true`; `false` drops the depth buffer it needs.
+     */
+    skipCoveredPixels?: boolean;
   };
   /** GPU memory: atlas and instance-buffer sizes. */
   memory?: {
