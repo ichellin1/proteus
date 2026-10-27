@@ -14,40 +14,40 @@ GPU.
 **What the measurements show:**
 
 - **Proteus is fast for animated interfaces.** With every component always moving, Proteus held
-  the display's full rate of 60 fps up to 50,000 components in Chrome and in Safari, and took 17
-  to 20 ms a frame at 100,000. CSS, animating the same components with transitions, fell to 10
-  fps at 10,000 elements in Chrome, and to under 2 fps at 5,000 in Safari. Canvas 2D fell behind
-  60 fps between 25,000 and 50,000 components. The WebGL2 renderers written by hand to draw
-  rectangles kept pace, apart from the one that makes a draw call per component, which dropped
-  below 60 fps at 100,000 in Safari.
+  the display's full rate of 60 fps up to 100,000 components, in Chrome and in Safari. CSS,
+  animating the same components with transitions, fell to 10 fps at 10,000 elements in Chrome,
+  and to about 4 fps at 5,000 in Safari. Canvas 2D fell behind 60 fps from 25,000 components
+  in Safari and from 100,000 in Chrome. The WebGL2 renderers written by hand to draw rectangles
+  kept pace, apart from the one that makes a draw call per component, which dropped below 60
+  fps at 100,000 in Safari.
 - **The design claim holds.** With components only a few pixels across, so the GPU's work per
   pixel barely matters, Proteus draws at the display's full rate of 60 fps with up to half a
-  million components, in both browsers. At a million, it takes 24 to 30 ms a frame, against 150
+  million components, in both browsers. At a million, it takes 21 to 25 ms a frame, against 150
   ms for one draw call per component in Chrome, while in Safari that renderer was over 100 ms
   already at 500,000.
 - **It keeps up with a renderer batched by hand.** The WebGL2 renderer that batches every
   rectangle into one draw call by hand, uploading all of them every frame, is the fastest
-  possible design for rectangles alone. At a million small components, Proteus took 24 to 26 ms
-  a frame in Safari against its 27, and 27 to 30 ms in Chrome against its 16.7. Before v0.2.0,
+  possible design for rectangles alone. At a million small components, Proteus took 21 to 22 ms
+  a frame in Safari against its 27, and 23 to 25 ms in Chrome against its 16.7. Before v0.2.0,
   when Proteus collected and uploaded every component every frame, it was 3 times slower in
   Safari and 5 in Chrome.
-- **What limits Proteus is per-pixel work.** Its one shader handles borders, shadows, glows,
-  images and video, and does more work on every pixel than a shader that only draws a rounded
-  rectangle, even for a plain component. With large, still components overlapping many times, it
-  falls below 60 fps between 5,000 and 10,000 components in both browsers, where the
-  hand-written WebGL2 renderers keep 60 fps up through 10,000; at 25,000, Proteus takes 95 to
-  105 ms a frame in Chrome against hand-written WebGL2 renderers at 33 ms. Chrome's Canvas 2D
-  does best here, keeping 60 fps with up to 25,000 elements on screen. Proteus's frame times
-  are uneven there, too: from 5,000 components up, its p99 is often twice its median or more,
-  in both browsers and from TypeScript and Rust alike, while the hand-written renderers' mostly
-  stay within 15% of theirs.
+- **With large components overlapping, it's the fastest of them all.** With components 20 to
+  200 pixels across, stacked many times over, Proteus holds the display's full rate with up to
+  100,000 of them in Safari, and takes 19.9 ms a frame at 100,000 in Chrome, where the WebGL2
+  renderers written by hand take 100 to 136 ms and Canvas 2D 83 to 144. Its frame times are
+  even, too: the p99 stays within a few milliseconds of the median. Before v0.2.0 this was
+  Proteus's weak spot: it fell below 60 fps between 5,000 and 10,000 components, took 88 ms a
+  frame at 25,000 in Chrome, and crashed Safari's tab at 100,000. Plain components now take a
+  smaller shader, and the GPU skips the pixels a later opaque component covers. The scene's
+  components are all solid and opaque, which is where skipping covered pixels helps most;
+  translucent, textured or bordered components stacked this deep still cost their pixels.
 - **Starting many moves at once costs more from TypeScript.** Running transitions is cheap, but
   each `animateTo` call from TypeScript crosses into WebAssembly. When 100,000 components get
-  new moves in one frame, that frame took 256 ms in Chrome and 344 in Safari. The same app
-  written in Rust, whose calls don't cross, took 93 and 87. Otherwise the two draw the same.
+  new moves in one frame, that frame took 236 ms in Chrome and 342 in Safari. The same app
+  written in Rust, whose calls don't cross, took 74 and 70. Otherwise the two draw the same.
 
-What's left of these limits is planned: a fast path in the shader for plain components, in
-v0.2.0, and a call that starts many transitions at once, in v0.6.0.
+What's left of these limits is planned: a call that starts many transitions at once, in
+v0.6.0.
 
 ## Performance history
 
@@ -68,6 +68,11 @@ change is also in [CHANGELOG.md](./CHANGELOG.md), under the release it shipped i
 | | | Chrome, large still scene, frame at 25,000 | 95 ms | 48 ms |
 | | | Safari, large still scene, frame at 25,000 | 96 ms | 51 ms |
 | | | Both browsers, most large components at the display's full rate | 5,000 | 10,000 (Safari), almost (Chrome, 19 ms) |
+| v0.2.0 | Pixels a later opaque component covers aren't shaded | Native, large still scene, frame at 100,000 | 50.9 ms | 5.1 ms |
+| | | Native, large still scene, frame at 25,000 | 12.3 ms | 1.9 ms |
+| | | Chrome, large still scene, frame at 50,000 | 98–100 ms | 16.7 ms |
+| | | Safari, large still scene, frame at 50,000 | 102–104 ms | 17 ms |
+| | | Safari, large still scene, at 100,000 | The tab crashed | 17 ms |
 
 ## How it's measured
 
@@ -131,8 +136,9 @@ every renderer:
 - **Small, still:** components 4 to 8 pixels across. Even a million cover the canvas only a few
   times, so per-pixel work stays small, and what's left is each renderer's cost per component.
 - **Large, still:** components 20 to 200 pixels across, overlapping many times at high counts,
-  so filling pixels dominates. It stops at 50,000: past that, frames take long enough that
-  Safari resets its GPU process and the tab crashes.
+  so filling pixels dominates. It stops at 100,000: past that, a renderer's frames can take
+  long enough that Safari resets its GPU process and the tab crashes, as Proteus's did at
+  100,000 before v0.2.0.
 - **Moving:** components 10 to 40 pixels across, every one always moving: each gets a new random
   place every half second, and moves there over half a second, easing in and out. Proteus
   moves them with `animateTo`, CSS with transitions, and the others by drawing them at new
@@ -146,10 +152,11 @@ crashes can resume, with the crash noted.
 ## Results
 
 Natively, in Chrome and in Safari, on a MacBook Air (Apple M4, 10 CPU cores, 24 GB) running
-macOS 26.5.2, on 22 October 2026, during v0.2.0, with its instance cache. The Air has no fan, so
-a long run can slow as it warms; each table is from one run, apart from the browsers' small
-scene above 100,000 components, run on its own. Then on a low-end machine: in Chrome on a
-two-year-old Chromebook, with WebGL2, before v0.2.0's changes.
+macOS 26.5.2, on 22 October 2026, during v0.2.0, with its instance cache, plain pipeline and
+skipping of covered pixels. The Air has no fan, so a long run can slow as it warms; each table
+is from one run, apart from the browsers' small scene above 100,000 components and large scene
+at 100,000, each run on its own. Then on a low-end machine: in Chrome on a two-year-old
+Chromebook, with WebGL2, before v0.2.0's changes.
 
 ### Native
 
@@ -159,50 +166,50 @@ Release build, Metal. Times in milliseconds.
 
 | Components | CPU median | CPU p99 | Frame interval median | Frame interval p99 |
 |---:|---:|---:|---:|---:|
-| 100 | 0.03 | 0.10 | 0.04 | 3.82 |
-| 1,000 | 0.09 | 0.22 | 0.11 | 2.67 |
-| 5,000 | 0.21 | 0.59 | 0.22 | 2.78 |
-| 10,000 | 0.28 | 0.38 | 0.32 | 2.85 |
-| 25,000 | 0.45 | 0.52 | 0.47 | 1.76 |
-| 50,000 | 0.71 | 0.77 | 0.72 | 2.00 |
-| 100,000 | 1.32 | 1.41 | 1.32 | 2.59 |
+| 100 | 0.04 | 0.20 | 0.05 | 3.83 |
+| 1,000 | 0.08 | 0.23 | 0.10 | 3.86 |
+| 5,000 | 0.18 | 0.37 | 0.24 | 2.80 |
+| 10,000 | 0.32 | 0.57 | 0.38 | 3.04 |
+| 25,000 | 0.35 | 0.39 | 0.35 | 1.62 |
+| 50,000 | 0.68 | 0.72 | 0.68 | 1.95 |
+| 100,000 | 1.32 | 1.40 | 1.32 | 2.58 |
 
 **Large components, still:**
 
 | Components | CPU median | CPU p99 | Frame interval median | Frame interval p99 |
 |---:|---:|---:|---:|---:|
 | 100 | 0.02 | 0.07 | 0.05 | 1.30 |
-| 1,000 | 0.04 | 0.10 | 1.29 | 1.37 |
-| 5,000 | 0.35 | 0.70 | 5.23 | 6.61 |
-| 10,000 | 0.84 | 1.24 | 10.08 | 11.20 |
-| 25,000 | 1.65 | 2.69 | 26.54 | 28.04 |
-| 50,000 | 2.32 | 4.30 | 53.74 | 56.46 |
-| 100,000 | 5.95 | 7.19 | 111.84 | 115.96 |
+| 1,000 | 0.06 | 0.09 | 0.07 | 1.35 |
+| 5,000 | 0.17 | 0.27 | 0.19 | 1.48 |
+| 10,000 | 0.33 | 0.61 | 0.49 | 1.85 |
+| 25,000 | 0.77 | 0.93 | 2.01 | 3.28 |
+| 50,000 | 1.49 | 1.78 | 2.75 | 4.04 |
+| 100,000 | 2.46 | 2.60 | 5.10 | 7.39 |
 
 **Moving components:**
 
 | Components | CPU median | CPU p99 | Frame interval median | Frame interval p99 |
 |---:|---:|---:|---:|---:|
-| 100 | 0.12 | 0.24 | 0.12 | 1.44 |
-| 1,000 | 0.21 | 0.63 | 0.21 | 1.50 |
-| 5,000 | 0.46 | 2.77 | 0.46 | 2.77 |
-| 10,000 | 0.93 | 6.21 | 0.93 | 6.21 |
-| 25,000 | 2.40 | 15.75 | 2.40 | 15.75 |
-| 50,000 | 5.09 | 31.85 | 5.09 | 31.85 |
-| 100,000 | 10.54 | 65.26 | 10.54 | 65.26 |
+| 100 | 0.07 | 0.21 | 0.08 | 1.40 |
+| 1,000 | 0.15 | 0.45 | 0.16 | 1.46 |
+| 5,000 | 0.47 | 2.80 | 0.47 | 2.80 |
+| 10,000 | 0.89 | 5.81 | 0.89 | 5.81 |
+| 25,000 | 2.23 | 14.91 | 2.23 | 14.91 |
+| 50,000 | 4.73 | 30.36 | 4.73 | 30.36 |
+| 100,000 | 9.75 | 60.68 | 9.75 | 60.68 |
 
 With small components, the CPU sets the frame rate. A still frame redoes nothing it did before,
 and only draws: 100,000 components take 1.3 ms a frame, about 13 ns of CPU each, against 7.9 ms
 before v0.2.0, when every component's instance was collected and uploaded every frame. Moving
-them all costs more, 10.5 ms, since every instance is redone and uploaded every frame; that
-scene ran last, as the Air warmed, and run on its own it took 9.2 ms against 9.4 before the
-cache. Its p99 is the frame every half second where every component gets a new transition,
-about 0.5 µs each.
+them all costs more, 9.8 ms, since every instance is redone and uploaded every frame. Its p99
+is the frame every half second where every component gets a new transition, about 0.5 µs
+each.
 
-With large components, the GPU sets the frame rate: at 100,000, the CPU's work takes 6 ms of a
-112 ms frame. Most of the GPU's time is the fragment shader: with it made to return a flat
-color, the interval fell from 11.4 to 2.8 ms at 10,000 components, and from 33 to 15.7 ms at
-25,000.
+With large components, the GPU set the frame rate before v0.2.0: 112 ms a frame at 100,000,
+most of it the fragment shader, run for every pixel of every component, however many times it
+was covered. Plain components now take a smaller shader, and pixels a later opaque component
+covers aren't shaded at all: 5.1 ms a frame, 22 times faster, of which 2.5 is the CPU's own
+work.
 
 **A still frame's CPU work, by phase** (`phases`, medians in milliseconds). The last two
 columns are what the renderer does instead of `collect_instances` since v0.2.0: it keeps the
@@ -233,11 +240,11 @@ the display's cap.
 | Components | Proteus (TypeScript) | Proteus (Rust) | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
 |---:|---:|---:|---:|---:|---:|
 | 100 to 25,000 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
-| 50,000 | 16.7 | 16.7 | 32.3 | 16.7 | 16.7 |
-| 100,000 | 16.6 | 16.6 | 66.7 (84.2) | 16.7 | 16.7 |
-| 250,000 | 16.6 | 16.7 | 183.4 (216.7) | 33.4 (51.0) | 16.7 |
-| 500,000 | 16.7 | 16.7 | skipped | 67.6 (84.3) | 16.7 |
-| 1,000,000 | 27.1 (34.3) | 29.8 (35.0) | skipped | 150.0 | 16.7 (34.4) |
+| 50,000 | 16.7 | 16.6 | 32.7 | 16.7 | 16.7 |
+| 100,000 | 16.6 | 16.7 | 66.7 (83.4) | 16.7 | 16.7 |
+| 250,000 | 16.7 | 16.7 | 183.3 (216.7) | 33.4 (50.9) | 16.7 |
+| 500,000 | 16.7 | 16.7 | skipped | 67.6 (84.4) | 16.7 |
+| 1,000,000 | 23.3 | 24.7 | skipped | 150.0 | 16.7 (34.2) |
 
 Canvas 2D was skipped once it was slower than 100 ms a frame.
 
@@ -245,16 +252,10 @@ Canvas 2D was skipped once it was slower than 100 ms a frame.
 
 | Components | Proteus (TypeScript) | Proteus (Rust) | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
 |---:|---:|---:|---:|---:|---:|
-| 100 | 16.7 | 16.7 (23.1) | 16.7 | 16.7 | 16.7 |
-| 1,000 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
-| 5,000 | 17.6 (39.9) | 18.7 (39.9) | 16.7 | 16.7 | 16.7 |
-| 10,000 | 41.5 (77.9) | 40.3 (77.9) | 16.7 | 16.7 | 16.7 |
-| 25,000 | 94.9 (191.4) | 105.0 (192.5) | 16.7 | 33.3 | 33.3 |
-| 50,000 | 186.1 (574.9) | skipped | 32.4 | 50.0 (67.5) | 50.0 (67.4) |
-
-Proteus (Rust) was skipped at 50,000, being just over 100 ms a frame at 25,000. Measured on its
-own at 50,000, Proteus took 363 ms a frame from TypeScript and Rust alike: at this size,
-Chrome's frame times settle at about 180 or about 360 ms, varying from run to run.
+| 100 to 10,000 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
+| 25,000 | 16.7 | 16.6 | 16.7 | 33.3 | 33.3 |
+| 50,000 | 16.7 | 16.7 | 16.8 (33.4) | 50.0 (66.8) | 50.0 (67.5) |
+| 100,000 | 19.9 | 19.9 | 83.2 | 100.1 (117.7) | 100.1 (117.0) |
 
 **Moving components** (10 to 40 pixels, every one always moving). CSS was skipped once it was
 slower than 100 ms a frame:
@@ -263,11 +264,11 @@ slower than 100 ms a frame:
 |---:|---:|---:|---:|---:|---:|---:|
 | 100 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
 | 1,000 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 | 16.7 |
-| 5,000 | 16.7 (25.2) | 16.7 (21.0) | 50.0 (149.0) | 16.7 | 16.7 | 16.7 |
-| 10,000 | 16.7 (35.8) | 16.7 (21.1) | 100.0 (366.7) | 16.7 | 16.7 | 16.7 |
-| 25,000 | 16.7 (62.9) | 16.7 (23.1) | skipped | 16.7 | 16.7 | 16.7 |
-| 50,000 | 16.7 (118.4) | 16.6 (35.8) | skipped | 17.7 (34.4) | 16.7 | 16.7 |
-| 100,000 | 17.3 (255.5) | 19.7 (92.8) | skipped | 66.7 (98.0) | 16.7 | 16.7 |
+| 5,000 | 16.7 (24.1) | 16.7 (20.4) | 50.0 (134.3) | 16.7 | 16.7 | 16.7 |
+| 10,000 | 16.7 (36.0) | 16.7 (21.1) | 100.0 (383.3) | 16.7 | 16.7 | 16.7 |
+| 25,000 | 16.7 (63.2) | 16.7 (26.6) | skipped | 16.7 | 16.7 | 16.7 |
+| 50,000 | 16.7 (117.5) | 16.7 (36.4) | skipped | 17.4 (33.4) | 16.7 | 16.7 |
+| 100,000 | 17.0 (236.1) | 16.9 (73.5) | skipped | 66.7 (83.5) | 16.7 | 16.7 |
 
 ### Safari
 
@@ -281,41 +282,37 @@ display's cap. Safari reports time in whole milliseconds.
 |---:|---:|---:|---:|---:|---:|
 | 100 to 10,000 | 17 | 17 | 17 | 17 | 17 |
 | 25,000 | 17 | 17 | 23 | 17 | 17 |
-| 50,000 | 17 | 17 | 48 | 17 (21) | 17 |
-| 100,000 | 17 | 17 | 101 | 28 (35) | 17 |
-| 250,000 | 17 | 17 | 262 | 74 | 18 (24) |
-| 500,000 | 17 | 17 | skipped | 138 | 17 (23) |
-| 1,000,000 | 24 | 26 (30) | skipped | skipped | 27 |
+| 50,000 | 17 | 17 | 49 | 17 (20) | 17 |
+| 100,000 | 17 | 17 | 103 | 29 (35) | 17 |
+| 250,000 | 17 | 17 | 269 | 74 | 17 (24) |
+| 500,000 | 17 | 17 | skipped | 138 | 17 (24) |
+| 1,000,000 | 21 | 22 | skipped | skipped | 27 |
 
 Canvas 2D and the naive WebGL2 renderer were skipped once they were slower than 100 ms a frame.
 
-**Large components.** Proteus was skipped once it was slower than 100 ms a frame:
+**Large components:**
 
 | Components | Proteus (TypeScript) | Proteus (Rust) | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
 |---:|---:|---:|---:|---:|---:|
 | 100 | 17 | 17 | 17 | 17 | 17 |
 | 1,000 | 17 | 17 | 17 | 17 | 17 |
-| 5,000 | 17 (39) | 17 (21) | 17 | 20 (27) | 17 (21) |
-| 10,000 | 39 | 38 (104) | 17 | 17 (20) | 17 |
-| 25,000 | 96 (280) | 93 (287) | 37 (231) | 35 | 30 |
-| 50,000 | 190 (602) | not measured | 81 (1,054) | 69 | 59 |
-
-Proteus (Rust) at 50,000 measured a median of 17 ms in two runs, with a p99 over 600 ms:
-Safari reset the GPU after the first long frames, and Proteus, which doesn't recover from a lost
-GPU yet, stopped drawing while the page went on timing frames. Measured on its own, Proteus
-(TypeScript) took 221 ms there.
+| 5,000 | 17 | 17 | 17 | 21 (28) | 17 (22) |
+| 10,000 | 17 | 17 | 17 | 17 (22) | 17 (21) |
+| 25,000 | 17 | 17 | 37 | 35 | 30 |
+| 50,000 | 17 | 17 (20) | 73 (87) | 69 | 58 |
+| 100,000 | 17 (21) | 17 (21) | 144 | 136 | 115 |
 
 **Moving components.** CSS was skipped once it was slower than 100 ms a frame:
 
 | Components | Proteus (TypeScript) | Proteus (Rust) | CSS | Canvas 2D | Naive WebGL2 | Batched WebGL2 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 100 | 17 | 17 | 17 (25) | 17 | 17 | 17 |
-| 1,000 | 17 | 17 | 17 (90) | 17 | 17 | 17 |
-| 5,000 | 17 (42) | 17 (20) | 672 | 17 | 17 | 17 |
-| 10,000 | 17 (50) | 17 (22) | skipped | 17 | 17 | 17 |
-| 25,000 | 17 (90) | 17 (23) | skipped | 23 (27) | 17 (20) | 17 (29) |
-| 50,000 | 17 (167) | 17 (35) | skipped | 50 (62) | 17 (30) | 18 (37) |
-| 100,000 | 17 (344) | 20 (87) | skipped | 113 (162) | 33 (61) | 19 (54) |
+| 100 | 17 | 17 | 17 | 17 | 17 | 17 |
+| 1,000 | 17 | 17 | 17 (36) | 17 | 17 | 17 |
+| 5,000 | 17 (39) | 17 (20) | 231 (410) | 17 | 17 | 17 |
+| 10,000 | 17 (50) | 17 (21) | skipped | 17 | 17 | 17 |
+| 25,000 | 17 (92) | 17 (23) | skipped | 24 (28) | 17 (21) | 16 (27) |
+| 50,000 | 17 (168) | 17 (37) | skipped | 50 (65) | 17 (29) | 17 (44) |
+| 100,000 | 16 (342) | 17 (70) | skipped | 109 (133) | 32 (59) | 20 (54) |
 
 ### A Chromebook
 
@@ -426,7 +423,7 @@ The page takes two settings, in its address, both optional:
 | `counts` | The component counts to measure, separated by commas | `100,1000,5000,10000,25000,50000,100000` |
 
 For example, `http://localhost:4173/?scenes=small&counts=100000,250000,500000,1000000`. The large
-scene stops at 50,000 whatever `counts` asks for.
+scene stops at 100,000 whatever `counts` asks for.
 
 The page saves its progress for each address. If the tab crashes, reload the same address and
 click **Resume**: the measurement that crashed is marked, and the run carries on. **Start over**
