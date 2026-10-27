@@ -13,8 +13,8 @@ use bevy_ecs::world::World;
 use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, TextureId};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{
-    BakedImage, BakedText, EffectiveVisibility, Image, ImageTextureRef, Text, TextTextureRef,
-    Visibility,
+    BakeScale, BakedImage, BakedText, EffectiveVisibility, Image, ImageTextureRef, Text,
+    TextTextureRef, Visibility,
 };
 
 use crate::services::HostServices;
@@ -99,10 +99,38 @@ pub(crate) fn bake_pending_text(
             .collect()
     };
 
+    // Rasterized at the bake scale, so a texel is a display pixel, and drawn
+    // at its logical size.
+    let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     for (entity, text) in pending {
-        let Some(mut glyphs) =
-            font_atlas.rasterize_text(&text.content, text.size_px, text.letter_spacing_px)
-        else {
+        let mut scale = bake_scale;
+        let mut glyphs = font_atlas.rasterize_text(
+            &text.content,
+            text.size_px * scale,
+            text.letter_spacing_px * scale,
+        );
+        // Too large for a page at the bake scale: rasterized again, at the
+        // largest scale that fits, if that is above 1.
+        let max = world
+            .get_resource::<QuadPipeline>()
+            .map_or(u32::MAX, |p| p.texture_registry.max_texture_side());
+        if let Some(g) = &glyphs {
+            let fitted = proteus_ui::bake_scale_to_fit(
+                scale,
+                g.width as f32 / scale,
+                g.height as f32 / scale,
+                max,
+            );
+            if fitted < scale {
+                scale = fitted;
+                glyphs = font_atlas.rasterize_text(
+                    &text.content,
+                    text.size_px * scale,
+                    text.letter_spacing_px * scale,
+                );
+            }
+        }
+        let Some(mut glyphs) = glyphs else {
             world.entity_mut(entity).insert(BakedText {
                 uv_offset: [0.0, 0.0],
                 uv_scale: [0.0, 0.0],
@@ -153,7 +181,8 @@ pub(crate) fn bake_pending_text(
                 uv_offset: uv.uv_offset,
                 uv_scale: uv.uv_scale,
                 page: uv.page,
-                pixel_size: [glyphs.width as f32, glyphs.height as f32],
+                // The size it's drawn at, in logical pixels.
+                pixel_size: [glyphs.width as f32 / scale, glyphs.height as f32 / scale],
             },
             TextTextureRef(texture_id),
         ));

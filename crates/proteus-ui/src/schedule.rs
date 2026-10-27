@@ -168,6 +168,8 @@ impl ProteusWorld {
         // A default, replaced with the configured size when a renderer is
         // created.
         world.init_resource::<TransitionAtlasSize>();
+        // 1, replaced with the display's scale when a renderer is created.
+        world.init_resource::<crate::bake::BakeScale>();
         channel::init_resources(&mut world);
 
         // Component hooks must be registered before any entity has the

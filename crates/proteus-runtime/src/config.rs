@@ -491,9 +491,10 @@ impl Default for TextConfig {
 // ResourceConfig
 // ---------------------------------------------------------------------------
 
-/// Image and texture loading settings. The default keeps images at full size
-/// and bakes text and images whether or not their component is visible.
-#[derive(Debug, Clone, Copy, Default)]
+/// Image and texture loading settings. The default keeps images at full size,
+/// bakes text and images whether or not their component is visible, and bakes
+/// at up to twice the logical resolution.
+#[derive(Debug, Clone, Copy)]
 pub struct ResourceConfig {
     /// Scale images down so their longer side is at most this many pixels,
     /// unless the image sets its own
@@ -503,6 +504,49 @@ pub struct ResourceConfig {
     /// Wait to bake a component's text or image until the component is
     /// visible.
     pub lazy_load: bool,
+    /// The most texels per logical pixel that text, baked components and the
+    /// images splits and merges bake are baked at. They're baked at the
+    /// display's scale factor, up to this, and at least 1, and drawn at their
+    /// logical size, so on a high-density display they're as sharp as the
+    /// shapes the shader draws. The default, 2, makes them fully sharp on
+    /// Retina Macs, most high-density Windows and Linux displays, and in
+    /// browsers at a pixel ratio of 2, the most common high-density setups.
+    ///
+    /// **What it costs.** A bake at scale `s` takes `s²` times the atlas space
+    /// of one at 1: at 2, text and baked components take four times as much,
+    /// and at 3, nine. That matters most on the web, whose atlas pages are
+    /// 2048 pixels on a side: a 1,200 × 800 baked component fits a page at 1
+    /// but not at 2, and is baked at the largest scale that fits instead.
+    /// Splits and merges bake into the transition atlas the same way, so
+    /// larger transitions fill it sooner.
+    ///
+    /// **When to change it.** On a 3× display, such as most phones, a cap of 2
+    /// keeps bakes at 44% of the memory 3 would take, slightly soft where 3
+    /// would be exact; raise it to 3 if text there must be pixel-exact and
+    /// the atlas has room. Lower it to 1, the resolution before v0.2.0, for an
+    /// app with a lot of text or many baked components that runs short of
+    /// atlas space, at the cost of slightly soft text on high-density
+    /// displays.
+    pub max_bake_scale: f32,
+}
+
+impl Default for ResourceConfig {
+    fn default() -> Self {
+        Self {
+            image_max_side: None,
+            lazy_load: false,
+            max_bake_scale: 2.0,
+        }
+    }
+}
+
+impl ResourceConfig {
+    /// The [`BakeScale`](proteus_ui::BakeScale) for a display with
+    /// `scale_factor`: the display's scale, capped by
+    /// [`max_bake_scale`](Self::max_bake_scale), and at least 1.
+    pub fn bake_scale(&self, scale_factor: f32) -> f32 {
+        scale_factor.min(self.max_bake_scale).max(1.0)
+    }
 }
 
 // ---------------------------------------------------------------------------

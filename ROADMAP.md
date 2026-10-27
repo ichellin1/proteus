@@ -181,6 +181,9 @@ Not yet placed in a release. Unordered within each area.
 
 ### Transitions and components
 
+- A component baked with `.bake()` keeping its children, hidden, rather than destroying them,
+  so that it can be baked again: at a new display scale, when a window moves to a display of
+  another density, or when its content changes.
 - A composite-bake transition strategy: flatten a subtree into one quad for the length of a
   transition. [Design note](./docs/design/composite-bake.md)
 - Advanced transition effects, such as particle dissolution and fluid deformation.

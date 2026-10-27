@@ -28,7 +28,9 @@
 
 use proteus_render::{GpuContext, QuadPipeline};
 use proteus_sdk::Proteus;
-use proteus_ui::{InstanceCache, InstanceChanges, TransitionAtlasSize};
+use proteus_ui::{
+    BakeScale, BakedText, InstanceCache, InstanceChanges, TextTextureRef, TransitionAtlasSize,
+};
 
 use crate::bake;
 use crate::config::{FontSource, ProteusConfig};
@@ -104,6 +106,9 @@ impl Renderer {
         });
         world.insert_resource(pipeline);
         world.insert_resource(TransitionAtlasSize(mem.transition_atlas_size));
+        world.insert_resource(BakeScale(
+            config.resources.bake_scale(viewport.scale_factor),
+        ));
 
         // Use the configured font, or the embedded one. Bytes that aren't a
         // font fall back to the embedded font rather than stopping the app;
@@ -132,6 +137,11 @@ impl Renderer {
 
     /// Updates the projection for a new viewport. The host resizes the GPU
     /// surface itself. The atlases keep their size.
+    ///
+    /// If the display's scale factor changed the bake scale, as when a window
+    /// moves to a display of another density, text is baked again at the new
+    /// one before the next frame is drawn. Baked components keep the scale
+    /// they were baked at: baking destroys what they were drawn from.
     pub fn resize(&mut self, proteus: &mut Proteus, viewport: Viewport) {
         self.viewport = viewport;
         let queue = proteus.world().resource::<GpuContext>().queue.clone();
@@ -142,6 +152,22 @@ impl Renderer {
                 &queue,
                 QuadPipeline::ortho(viewport.logical_size.x, viewport.logical_size.y),
             );
+
+        let scale = self.config.resources.bake_scale(viewport.scale_factor);
+        let world = proteus.world_mut();
+        if world.resource::<BakeScale>().0 != scale {
+            world.insert_resource(BakeScale(scale));
+            let baked: Vec<_> = world
+                .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<BakedText>>()
+                .iter(world)
+                .collect();
+            for entity in baked {
+                // Releases the old texture; see `proteus_ui::texture_ref`.
+                world
+                    .entity_mut(entity)
+                    .remove::<(BakedText, TextTextureRef)>();
+            }
+        }
     }
 
     /// Draws one frame into `target`, a surface texture the host has acquired:
@@ -258,6 +284,11 @@ mod tests {
 
     impl Scene {
         fn new(config: ProteusConfig) -> Option<Self> {
+            Self::with_scale(config, 1.0)
+        }
+
+        /// A scene on a display with `scale_factor`.
+        fn with_scale(config: ProteusConfig, scale_factor: f32) -> Option<Self> {
             let Some((device, queue)) = pollster::block_on(headless_device()) else {
                 eprintln!("proteus-runtime: no GPU adapter available — skipping");
                 return None;
@@ -268,7 +299,7 @@ mod tests {
                 &device,
                 &queue,
                 wgpu::TextureFormat::Rgba8Unorm,
-                Viewport::new(Vec2::new(64.0, 64.0), 1.0),
+                Viewport::new(Vec2::new(64.0, 64.0), scale_factor),
                 config,
             );
             let target = device
@@ -468,5 +499,120 @@ mod tests {
         for _ in 0..5 {
             assert!(scene.frame());
         }
+    }
+
+    /// `handle`'s baked text: its size in logical pixels, and its texture's
+    /// width in the atlas, in texels.
+    fn baked_text(scene: &Scene, handle: &Handle) -> ([f32; 2], u32) {
+        let world = scene.proteus.world();
+        let baked = world.get::<BakedText>(handle.id()).expect("baked");
+        let texture = world.get::<TextTextureRef>(handle.id()).expect("baked").0;
+        let width = world
+            .resource::<QuadPipeline>()
+            .texture_registry
+            .main_atlas_region(texture)
+            .expect("in the atlas")
+            .width;
+        (baked.pixel_size, width)
+    }
+
+    /// A component showing "Proteus" at 16 pixels, baked.
+    fn text_scene(scale_factor: f32, config: ProteusConfig) -> Option<(Scene, Handle)> {
+        let mut scene = Scene::with_scale(config, scale_factor)?;
+        let label = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(Text::new("Proteus", 16.0)));
+        scene.frame();
+        Some((scene, label))
+    }
+
+    #[test]
+    fn text_is_baked_at_the_display_scale_and_drawn_at_its_logical_size() {
+        let Some((at_1, label_1)) = text_scene(1.0, ProteusConfig::default()) else {
+            return;
+        };
+        let Some((at_2, label_2)) = text_scene(2.0, ProteusConfig::default()) else {
+            return;
+        };
+        let (size_1, texels_1) = baked_text(&at_1, &label_1);
+        let (size_2, texels_2) = baked_text(&at_2, &label_2);
+        // Glyphs are rounded to whole texels at each size, so allow a texel.
+        assert!(
+            (texels_2 as f32 - 2.0 * texels_1 as f32).abs() <= 2.0,
+            "twice the texels: {texels_1} at 1, {texels_2} at 2"
+        );
+        assert!(
+            (size_2[0] - size_1[0]).abs() <= 1.0 && (size_2[1] - size_1[1]).abs() <= 1.0,
+            "the same logical size: {size_1:?} at 1, {size_2:?} at 2"
+        );
+    }
+
+    #[test]
+    fn a_new_display_scale_bakes_text_again() {
+        let Some((mut scene, label)) = text_scene(1.0, ProteusConfig::default()) else {
+            return;
+        };
+        let (size_1, texels_1) = baked_text(&scene, &label);
+        scene.renderer.resize(
+            &mut scene.proteus,
+            Viewport::new(Vec2::new(64.0, 64.0), 2.0),
+        );
+        assert!(scene.frame(), "the new bake is drawn");
+        let (size_2, texels_2) = baked_text(&scene, &label);
+        assert!(
+            texels_2 as f32 >= 2.0 * texels_1 as f32 - 2.0,
+            "{texels_1} then {texels_2}"
+        );
+        assert!(
+            (size_2[0] - size_1[0]).abs() <= 1.0,
+            "{size_1:?} then {size_2:?}"
+        );
+    }
+
+    #[test]
+    fn max_bake_scale_caps_the_bake_scale() {
+        let Some((at_2, label_2)) = text_scene(2.0, ProteusConfig::default()) else {
+            return;
+        };
+        let Some((at_3, label_3)) = text_scene(3.0, ProteusConfig::default()) else {
+            return;
+        };
+        assert_eq!(
+            baked_text(&at_3, &label_3).1,
+            baked_text(&at_2, &label_2).1,
+            "a 3× display bakes at the default cap, 2"
+        );
+        let mut config = ProteusConfig::default();
+        config.resources.max_bake_scale = 1.0;
+        let Some((capped, label)) = text_scene(2.0, config) else {
+            return;
+        };
+        let Some((at_1, label_1)) = text_scene(1.0, ProteusConfig::default()) else {
+            return;
+        };
+        assert_eq!(baked_text(&capped, &label).1, baked_text(&at_1, &label_1).1);
+    }
+
+    #[test]
+    fn a_baked_component_is_baked_at_the_display_scale() {
+        let Some(mut scene) = Scene::with_scale(ProteusConfig::default(), 2.0) else {
+            return;
+        };
+        let card = scene.proteus.component(
+            ComponentSpec::new(QuadState {
+                size: Vec2::new(20.0, 10.0),
+                color: Vec4::new(0.2, 0.4, 0.8, 1.0),
+                ..Default::default()
+            })
+            .bake(),
+        );
+        scene.frame();
+        scene.frame();
+        let baked = scene
+            .proteus
+            .world()
+            .get::<proteus_ui::BakedComposite>(card.id())
+            .expect("baked");
+        assert_eq!(baked.pixel_size, [40.0, 20.0]);
     }
 }

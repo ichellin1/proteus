@@ -163,12 +163,14 @@ results in BENCHMARKS, and the reference demo on a still screen.
   `RenderConfig::plain_pipeline` turns it off. Natively, the large scene's frame went from
   108.7 to 51.6 ms at 100,000, from 25.7 to 11.8 at 25,000 and from 10.3 to 5.3 at 10,000; the
   small and moving scenes didn't change.
-- [ ] A component that only shows video, with no border, shadow or glow, takes a fast path too,
-  sampling the video texture and nothing else. Built: it takes the full shader's shorter path,
-  for any component with no border, shadow, glow or crossfade, which samples its one texture and
-  nothing else. Still to measure. Measured with the demo's video full screen; the
+- [x] A component that only shows video, with no border, shadow or glow, takes a fast path too,
+  sampling the video texture and nothing else. Measured with the demo's video full screen; the
   saving is expected to be small next to the cost of getting frames to the GPU, which v0.5.0
-  addresses.
+  addresses. It takes the full shader's shorter path, for any component with no border,
+  shadow, glow or crossfade. Measured with the native benchmark's new `video` scene, a new
+  1280 × 800 frame uploaded every frame, it makes no difference: one full-screen video takes
+  0.45 to 0.50 ms a frame before and after, and even 50 stacked, 4.7 to 4.9 ms, within the
+  runs' own variation. A video's cost is uploading the frame and filling the pixels.
 - [x] Pixels a later opaque component covers aren't shaded, with a depth buffer, measured on the
   large scene against the early exit and on the small scene to check it costs nothing there.
   Natively, the large scene's frame went from 50.9 to 5.1 ms at 100,000, from 12.3 to 1.9 at
@@ -189,13 +191,25 @@ results in BENCHMARKS, and the reference demo on a still screen.
   100,000. Proteus went from the slowest renderer there to the fastest: 19.9 ms a frame at
   100,000 in Chrome and 17 in Safari, against 100 to 136 for the WebGL2 renderers written by
   hand.
-- [ ] The reference demo, its Effects and Text examples especially, is checked on both shells.
+- [x] The reference demo, its Effects and Text examples especially, is checked on both shells.
 
 ### Step 7 — Bake at the display's resolution
 
-- [ ] Text and baked components are baked at the display's resolution and drawn at their
+- [x] Text and baked components are baked at the display's resolution and drawn at their
   logical size, and baked again when the scale factor changes.
-  [Design note](./docs/design/bake-resolution.md)
+  [Design note](./docs/design/bake-resolution.md) Text, baked components and the bakes of
+  splits and merges all bake at the display's scale factor, and text bakes again when it
+  changes. A baked component doesn't: baking destroys its children and its own color and
+  effects, so there is nothing to bake it again from.
+- **Decided (2026-10-27): bakes are capped at a scale of 2,** by
+  `ResourceConfig::max_bake_scale`. It makes them pixel-exact on the common high-density
+  displays, Retina Macs and browsers at a pixel ratio of 2, while a bake at scale `s` takes `s²`
+  the atlas space: 4× at 2, 9× at 3. 3× phones get 2× bakes, at 44% of the memory 3 would
+  take. A bake too large for its atlas at the scale takes the largest scale that fits. The
+  configuration guide explains the costs and when to change it.
+- **Decided (2026-10-27): a baked component keeps the scale it was first baked at.** Baking it
+  again on a scale change would need `.bake()` to keep its subtree, hidden, rather than destroy
+  it; that is a candidate in ROADMAP.
 
 ### Step 8 — Rounded corners on baked slices
 

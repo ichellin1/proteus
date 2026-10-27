@@ -94,6 +94,8 @@ pub struct ResourcesDto {
     pub image_max_side: Option<Option<u32>>,
     #[serde(default)]
     pub lazy_load: Option<bool>,
+    #[serde(default)]
+    pub max_bake_scale: Option<f32>,
 }
 
 /// Tells an absent field from an explicit `null`, so that
@@ -186,6 +188,9 @@ impl ProteusConfigDto {
             }
             if let Some(v) = r.lazy_load {
                 config.resources.lazy_load = v;
+            }
+            if let Some(v) = r.max_bake_scale {
+                config.resources.max_bake_scale = v;
             }
         }
         if let Some(t) = &self.text {

@@ -1,7 +1,9 @@
 # Bake at the display's resolution
 
-**Status:** a candidate. A known shortcoming, listed in
-[ARCHITECTURE.md](../../ARCHITECTURE.md#known-limits).
+**Status:** done in v0.2.0, capped at a scale of 2 by `ResourceConfig::max_bake_scale`; see
+PLANNING's step 7, ARCHITECTURE's [Baking](../../ARCHITECTURE.md#baking), and the
+[configuration guide](../guides/configuration.md#sharpness-on-high-density-displays). A baked
+component isn't baked again when the scale changes.
 
 Nothing that draws into a texture reads the display's scale factor. Text is rasterized at
 `size_px` logical pixels, and baked components (`ComponentSpec::bake`) and the images a split or

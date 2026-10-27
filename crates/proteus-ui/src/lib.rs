@@ -40,7 +40,7 @@ pub mod transition;
 pub mod video;
 
 // Convenience re-exports for the most commonly used types.
-pub use bake::{bake_system, Baked, BakedComposite};
+pub use bake::{bake_scale_to_fit, bake_system, BakeScale, Baked, BakedComposite};
 pub use bevy_ecs::hierarchy::{ChildOf, Children};
 pub use bevy_ecs::prelude::Entity;
 pub use channel::{
