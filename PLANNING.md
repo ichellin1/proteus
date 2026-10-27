@@ -169,10 +169,26 @@ results in BENCHMARKS, and the reference demo on a still screen.
   nothing else. Still to measure. Measured with the demo's video full screen; the
   saving is expected to be small next to the cost of getting frames to the GPU, which v0.5.0
   addresses.
-- [ ] Pixels a later opaque component covers aren't shaded, with a depth buffer, measured on the
+- [x] Pixels a later opaque component covers aren't shaded, with a depth buffer, measured on the
   large scene against the early exit and on the small scene to check it costs nothing there.
-- [ ] BENCHMARKS updated, checking whether frame times even out and whether Safari's tab still
-  crashes at 100,000 large components.
+  Natively, the large scene's frame went from 50.9 to 5.1 ms at 100,000, from 12.3 to 1.9 at
+  25,000 and from 5.2 to 0.32 at 10,000; the small and moving scenes didn't change.
+- **Decided (2026-10-22): the depth pre-pass draws a shrunk rectangle, not the rounded
+  shape.** A pre-pass that worked out each pixel's distance from the rounded edge, as the design
+  note sketched, would do that work for every overdrawn pixel, back to front, which is the
+  cost it's meant to save. So it draws each opaque component's rectangle inset by its largest
+  radius and 2 pixels, where every pixel is certainly fully opaque, and does no work per pixel.
+  Depth is each instance's place in drawing order, from `instance_index`, which wgpu counts from
+  the start of the buffer on WebGL2 too. "Opaque" is a plain component with full alpha and
+  opacity; opaque images could join it later, with a flag recorded when they're decoded.
+  `RenderConfig::skip_covered_pixels` turns it off.
+- [x] BENCHMARKS updated, checking whether frame times even out and whether Safari's tab still
+  crashes at 100,000 large components. Both: in both browsers, the large scene's p99 is now
+  within a few milliseconds of its median, and Safari holds the display's full rate at 100,000
+  large components without crashing, so the browser benchmark's large scene now goes to
+  100,000. Proteus went from the slowest renderer there to the fastest: 19.9 ms a frame at
+  100,000 in Chrome and 17 in Safari, against 100 to 136 for the WebGL2 renderers written by
+  hand.
 - [ ] The reference demo, its Effects and Text examples especially, is checked on both shells.
 
 ### Step 7 — Bake at the display's resolution

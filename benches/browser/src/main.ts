@@ -36,11 +36,11 @@ const COUNTS = [100, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
 const WARM_UP = 60;
 const WARM_UP_LIMIT = 2_000;
 /**
- * The large scene's largest count. Past it, the large scene only repeats what
- * 50,000 shows, Proteus's per-pixel cost, while each frame takes long enough
- * that Safari resets its GPU process and the tab crashes.
+ * The large scene's largest count. Past it, each frame takes long enough that
+ * Safari may reset its GPU process and crash the tab. It was 50,000 until
+ * v0.2.0, when Proteus's frames there took up to 190 ms.
  */
-const LARGE_LIMIT = 50_000;
+const LARGE_LIMIT = 100_000;
 /**
  * A renderer slower than this, in milliseconds a frame, is skipped at the
  * scene's larger counts: below 10 frames a second it's unusable, and larger

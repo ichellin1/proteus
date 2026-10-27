@@ -153,6 +153,12 @@ pub struct QuadPipeline {
     // The plain pipeline, for plain components; see `set_plain_pipeline`.
     // `None` while it's off.
     plain_pipeline: Option<wgpu::RenderPipeline>,
+    // The depth pre-pass, for skipping covered pixels; see
+    // `set_skip_covered_pixels`. `None` while it's off.
+    depth_pipeline: Option<wgpu::RenderPipeline>,
+    // The depth buffer the pre-pass writes, sized to the target; see
+    // `prepare_depth`.
+    depth_buffer: Option<(wgpu::Texture, wgpu::TextureView)>,
     // What the plain pipeline is built from, kept so it can be built later.
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -173,6 +179,21 @@ const MIN_PLAIN_COUNT: usize = 32;
 /// The most runs drawn separately. A frame that would need more is drawn in
 /// one call by the full pipeline.
 const MAX_RUNS: usize = 256;
+
+/// The depth buffer's format: 32-bit floats hold every instance's depth
+/// exactly; see `draw_depth` in the shader's `depth.wgsl`.
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// A depth test against [`DEPTH_FORMAT`], writing depth or not.
+fn depth_state(write: bool, compare: wgpu::CompareFunction) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(write),
+        depth_compare: Some(compare),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
 
 /// Whether the plain pipeline draws `instance` exactly as the full one does: a
 /// solid color, sampling the main atlas's white block, with no border, shadow,
@@ -362,6 +383,7 @@ impl QuadPipeline {
             &pipeline_layout,
             surface_format,
             ("vs_main", "fs_main"),
+            None,
         );
         let atlas_pipeline = Self::build_render_pipeline(
             device,
@@ -369,6 +391,7 @@ impl QuadPipeline {
             &pipeline_layout,
             wgpu::TextureFormat::Rgba8Unorm,
             ("vs_main", "fs_main"),
+            None,
         );
 
         // --- Static geometry buffers ---
@@ -512,6 +535,8 @@ impl QuadPipeline {
             ),
             content_version: Default::default(),
             plain_pipeline: None,
+            depth_pipeline: None,
+            depth_buffer: None,
             shader,
             pipeline_layout,
             surface_format,
@@ -573,16 +598,94 @@ impl QuadPipeline {
     /// drawn by the full shader. Both draw the same pixels. It takes effect
     /// from the next upload.
     pub fn set_plain_pipeline(&mut self, device: &wgpu::Device, on: bool) {
-        self.plain_pipeline = on.then(|| {
+        self.build_pipelines(device, on, self.depth_pipeline.is_some());
+        self.runs = vec![(0..self.instance_count, false)];
+    }
+
+    /// Turns skipping covered pixels on or off. On, a depth pre-pass marks the
+    /// pixels each opaque component certainly covers, a solid color with full
+    /// alpha and opacity, and the main pass doesn't shade what a later one
+    /// covers there; see the shader's `depth.wgsl`. It draws the same pixels.
+    /// On, every render pass that draws with this pipeline needs the depth
+    /// attachment [`Self::depth_attachment`] gives, after
+    /// [`Self::prepare_depth`]. Bakes are unaffected.
+    pub fn set_skip_covered_pixels(&mut self, device: &wgpu::Device, on: bool) {
+        self.build_pipelines(device, self.plain_pipeline.is_some(), on);
+        if !on {
+            self.depth_buffer = None;
+        }
+    }
+
+    /// Builds the pipelines the main draw uses, for the settings `plain` and
+    /// `skip_covered`: the full pipeline always, the plain pipeline and the
+    /// depth pre-pass when they're on. With the pre-pass, the main pipelines
+    /// test depth without writing it.
+    fn build_pipelines(&mut self, device: &wgpu::Device, plain: bool, skip_covered: bool) {
+        let test = skip_covered.then(|| depth_state(false, wgpu::CompareFunction::LessEqual));
+        let build = |entry_points, depth| {
             Self::build_render_pipeline(
                 device,
                 &self.shader,
                 &self.pipeline_layout,
                 self.surface_format,
-                ("vs_plain", "fs_plain"),
+                entry_points,
+                depth,
+            )
+        };
+        self.pipeline = build(("vs_main", "fs_main"), test.clone());
+        self.plain_pipeline = plain.then(|| build(("vs_plain", "fs_plain"), test.clone()));
+        self.depth_pipeline = skip_covered.then(|| {
+            build(
+                ("vs_depth", "fs_depth"),
+                Some(depth_state(true, wgpu::CompareFunction::Less)),
             )
         });
-        self.runs = vec![(0..self.instance_count, false)];
+    }
+
+    /// Makes the depth buffer `width × height`, the size of the texture the next
+    /// draw renders into, if it isn't already. Does nothing while skipping
+    /// covered pixels is off.
+    pub fn prepare_depth(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self.depth_pipeline.is_none() {
+            return;
+        }
+        if let Some((texture, _)) = &self.depth_buffer {
+            if (texture.width(), texture.height()) == (width, height) {
+                return;
+            }
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("quad_depth"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        self.depth_buffer = Some((texture, view));
+    }
+
+    /// The depth attachment a render pass that draws with this pipeline needs
+    /// while skipping covered pixels is on, after [`Self::prepare_depth`]:
+    /// cleared at the start, and not kept at the end, so on a tile-based GPU it
+    /// never leaves the tile. `None` while it's off.
+    pub fn depth_attachment(&self) -> Option<wgpu::RenderPassDepthStencilAttachment<'_>> {
+        let (_, view) = self.depth_buffer.as_ref()?;
+        Some(wgpu::RenderPassDepthStencilAttachment {
+            view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Discard,
+            }),
+            stencil_ops: None,
+        })
     }
 
     /// Splits the uploaded `instances` into runs for each pipeline.
@@ -626,12 +729,18 @@ impl QuadPipeline {
         if self.instance_count == 0 {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.set_bind_group(1, &self.atlas_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        // The depth pre-pass first, every instance in one call: only opaque
+        // ones draw anything.
+        if let Some(depth_pipeline) = &self.depth_pipeline {
+            pass.set_pipeline(depth_pipeline);
+            pass.draw_indexed(0..6, 0, 0..self.instance_count);
+        }
+        pass.set_pipeline(&self.pipeline);
         let Some(plain_pipeline) = &self.plain_pipeline else {
             pass.draw_indexed(0..6, 0, 0..self.instance_count);
             return;
@@ -1158,7 +1267,10 @@ impl QuadPipeline {
         pipeline_layout: &wgpu::PipelineLayout,
         color_format: wgpu::TextureFormat,
         entry_points: (&str, &str),
+        depth_stencil: Option<wgpu::DepthStencilState>,
     ) -> wgpu::RenderPipeline {
+        // The depth pre-pass writes depth only; see `set_skip_covered_pixels`.
+        let writes_color = entry_points.1 != "fs_depth";
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("quad_pipeline"),
             layout: Some(pipeline_layout),
@@ -1177,7 +1289,11 @@ impl QuadPipeline {
                     // outputs premultiplied color, so this must match, or
                     // partly transparent fragments would blend wrongly.
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: if writes_color {
+                        wgpu::ColorWrites::ALL
+                    } else {
+                        wgpu::ColorWrites::empty()
+                    },
                 })],
                 compilation_options: Default::default(),
             }),
@@ -1190,7 +1306,9 @@ impl QuadPipeline {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None, // Z order comes from instance order
+            // Drawing order comes from instance order; depth, when there is
+            // any, only skips covered pixels.
+            depth_stencil,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,

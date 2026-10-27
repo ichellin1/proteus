@@ -11,6 +11,11 @@ struct VertexIn {
     @location(0) position:             vec2<f32>,
     @location(1) uv:                   vec2<f32>,
 
+    // The instance's place in drawing order, counted from the start of the
+    // instance buffer whichever run a draw call starts at. (On WebGL2, wgpu
+    // adds the draw's first instance itself.)
+    @builtin(instance_index) instance: u32,
+
     // QuadInstance — locations 2–15, step per instance
     @location(2)  inst_position:       vec3<f32>,
     // .xy = size, .z = rotation (radians), .w = scale
@@ -131,6 +136,24 @@ fn place(in: VertexIn) -> Placed {
     // the shadow inflation so the rasterized area covers the full shadow footprint.
     let centered = in.position * scaled_size + inflate;
 
+    out.clip_position = to_clip(in, centered);
+
+    // local_pos is the inflated centered position: the pixel coordinate relative
+    // to the component center. Fragments inside the main shape use it as is; for
+    // shadow-only fragments (|local_pos| > half_size) the shadow SDF in fs_main
+    // takes over.
+    out.local_pos = centered;
+    out.half_size = half;
+    return out;
+}
+
+// Where `centered`, a point relative to the component's center in pixels, goes
+// in clip space: pivoted on the anchor, rotated, moved to the component's
+// position and projected, at the instance's depth in drawing order.
+fn to_clip(in: VertexIn, centered: vec2<f32>) -> vec4<f32> {
+    let inst_rotation = in.inst_size_rot_scale.z;
+    let scaled_size   = in.inst_size_rot_scale.xy * in.inst_size_rot_scale.w;
+
     // Shift so that the declared anchor becomes the pivot for rotation and scale.
     // anchor [0.5, 0.5] = center → no shift.
     // Anchor uses Y-down screen convention: [0,0] = top-left, [1,1] = bottom-right.
@@ -149,17 +172,12 @@ fn place(in: VertexIn) -> Placed {
 
     // Translate to world space and project. `z` is left out: it only orders
     // components, which the instance order already does, and as a depth it
-    // would clip any component outside the projection's depth range.
+    // would clip any component outside the projection's depth range. The
+    // depth is the instance's place in drawing order instead; see `depth.wgsl`.
     let world = vec4(rotated + in.inst_position.xy, 0.0, 1.0);
-    out.clip_position = uniforms.view_projection * world;
-
-    // local_pos is the inflated centered position: the pixel coordinate relative
-    // to the component center. Fragments inside the main shape use it as is; for
-    // shadow-only fragments (|local_pos| > half_size) the shadow SDF in fs_main
-    // takes over.
-    out.local_pos = centered;
-    out.half_size = half;
-    return out;
+    var clip = uniforms.view_projection * world;
+    clip.z = draw_depth(in.instance) * clip.w;
+    return clip;
 }
 
 @vertex
