@@ -261,9 +261,15 @@ surface's format depends on the platform. A bake draws into a scratch texture, w
 uniform and instance buffers so it never disturbs the frame's, and copies the result into the
 atlas.
 
-Bakes are at the component's size in logical pixels, not the display's, so on a high-density
-display text and baked content are slightly softer than shapes the shader draws directly. This
-is a known shortcoming, planned to be fixed in a future release.
+Bakes are at the display's resolution: every bake reads a `BakeScale` resource, the display's
+scale factor capped by `ResourceConfig::max_bake_scale`, 2 by default, and at least 1, and
+gets `scale` texels per logical pixel, drawn at its logical size by the same projection. Text is
+rasterized at `size_px × scale`, and `BakedText::pixel_size` stays its logical size, for layout.
+A bake too large for a page, or for the transition atlas, takes the largest scale that fits.
+When the scale changes, the renderer removes every `BakedText`, so text bakes again at the new
+one; a baked component keeps its scale, since baking destroyed what it was drawn from. The
+[configuration guide](./docs/guides/configuration.md#sharpness-on-high-density-displays)
+explains the cap and its costs.
 
 ## Transitions
 
@@ -465,8 +471,8 @@ These are known shortcomings, each planned to be addressed in a future release:
   every component is a rectangle.
 - Per-pixel work in the shader limits large scenes where translucent, textured or bordered
   components overlap: only a solid, opaque component hides what's behind it from the shader.
-- Text and baked components are baked at logical-pixel resolution, so they are slightly soft
-  on high-density displays.
+- A component baked with `.bake()` keeps the resolution it was first baked at, if its window
+  moves to a display of another density.
 - Text is a single line.
 - One video at a time.
 - No keyboard input.

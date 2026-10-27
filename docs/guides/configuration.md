@@ -112,12 +112,15 @@ are removed to make room.
 | `render.clear_color` | `render.clearColor` | Black | The color behind everything, as RGBA from 0 to 1. It shows through transparent components. |
 | `render.present_mode` | `render.presentMode` | Auto vsync | How frames keep time with the display. The default matches its refresh rate; the no-vsync modes draw as fast as they can, for benchmarks. |
 | `render.power_preference` | `render.powerPreference` | High performance | Which GPU to use on a machine with two. Low power saves battery. |
+| `render.plain_pipeline` | `render.plainPipeline` | On | Draws plain components, a solid color with no texture, border, shadow, glow or crossfade, with a smaller, faster shader. Off draws everything with the one full shader. Either way the pixels are the same. |
+| `render.skip_covered_pixels` | `render.skipCoveredPixels` | On | Doesn't shade the pixels a later opaque component covers. Saves the most where opaque components are stacked; costs a depth buffer the size of the window. The pixels are the same. |
 
 ### Frames
 
 | Rust | TypeScript | Default | What it sets |
 |---|---|---|---|
 | `frame.dt_clamp_secs` | `frame.dtClampSecs` | 0.05 | The longest time one frame can step, in seconds. After a pause, such as a tab returning from the background, transitions continue where they were instead of jumping ahead. |
+| `frame.skip_idle_frames` | `frame.skipIdleFrames` | On | Skips drawing a frame that would look the same as the last one, such as a still screen. `update` still runs every frame. |
 
 ### Text
 
@@ -166,6 +169,48 @@ is an error the app handles. In TypeScript, `mount` throws.
 |---|---|---|---|
 | `resources.image_max_side` | `resources.imageMaxSide` | None | Scales images down so their longer side is at most this many pixels, unless an image sets its own `max_side`. |
 | `resources.lazy_load` | `resources.lazyLoad` | Off | Waits to prepare a component's text or image until the component is visible. |
+| `resources.max_bake_scale` | `resources.maxBakeScale` | 2 | The most texels per logical pixel text, baked components and transitions are baked at; see below. |
+
+### Sharpness on high-density displays
+
+Text, components made with `.bake()`, and the images splits and merges fade between are baked
+into textures, then drawn at their logical size. Proteus bakes them at the display's scale
+factor, `devicePixelRatio` in a browser, so that on a high-density display a texel is a screen
+pixel, and text is as sharp as the shapes the shader draws. `resources.max_bake_scale` caps it,
+and it is never below 1.
+
+**Why the default is 2.** It covers the high-density displays most people use: Retina Macs,
+most high-density Windows and Linux laptops, and browsers at a pixel ratio of 2. On those,
+bakes are pixel-exact. It also keeps the cost of a 3× display, most phones, down: there, bakes
+are at 2, slightly soft where 3 would be exact.
+
+**What it costs.** A bake at scale `s` takes `s²` times the atlas space of one at 1:
+
+| Bake scale | Atlas space | Text and baked content |
+|---:|---:|---|
+| 1 | 1× | Slightly soft on high-density displays |
+| 2 | 4× | Sharp at a pixel ratio of 2; slightly soft at 3 |
+| 3 | 9× | Sharp at 3 |
+
+Most apps never notice: text is small, and the main atlas holds 64 MiB by default. It matters
+where an app bakes a lot, many large baked components or long text, especially on the web,
+whose atlas pages are 2048 pixels on a side. A 1,200 × 800 baked component fits a page at 1 but
+not at 2, so Proteus bakes it at the largest scale that fits instead, slightly softer. Splits
+and merges bake their two ends into the transition atlas the same way, so very large ones
+fill it sooner, and a piece that doesn't fit is drawn as a plain shape.
+
+**When to change it.**
+
+- **Set it to 1**, the resolution before v0.2.0, if an app runs short of atlas space, with a
+  warning that the main atlas is full: a quarter of the space for text and baked content, at
+  the cost of softer text on high-density displays. Giving the atlas more pages,
+  `memory.main_atlas.page_count`, is the alternative that keeps text sharp.
+- **Set it to 3** for pixel-exact text on 3× phones, if the atlas has room for nine times the
+  space.
+
+When a window moves to a display of another density, its text is baked again at the new scale.
+A baked component keeps the scale it was first baked at, since baking destroys what it was
+drawn from.
 
 ### Diagnostics
 

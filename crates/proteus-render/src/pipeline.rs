@@ -854,6 +854,12 @@ impl QuadPipeline {
         self.transition_allocator.allocate(width, height)
     }
 
+    /// The transition atlas's width and height, in texels: the largest region
+    /// [`Self::allocate_transition_region`] can give.
+    pub fn transition_atlas_size(&self) -> u32 {
+        self.transition_atlas.width()
+    }
+
     /// Releases a region allocated by [`Self::allocate_transition_region`].
     /// Call it once the transition using it has completed.
     pub fn free_transition_region(&mut self, id: crate::TransitionAllocId) {

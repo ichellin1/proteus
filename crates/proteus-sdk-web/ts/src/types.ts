@@ -332,6 +332,15 @@ export interface ProteusConfigOverrides {
     imageMaxSide?: number | null;
     /** Wait to bake a component's text or image until the component is visible. */
     lazyLoad?: boolean;
+    /**
+     * The most texels per CSS pixel that text, baked components and transitions are baked at.
+     * They're baked at `devicePixelRatio`, up to this, and at least 1, so they're as sharp as
+     * shapes on high-density screens. Default `2`. A bake at scale `s` takes `s²` the atlas
+     * space of one at 1, which matters on the web's 2048-pixel atlas pages: lower it to `1` for
+     * an app with a lot of text that runs short of atlas space, or raise it to `3` for
+     * pixel-exact text on 3× screens.
+     */
+    maxBakeScale?: number;
   };
   /** Text settings. */
   text?: {

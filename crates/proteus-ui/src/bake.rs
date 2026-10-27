@@ -71,8 +71,50 @@ pub struct BakedComposite {
     pub uv_scale: [f32; 2],
     /// The main-atlas page the bake is on.
     pub page: u32,
-    /// The bake's size in pixels.
+    /// The bake's size in the atlas, in texels: its logical size times the
+    /// [`BakeScale`] it was baked at. It is drawn at its logical size.
     pub pixel_size: [f32; 2],
+}
+
+// ---------------------------------------------------------------------------
+// BakeScale
+// ---------------------------------------------------------------------------
+
+/// How many texels a baked texture has per logical pixel: the display's scale
+/// factor, capped by `ResourceConfig::max_bake_scale` and at least 1. Text,
+/// baked components and the images splits and merges bake are all baked at
+/// it, and drawn at their logical size, so on a high-density display they're
+/// as sharp as the shapes the shader draws.
+///
+/// The renderer sets it from the viewport; without one, as in tests, it is 1,
+/// a texel per logical pixel.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct BakeScale(pub f32);
+
+impl Default for BakeScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// The scale to bake something `width × height` logical pixels at, so that it
+/// fits a texture `max` pixels on a side: `scale` if that fits, else the
+/// largest scale that does, but not below 1. At 1, something larger than
+/// `max` still doesn't fit, and the caller handles it as it would without a
+/// bake scale.
+pub fn bake_scale_to_fit(scale: f32, width: f32, height: f32, max: u32) -> f32 {
+    let max = max as f32;
+    let fits = |s: f32| (width * s).ceil() <= max && (height * s).ceil() <= max;
+    if fits(scale) {
+        return scale;
+    }
+    // The largest that could fit, then down a 64th at a time until rounding
+    // up to whole texels fits too.
+    let mut s = (max / width.max(height).max(1.0)).min(scale);
+    while s > 1.0 && !fits(s) {
+        s = (s - 1.0 / 64.0).max(1.0);
+    }
+    s.max(1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +171,7 @@ pub fn bake_system(
     queries: BakeQueries,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
+    bake_scale: Option<Res<BakeScale>>,
 ) {
     let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) else {
         return;
@@ -153,10 +196,20 @@ pub fn bake_system(
             continue;
         }
 
-        let width = world_qs.size.x.max(1.0).ceil() as u32;
-        let height = world_qs.size.y.max(1.0).ceil() as u32;
-
+        // At the bake scale, or as near as fits a page; drawn at its logical
+        // size, by the same projection.
         let max = pipeline.texture_registry.max_texture_side();
+        let (logical_w, logical_h) = (world_qs.size.x.max(1.0), world_qs.size.y.max(1.0));
+        // 1 in a world without one, as in tests.
+        let scale = bake_scale_to_fit(
+            bake_scale.as_ref().map_or(1.0, |s| s.0),
+            logical_w,
+            logical_h,
+            max,
+        );
+        let width = (logical_w * scale).ceil() as u32;
+        let height = (logical_h * scale).ceil() as u32;
+
         if width > max || height > max {
             log::warn!(
                 "bake_system: entity {entity:?} is {width}x{height} pixels, larger than an atlas \
@@ -228,5 +281,29 @@ pub fn bake_system(
                 commands.entity(child).despawn();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bake_scale_tests {
+    use super::bake_scale_to_fit;
+
+    #[test]
+    fn a_bake_that_fits_keeps_its_scale() {
+        assert_eq!(bake_scale_to_fit(2.0, 300.0, 200.0, 2048), 2.0);
+        assert_eq!(bake_scale_to_fit(1.25, 300.0, 200.0, 2048), 1.25);
+    }
+
+    #[test]
+    fn a_bake_too_large_takes_the_largest_scale_that_fits() {
+        // 1,200 wide fits a 2,048 page at 1, not at 2.
+        let scale = bake_scale_to_fit(2.0, 1200.0, 800.0, 2048);
+        assert!(scale < 2.0 && scale > 1.6, "{scale}");
+        assert!((1200.0 * scale).ceil() <= 2048.0);
+    }
+
+    #[test]
+    fn a_bake_too_large_at_one_is_left_at_one() {
+        assert_eq!(bake_scale_to_fit(2.0, 3000.0, 100.0, 2048), 1.0);
     }
 }

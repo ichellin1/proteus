@@ -479,8 +479,10 @@ fn region_uv_grid_slices(
 /// Bakes `entity`'s appearance, at `qs`, into a new transition-atlas region.
 /// Returns `None` if there is nothing to bake or the atlas is full, in which
 /// case the caller uses a plain colored shape instead.
+#[allow(clippy::too_many_arguments)]
 fn bake_one(
     pipeline: &mut QuadPipeline,
+    scale: f32,
     gpu: &GpuContext,
     visuals: &BakeVisualsQuery,
     children_q: &Query<&Children>,
@@ -493,8 +495,18 @@ fn bake_one(
         return None;
     }
 
-    let width = qs.size.x.max(1.0).ceil() as u32;
-    let height = qs.size.y.max(1.0).ceil() as u32;
+    // At the bake scale, or as near as fits the transition atlas; drawn at the
+    // logical size, by the same projection. Slices address the region by
+    // fractions of it, so the scale doesn't change them.
+    let (logical_w, logical_h) = (qs.size.x.max(1.0), qs.size.y.max(1.0));
+    let scale = crate::bake::bake_scale_to_fit(
+        scale,
+        logical_w,
+        logical_h,
+        pipeline.transition_atlas_size(),
+    );
+    let width = (logical_w * scale).ceil() as u32;
+    let height = (logical_h * scale).ceil() as u32;
     let (alloc_id, granted) = pipeline.allocate_transition_region(width, height)?;
 
     // The allocator may grant a larger region than requested. Use only the
@@ -543,7 +555,10 @@ pub fn one_to_n_setup_system(
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
     atlas_size: Res<TransitionAtlasSize>,
+    bake_scale: Option<Res<crate::bake::BakeScale>>,
 ) {
+    // 1 in a world without one, as in tests.
+    let bake_scale = bake_scale.map_or(1.0, |s| s.0);
     let atlas_size = atlas_size.0 as f32;
     for (source_entity, request, source_state) in query.iter() {
         let n = request.targets.len();
@@ -610,6 +625,7 @@ pub fn one_to_n_setup_system(
                 if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
                     if let Some((src_id, src_region)) = bake_one(
                         pipeline,
+                        bake_scale,
                         gpu,
                         &visuals,
                         &children_q,
@@ -625,6 +641,7 @@ pub fn one_to_n_setup_system(
                             .map(|t| {
                                 bake_one(
                                     pipeline,
+                                    bake_scale,
                                     gpu,
                                     &visuals,
                                     &children_q,
@@ -767,7 +784,10 @@ pub fn n_to_one_setup_system(
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
     atlas_size: Res<TransitionAtlasSize>,
+    bake_scale: Option<Res<crate::bake::BakeScale>>,
 ) {
+    // 1 in a world without one, as in tests.
+    let bake_scale = bake_scale.map_or(1.0, |s| s.0);
     let atlas_size = atlas_size.0 as f32;
     for (dest_entity, request, dest_state) in query.iter() {
         let n = request.sources.len();
@@ -811,6 +831,7 @@ pub fn n_to_one_setup_system(
         if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
             if let Some((dest_id, dest_region)) = bake_one(
                 pipeline,
+                bake_scale,
                 gpu,
                 &visuals,
                 &children_q,
@@ -826,6 +847,7 @@ pub fn n_to_one_setup_system(
                     .map(|s| {
                         bake_one(
                             pipeline,
+                            bake_scale,
                             gpu,
                             &visuals,
                             &children_q,
