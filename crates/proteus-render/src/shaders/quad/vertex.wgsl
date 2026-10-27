@@ -12,8 +12,11 @@ struct VertexIn {
     @location(1) uv:                   vec2<f32>,
 
     // The instance's place in drawing order, counted from the start of the
-    // instance buffer whichever run a draw call starts at. (On WebGL2, wgpu
-    // adds the draw's first instance itself.)
+    // instance buffer whichever run a draw call starts at: on WebGL2 and
+    // Direct3D, wgpu adds the draw's first instance itself. Read it only in an
+    // entry point, never in a function an entry point calls: on Direct3D,
+    // naga adds the first instance only where an entry point reads it, so a
+    // function would get the index within the draw call.
     @builtin(instance_index) instance: u32,
 
     // QuadInstance — locations 2–15, step per instance
@@ -95,7 +98,7 @@ struct Placed {
     half_size:     vec2<f32>,
 }
 
-fn place(in: VertexIn) -> Placed {
+fn place(in: VertexIn, depth: f32) -> Placed {
     var out: Placed;
 
     // Unpack packed fields.
@@ -136,7 +139,7 @@ fn place(in: VertexIn) -> Placed {
     // the shadow inflation so the rasterized area covers the full shadow footprint.
     let centered = in.position * scaled_size + inflate;
 
-    out.clip_position = to_clip(in, centered);
+    out.clip_position = to_clip(in, centered, depth);
 
     // local_pos is the inflated centered position: the pixel coordinate relative
     // to the component center. Fragments inside the main shape use it as is; for
@@ -149,8 +152,8 @@ fn place(in: VertexIn) -> Placed {
 
 // Where `centered`, a point relative to the component's center in pixels, goes
 // in clip space: pivoted on the anchor, rotated, moved to the component's
-// position and projected, at the instance's depth in drawing order.
-fn to_clip(in: VertexIn, centered: vec2<f32>) -> vec4<f32> {
+// position and projected, at `depth`, from `draw_depth`.
+fn to_clip(in: VertexIn, centered: vec2<f32>, depth: f32) -> vec4<f32> {
     let inst_rotation = in.inst_size_rot_scale.z;
     let scaled_size   = in.inst_size_rot_scale.xy * in.inst_size_rot_scale.w;
 
@@ -176,14 +179,14 @@ fn to_clip(in: VertexIn, centered: vec2<f32>) -> vec4<f32> {
     // depth is the instance's place in drawing order instead; see `depth.wgsl`.
     let world = vec4(rotated + in.inst_position.xy, 0.0, 1.0);
     var clip = uniforms.view_projection * world;
-    clip.z = draw_depth(in.instance) * clip.w;
+    clip.z = depth * clip.w;
     return clip;
 }
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
-    let placed = place(in);
+    let placed = place(in, draw_depth(in.instance));
     out.clip_position = placed.clip_position;
     out.local_pos     = placed.local_pos;
     out.half_size     = placed.half_size;

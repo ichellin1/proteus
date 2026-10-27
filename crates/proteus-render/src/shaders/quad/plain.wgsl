@@ -23,7 +23,7 @@ struct PlainOut {
 @vertex
 fn vs_plain(in: VertexIn) -> PlainOut {
     var out: PlainOut;
-    let placed = place(in);
+    let placed = place(in, draw_depth(in.instance));
     out.clip_position = placed.clip_position;
     out.local_pos     = placed.local_pos;
     out.half_size     = placed.half_size;
