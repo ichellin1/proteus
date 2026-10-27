@@ -100,7 +100,11 @@ Waiting for the GPU after every frame instead, as a first version did, left the 
 between frames, and the Mac's power management then kept their clocks low: small scenes measured
 slower than large ones, by a different amount each run.
 
-A fourth mode, `phases`, needs no GPU. It times a still frame's work on the components:
+A fourth scene, `video`, runs only when asked for: components the size of the window showing a
+video, stacked, with a new 1280 × 800 frame uploaded every frame, as a playing video is. One is
+a full-screen video; more stack the per-pixel work.
+
+Another mode, `phases`, needs no GPU. It times a still frame's work on the components:
 `Proteus::tick`, `Proteus::refresh_cascades`, which works out each component's visibility and
 opacity, and `collect_instances`, which turns the components into what the GPU draws.
 
@@ -383,7 +387,7 @@ cargo run --release -p proteus-bench -- [what] [counts]
 
 | Argument | Values | Default |
 |---|---|---|
-| `what` | `all`, every scene; `small`, `large` or `moving`, one scene; or `phases`, a still frame's CPU work by phase, with no GPU | `all` |
+| `what` | `all`, every scene; `small`, `large` or `moving`, one scene; `video`, full-screen video, at 1, 10 and 50 unless `counts` says; or `phases`, a still frame's CPU work by phase, with no GPU | `all` |
 | `counts` | The component counts to measure, separated by commas, with no spaces: `1000,10000` | `100,1000,5000,10000,25000,50000,100000` |
 
 To give `counts`, give `what` first. For example:

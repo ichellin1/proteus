@@ -6,6 +6,7 @@
 //! cargo run --release -p proteus-bench -- small           # or one of them
 //! cargo run --release -p proteus-bench -- small 500,2000  # at other counts
 //! cargo run --release -p proteus-bench -- phases          # the CPU's phases
+//! cargo run --release -p proteus-bench -- video           # full-screen video
 //! ```
 //!
 //! Three scenes, each at every count in [`COUNTS`], the same as the browser
@@ -18,6 +19,14 @@
 //!   counts, so filling pixels dominates.
 //! - **moving:** 10 to 40 pixels across, every one always moving: each gets a
 //!   new random place every half second and moves there over half a second.
+//!
+//! And one that runs only when asked for, at 1, 10 and 50 components unless
+//! told otherwise:
+//!
+//! - **video:** components the size of the window showing a video, stacked,
+//!   with a new 1280 × 800 frame uploaded every frame, as a playing video is.
+//!   One is a full-screen video; more stack the per-pixel work, so that a
+//!   change to the shader's cost shows.
 //!
 //! Each frame runs the engine, `Engine::frame`, exactly as a host does, into
 //! a 1280 × 800 texture rather than a window, so the display's refresh rate
@@ -53,7 +62,7 @@ use std::time::{Duration, Instant};
 use proteus_host_winit::DirHostServices;
 use proteus_runtime::glam::{Vec2, Vec3, Vec4};
 use proteus_runtime::{wgpu, App, Engine, Frame, ProteusConfig, Viewport};
-use proteus_sdk::{ComponentSpec, Easing, Handle, QuadState, TransitionConfig};
+use proteus_sdk::{ComponentSpec, Easing, Handle, QuadState, TransitionConfig, VideoHandle};
 
 /// The component counts measured.
 const COUNTS: [usize; 7] = [100, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
@@ -76,9 +85,11 @@ enum Scenario {
     Small,
     Large,
     Moving,
+    Video,
 }
 
 impl Scenario {
+    /// The scenes `all` runs. `video` runs only when asked for.
     const ALL: [Self; 3] = [Self::Small, Self::Large, Self::Moving];
 
     fn name(self) -> &'static str {
@@ -86,6 +97,7 @@ impl Scenario {
             Self::Small => "small",
             Self::Large => "large",
             Self::Moving => "moving",
+            Self::Video => "video",
         }
     }
 
@@ -95,9 +107,13 @@ impl Scenario {
             Self::Small => (4.0, 8.0, 2.0),
             Self::Large => (20.0, 200.0, 8.0),
             Self::Moving => (10.0, 40.0, 4.0),
+            Self::Video => (0.0, 0.0, 0.0),
         }
     }
 }
+
+/// The counts `video` measures unless told otherwise.
+const VIDEO_COUNTS: [usize; 3] = [1, 10, 50];
 
 /// A small random-number generator (xorshift), so every run draws the same
 /// scene without a dependency.
@@ -149,10 +165,38 @@ struct Scene {
     random: Random,
     /// Seconds until the moving scenario's next round of moves.
     next_move: f32,
+    /// The video scenario's video, and the two frames it alternates between.
+    video: Option<(VideoHandle, [Vec<u8>; 2])>,
+    /// Frames drawn so far.
+    frames: usize,
 }
 
 impl App for Scene {
     fn setup(&mut self, f: &mut Frame) {
+        if self.scenario == Scenario::Video {
+            let video = f.proteus.create_video();
+            // Two frames, one light and one dark, so that each frame's upload
+            // is different, as a playing video's is.
+            let frame = |shade: u8| {
+                let mut rgba = vec![shade; (SIZE.0 * SIZE.1 * 4) as usize];
+                rgba.iter_mut().skip(3).step_by(4).for_each(|a| *a = 255);
+                rgba
+            };
+            let frames = [frame(200), frame(60)];
+            video.upload_frame(f.proteus, SIZE.0, SIZE.1, &frames[0]);
+            for _ in 0..self.count {
+                let geometry = QuadState {
+                    size: Vec2::new(SIZE.0 as f32, SIZE.1 as f32),
+                    color: Vec4::ONE,
+                    ..Default::default()
+                };
+                let handle = f.proteus.component(ComponentSpec::new(geometry.clone()));
+                handle.show_video(f.proteus, &video).expect("just created");
+                self.components.push((handle, geometry));
+            }
+            self.video = Some((video, frames));
+            return;
+        }
         for _ in 0..self.count {
             let geometry = self.random.geometry(self.scenario);
             let handle = f.proteus.component(ComponentSpec::new(geometry.clone()));
@@ -161,6 +205,11 @@ impl App for Scene {
     }
 
     fn update(&mut self, f: &mut Frame, dt: f32) {
+        self.frames += 1;
+        if let Some((video, frames)) = &self.video {
+            video.upload_frame(f.proteus, SIZE.0, SIZE.1, &frames[self.frames % 2]);
+            return;
+        }
         if self.scenario != Scenario::Moving {
             return;
         }
@@ -218,6 +267,8 @@ fn measure(
         components: Vec::with_capacity(count),
         random: Random(0x9e37_79b9_7f4a_7c15),
         next_move: 0.0,
+        video: None,
+        frames: 0,
     };
     let viewport = Viewport::new(Vec2::new(SIZE.0 as f32, SIZE.1 as f32), 1.0);
     let mut engine = Engine::new(
@@ -347,21 +398,31 @@ fn main() {
         }
         return;
     }
-    let scenarios: Vec<Scenario> = Scenario::ALL
-        .into_iter()
-        .filter(|s| {
-            only.as_deref()
-                .is_none_or(|name| name == "all" || name == s.name())
-        })
-        .collect();
+    let scenarios: Vec<Scenario> = if only.as_deref() == Some("video") {
+        vec![Scenario::Video]
+    } else {
+        Scenario::ALL
+            .into_iter()
+            .filter(|s| {
+                only.as_deref()
+                    .is_none_or(|name| name == "all" || name == s.name())
+            })
+            .collect()
+    };
     let counts: Option<Vec<usize>> = std::env::args().nth(2).map(|list| {
         list.split(',')
             .filter_map(|n| n.trim().parse().ok())
             .collect()
     });
-    let counts = counts.unwrap_or_else(|| COUNTS.to_vec());
+    let counts = counts.unwrap_or_else(|| {
+        if scenarios == [Scenario::Video] {
+            VIDEO_COUNTS.to_vec()
+        } else {
+            COUNTS.to_vec()
+        }
+    });
     if scenarios.is_empty() || counts.is_empty() {
-        eprintln!("usage: proteus-bench [all|small|large|moving|phases] [count,count,...]");
+        eprintln!("usage: proteus-bench [all|small|large|moving|video|phases] [count,count,...]");
         std::process::exit(2);
     }
 
