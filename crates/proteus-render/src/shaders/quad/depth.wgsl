@@ -44,7 +44,7 @@ fn vs_depth(in: VertexIn) -> @builtin(position) vec4<f32> {
     let inset = max(max(r.x, r.y), max(r.z, r.w)) + 2.0;
     let scaled_size = in.inst_size_rot_scale.xy * in.inst_size_rot_scale.w;
     let inner = max(scaled_size - vec2(2.0 * inset), vec2(0.0));
-    return to_clip(in, in.position * inner);
+    return to_clip(in, in.position * inner, draw_depth(in.instance));
 }
 
 // The pre-pass writes depth only. Its pipeline masks off the color target,
