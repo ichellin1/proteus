@@ -1,7 +1,7 @@
 {
   "name": "proteus-bench-browser",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Measures Proteus in the browser against hand-written WebGL2 renderers.",
   "type": "module",
   "scripts": {

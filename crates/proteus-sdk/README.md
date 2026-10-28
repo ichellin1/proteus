@@ -11,9 +11,9 @@ The app API of [Proteus](https://github.com/ichellin1/proteus), a rendering fram
 
 ```toml
 [dependencies]
-proteus-sdk = "0.1"
-proteus-runtime = "0.1"
-proteus-host-winit = "0.1"
+proteus-sdk = "0.2"
+proteus-runtime = "0.2"
+proteus-host-winit = "0.2"
 ```
 
 A button that turns into a panel when it's clicked, and back when the panel is clicked:

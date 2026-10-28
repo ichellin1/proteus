@@ -3,6 +3,61 @@
 The changes in each version of Proteus. This file is generated from the commit history; see
 RELEASING.md.
 
+## 0.2.0 (2026-10-28)
+
+### Upgrading from 0.1
+
+Most apps need no changes: the API apps use is the same in both SDKs.
+
+- **Config structs written out in full** no longer compile in Rust: `frame.skip_idle_frames`,
+  `render.plain_pipeline`, `render.skip_covered_pixels` and `resources.max_bake_scale` are new,
+  each on by default. Fill in the rest with `..Default::default()`. TypeScript's config is
+  unchanged, since every setting is optional there.
+- **Custom hosts that build instances:** `proteus_render::QuadInstance` has a radius per corner,
+  `corner_radii`, in place of `corner_radius`. Set it with `set_corner_radius` or
+  `set_corner_radii`.
+- **A still screen isn't drawn:** `update` still runs every frame, but when nothing changed the
+  GPU draws nothing. Set `frame.skip_idle_frames` to `false` to draw every frame regardless of changes, as 0.1 did.
+- **Text and baked components are baked at the display's resolution,** up to twice the logical
+  size, so they take up to four times the atlas space on high-density displays. An app that
+  filled its atlas in 0.1 can lower `resources.max_bake_scale`, or raise its memory. Component level overrides 
+  will be added in a future release.
+- **A corner radius past half the shorter side draws as half,** as in CSS, so a short, wide
+  component with a large radius is a pill. In 0.1 the shape shrank instead.
+
+### Features
+
+- **Breaking:** **runtime:** Skip drawing frames that didn't change
+- **Breaking:** **render:** Bake text and components at the display's resolution, up to twice the logical size
+- **demo:** Round the dark theme's buttons, tiles and panels twice as much as the light theme's
+- **sdk:** Rust's top_left_to_world and world_to_top_left, as in TypeScript
+- **sdk:** Declare_geometry and declared_geometry, to change where a component rests without moving it now
+
+### Fixes
+
+- **render:** Draw a radius past half the shorter side as half, as CSS does
+- **ui:** Give the pieces of a split or merge one corner curve that changes size, with no crossfade between two
+
+### Performance
+
+- **Breaking:** **render:** Redo and upload only the components that changed, so a still frame of 100,000 takes 1.3 ms of CPU, not 7.9, and a million draw 3 times faster in the browser
+- **Breaking:** **render:** Draw plain components with a pipeline of their own, halving large scenes' frame time: 108.7 to 51.6 ms at 100,000 natively, 95 to 48 ms at 25,000 in Chrome
+- **Breaking:** **render:** Skip pixels a later opaque component covers, 10 times faster in stacked scenes: 50.9 to 5.1 ms at 100,000 large components natively
+
+### Changes
+
+- **render:** Split the shader into named parts
+
+### Documentation
+
+- **benchmarks:** Add results from a Chromebook
+- **benchmarks:** V0.2.0's results, with the large scene up to 100,000 components
+
+### Build and release
+
+- **pages:** Publish the browser benchmark beside the demo
+- **bench:** A full-screen video scene in the native benchmark
+- **release:** Publish to npm verbosely, with a token only when the secret is set
 ## 0.1.1 (2026-10-20)
 
 ### Fixes
