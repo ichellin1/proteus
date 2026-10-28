@@ -11,8 +11,9 @@ RELEASING.md.
 """
 # Each version's section. Version 0.1.0 opens with a summary of everything in
 # it: the work before it didn't use Conventional Commits, so the list below
-# the summary only covers the work that prepared the release. The blank line
-# first separates it from the one before: git-cliff trims the header's.
+# the summary only covers the work that prepared the release. Version 0.2.0
+# opens with what to change when upgrading. The blank line first separates it
+# from the one before: git-cliff trims the header's.
 body = """
 
 {% if version -%}
@@ -39,6 +40,26 @@ The first release of Proteus.
   TypeScript; an API reference; and examples in both languages.
 
 The changes below were made while preparing this release.
+{% endif %}
+{%- if version == "v0.2.0" %}
+### Upgrading from 0.1
+
+Most apps need no changes: the API apps use is the same in both SDKs.
+
+- **Config structs written out in full** no longer compile in Rust: `frame.skip_idle_frames`,
+  `render.plain_pipeline`, `render.skip_covered_pixels` and `resources.max_bake_scale` are new,
+  each on by default. Fill in the rest with `..Default::default()`. TypeScript's config is
+  unchanged, since every setting is optional there.
+- **Custom hosts that build instances:** `proteus_render::QuadInstance` has a radius per corner,
+  `corner_radii`, in place of `corner_radius`. Set it with `set_corner_radius` or
+  `set_corner_radii`.
+- **A still screen isn't drawn:** `update` still runs every frame, but when nothing changed the
+  GPU draws nothing. Set `frame.skip_idle_frames` to `false` to draw every frame, as 0.1 did.
+- **Text and baked components are baked at the display's resolution,** up to twice the logical
+  size, so they take up to four times the atlas space on high-density displays. An app that
+  filled its atlas in 0.1 can lower `resources.max_bake_scale`, or raise its memory.
+- **A corner radius past half the shorter side draws as half,** as in CSS, so a short, wide
+  component with a large radius is a pill. In 0.1 the shape shrank instead.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 
@@ -70,6 +91,18 @@ filter_commits = true
 commit_preprocessors = [
     { pattern = " \\(step [0-9][a-z]?\\)", replace = "" },
     { pattern = ",? and close out step [0-9]+", replace = "" },
+    # v0.2.0: a subject starting with a function's name, which the template
+    # would capitalize.
+    { pattern = "^feat\\(sdk\\): top_left_to_world and world_to_top_left in Rust", replace = "feat(sdk): Rust's top_left_to_world and world_to_top_left" },
+    # v0.2.0: changes that break existing code, which their commits didn't
+    # mark; the template's upgrading notes for v0.2.0 say what to change.
+    # `QuadInstance` has a radius per corner, and four config structs have new
+    # fields.
+    { pattern = "^(perf\\(render\\)): (redo and upload only the components that changed)", replace = "$1!: $2" },
+    { pattern = "^(feat\\(runtime\\)): (skip drawing frames that didn't change)", replace = "$1!: $2" },
+    { pattern = "^(perf\\(render\\)): (draw plain components with a pipeline of their own)", replace = "$1!: $2" },
+    { pattern = "^(perf\\(render\\)): (skip pixels a later opaque component covers)", replace = "$1!: $2" },
+    { pattern = "^(feat\\(render\\)): (bake text and components at the display's resolution)", replace = "$1!: $2" },
 ]
 protect_breaking_commits = true
 tag_pattern = "v[0-9]*"
@@ -86,6 +119,12 @@ commit_parsers = [
     { message = "^docs\\(planning\\)", skip = true },
     { sha = "12bc867023f3a4a3c16957c94f235f9fd002d7ec", skip = true },
     { sha = "6d33b67dd510e6e4868d5c76498ba7f6bf3d7c60", skip = true },
+    # v0.2.0's planning notes, committed as plain `docs`.
+    { sha = "c5bce1f40e453e3cb9a1f0c6aeb2a8e0d55ac75f", skip = true },
+    { sha = "36c2d8753c822eabab26bf934d62068d224659fe", skip = true },
+    # Fixes for bugs v0.2.0's own work introduced, which never shipped.
+    { sha = "7d5b62e6b7f0fe10688c807145fc3a3263319a06", skip = true },
+    { sha = "2a7d9934ba941e7b1293b8d2899244be0e950e07", skip = true },
     # A clip of the demo, added to the README and then removed again.
     { sha = "151456cbfd69ed7dd85f8025084ee0390e1cda0d", skip = true },
     { sha = "3121b9afe65bafbbc54dc3ac1b607a51f1d56d63", skip = true },
