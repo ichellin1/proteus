@@ -100,12 +100,28 @@ fn violet_dark() -> Vec4 {
     Vec4::new(182.0 / 255.0, 168.0 / 255.0, 1.0, 1.0)
 }
 
+/// A corner radius `p` of the way from the light theme's, `light`, to the
+/// dark theme's, `dark` (0 = light, 1 = dark). A transition's end state uses
+/// it too, so that it ends at the radius the theme then keeps.
+pub(crate) fn themed_radius(light: f32, dark: f32, p: f32) -> f32 {
+    light + (dark - light) * p
+}
+
 /// Blends `handle`'s corner radius between `light` and `dark` by `p`
-/// (0 = light, 1 = dark). A no-op if `handle` has no `QuadState`, for
-/// example because it was destroyed.
+/// (0 = light, 1 = dark): both how it looks now and where it rests, its
+/// declared geometry, so that a transition into it, such as a panel going back
+/// to a button, ends at the themed radius rather than snapping to it after. A
+/// no-op if `handle` has no `QuadState`, for example because it was destroyed.
 fn blend_corner_radius(app: &mut Proteus, handle: Handle, light: f32, dark: f32, p: f32) {
+    let radius = themed_radius(light, dark, p);
     if let Some(mut qs) = app.world_mut().get_mut::<QuadState>(handle.id()) {
-        qs.corner_radius = light + (dark - light) * p;
+        qs.corner_radius = radius;
+    }
+    if let Some(mut declared) = handle.declared_geometry(app) {
+        if declared.corner_radius != radius {
+            declared.corner_radius = radius;
+            let _ = handle.declare_geometry(app, declared);
+        }
     }
 }
 
@@ -1082,6 +1098,15 @@ impl Demo {
     /// the real initial size, since [`Demo::new`] only has a placeholder to
     /// spawn with). Logical pixels, same convention as
     /// [`proteus_sdk::Proteus::pointer_moved`].
+    /// `state` with the theme's corner radius, `theme_progress` of the way
+    /// from `light` to `dark`. Every geometry the demo declares or transitions
+    /// to goes through it, so nothing ends a transition at the light theme's
+    /// radius and snaps to the dark one after, or keeps resetting it.
+    fn themed(&self, mut state: QuadState, light: f32, dark: f32) -> QuadState {
+        state.corner_radius = themed_radius(light, dark, self.theme_progress);
+        state
+    }
+
     pub fn set_viewport_size(&mut self, proteus: &mut Proteus, size: Vec2) {
         self.viewport_size = size;
         for handle in [self.background.light, self.background.dark] {
@@ -1090,6 +1115,7 @@ impl Demo {
             }
         }
         for (tile, state) in self.gallery.tiles.into_iter().zip(gallery::layout(size)) {
+            let state = self.themed(state, gallery::CORNER_RADIUS, gallery::CORNER_RADIUS_DARK);
             let _ = tile.set_declared_geometry(proteus, state);
         }
     }
@@ -1213,6 +1239,7 @@ impl Demo {
         // never ran — see `home::layout`'s doc.
         let states = home::layout(proteus, &self.home);
         for (button, state) in self.home.nav_buttons.into_iter().zip(states) {
+            let state = self.themed(state, home::CORNER_RADIUS, home::CORNER_RADIUS_DARK);
             let _ = button.set_declared_geometry(proteus, state);
         }
 
@@ -1350,7 +1377,7 @@ impl Demo {
         for i in 0..3 {
             let source = self.home.nav_buttons[i];
             let target = self.video_tiles.tiles[i];
-            let state = video_tiles::tile_target_state(proteus, target, i);
+            let state = video_tiles::tile_target_state(proteus, target, i, self.theme_progress);
             let _ = source.split_to_with_states(
                 proteus,
                 &[(target, state)],
@@ -1391,7 +1418,13 @@ impl Demo {
     /// before the first frame lands is expected.
     fn start_tiles_to_screen(&mut self, proteus: &mut Proteus, idx: usize) {
         let tile = self.video_tiles.tiles[idx];
-        let target = video_tiles::video_screen_quad(self.viewport_size);
+        // At the theme's radius, so the tile doesn't snap to it on arriving.
+        let mut target = video_tiles::video_screen_quad(self.viewport_size);
+        target.corner_radius = themed_radius(
+            video_tiles::SCREEN_CORNER_RADIUS,
+            video_tiles::SCREEN_CORNER_RADIUS_DARK,
+            self.theme_progress,
+        );
         let _ = tile.animate_to(proteus, target, group_transition_config());
         let video = proteus.create_video();
         let _ = tile.show_video(proteus, &video);
@@ -1437,7 +1470,7 @@ impl Demo {
         let targets: Vec<(Handle, QuadState)> = (0..3)
             .map(|i| {
                 let t = self.video_tiles.tiles[i];
-                let state = video_tiles::tile_target_state(proteus, t, i);
+                let state = video_tiles::tile_target_state(proteus, t, i, self.theme_progress);
                 (t, state)
             })
             .collect();
@@ -1699,7 +1732,11 @@ impl Demo {
     /// and fetches, no aspect-ratio bookkeeping of its own needed.
     fn start_gallery_to_image(&mut self, proteus: &mut Proteus, idx: usize) {
         let aspect = self.gallery_tile_aspect[idx];
-        let target = gallery::large_image_quad(aspect, self.viewport_size);
+        let target = self.themed(
+            gallery::large_image_quad(aspect, self.viewport_size),
+            gallery::CORNER_RADIUS,
+            gallery::CORNER_RADIUS_DARK,
+        );
         let target_size = target.size;
         let _ = self.gallery.enlarged.set_declared_geometry(proteus, target);
         let _ = self
@@ -1809,7 +1846,11 @@ impl Demo {
     /// front, so the transition animates straight to the correct spot instead of
     /// snapping after.
     fn start_examples_to_detail(&mut self, proteus: &mut Proteus, idx: usize) {
-        let target = example_detail::panel_target(idx, self.viewport_size);
+        let target = self.themed(
+            example_detail::panel_target(idx, self.viewport_size),
+            example_detail::CORNER_RADIUS,
+            example_detail::CORNER_RADIUS_DARK,
+        );
         let _ = self
             .example_detail
             .panel
@@ -1941,7 +1982,7 @@ impl Demo {
         for (i, tile) in self.video_tiles.tiles.into_iter().enumerate() {
             // The tile also rests here again: `start_tiles_to_screen` moved it
             // to the screen with `animate_to`, which made that where it rests.
-            let state = video_tiles::tile_target_state(proteus, tile, i);
+            let state = video_tiles::tile_target_state(proteus, tile, i, self.theme_progress);
             let _ = tile.set_declared_geometry(proteus, state);
             if let Some(mut glow) = proteus.world_mut().get_mut::<Glow>(tile.id()) {
                 glow.radius = 0.0;
@@ -1960,6 +2001,11 @@ impl Demo {
         if let Some(states) = examples_home::layout(proteus, &self.examples_home) {
             let buttons = self.examples_home.buttons;
             for (button, state) in buttons.into_iter().zip(states) {
+                let state = self.themed(
+                    state,
+                    examples_home::CORNER_RADIUS,
+                    examples_home::CORNER_RADIUS_DARK,
+                );
                 let _ = button.set_declared_geometry(proteus, state);
             }
         }
@@ -2234,6 +2280,13 @@ impl Demo {
     /// live transition on this entity to fight.
     fn apply_gallery_fetch_button_layout(&mut self, proteus: &mut Proteus) {
         if let Some(qs) = gallery::fetch_button_quad(proteus, &self.gallery, self.viewport_size) {
+            // At the theme's radius: this runs every tick, after the theme
+            // blends it, so at the light radius it would undo the blend.
+            let qs = self.themed(
+                qs,
+                gallery::FETCH_BUTTON_CORNER_RADIUS,
+                gallery::FETCH_BUTTON_CORNER_RADIUS_DARK,
+            );
             let _ = self.gallery.fetch_button.set_declared_geometry(proteus, qs);
         }
     }
@@ -3078,12 +3131,16 @@ impl Demo {
             qs.color.w = self.theme_icon_fade[1];
         }
 
-        // `home`'s nav buttons — corner radius (the dark value,
-        // `NAV_BUTTON_CORNER_RADIUS_DARK`, currently equals the light one, but
-        // it's blended anyway so changing it just works) and Border/Glow/label
-        // RGB.
+        // `home`'s nav buttons — corner radius, twice as round in the dark
+        // theme, and Border/Glow/label RGB.
         for &button in &self.home.nav_buttons {
-            blend_corner_radius(proteus, button, home::CORNER_RADIUS, home::CORNER_RADIUS, p);
+            blend_corner_radius(
+                proteus,
+                button,
+                home::CORNER_RADIUS,
+                home::CORNER_RADIUS_DARK,
+                p,
+            );
             blend_primary_color(proteus, button, p);
         }
         for &label in &self.home.nav_labels {
@@ -3122,16 +3179,13 @@ impl Demo {
         }
 
         // `examples_home`'s 6 category buttons — same corner-radius/
-        // Border/Glow/label treatment as `home`'s nav buttons above
-        // (`examples_home::CORNER_RADIUS`'s dark counterpart is likewise
-        // equal to the light one, and blended anyway — see that constant's own
-        // doc).
+        // Border/Glow/label treatment as `home`'s nav buttons above.
         for &button in &self.examples_home.buttons {
             blend_corner_radius(
                 proteus,
                 button,
                 examples_home::CORNER_RADIUS,
-                examples_home::CORNER_RADIUS,
+                examples_home::CORNER_RADIUS_DARK,
                 p,
             );
             blend_primary_color(proteus, button, p);
@@ -3889,6 +3943,26 @@ mod tests {
         demo.pointer_pressed();
         demo.tick(1.0);
         assert_eq!(demo.state, AppState::Home);
+    }
+
+    #[test]
+    fn in_the_dark_theme_a_tile_heads_for_the_dark_screens_radius() {
+        let mut demo = advance_to_video_tiles();
+        demo.dark_target = true;
+        let mut t = 0.0;
+        while t < THEME_MORPH_DURATION_SECS + 0.5 {
+            demo.tick(0.1);
+            t += 0.1;
+        }
+        assert_eq!(demo.theme_progress, 1.0);
+        let tile = demo.video_tiles.tiles[0];
+        demo.start_tiles_to_screen(0);
+        // Where the transition ends: the dark screen's radius, so it doesn't
+        // snap there once it arrives.
+        assert_eq!(
+            tile.declared_geometry(&demo.app).unwrap().corner_radius,
+            video_tiles::SCREEN_CORNER_RADIUS_DARK
+        );
     }
 
     fn advance_to_video_tiles() -> Harness {

@@ -30,12 +30,12 @@ use proteus_sdk::{Border, ComponentSpec, Glow, Handle, Proteus, QuadState, Text}
 pub const TILE_WIDTH: f32 = 200.0;
 pub const TILE_HEIGHT: f32 = TILE_WIDTH * 1.5;
 const TILE_GAP: f32 = 100.0;
-/// Also the theme-blend target in `Demo::advance_theme`. The dark-theme
-/// counterpart (`TILE_CORNER_RADIUS_DARK`) has the same value, but is kept
-/// separate so the themes can diverge (see `screens::home::CORNER_RADIUS`).
+/// Also the theme-blend target in `Demo::advance_theme`, toward
+/// [`TILE_CORNER_RADIUS_DARK`].
 pub const TILE_CORNER_RADIUS: f32 = 20.0;
-/// Dark-theme counterpart of [`TILE_CORNER_RADIUS`] — see its doc.
-pub const TILE_CORNER_RADIUS_DARK: f32 = 20.0;
+/// Dark-theme counterpart of [`TILE_CORNER_RADIUS`]: twice as round, the
+/// original design.
+pub const TILE_CORNER_RADIUS_DARK: f32 = 2.0 * TILE_CORNER_RADIUS;
 pub const BORDER_WIDTH: f32 = 3.0;
 
 /// One placeholder color per tile — shown until (if ever)
@@ -130,8 +130,19 @@ pub(crate) fn tile_quad(idx: usize) -> QuadState {
 /// carry the tint, multiplying the real box art underneath it. Both
 /// `Demo::start_home_to_tiles` and `Demo::start_screen_to_tiles` gate the
 /// override on `BakedImage` the same way.
-pub(crate) fn tile_target_state(app: &Proteus, tile: Handle, idx: usize) -> QuadState {
+///
+/// Its corner radius is the theme's, `theme_progress` of the way from the
+/// light theme's to the dark's, so a transition onto the tile ends at the
+/// radius the theme then keeps, rather than snapping to it after.
+pub(crate) fn tile_target_state(
+    app: &Proteus,
+    tile: Handle,
+    idx: usize,
+    theme_progress: f32,
+) -> QuadState {
     let mut state = tile_quad(idx);
+    state.corner_radius =
+        crate::themed_radius(TILE_CORNER_RADIUS, TILE_CORNER_RADIUS_DARK, theme_progress);
     if tile.baked_image_size(app).is_some() {
         state.color = Vec4::ONE;
     }
@@ -323,13 +334,12 @@ pub fn spawn(app: &mut Proteus) -> VideoTiles {
 const SCREEN_WIDTH_FRACTION: f32 = 0.9;
 /// height / width — the source videos' native aspect ratio.
 const SCREEN_ASPECT: f32 = 720.0 / 1280.0;
-/// Also the theme-blend target in `Demo::advance_theme` — unlike
-/// `TILE_CORNER_RADIUS`'s pair, this one's dark counterpart
-/// (`SCREEN_CORNER_RADIUS_DARK`) is a genuinely different value.
+/// Also the theme-blend target in `Demo::advance_theme`, toward
+/// [`SCREEN_CORNER_RADIUS_DARK`].
 pub const SCREEN_CORNER_RADIUS: f32 = 12.0;
-/// Dark-theme counterpart of [`SCREEN_CORNER_RADIUS`] — genuinely different
-/// here, unlike [`TILE_CORNER_RADIUS`]'s pair.
-pub const SCREEN_CORNER_RADIUS_DARK: f32 = 18.0;
+/// Dark-theme counterpart of [`SCREEN_CORNER_RADIUS`]: twice as round, as the
+/// tiles are.
+pub const SCREEN_CORNER_RADIUS_DARK: f32 = 2.0 * SCREEN_CORNER_RADIUS;
 /// Same reasoning/value as `example_detail`'s own top-clearance constant —
 /// vertical space reserved (top *and* bottom, here) so the screen never
 /// overlaps `screens::nav`'s buttons.

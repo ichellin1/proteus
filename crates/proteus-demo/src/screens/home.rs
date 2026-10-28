@@ -12,8 +12,12 @@ const LABEL_SIZE_PX: f32 = 24.0;
 const LABEL_LETTER_SPACING_PX: f32 = LABEL_SIZE_PX * 0.02;
 const PADDING_PX: f32 = 15.0;
 const GAP_PX: f32 = 50.0;
-// Public to suport dark theme that uses the same value. probably should clean up.
+/// The nav buttons' corner radius in the light theme, and the theme-blend
+/// target in `Demo::advance_theme`.
 pub const CORNER_RADIUS: f32 = 20.0;
+/// Dark-theme counterpart of [`CORNER_RADIUS`]: twice as round, the original
+/// design. More than half the buttons' height, so they're drawn as pills.
+pub const CORNER_RADIUS_DARK: f32 = 2.0 * CORNER_RADIUS;
 const BORDER_WIDTH: f32 = 3.0;
 const FALLBACK_SIZE: Vec2 = Vec2::new(150.0, 46.0);
 

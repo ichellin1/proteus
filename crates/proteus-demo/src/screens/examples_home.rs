@@ -26,10 +26,12 @@ const PADDING_PX: f32 = 15.0;
 const FALLBACK_SIZE: Vec2 = Vec2::new(150.0, 46.0);
 const COL_GAP_PX: f32 = 40.0;
 const ROW_GAP_PX: f32 = 30.0;
-/// Also the theme-blend target in `Demo::advance_theme` — the dark-theme
-/// counterpart is numerically identical (`NAV_BUTTON_CORNER_RADIUS_DARK`),
-/// same as `screens::home::CORNER_RADIUS`'s own doc.
+/// Also the theme-blend target in `Demo::advance_theme`, like
+/// `screens::home::CORNER_RADIUS`.
 pub const CORNER_RADIUS: f32 = 20.0;
+/// Dark-theme counterpart of [`CORNER_RADIUS`]: twice as round, as
+/// `screens::home::CORNER_RADIUS_DARK` is.
+pub const CORNER_RADIUS_DARK: f32 = 2.0 * CORNER_RADIUS;
 const BORDER_WIDTH: f32 = 3.0;
 
 fn violet() -> Vec4 {
