@@ -1,7 +1,8 @@
 # Bake at the display's resolution
 
 **Status:** done in v0.2.0, capped at a scale of 2 by `ResourceConfig::max_bake_scale`; see
-PLANNING's step 7, ARCHITECTURE's [Baking](../../ARCHITECTURE.md#baking), and the
+step 7 of [v0.2.0's planning](../archive/PLANNING-v0.2.0.md), ARCHITECTURE's
+[Baking](../../ARCHITECTURE.md#baking), and the
 [configuration guide](../guides/configuration.md#sharpness-on-high-density-displays). A baked
 component isn't baked again when the scale changes.
 

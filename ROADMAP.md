@@ -24,41 +24,21 @@ describes how it is built, and lists its known limits. It was built in milestone
 whose roadmap and planning are kept in [docs/archive](./docs/archive/) as history. "V1" in those
 documents means v0.1.0, and "V2" means everything after it.
 
+v0.2.0, shipped on 2026-10-28, fixed the known limits in how Proteus draws. Frames in which
+nothing changed aren't drawn, each frame redoes only the components that changed, plain
+components and pixels a later opaque component covers take faster paths, text and baked
+components are baked at the display's resolution, and the pieces of a split or merge keep their
+rounded corners. Natively, a still frame of 100,000 small components went from 7.9 to 1.3 ms,
+and of 100,000 large ones from 108.7 to 5.1 ms; [BENCHMARKS.md](./BENCHMARKS.md) has the
+history. Its planning is [archived](./docs/archive/PLANNING-v0.2.0.md), and its
+[release notes](./CHANGELOG.md) say what to change when upgrading.
+
+v0.3.0, keyboard and focus, is next.
+
 ## Releases
 
 A draft order, from release planning. Each release is planned in detail, with a definition of
 done in PLANNING, when it comes up, and its scope can change then.
-
-### v0.2.0 — Rendering limits
-
-Sharper, faster and steadier rendering: the known limits in how Proteus draws. In the order
-they're built; PLANNING has the steps.
-
-- The browser benchmark published beside the demo, and in each pull request's staging preview,
-  so it can be run on other people's machines.
-- Skip drawing a frame when nothing changed: no running transition, input, change to a
-  component, pending bake or new video frame. Both hosts draw every frame today, even on a still
-  screen, which may be why fans turn on with Proteus on low-end devices. A coarse check comes
-  first, and per-frame work's tracking refines it.
-- Only redo per-frame work that changed: collect, sort and upload only the components that
-  changed. [Design note](./docs/design/per-frame-work.md)
-- Split `quad.wgsl` into named parts, keeping its output identical, before custom shaders need
-  reusable pieces. Done before the fast path, which changes the same shader.
-- The test that checks the shader's atlas-page layout against Rust's breaks when the shader is
-  reformatted.
-- **High priority: a fast path for plain components in the shader.** Per-pixel work, not the
-  number of components, limits large, overlapping scenes; it also makes frame times uneven. Also
-  covers skipping pixels a later opaque component covers.
-  [Design note](./docs/design/shader-fast-path.md)
-- Bake text and components at the display's resolution, so they are as sharp as shapes the
-  shader draws. [Design note](./docs/design/bake-resolution.md)
-- **High priority: rounded corners on the slices of a baked split or merge** alias toward
-  square while a slice is drawn smaller than its bake.
-  [Design note](./docs/design/shared-bake-corners.md)
-- Top-left coordinates in Rust: Rust equivalents of TypeScript's `topLeftToWorld` and
-  `worldToTopLeft`, and guides that make the origin, the viewport's center with y up, and the
-  conversion clear in both languages. The origin itself stays where it is. Independent of the
-  rest, so done at any point.
 
 ### v0.3.0 — Keyboard and focus
 
