@@ -47,7 +47,7 @@ done, the candidates are unordered.
 - [x] Every candidate in ROADMAP is placed in a release, kept as a candidate for later, or
   dropped with a reason.
 - [x] The releases are in ROADMAP in order.
-- [ ] The two high-priority candidates, the shader fast path and rounded corners on baked
+- [x] The two high-priority candidates, the shader fast path and rounded corners on baked
   slices, are decided first.
 
 ## v0.2.0 — Rendering limits
@@ -252,7 +252,7 @@ Independent of the other steps.
 
 ### Step 9 — Close out
 
-- [ ] ARCHITECTURE's known limits no longer list what this release fixes.
+- [x] ARCHITECTURE's known limits no longer list what this release fixes.
 - [ ] Released through the process in [RELEASING.md](./RELEASING.md).
 
 ## Standing decisions
