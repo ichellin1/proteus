@@ -47,6 +47,21 @@ impl Viewport {
         }
     }
 
+    /// Converts `point`, in logical pixels from the viewport's top-left corner
+    /// with y pointing down, as windows and web pages measure, to world units:
+    /// from its center, with y pointing up, where top-level components are
+    /// placed. See [`proteus_sdk::top_left_to_world`].
+    pub fn top_left_to_world(&self, point: Vec2) -> Vec2 {
+        proteus_sdk::top_left_to_world(point, self.logical_size)
+    }
+
+    /// Converts `point`, in world units, back to logical pixels from the
+    /// viewport's top-left corner with y pointing down: the inverse of
+    /// [`Viewport::top_left_to_world`].
+    pub fn world_to_top_left(&self, point: Vec2) -> Vec2 {
+        proteus_sdk::world_to_top_left(point, self.logical_size)
+    }
+
     /// The size in physical pixels, at least 1 in each direction.
     pub fn physical_size(&self) -> (u32, u32) {
         (

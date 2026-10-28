@@ -213,14 +213,14 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 ### Step 8 — Rounded corners on baked slices
 
-- [ ] With step 3's approach, a slice's corners stay round while it is drawn smaller than its
+- [x] With step 3's approach, a slice's corners stay round while it is drawn smaller than its
   bake, and change size as one curve, with no crossfade between two corner shapes. Checked with
   `cargo run --release -p check-corners`, on a fill, an image and a border.
   [Design note](./docs/design/shared-bake-corners.md) Built: each baked piece has a
   `PieceCorners`, each corner's radius at its start and its end, which the instance's radii
   move between with the transition's easing, and both ends are baked with square corners, so
   only the shader draws corners. A slice of a split's source is rounded only at the source's
-  own corners. To be checked by eye.
+  own corners. Checked by eye, in `check-corners` and the demo, natively and over WebGL2.
 - **Decided (2026-10-27): a component with a border is baked with its rounded corners (option
   A).** Baked square, a border's inside would be square at the corners too. Its slices start
   with no radius, so its bake's corners show in a split or merge, as before. Baking it without
@@ -241,8 +241,14 @@ results in BENCHMARKS, and the reference demo on a still screen.
 
 Independent of the other steps.
 
-- [ ] Rust has equivalents of TypeScript's `topLeftToWorld` and `worldToTopLeft`, and the
-  guides make the origin and the conversion clear in both languages.
+- [x] Rust has equivalents of TypeScript's `topLeftToWorld` and `worldToTopLeft`, and the
+  guides make the origin and the conversion clear in both languages. `Viewport::top_left_to_world`
+  and `world_to_top_left`, and functions of the same names in `proteus_sdk` that take the
+  viewport's size, for code with no `Viewport`; both hosts convert the pointer with them.
+- **Decided (2026-10-28): methods on `Viewport`, not coordinate types.** A conversion needs the
+  viewport's size, which `From` can't carry, and types such as `TopLeft` and `World` would only
+  pay off if every position in the API used them, which would break both SDKs. Typed
+  coordinates could be weighed with v0.6.0's work for developers.
 
 ### Step 9 — Close out
 

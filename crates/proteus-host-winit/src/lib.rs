@@ -407,12 +407,15 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
                 // `position` is in physical pixels from the top-left; the
                 // engine wants world units: logical, origin at the center, y
                 // up.
-                let scale = running.window.scale_factor() as f32;
-                let w = running.gpu.config.width as f32 / scale;
-                let h = running.gpu.config.height as f32 / scale;
-                let wx = (position.x as f32 / scale) - w / 2.0;
-                let wy = h / 2.0 - (position.y as f32 / scale);
-                running.engine.pointer_moved(Some(Vec2::new(wx, wy)));
+                let viewport = viewport_for(
+                    &running.window,
+                    running.gpu.config.width,
+                    running.gpu.config.height,
+                );
+                let top_left =
+                    Vec2::new(position.x as f32, position.y as f32) / viewport.scale_factor;
+                let world = viewport.top_left_to_world(top_left);
+                running.engine.pointer_moved(Some(world));
             }
             WindowEvent::CursorLeft { .. } => running.engine.pointer_moved(None),
             WindowEvent::MouseInput {
