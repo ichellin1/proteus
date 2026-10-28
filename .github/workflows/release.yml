@@ -150,12 +150,17 @@ jobs:
           # Only for the package's first publish, before trusted publishing
           # can be linked to it; see RELEASING.md. Unset otherwise, and npm
           # uses trusted publishing.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # Without the secret, npm publishes through trusted publishing; an
+          # empty token would be sent instead.
+          if [ -n "$NPM_TOKEN" ]; then
+            export NODE_AUTH_TOKEN="$NPM_TOKEN"
+          fi
           if [ "$DRY_RUN" = true ]; then
-            npm publish --access public --dry-run
+            npm publish --access public --loglevel verbose --dry-run
           else
-            npm publish --access public
+            npm publish --access public --loglevel verbose
           fi
 
   github-release:
