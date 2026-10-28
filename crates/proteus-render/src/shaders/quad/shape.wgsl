@@ -8,11 +8,13 @@
 //   half_size — half-extents of the rect (pixels)
 //   radii     — each corner's radius (pixels): top-left, top-right,
 //               bottom-right, bottom-left; 0.0 = a sharp corner
-// Each quadrant of the rect is shaped by its own corner's radius.
+// Each quadrant of the rect is shaped by its own corner's radius, at most half
+// the shorter side, as CSS does: a larger one would shrink the shape, while
+// this rounds the ends of a short, wide one into a pill.
 fn sdf_rounded_rect(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
     let top    = select(radii.x, radii.y, p.x > 0.0);
     let bottom = select(radii.w, radii.z, p.x > 0.0);
-    let r      = select(bottom, top, p.y > 0.0);
+    let r      = min(select(bottom, top, p.y > 0.0), min(half_size.x, half_size.y));
     let q = abs(p) - half_size + vec2(r, r);
     return length(max(q, vec2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
