@@ -1,7 +1,7 @@
 {
   "name": "proteus-example-video",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Video from the browser's own player, shown with the Proteus TypeScript SDK.",
   "type": "module",
   "scripts": {

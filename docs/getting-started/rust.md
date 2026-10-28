@@ -30,9 +30,9 @@ Add Proteus to `Cargo.toml`:
 
 ```toml
 [dependencies]
-proteus-sdk = "0.1"
-proteus-runtime = "0.1"
-proteus-host-winit = "0.1"
+proteus-sdk = "0.2"
+proteus-runtime = "0.2"
+proteus-host-winit = "0.2"
 ```
 
 - `proteus-sdk` is what you build an app with: components, transitions and input.
@@ -129,14 +129,14 @@ In `Cargo.toml`, add the library and give each host to its own target:
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-proteus-sdk = "0.1"
-proteus-runtime = "0.1"
+proteus-sdk = "0.2"
+proteus-runtime = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-proteus-host-winit = "0.1"
+proteus-host-winit = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-proteus-host-web = "0.1"
+proteus-host-web = "0.2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 ```
