@@ -114,8 +114,20 @@ What outside developers need to build real apps.
   `outline-offset`. Only inner borders draw today. The instance already carries a placement, in
   a field confusingly named `border_offset`, but nothing outside the shape is drawn, so a border
   outside it needs the quad grown to make room, as it already is for a shadow.
+- Rounded, bordered components in splits and merges: bake them without their border, and draw
+  the border on the pieces, only along the edges that were the source's, so their corners
+  change size as one curve as other components' do. They show their baked corners today.
+  [Design note](./docs/design/shared-bake-corners.md)
 - An `on_destroy` callback, for components and channels destroyed as a side effect, with their
   parent or their owner.
+- Choosing the bake scale per component, and changing the cap while the app runs. A
+  component's text, or a component made with `.bake()`, could set its own scale: lower for a
+  large component that takes too much atlas space, higher for text that must be pixel-exact on
+  a 3× display while the default cap stays at 2. The bakes of splits and merges would keep
+  choosing their scale themselves, since they last only for the transition. Changing
+  `max_bake_scale` while the app runs would bake text again, as a new display scale already
+  does; components made with `.bake()` can't be baked again until `.bake()` keeps their
+  children (a candidate below), so the two go together.
 
 ### v0.7.0 — Effects
 

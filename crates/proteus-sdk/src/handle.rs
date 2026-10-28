@@ -283,6 +283,38 @@ impl Handle {
         Ok(())
     }
 
+    /// Changes the geometry this component rests at, its declared geometry,
+    /// without moving it now: where a transition into it ends, and what its
+    /// interaction styles apply on top of.
+    ///
+    /// A transition already under way keeps going, and a style already shown
+    /// stays until the pointer changes it; the next ones use the new geometry.
+    /// Use it for a change that should take effect as the component next
+    /// moves, such as a theme that rounds its corners more, whose current
+    /// look the app changes itself. To move the component there now as well,
+    /// use [`Handle::set_declared_geometry`] or [`Handle::animate_to`].
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn declare_geometry(&self, app: &mut Proteus, state: QuadState) -> Result<(), HandleError> {
+        check_alive(app, self.0, "declare_geometry")?;
+        declare(app, self.0, state);
+        Ok(())
+    }
+
+    /// The geometry this component rests at: its declared geometry, where a
+    /// transition into it ends. While it transitions, or shows an interaction
+    /// style, its current geometry, from [`Proteus::get`], differs. `None` if
+    /// it no longer exists.
+    pub fn declared_geometry(&self, app: &Proteus) -> Option<QuadState> {
+        let world = &app.world.world;
+        world
+            .get::<DeclaredGeometry>(self.0)
+            .map(|d| d.0.clone())
+            .or_else(|| world.get::<QuadState>(self.0).cloned())
+    }
+
     /// Transitions this component from its current geometry to `to`, where it
     /// then rests: `to` becomes its declared geometry, as with
     /// [`Handle::set_declared_geometry`], so a later transition into it, or

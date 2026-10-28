@@ -41,8 +41,10 @@ fn vs_depth(in: VertexIn) -> @builtin(position) vec4<f32> {
     // the 1 the edge's antialiasing takes, so rounding between the two passes
     // can't put a pixel the main pass blends into the rectangle.
     let r     = in.inst_corner_radii;
-    let inset = max(max(r.x, r.y), max(r.z, r.w)) + 2.0;
     let scaled_size = in.inst_size_rot_scale.xy * in.inst_size_rot_scale.w;
+    // The radius as the shape clamps it; see `sdf_rounded_rect`.
+    let largest = min(max(max(r.x, r.y), max(r.z, r.w)), 0.5 * min(scaled_size.x, scaled_size.y));
+    let inset = largest + 2.0;
     let inner = max(scaled_size - vec2(2.0 * inset), vec2(0.0));
     return to_clip(in, in.position * inner, draw_depth(in.instance));
 }

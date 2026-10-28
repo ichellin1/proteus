@@ -207,6 +207,33 @@ card.setDeclaredGeometry(moved);
 card.animateTo(moved, { duration: 0.3 });
 ```
 
+To change where a component rests without moving it now, use `declare_geometry`
+(`declareGeometry`). A transition already under way keeps going, and the next one ends at the
+new geometry. That suits a change the app shows in its own way, such as a theme that rounds
+corners more: the app sets the component's current look itself, and declares the new one so a
+transition into the component ends there rather than snapping to it after. `declared_geometry`
+(`declaredGeometry`) reads where a component rests, which differs from its current geometry
+while it moves.
+
+#### Rust
+
+```rust
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState};
+# let mut app = Proteus::new();
+# let card = app.component(ComponentSpec::new(QuadState::default()));
+let mut rounder = card.declared_geometry(&app).unwrap();
+rounder.corner_radius = 40.0;
+card.declare_geometry(&mut app, rounder)?;
+# Ok::<(), proteus_sdk::HandleError>(())
+```
+
+#### TypeScript
+
+```ts
+const rounder = { ...card.declaredGeometry()!, cornerRadius: 40 };
+card.declareGeometry(rounder);
+```
+
 ## Children
 
 A component can contain others, its children. A child moves, turns, scales, fades and hides with

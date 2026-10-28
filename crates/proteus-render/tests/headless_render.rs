@@ -789,6 +789,68 @@ fn skipping_covered_pixels_draws_the_same_pixels() {
     }
 }
 
+// A corner radius larger than half the shorter side is drawn at half the
+// shorter side, as CSS does, making a short, wide component a pill: the same
+// pixels as giving it that radius.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_radius_past_half_the_shorter_side_draws_a_pill() {
+    let Some((device, queue)) = pollster::block_on(make_device()) else {
+        no_gpu();
+        return;
+    };
+    let pill = |radius: f32| {
+        let mut q = QuadInstance {
+            position: [0.0, 0.0, 0.0],
+            size: [48.0, 20.0],
+            rotation: 0.0,
+            scale: 1.0,
+            anchor: [0.5, 0.5],
+            color: [0.9, 0.5, 0.1, 1.0],
+            opacity: 1.0,
+            corner_radii: [0; 4],
+            uv_offset: QuadPipeline::WHITE_PIXEL_UV_OFFSET,
+            uv_scale: QuadPipeline::WHITE_PIXEL_UV_SCALE,
+            atlas_page: pack_atlas_page(ATLAS_SELECTOR_MAIN, 0),
+            base_uv_offset: [0.0, 0.0],
+            base_uv_scale: [0.0, 0.0],
+            crossfade_t: 0.0,
+            border_width: 0.0,
+            border_color: [0.0; 4],
+            border_offset: 0.0,
+            shadow_params: [0.0; 4],
+            shadow_color: [0.0; 4],
+            base_atlas_page: pack_atlas_page(ATLAS_SELECTOR_TRANSITION, 0),
+        };
+        q.set_corner_radius(radius);
+        q
+    };
+    let black = wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    let draw = |radius: f32| {
+        let mut pipeline = QuadPipeline::new(
+            &device,
+            &queue,
+            FORMAT,
+            16,
+            AtlasConfig::default(),
+            DEFAULT_TRANSITION_ATLAS_SIZE,
+        );
+        pipeline.set_view_projection(&queue, QuadPipeline::ortho(WIDTH as f32, HEIGHT as f32));
+        render_and_read_back(&device, &queue, &mut pipeline, &[pill(radius)], black)
+    };
+    let half_the_height = draw(10.0);
+    assert!(half_the_height.iter().any(|&b| b != 0), "it draws");
+    assert!(
+        draw(40.0) == half_the_height,
+        "40 is drawn as 10, half the height"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

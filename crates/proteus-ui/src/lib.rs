@@ -40,7 +40,9 @@ pub mod transition;
 pub mod video;
 
 // Convenience re-exports for the most commonly used types.
-pub use bake::{bake_scale_to_fit, bake_system, BakeScale, Baked, BakedComposite};
+pub use bake::{
+    bake_scale_to_fit, bake_system, group_bake_scale, BakeScale, Baked, BakedComposite,
+};
 pub use bevy_ecs::hierarchy::{ChildOf, Children};
 pub use bevy_ecs::prelude::Entity;
 pub use channel::{
@@ -71,8 +73,8 @@ pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};
 pub use texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 pub use topology::{
-    ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout, NToOneRequest,
-    OneToNRequest, PartOfGroup, SplitStrategy, TransitionAtlasSize,
+    slice_corners, ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout,
+    NToOneRequest, OneToNRequest, PartOfGroup, PieceCorners, SplitStrategy, TransitionAtlasSize,
 };
 pub use transition::{ActiveTransition, CompletedTransitions, Easing, FrameTime, TransitionConfig};
 pub use video::{VideoCrossfade, VideoPlayer};

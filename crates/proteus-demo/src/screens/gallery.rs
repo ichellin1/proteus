@@ -11,9 +11,8 @@
 //! `enlarged` — see `Demo::advance_hovers`' call site for why that one's
 //! different) and theme-color/corner-radius wiring both live in `Demo`
 //! (`Demo::new`'s `register_hover` calls, `Demo::advance_theme`) — this
-//! module only owns the static geometry/spawn shape. `GALLERY_CORNER_
-//! RADIUS`'s dark counterpart currently equals the light one (both
-//! `20.0`), and is blended anyway, so changing it just works.
+//! module only owns the static geometry/spawn shape. The tiles are twice as
+//! round in the dark theme, [`CORNER_RADIUS_DARK`].
 //!
 //! An empty tile (before its fetch resolves) is a plain white rounded
 //! square with a violet border. A fetched photo's real aspect ratio is
@@ -41,24 +40,22 @@ const MARGIN_BOTTOM: f32 = 100.0;
 const GAP_PX: f32 = 20.0;
 const CELL_SCALE: f32 = 0.9;
 const GRID_BOTTOM_MARGIN_PX: f32 = 40.0;
-/// Also the theme-blend target in `Demo::advance_theme` — the dark-theme
-/// counterpart (`CORNER_RADIUS_DARK`) is a genuine, verified no-op (both
-/// `20.0` in source), wired anyway — see the module doc.
+/// Also the theme-blend target in `Demo::advance_theme`, toward
+/// [`CORNER_RADIUS_DARK`].
 pub const CORNER_RADIUS: f32 = 20.0;
-/// Dark-theme counterpart of [`CORNER_RADIUS`] — see its doc.
-pub const CORNER_RADIUS_DARK: f32 = 20.0;
+/// Dark-theme counterpart of [`CORNER_RADIUS`]: twice as round, the original
+/// design.
+pub const CORNER_RADIUS_DARK: f32 = 2.0 * CORNER_RADIUS;
 const BORDER_WIDTH: f32 = 3.0;
 
 const FETCH_BUTTON_LABEL: &str = "Fetch New Images";
 const FETCH_BUTTON_TOP_MARGIN_PX: f32 = 65.0;
 const FETCH_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(220.0, 46.0);
 const FETCH_BUTTON_PADDING_PX: f32 = 15.0;
-/// The fetch button blends its corner radius against the *nav button's*
-/// pair, not the gallery's, since it's a button like the nav buttons. The
-/// values are the same either way today (every one of these pairs is
-/// `20.0`/`20.0`).
+/// The fetch button blends its corner radius like the nav buttons, since it's
+/// a button like them: twice as round in the dark theme.
 pub const FETCH_BUTTON_CORNER_RADIUS: f32 = 20.0;
-pub const FETCH_BUTTON_CORNER_RADIUS_DARK: f32 = 20.0;
+pub const FETCH_BUTTON_CORNER_RADIUS_DARK: f32 = 2.0 * FETCH_BUTTON_CORNER_RADIUS;
 const LABEL_SIZE_PX: f32 = 24.0;
 const LABEL_LETTER_SPACING_PX: f32 = LABEL_SIZE_PX * 0.02;
 

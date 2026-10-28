@@ -154,7 +154,7 @@ every feature. A component's features are switched on or off by its instance dat
 choosing a different shader:
 
 - **The shape** is a rounded rectangle drawn with a signed distance field, antialiased over
-  one pixel.
+  one pixel, with a radius per corner, each at most half the shorter side, as in CSS.
 - **Content** is a texture sample. A component with no image or text samples a white block in
   the main atlas, so its color alone decides how it looks, with no branch in the shader.
 - **A border** draws when its width isn't zero.
@@ -265,7 +265,9 @@ Bakes are at the display's resolution: every bake reads a `BakeScale` resource, 
 scale factor capped by `ResourceConfig::max_bake_scale`, 2 by default, and at least 1, and
 gets `scale` texels per logical pixel, drawn at its logical size by the same projection. Text is
 rasterized at `size_px × scale`, and `BakedText::pixel_size` stays its logical size, for layout.
-A bake too large for a page, or for the transition atlas, takes the largest scale that fits.
+A bake too large for a page, or for the transition atlas, takes the largest scale that fits,
+and a split or merge bakes its source and targets at one scale at which they all fit the
+transition atlas together, so a large one doesn't leave pieces as plain shapes.
 When the scale changes, the renderer removes every `BakedText`, so text bakes again at the new
 one; a baked component keeps its scale, since baking destroyed what it was drawn from. The
 [configuration guide](./docs/guides/configuration.md#sharpness-on-high-density-displays)
@@ -333,6 +335,15 @@ its layout. Because each virtual fades between two images, the pieces look like 
 source at the start and like the targets at the end, whatever those contain: text, images,
 borders, children. If there's no GPU, as in tests, or a bake fails, a virtual is a plain
 colored shape carrying its source's shadow, glow and text instead.
+
+Both ends are baked with square corners, and a virtual's corners are drawn by the shader, from
+its `PieceCorners`: each corner's radius at the start and the end, which its instance's radii
+move between with the transition. A slice of a split's source is rounded only at the source's
+own corners, by `slice_corners`; a whole target at all four. Both images a virtual fades
+between are clipped by that one curve, so its corners change size smoothly however small it's
+drawn, rather than crossfading between two shapes or aliasing a baked edge. A component with a
+border is the exception: baked square, its border's inside would be square too, so it is baked
+with its rounded corners, which show in its slices.
 
 A virtual has the `Virtual` marker, and every behavioral system, such as input and
 transition completion, skips entities that have it. Transition-atlas regions are freed by
@@ -473,6 +484,8 @@ These are known shortcomings, each planned to be addressed in a future release:
   components overlap: only a solid, opaque component hides what's behind it from the shader.
 - A component baked with `.bake()` keeps the resolution it was first baked at, if its window
   moves to a display of another density.
+- A rounded component with a border shows its baked corners in a split or merge, crossfading
+  with its pieces' own, rather than one curve that changes size.
 - Text is a single line.
 - One video at a time.
 - No keyboard input.

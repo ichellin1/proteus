@@ -196,8 +196,10 @@ Most apps never notice: text is small, and the main atlas holds 64 MiB by defaul
 where an app bakes a lot, many large baked components or long text, especially on the web,
 whose atlas pages are 2048 pixels on a side. A 1,200 × 800 baked component fits a page at 1 but
 not at 2, so Proteus bakes it at the largest scale that fits instead, slightly softer. Splits
-and merges bake their two ends into the transition atlas the same way, so very large ones
-fill it sooner, and a piece that doesn't fit is drawn as a plain shape.
+and merges bake their source and every target into the transition atlas together, so a
+transition with a large component, such as a photo enlarged to fill the window going back to
+its grid, bakes all of them at the largest scale at which they fit together, slightly softer
+during the transition only.
 
 **When to change it.**
 

@@ -36,12 +36,12 @@ const HEADING_PANEL_GAP_PX: f32 = 20.0;
 /// top of the panel; headings use 0.51 for the same reason.
 pub(crate) const CONTENT_Z: f32 = 0.51;
 
-/// `panel`'s theme-blend target in `Demo::advance_theme`. Unlike
-/// `screens::home`'s nav-button pair, this one's light/dark values are
-/// genuinely different.
+/// `panel`'s theme-blend target in `Demo::advance_theme`, toward
+/// [`CORNER_RADIUS_DARK`].
 pub const CORNER_RADIUS: f32 = 12.0;
-/// Dark-theme counterpart of [`CORNER_RADIUS`] — genuinely different here.
-pub const CORNER_RADIUS_DARK: f32 = 18.0;
+/// Dark-theme counterpart of [`CORNER_RADIUS`]: twice as round, as the
+/// buttons and tiles are.
+pub const CORNER_RADIUS_DARK: f32 = 2.0 * CORNER_RADIUS;
 const BORDER_WIDTH: f32 = 3.0;
 /// Neutral grey (not violet-tinted like everything else in this demo) —
 /// deliberately opaque and desaturated, so the effect/text/transform

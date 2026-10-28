@@ -117,6 +117,27 @@ pub fn bake_scale_to_fit(scale: f32, width: f32, height: f32, max: u32) -> f32 {
     s.max(1.0)
 }
 
+/// The most of an atlas a group's bakes may take between them at their scale,
+/// leaving the rest for the gaps between regions as they're packed, and for
+/// the gutters around them.
+const GROUP_FILL: f32 = 0.6;
+
+/// The scale to bake a group of things at together, such as a split's source
+/// and its targets, each `size` logical pixels, so that they fit an atlas
+/// `max` pixels on a side between them: `scale` if they take at most 60% of
+/// it at that scale, else the largest scale at which they do, but never
+/// below a scale of 1. A group of small bakes keeps the display's scale;
+/// one with a bake near the window's size takes less, so none of its bakes
+/// is left a plain shape for want of room.
+pub fn group_bake_scale(scale: f32, sizes: impl IntoIterator<Item = glam::Vec2>, max: u32) -> f32 {
+    let area: f32 = sizes.into_iter().map(|s| s.x.max(1.0) * s.y.max(1.0)).sum();
+    let budget = GROUP_FILL * (max as f32) * (max as f32);
+    if area * scale * scale <= budget {
+        return scale;
+    }
+    (budget / area).sqrt().clamp(1.0, scale.max(1.0))
+}
+
 // ---------------------------------------------------------------------------
 // bake_system
 // ---------------------------------------------------------------------------
@@ -305,5 +326,28 @@ mod bake_scale_tests {
     #[test]
     fn a_bake_too_large_at_one_is_left_at_one() {
         assert_eq!(bake_scale_to_fit(2.0, 3000.0, 100.0, 2048), 1.0);
+    }
+
+    #[test]
+    fn a_small_group_keeps_its_scale() {
+        let tiles = [glam::Vec2::splat(200.0); 4];
+        assert_eq!(super::group_bake_scale(2.0, tiles, 2044), 2.0);
+    }
+
+    #[test]
+    fn a_large_group_takes_a_scale_at_which_it_fits() {
+        // The demo's gallery: an enlarged photo and twelve tiles.
+        let group =
+            std::iter::once(glam::Vec2::new(1100.0, 750.0)).chain([glam::Vec2::splat(220.0); 12]);
+        let scale = super::group_bake_scale(2.0, group.clone(), 2044);
+        assert!(scale > 1.0 && scale < 2.0, "{scale}");
+        let area: f32 = group.map(|s| s.x * s.y * scale * scale).sum();
+        assert!(area <= 0.6 * 2044.0 * 2044.0 + 1.0, "{area}");
+    }
+
+    #[test]
+    fn a_group_too_large_at_one_is_left_at_one() {
+        let huge = [glam::Vec2::splat(2000.0); 3];
+        assert_eq!(super::group_bake_scale(2.0, huge, 2044), 1.0);
     }
 }

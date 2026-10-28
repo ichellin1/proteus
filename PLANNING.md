@@ -216,7 +216,26 @@ results in BENCHMARKS, and the reference demo on a still screen.
 - [ ] With step 3's approach, a slice's corners stay round while it is drawn smaller than its
   bake, and change size as one curve, with no crossfade between two corner shapes. Checked with
   `cargo run --release -p check-corners`, on a fill, an image and a border.
-  [Design note](./docs/design/shared-bake-corners.md)
+  [Design note](./docs/design/shared-bake-corners.md) Built: each baked piece has a
+  `PieceCorners`, each corner's radius at its start and its end, which the instance's radii
+  move between with the transition's easing, and both ends are baked with square corners, so
+  only the shader draws corners. A slice of a split's source is rounded only at the source's
+  own corners. To be checked by eye.
+- **Decided (2026-10-27): a component with a border is baked with its rounded corners (option
+  A).** Baked square, a border's inside would be square at the corners too. Its slices start
+  with no radius, so its bake's corners show in a split or merge, as before. Baking it without
+  its border and drawing the border on the pieces, only along the source's own edges, is a
+  candidate for v0.6.0, with the border placements there.
+- **Added to the step (2026-10-27): the demo's dark theme is twice as round,** its original
+  design: buttons and tiles 40 rather than 20, the detail panel and the video screen 24. A
+  radius past half a component's shorter side is now drawn at half, as CSS does, rather than
+  shrinking the shape, so the 60-pixel buttons are pills.
+- **Decided (2026-10-27): `Handle::declare_geometry` and `declared_geometry`,** in Rust and
+  TypeScript, change and read where a component rests without moving it now. The demo's
+  themes changed only the live radius, so a transition into a button ended at the light radius
+  and snapped to the dark one after, which at 40 was jarring. `set_declared_geometry` moves the
+  component too, which would cut a transition short or drop a hover style, so an app with
+  themes had no way to do this.
 
 ### Any time — Top-left coordinates in Rust
 

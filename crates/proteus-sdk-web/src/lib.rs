@@ -619,6 +619,28 @@ impl ProteusApp {
             .map_err(handle_err)
     }
 
+    /// Calls [`Handle::declare_geometry`](sdk::Handle::declare_geometry).
+    #[wasm_bindgen(js_name = declareGeometry)]
+    pub fn declare_geometry(&mut self, handle: &Handle, state: JsValue) -> Result<(), JsValue> {
+        let dto: QuadStateDto = serde_wasm_bindgen::from_value(state)
+            .map_err(|e| crate::js_error(&format!("invalid Geometry: {e}")))?;
+        handle
+            .0
+            .declare_geometry(&mut self.0.borrow_mut(), (&dto).into())
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::declared_geometry`](sdk::Handle::declared_geometry):
+    /// the geometry, or `undefined` if the component no longer exists.
+    #[wasm_bindgen(js_name = declaredGeometry)]
+    pub fn declared_geometry(&self, handle: &Handle) -> JsValue {
+        handle
+            .0
+            .declared_geometry(&self.0.borrow())
+            .and_then(|state| serde_wasm_bindgen::to_value(&QuadStateDto::from(&state)).ok())
+            .unwrap_or(JsValue::UNDEFINED)
+    }
+
     /// Calls [`Handle::animate_to`](sdk::Handle::animate_to).
     #[wasm_bindgen(js_name = animateTo)]
     pub fn animate_to(

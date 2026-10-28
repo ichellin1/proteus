@@ -342,6 +342,31 @@ export class Handle {
   }
 
   /**
+   * Changes the geometry this component rests at, its declared geometry, without moving it now:
+   * where a transition into it ends, and what its interaction styles apply on top of.
+   *
+   * A transition already under way keeps going, and a style already shown stays until the
+   * pointer changes it; the next ones use the new geometry. Use it for a change that should take
+   * effect as the component next moves, such as a theme that rounds its corners more, whose
+   * current look the app changes itself. To move the component there now as well, use
+   * {@link Handle.setDeclaredGeometry} or {@link Handle.animateTo}.
+   *
+   * @throws if this component no longer exists.
+   */
+  declareGeometry(state: Geometry): void {
+    this.app.wasmApp.declareGeometry(this.wasmHandle, state);
+  }
+
+  /**
+   * The geometry this component rests at: its declared geometry, where a transition into it
+   * ends. While it transitions, or shows an interaction style, its current geometry, from
+   * {@link ProteusApp.get}, differs. `undefined` if it no longer exists.
+   */
+  declaredGeometry(): Geometry | undefined {
+    return this.app.wasmApp.declaredGeometry(this.wasmHandle) as Geometry | undefined;
+  }
+
+  /**
    * Transitions this component from its current geometry to `to`, where it
    * then rests: `to` becomes its declared geometry, as with
    * {@link Handle.setDeclaredGeometry}, so a later transition into it, or an
