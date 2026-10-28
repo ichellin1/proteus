@@ -14,7 +14,7 @@
 //!   `collect_instances`.
 //! - **Otherwise,** an entity is redone when anything its instances are made
 //!   from changes or is removed: its geometry, visibility, opacity, effects,
-//!   image, video, text, bake or transition. One whose geometry in world space
+//!   image, video, text, bake, transition, or a piece's corners. One whose geometry in world space
 //!   changed also redoes its children, which are placed relative to it.
 //!   Entities are redone in drawing order, so a parent is always done before
 //!   its children. When more than a quarter of them changed, as when
@@ -44,6 +44,7 @@ use crate::{
     effects::{Border, DropShadow, Glow},
     hierarchy::{compose_with_parent, EffectiveOpacity, EffectiveVisibility, Opacity},
     spawn_order::SpawnOrder,
+    topology::PieceCorners,
     video::{VideoCrossfade, VideoPlayer},
     ActiveTransition, BakedImage, BakedText, BakedTexture, QuadState, Text, Virtual, Visibility,
 };
@@ -113,6 +114,7 @@ type ChangeParams = (
             Changed<Text>,
             Changed<Virtual>,
             Changed<ActiveTransition>,
+            Changed<PieceCorners>,
         )>,
     >,
     Query<'static, 'static, Entity, Changed<ChildOf>>,
@@ -140,6 +142,7 @@ type ChangeParams = (
         RemovedComponents<'static, 'static, Virtual>,
         RemovedComponents<'static, 'static, ActiveTransition>,
     ),
+    RemovedComponents<'static, 'static, PieceCorners>,
 );
 
 /// Every component's instances, in drawing order, kept from frame to frame.
@@ -173,7 +176,7 @@ impl InstanceCache {
     pub fn update(&mut self, world: &mut World) -> InstanceChanges {
         let first = self.changes.is_none();
         let state = self.changes.get_or_insert_with(|| SystemState::new(world));
-        let (content, more_content, reparented, structure, removed, more_removed) =
+        let (content, more_content, reparented, structure, removed, more_removed, mut corners) =
             state.get_mut(world);
 
         let (mut removed_quads, mut orphaned) = structure;
@@ -189,6 +192,7 @@ impl InstanceCache {
         let (mut r0, mut r1, mut r2, mut r3, mut r4, mut r5, mut r6, mut r7) = more_removed;
         dirty.extend(r0.read().chain(r1.read()).chain(r2.read()).chain(r3.read()));
         dirty.extend(r4.read().chain(r5.read()).chain(r6.read()).chain(r7.read()));
+        dirty.extend(corners.read());
 
         if !restructured {
             // A new entity, or one whose `z` changed, needs a new drawing
@@ -459,7 +463,7 @@ mod tests {
         let e = entities[random.below(entities.len())];
         let other = entities[random.below(entities.len())];
         let mut entity = world.entity_mut(e);
-        match random.below(17) {
+        match random.below(18) {
             0 => {
                 let child = geometry(random);
                 let child = world.spawn((child, ChildOf(e))).id();
@@ -572,6 +576,16 @@ mod tests {
             }
             15 => {
                 entity.get_mut::<QuadState>().unwrap().size *= 1.1;
+            }
+            16 => {
+                if random.chance(50) {
+                    entity.insert(PieceCorners {
+                        from: [random.f32(0.0, 10.0), 0.0, 4.0, 0.0],
+                        to: [random.f32(0.0, 10.0); 4],
+                    });
+                } else {
+                    entity.remove::<PieceCorners>();
+                }
             }
             _ => {
                 // A change to nothing an instance reads.

@@ -2329,3 +2329,44 @@ fn merge_from_refuses_a_grid_with_too_few_cells() {
         "nothing started"
     );
 }
+
+#[test]
+fn declare_geometry_changes_where_a_component_rests_without_moving_it() {
+    use proteus_sdk::SplitStrategy;
+
+    let mut app = Proteus::new();
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let target = app.component(ComponentSpec::new(quad_at(50.0, 50.0)));
+    // A theme rounding its corners more.
+    let rounder = QuadState {
+        corner_radius: 40.0,
+        ..quad_at(50.0, 50.0)
+    };
+    target.declare_geometry(&mut app, rounder.clone()).unwrap();
+
+    assert_eq!(
+        app.get(target).unwrap().geometry.corner_radius,
+        quad_at(50.0, 50.0).corner_radius,
+        "it hasn't moved"
+    );
+    assert_eq!(target.declared_geometry(&app).unwrap(), rounder);
+
+    // A transition into it ends at the new geometry.
+    let _ = source.split_to(&mut app, &[target], cfg(0.1), SplitStrategy::PerTarget);
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(app.get(target).unwrap().geometry.corner_radius, 40.0);
+}
+
+#[test]
+fn declared_geometry_is_where_a_moving_component_will_rest() {
+    let mut app = Proteus::new();
+    let card = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let _ = card.animate_to(&mut app, quad_at(100.0, 0.0), cfg(1.0));
+    app.tick(0.5);
+    assert_eq!(card.declared_geometry(&app).unwrap(), quad_at(100.0, 0.0));
+    assert_ne!(
+        app.get(card).unwrap().geometry.position,
+        quad_at(100.0, 0.0).position
+    );
+}

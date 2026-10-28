@@ -77,6 +77,7 @@ use crate::{
     bake::BakedComposite,
     effects::{Border, DropShadow, Glow},
     hierarchy::{EffectiveOpacity, Opacity},
+    topology::PieceCorners,
     video::{VideoCrossfade, VideoPlayer},
     ActiveTransition, BakedImage, BakedText, QuadState, Text, Virtual,
 };
@@ -274,6 +275,18 @@ pub(crate) fn push_entity_instances(
         bg_inst.atlas_page = pack_atlas_page(ATLAS_SELECTOR_MAIN, bc.page);
         bg_inst.uv_offset = bc.uv_offset;
         bg_inst.uv_scale = bc.uv_scale;
+    }
+    // A piece of a split or merge: each corner's radius moves from its start
+    // to its end with the transition's eased progress, never below 0, as an
+    // overshooting curve could take it.
+    if let Some(corners) = world.get::<PieceCorners>(e) {
+        let t = world
+            .get::<ActiveTransition>(e)
+            .map_or(1.0, |active| active.config.easing.apply(active.raw_t()));
+        let radii: [f32; 4] = std::array::from_fn(|i| {
+            (corners.from[i] + (corners.to[i] - corners.from[i]) * t).max(0.0)
+        });
+        bg_inst.set_corner_radii(radii);
     }
     // A BakedTexture: fade from the start image to the end image with the
     // transition's eased progress. Never exactly 0, since the shader skips

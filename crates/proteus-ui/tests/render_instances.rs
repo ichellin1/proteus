@@ -1117,3 +1117,43 @@ fn siblings_are_drawn_by_z_then_creation_order() {
         ]
     );
 }
+
+// A piece of a split or merge draws each corner's radius moving from its start
+// to its end with the transition's progress, rather than its QuadState's single
+// radius, and its end once there's no transition.
+#[test]
+fn a_pieces_corners_move_from_start_to_end() {
+    let mut world = World::new();
+    register_spawn_order_hooks(&mut world);
+    let mut active = ActiveTransition::new(
+        sky_blue_button(),
+        sky_blue_button(),
+        TransitionConfig {
+            duration: 1.0,
+            delay: 0.0,
+            easing: Easing::Linear,
+        },
+    );
+    active.elapsed = 0.25;
+    let piece = world
+        .spawn((
+            sky_blue_button(),
+            active,
+            proteus_ui::PieceCorners {
+                from: [8.0, 0.0, 0.0, 0.0],
+                to: [4.0; 4],
+            },
+        ))
+        .id();
+
+    let instances = collect_instances(&mut world);
+    assert_f32_slice_approx(
+        &instances[0].corner_radii(),
+        &[7.0, 1.0, 1.0, 1.0],
+        "a quarter of the way",
+    );
+
+    world.entity_mut(piece).remove::<ActiveTransition>();
+    let instances = collect_instances(&mut world);
+    assert_f32_slice_approx(&instances[0].corner_radii(), &[4.0; 4], "the end");
+}

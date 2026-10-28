@@ -615,4 +615,112 @@ mod tests {
             .expect("baked");
         assert_eq!(baked.pixel_size, [40.0, 20.0]);
     }
+
+    /// A split whose source, at the bake scale, would be wider than the
+    /// transition atlas still bakes its pieces, rather than drawing them as
+    /// plain shapes: like the demo's video screen, 1,152 wide in a 1,280-wide
+    /// window, going back to its tiles at a scale of 2.
+    #[test]
+    fn a_split_too_wide_for_the_transition_atlas_at_its_scale_still_bakes() {
+        let Some(mut scene) = Scene::with_scale(ProteusConfig::default(), 2.0) else {
+            return;
+        };
+        let screen = scene.proteus.component(ComponentSpec::new(QuadState {
+            size: Vec2::new(1152.0, 648.0),
+            color: Vec4::new(0.3, 0.3, 0.8, 1.0),
+            ..Default::default()
+        }));
+        let tiles: Vec<Handle> = (0..3)
+            .map(|i| {
+                scene.proteus.component(
+                    ComponentSpec::new(QuadState {
+                        position: Vec3::new(-300.0 + 300.0 * i as f32, 0.0, 0.0),
+                        size: Vec2::new(200.0, 300.0),
+                        color: Vec4::new(0.8, 0.3, 0.3, 1.0),
+                        ..Default::default()
+                    })
+                    .visible(false),
+                )
+            })
+            .collect();
+        scene.frame();
+        screen
+            .split_to(
+                &mut scene.proteus,
+                &tiles,
+                TransitionConfig {
+                    duration: 0.5,
+                    delay: 0.0,
+                    easing: Easing::Linear,
+                },
+                proteus_sdk::SplitStrategy::Row,
+            )
+            .unwrap();
+        scene.frame();
+        scene.frame();
+        let world = scene.proteus.world_mut();
+        let baked = world
+            .query_filtered::<(), (
+                bevy_ecs::query::With<proteus_ui::Virtual>,
+                bevy_ecs::query::With<proteus_ui::BakedTexture>,
+            )>()
+            .iter(world)
+            .count();
+        assert_eq!(baked, 3, "every piece is baked, not a plain shape");
+    }
+
+    /// A split's bakes fit the transition atlas together, not just one by
+    /// one: like the demo's gallery going from an enlarged photo back to its
+    /// 4 × 3 grid at a scale of 2, where the photo and the twelve tiles, each
+    /// at 2, would overflow it, and the last tiles would be drawn as plain
+    /// shapes.
+    #[test]
+    fn a_splits_bakes_all_fit_the_transition_atlas_together() {
+        let Some(mut scene) = Scene::with_scale(ProteusConfig::default(), 2.0) else {
+            return;
+        };
+        let photo = scene.proteus.component(ComponentSpec::new(QuadState {
+            size: Vec2::new(1100.0, 750.0),
+            color: Vec4::new(0.3, 0.3, 0.8, 1.0),
+            ..Default::default()
+        }));
+        let tiles: Vec<Handle> = (0..12)
+            .map(|i| {
+                let (col, row) = ((i % 4) as f32, (i / 4) as f32);
+                scene.proteus.component(
+                    ComponentSpec::new(QuadState {
+                        position: Vec3::new(-360.0 + 240.0 * col, 240.0 - 240.0 * row, 0.0),
+                        size: Vec2::new(220.0, 220.0),
+                        color: Vec4::new(0.8, 0.3, 0.3, 1.0),
+                        ..Default::default()
+                    })
+                    .visible(false),
+                )
+            })
+            .collect();
+        scene.frame();
+        photo
+            .split_to(
+                &mut scene.proteus,
+                &tiles,
+                TransitionConfig {
+                    duration: 0.5,
+                    delay: 0.0,
+                    easing: Easing::Linear,
+                },
+                proteus_sdk::SplitStrategy::Grid { cols: 4, rows: 3 },
+            )
+            .unwrap();
+        scene.frame();
+        scene.frame();
+        let world = scene.proteus.world_mut();
+        let baked = world
+            .query_filtered::<(), (
+                bevy_ecs::query::With<proteus_ui::Virtual>,
+                bevy_ecs::query::With<proteus_ui::BakedTexture>,
+            )>()
+            .iter(world)
+            .count();
+        assert_eq!(baked, 12, "every piece is baked, not a plain shape");
+    }
 }

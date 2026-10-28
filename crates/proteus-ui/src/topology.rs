@@ -357,6 +357,60 @@ pub fn grid_slices(source: &QuadState, cols: usize, rows: usize) -> Vec<QuadStat
 }
 
 // ---------------------------------------------------------------------------
+// PieceCorners
+// ---------------------------------------------------------------------------
+
+/// A baked piece of a split or merge: each corner's radius at its start and
+/// its end, top-left, top-right, bottom-right, bottom-left, in pixels. It is
+/// drawn with each corner's radius moving from one to the other as the piece
+/// moves, so the shader draws one curve that changes size, and both images the
+/// piece fades between are clipped by it.
+///
+/// A slice of a split's source has the source's radius only at the corners
+/// that are the source's own, such as the top-left cell's top-left, and none
+/// elsewhere; a whole target has its own radius at all four. A merge is the
+/// reverse. Both ends are baked with square corners, so no curve is baked into
+/// either image, unless the component has a border: baked square, a border's
+/// inside would be square at the corners too, so a bordered component is baked
+/// with its rounded corners, and its slices start with none.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct PieceCorners {
+    /// Each corner's radius where the piece starts.
+    pub from: [f32; 4],
+    /// Each corner's radius where it ends.
+    pub to: [f32; 4],
+}
+
+/// The corner radii of cell `index` of a `cols × rows` grid of slices, filled
+/// row by row from the top-left, each with `radius` at the corners that are
+/// the whole grid's own and none elsewhere.
+pub fn slice_corners(radius: f32, cols: usize, rows: usize, index: usize) -> [f32; 4] {
+    let (col, row) = (index % cols, index / cols);
+    let (left, right) = (col == 0, col + 1 == cols);
+    let (top, bottom) = (row == 0, row + 1 == rows);
+    let at = |corner: bool| if corner { radius } else { 0.0 };
+    [
+        at(top && left),
+        at(top && right),
+        at(bottom && right),
+        at(bottom && left),
+    ]
+}
+
+/// Whether `entity` is baked for a split or merge with square corners, so the
+/// pieces' corners are drawn only by the shader: unless it has a border.
+/// Baked square, a border's inside would be square at the corners too, so a
+/// bordered entity is baked with its rounded corners, which then show in its
+/// slices as they did before v0.2.0.
+fn bakes_square(visuals: &BakeVisualsQuery, entity: Entity) -> bool {
+    visuals
+        .get(entity)
+        .ok()
+        .and_then(|(border, ..)| border)
+        .is_none_or(|b| b.width <= 0.0)
+}
+
+// ---------------------------------------------------------------------------
 // Baking for splits and merges
 // ---------------------------------------------------------------------------
 
@@ -490,7 +544,17 @@ fn bake_one(
     entity: Entity,
     qs: &QuadState,
 ) -> Option<(TransitionAllocId, TransitionRegion)> {
-    let instances = gather_bake_instances(visuals, children_q, quad_states, entity, qs);
+    // With square corners, unless it has a border; see `bakes_square`.
+    let square = QuadState {
+        corner_radius: 0.0,
+        ..qs.clone()
+    };
+    let baked_qs = if bakes_square(visuals, entity) {
+        &square
+    } else {
+        qs
+    };
+    let instances = gather_bake_instances(visuals, children_q, quad_states, entity, baked_qs);
     if instances.is_empty() {
         return None;
     }
@@ -503,11 +567,19 @@ fn bake_one(
         scale,
         logical_w,
         logical_h,
-        pipeline.transition_atlas_size(),
+        pipeline.largest_transition_region(),
     );
-    let width = (logical_w * scale).ceil() as u32;
-    let height = (logical_h * scale).ceil() as u32;
-    let (alloc_id, granted) = pipeline.allocate_transition_region(width, height)?;
+    let size_at = |s: f32| ((logical_w * s).ceil() as u32, (logical_h * s).ceil() as u32);
+    let (mut width, mut height) = size_at(scale);
+    let mut allocated = pipeline.allocate_transition_region(width, height);
+    // The atlas may be too full for it at the bake scale, with the
+    // transition's other bakes; at 1, the size before bake scales, it may
+    // still fit, which is better than a plain shape.
+    if allocated.is_none() && scale > 1.0 {
+        (width, height) = size_at(1.0);
+        allocated = pipeline.allocate_transition_region(width, height);
+    }
+    let (alloc_id, granted) = allocated?;
 
     // The allocator may grant a larger region than requested. Use only the
     // requested size, so the slices' texture coordinates stay exact.
@@ -623,6 +695,14 @@ pub fn one_to_n_setup_system(
                     Vec::new();
 
                 if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
+                    // One scale for the source and every target, at which
+                    // they fit the atlas together.
+                    let bake_scale = crate::bake::group_bake_scale(
+                        bake_scale,
+                        std::iter::once(source_state.size)
+                            .chain(request.targets.iter().map(|t| t.state.size)),
+                        pipeline.largest_transition_region(),
+                    );
                     if let Some((src_id, src_region)) = bake_one(
                         pipeline,
                         bake_scale,
@@ -670,6 +750,7 @@ pub fn one_to_n_setup_system(
                     .and_then(|(_, _, _, b, _, _, _, _)| b.cloned());
 
                 let slices = grid_slices(source_state, cols, rows);
+                let source_square = bakes_square(&visuals, source_entity);
 
                 // One virtual piece per target.
                 for (i, (slice_state, target)) in
@@ -689,16 +770,9 @@ pub fn one_to_n_setup_system(
                             // Both ends are white and untinted: the baked
                             // image has the real colors.
                             //
-                            // The corner radius differs between the ends. The
-                            // start is a slice of the source's bake, and only
-                            // slices at the source's corners should be
-                            // rounded, so its radius stays 0 and the bake's
-                            // own rounded edges show. The end is a whole
-                            // target, so it uses the target's real radius.
-                            // That also keeps its corners round while it is
-                            // small, where the bake alone would look jagged,
-                            // since the atlases have no smaller versions of
-                            // each image (mipmaps).
+                            // The corners are drawn from the piece's
+                            // `PieceCorners`, added below, not from these
+                            // states' radius.
                             let from_state = QuadState {
                                 color: Vec4::ONE,
                                 corner_radius: 0.0,
@@ -730,7 +804,21 @@ pub fn one_to_n_setup_system(
                         PartOfGroup(source_entity),
                     ));
                     if let Some(bt) = baked_texture {
-                        entity_cmd.insert(bt);
+                        // The slice's corners to the target's. A source baked
+                        // with its rounded corners shows them in its bake,
+                        // so its slices start with none, as before.
+                        let from = if source_square {
+                            slice_corners(slice_state.corner_radius, cols, rows, i)
+                        } else {
+                            [0.0; 4]
+                        };
+                        entity_cmd.insert((
+                            bt,
+                            PieceCorners {
+                                from,
+                                to: [target.state.corner_radius; 4],
+                            },
+                        ));
                     } else {
                         // Not baked: carry the source's own visual
                         // components.
@@ -821,6 +909,7 @@ pub fn n_to_one_setup_system(
 
         // The part of the destination each source moves to.
         let target_slices = grid_slices(dest_state, cols, rows);
+        let dest_square = bakes_square(&visuals, dest_entity);
 
         // Bake the destination once, shared by every piece, and each source
         // once, as one_to_n_setup_system does.
@@ -829,6 +918,14 @@ pub fn n_to_one_setup_system(
         let mut source_bakes: Vec<Option<(TransitionAllocId, TransitionRegion)>> = Vec::new();
 
         if let (Some(gpu), Some(pipeline)) = (gpu.as_deref(), pipeline.as_deref_mut()) {
+            // One scale for the destination and every source, at which they
+            // fit the atlas together.
+            let bake_scale = crate::bake::group_bake_scale(
+                bake_scale,
+                std::iter::once(dest_state.size)
+                    .chain(request.sources.iter().map(|s| s.state.size)),
+                pipeline.largest_transition_region(),
+            );
             if let Some((dest_id, dest_region)) = bake_one(
                 pipeline,
                 bake_scale,
@@ -875,10 +972,8 @@ pub fn n_to_one_setup_system(
                 (Some(_), Some((own_id, own_region))) => {
                     let (to_off, to_scale) = to_uv_slices[i];
                     let (from_off, from_scale) = region_uv(&own_region, atlas_size);
-                    // The corner radius, reversed from one_to_n_setup_system:
-                    // the start is a whole source, so it uses the source's
-                    // real radius; the end is a slice of the destination's
-                    // bake, so its radius stays 0.
+                    // The corners are drawn from the piece's `PieceCorners`,
+                    // added below, not from these states' radius.
                     let from_state = QuadState {
                         color: Vec4::ONE,
                         ..source.state.clone()
@@ -911,7 +1006,20 @@ pub fn n_to_one_setup_system(
             ));
 
             if let Some(bt) = baked_texture {
-                entity_cmd.insert(bt);
+                // The source's corners to its slice of the destination's,
+                // reversed from a split's.
+                let to = if dest_square {
+                    slice_corners(target_slice.corner_radius, cols, rows, i)
+                } else {
+                    [0.0; 4]
+                };
+                entity_cmd.insert((
+                    bt,
+                    PieceCorners {
+                        from: [source.state.corner_radius; 4],
+                        to,
+                    },
+                ));
             } else if let Ok((_, glow, shadow, baked, _, _, _, _)) = visuals.get(source.entity) {
                 // Not baked: carry the source's own visual components.
                 if let Some(s) = shadow {
@@ -1069,6 +1177,23 @@ mod tests {
         }
         assert!((slices[0].position.y - 37.5).abs() < 1e-4);
         assert!((slices[3].position.y + 37.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_grids_slices_are_rounded_only_at_its_own_corners() {
+        // 2 × 2: each cell has one of the grid's corners.
+        assert_eq!(slice_corners(8.0, 2, 2, 0), [8.0, 0.0, 0.0, 0.0]);
+        assert_eq!(slice_corners(8.0, 2, 2, 1), [0.0, 8.0, 0.0, 0.0]);
+        assert_eq!(slice_corners(8.0, 2, 2, 2), [0.0, 0.0, 0.0, 8.0]);
+        assert_eq!(slice_corners(8.0, 2, 2, 3), [0.0, 0.0, 8.0, 0.0]);
+        // A 3 × 3 grid's center cell has none.
+        assert_eq!(slice_corners(8.0, 3, 3, 4), [0.0; 4]);
+        // A row: the ends have two each, the middle none.
+        assert_eq!(slice_corners(8.0, 3, 1, 0), [8.0, 0.0, 0.0, 8.0]);
+        assert_eq!(slice_corners(8.0, 3, 1, 1), [0.0; 4]);
+        assert_eq!(slice_corners(8.0, 3, 1, 2), [0.0, 8.0, 8.0, 0.0]);
+        // A single cell is the whole source.
+        assert_eq!(slice_corners(8.0, 1, 1, 0), [8.0; 4]);
     }
 
     #[test]

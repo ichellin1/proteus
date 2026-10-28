@@ -1,7 +1,9 @@
 # Rounded corners on the slices of a baked split or merge
 
-**Status:** planned for v0.2.0, **high priority**. A radius per corner was chosen; see
-PLANNING's step 3.
+**Status:** done in v0.2.0, with a radius per corner and square bakes; see PLANNING's steps 3
+and 8, and ARCHITECTURE's [Splits and merges](../../ARCHITECTURE.md#splits-and-merges). A
+rounded component with a border is still baked with its rounded corners, which show in its
+slices; drawing its border on the pieces instead is a candidate in ROADMAP, for v0.6.0.
 
 In a split, each virtual component fades from its slice of the source's bake to its target's
 bake (a merge is the reverse; see [ARCHITECTURE.md](../../ARCHITECTURE.md#splits-and-merges)).
