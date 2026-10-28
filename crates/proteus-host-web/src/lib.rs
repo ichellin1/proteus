@@ -221,10 +221,9 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         for input in inbox.pointer {
             match input {
                 PointerInput::Moved(Some((x, y))) => {
-                    // The offsets are in the same units as
-                    // `Viewport::logical_size`.
-                    let size = self.surface.viewport().logical_size;
-                    let world = Vec2::new(x - size.x / 2.0, size.y / 2.0 - y);
+                    // The offsets are from the canvas's top-left, in the
+                    // same units as `Viewport::logical_size`.
+                    let world = self.surface.viewport().top_left_to_world(Vec2::new(x, y));
                     self.driver.pointer_moved(Some(world));
                 }
                 PointerInput::Moved(None) => self.driver.pointer_moved(None),

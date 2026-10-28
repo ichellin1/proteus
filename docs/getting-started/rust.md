@@ -211,7 +211,7 @@ Open <http://localhost:8080>. `cargo run` still runs the app natively.
 radius, that can carry text or an image. `app.component` creates one from a `ComponentSpec` and
 returns a `Handle`, a small copyable ID you use to change it later. Positions are in pixels,
 measured from the center of the window, with y pointing up; both components here sit at the
-center.
+center. `f.viewport.top_left_to_world` converts from the usual top-left coordinates.
 
 **A transition channel** turns one component into another: `channel.set(app, to, from, …)`
 hides `from` and moves `to` from `from`'s shape to its own, over the transition's duration.

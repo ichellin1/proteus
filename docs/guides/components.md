@@ -109,7 +109,27 @@ logical pixels, so a component is the same size on a high-density display. The c
 position, so `(0, 0)` puts the child at the parent's anchor, its center by default. The offset
 turns and scales with the parent.
 
-In TypeScript, `topLeftToWorld` converts from the top-left coordinates the web usually uses:
+Windows, web pages and most design tools measure from the top-left corner instead, with y
+growing downward. `top_left_to_world` converts from there to Proteus's coordinates, and
+`world_to_top_left` back. In Rust they are methods of the `Viewport` an app gets in `setup` and
+`update`, `f.viewport`, and also functions of `proteus_sdk` that take the viewport's size. To
+place a component by its own top-left corner as well, give it an anchor of `(0, 0)`; see
+[Anchor](#anchor).
+
+#### Rust
+
+```rust
+# use proteus_runtime::{App, Frame};
+# use proteus_sdk::glam::Vec2;
+# struct MyApp;
+# impl App for MyApp {
+fn setup(&mut self, f: &mut Frame) {
+    // 20 pixels from the window's left edge and 40 from its top.
+    let position = f.viewport.top_left_to_world(Vec2::new(20.0, 40.0));
+    # let _ = position;
+}
+# }
+```
 
 #### TypeScript
 

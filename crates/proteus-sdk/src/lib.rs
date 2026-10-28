@@ -54,12 +54,14 @@
 
 mod app;
 mod callback;
+mod coords;
 mod data;
 mod handle;
 mod spec;
 pub mod video;
 
 pub use app::Proteus;
+pub use coords::{top_left_to_world, world_to_top_left};
 pub use data::{ComponentData, TransitionData};
 pub use handle::{Handle, HandleError, TextureHandle, TextureRequest, TransitionChannel};
 pub use spec::ComponentSpec;
