@@ -417,13 +417,7 @@ fn key_event(e: &web_sys::KeyboardEvent, pressed: bool) -> KeyEvent {
         Key::Character(c) if pressed && !modifiers.control && !modifiers.meta => Some(c.clone()),
         _ => None,
     };
-    KeyEvent {
-        key,
-        code: Code::from_web_name(&e.code()),
-        state,
-        modifiers,
-        text,
-    }
+    KeyEvent::new(key, Code::from_web_name(&e.code()), state, modifiers, text)
 }
 
 fn wire_visibility(inbox: &Rc<RefCell<Inbox>>) {

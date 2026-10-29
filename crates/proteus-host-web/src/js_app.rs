@@ -79,10 +79,12 @@ pub async fn mount(
     // JavaScript gets its own handle to the shared `Proteus`; the driver keeps
     // one for the frame loop.
     let js_app = ProteusApp::from_shared(proteus.clone());
+    let keys_app = js_app.clone();
     setup.call1(&JsValue::NULL, &JsValue::from(js_app))?;
 
     let driver = JsDriver {
         proteus,
+        app: keys_app,
         renderer,
         update,
     };
@@ -92,16 +94,19 @@ pub async fn mount(
 
 struct JsDriver {
     proteus: Rc<RefCell<proteus_runtime::Proteus>>,
+    // The app JavaScript has, which runs its key callbacks.
+    app: ProteusApp,
     renderer: Renderer,
     update: Option<js_sys::Function>,
 }
 
 impl FrameDriver for JsDriver {
     /// Runs one frame in the same order as `Engine::update`, calling the
-    /// JavaScript `update` in place of `App::update`. The `Proteus` borrow is
-    /// released before `update` runs, since `update` may call back into the
-    /// app.
+    /// JavaScript `update` in place of `App::update`, after the JavaScript key
+    /// callbacks. The `Proteus` borrow is released before either runs, since
+    /// they may call back into the app.
     fn update(&mut self, dt_secs: f32) -> bool {
+        self.app.dispatch_keys();
         self.proteus.borrow_mut().tick(dt_secs);
 
         if let Some(update) = &self.update {

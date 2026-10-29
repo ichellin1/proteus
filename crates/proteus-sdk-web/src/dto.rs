@@ -13,9 +13,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use wasm_bindgen::JsValue;
 
 use proteus_sdk::{
-    ComponentData, ComponentSpec, DropReason, Easing, FocusBlocked, InputDevice, InputDevices,
-    InteractionStateKind, QuadState, StyleOverride, TransitionConfig, TransitionData,
-    TransitionDropped,
+    Action, Code, ComponentData, ComponentSpec, DropReason, Easing, FocusBlocked, InputDevice,
+    InputDevices, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyState, Modifiers,
+    QuadState, StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
 
@@ -358,6 +358,119 @@ pub fn input_device_names(devices: InputDevices) -> js_sys::Array {
             })
         })
         .collect()
+}
+
+/// TypeScript's names for the built-in actions, in the order of
+/// [`Action::BUILT_IN`].
+const ACTION_NAMES: [&str; 8] = [
+    "up", "down", "left", "right", "next", "previous", "activate", "back",
+];
+
+/// The built-in action TypeScript names `name`, if any.
+pub fn action_from_name(name: &str) -> Option<Action> {
+    let i = ACTION_NAMES.iter().position(|n| *n == name)?;
+    Some(Action::BUILT_IN[i])
+}
+
+/// TypeScript's name for `action`: a built-in's name, or the name the app
+/// defined it with.
+pub fn action_name(action: Action, key_map: &KeyMap) -> Option<String> {
+    match action {
+        Action::App(app) => key_map.action_name(app).map(str::to_owned),
+        built_in => Action::BUILT_IN
+            .iter()
+            .position(|a| *a == built_in)
+            .map(|i| ACTION_NAMES[i].to_owned()),
+    }
+}
+
+/// A key event, as TypeScript sees it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyEventDto {
+    pub key: String,
+    pub code: String,
+    pub action: Option<String>,
+    pub state: &'static str,
+    pub modifiers: ModifiersDto,
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifiersDto {
+    #[serde(default, deserialize_with = "or_default")]
+    pub shift: bool,
+    #[serde(default, deserialize_with = "or_default")]
+    pub control: bool,
+    #[serde(default, deserialize_with = "or_default")]
+    pub alt: bool,
+    #[serde(default, deserialize_with = "or_default")]
+    pub meta: bool,
+}
+
+impl KeyEventDto {
+    pub fn new(event: &KeyEvent, key_map: &KeyMap) -> Self {
+        Self {
+            key: event.key.web_name().to_owned(),
+            code: event.code.web_name().to_owned(),
+            action: event.action.and_then(|a| action_name(a, key_map)),
+            state: match event.state {
+                KeyState::Pressed => "pressed",
+                KeyState::Repeated => "repeated",
+                KeyState::Released => "released",
+                _ => "unknown",
+            },
+            modifiers: ModifiersDto {
+                shift: event.modifiers.shift,
+                control: event.modifiers.control,
+                alt: event.modifiers.alt,
+                meta: event.modifiers.meta,
+            },
+            text: event.text.clone(),
+        }
+    }
+}
+
+/// `event` as a TypeScript `KeyEvent` object.
+pub fn key_event_to_js(event: &KeyEvent, key_map: &KeyMap) -> JsValue {
+    serde_wasm_bindgen::to_value(&KeyEventDto::new(event, key_map)).unwrap_or(JsValue::NULL)
+}
+
+/// `{ key?, code?, shift?, control?, alt?, meta? }`: a key binding, naming the
+/// key by meaning (`key`) or position (`code`), as the web names them.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyBindingDto {
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(flatten)]
+    pub modifiers: ModifiersDto,
+}
+
+impl KeyBindingDto {
+    pub fn to_binding(&self) -> Result<KeyBinding, String> {
+        let binding = match (&self.key, &self.code) {
+            (Some(key), None) => KeyBinding::key(Key::from_web_name(key)),
+            (None, Some(code)) => KeyBinding::code(Code::from_web_name(code)),
+            _ => return Err("a key binding names exactly one of `key` and `code`".to_owned()),
+        };
+        Ok(binding.with(Modifiers {
+            shift: self.modifiers.shift,
+            control: self.modifiers.control,
+            alt: self.modifiers.alt,
+            meta: self.modifiers.meta,
+        }))
+    }
+}
+
+pub fn parse_key_binding(binding: JsValue) -> Result<KeyBinding, JsValue> {
+    let dto: KeyBindingDto = serde_wasm_bindgen::from_value(binding)
+        .map_err(|e| crate::js_error(&format!("invalid KeyBinding: {e}")))?;
+    dto.to_binding()
+        .map_err(|e| crate::js_error(&format!("invalid KeyBinding: {e}")))
 }
 
 /// TypeScript's name for why a component can't take focus, or lost it.
@@ -800,6 +913,40 @@ impl TextureStateDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_bindings_by_name() {
+        let parse = |json: &str| {
+            serde_json::from_str::<KeyBindingDto>(json)
+                .unwrap()
+                .to_binding()
+        };
+        assert_eq!(
+            parse(r#"{"key": "Tab", "shift": true}"#),
+            Ok(
+                KeyBinding::key(Key::Named(proteus_sdk::NamedKey::Tab)).with(Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                })
+            )
+        );
+        assert_eq!(
+            parse(r#"{"code": "KeyW"}"#),
+            Ok(KeyBinding::code(Code::KeyW))
+        );
+        assert!(parse(r#"{}"#).is_err());
+        assert!(parse(r#"{"key": "a", "code": "KeyA"}"#).is_err());
+    }
+
+    #[test]
+    fn action_names() {
+        let mut map = KeyMap::default();
+        let search = Action::App(map.define_action("search"));
+        assert_eq!(action_from_name("activate"), Some(Action::Activate));
+        assert_eq!(action_from_name("search"), None);
+        assert_eq!(action_name(Action::Back, &map).as_deref(), Some("back"));
+        assert_eq!(action_name(search, &map).as_deref(), Some("search"));
+    }
 
     #[test]
     fn input_devices_by_name() {

@@ -190,20 +190,86 @@ fn handle_err(e: sdk::HandleError) -> JsValue {
 /// same app.
 #[wasm_bindgen]
 #[derive(Clone)]
-pub struct ProteusApp(Rc<RefCell<sdk::Proteus>>);
+pub struct ProteusApp(Rc<RefCell<sdk::Proteus>>, Rc<RefCell<JsKeyHandlers>>);
+
+/// The app's JavaScript key callbacks. They're kept here, rather than in
+/// `Proteus` with the other callbacks, because a key callback returns whether
+/// it claimed the key, so it must run at once, and `Proteus` is borrowed while
+/// its own callbacks run, which a JavaScript callback calling back into the app
+/// would borrow again.
+#[derive(Default)]
+struct JsKeyHandlers {
+    components: std::collections::HashMap<bevy_ecs::prelude::Entity, Vec<js_sys::Function>>,
+    app: Vec<js_sys::Function>,
+}
 
 // Rust-only: for a host crate, not part of the JavaScript API.
 impl ProteusApp {
     /// Wraps a `Proteus` that a host already shares, so JavaScript and the
     /// host use the same app.
     pub fn from_shared(inner: Rc<RefCell<sdk::Proteus>>) -> Self {
-        ProteusApp(inner)
+        ProteusApp(inner, Rc::default())
     }
 
     /// The shared `Proteus`, for a host to tick and render directly.
     pub fn shared(&self) -> Rc<RefCell<sdk::Proteus>> {
         self.0.clone()
     }
+
+    /// Sends the key events reported since the last tick to the JavaScript
+    /// key callbacks: the focused component's, then its ancestors', then the
+    /// app's, until one claims it, and to the engine's default for its action
+    /// if none does. A host calls it just before ticking the shared `Proteus`,
+    /// with nothing borrowed.
+    pub fn dispatch_keys(&self) {
+        {
+            let proteus = self.0.borrow();
+            self.1
+                .borrow_mut()
+                .components
+                .retain(|e, _| proteus.world().entities().contains(*e));
+        }
+        loop {
+            let Some(event) = self.0.borrow_mut().next_key_event() else {
+                break;
+            };
+            let (js_event, chain) = {
+                let proteus = self.0.borrow();
+                (
+                    dto::key_event_to_js(&event, proteus.key_map()),
+                    proteus.key_chain(),
+                )
+            };
+            let mut handled = false;
+            for component in chain {
+                let cbs = self.1.borrow().components.get(&component.id()).cloned();
+                if call_key_handlers(cbs.unwrap_or_default(), &js_event) {
+                    handled = true;
+                    break;
+                }
+            }
+            if !handled {
+                let cbs = self.1.borrow().app.clone();
+                handled = call_key_handlers(cbs, &js_event);
+            }
+            if !handled {
+                self.0.borrow_mut().apply_key_default(&event);
+            }
+        }
+    }
+}
+
+/// Calls each of `cbs` with `event`, and returns whether any returned `true`.
+/// All of them run, whether or not an earlier one claimed it.
+fn call_key_handlers(cbs: Vec<js_sys::Function>, event: &JsValue) -> bool {
+    let mut handled = false;
+    for cb in cbs {
+        match cb.call1(&JsValue::NULL, event) {
+            Ok(result) => handled |= result.as_bool() == Some(true),
+            Err(e) => report_throw(Err(e)),
+        }
+    }
+    handled
 }
 
 #[wasm_bindgen]
@@ -211,7 +277,7 @@ impl ProteusApp {
     /// Creates a standalone app, with no host, that draws nothing.
     #[wasm_bindgen(constructor)]
     pub fn new() -> ProteusApp {
-        ProteusApp(Rc::new(RefCell::new(sdk::Proteus::new())))
+        ProteusApp(Rc::new(RefCell::new(sdk::Proteus::new())), Rc::default())
     }
 
     /// Calls [`Proteus::component`](sdk::Proteus::component). `spec` is a
@@ -471,6 +537,7 @@ impl ProteusApp {
     /// a host ticks the shared `Proteus` itself.
     #[wasm_bindgen]
     pub fn tick(&mut self, dt: f32) {
+        self.dispatch_keys();
         self.0.borrow_mut().tick(dt);
     }
 
@@ -831,6 +898,58 @@ impl ProteusApp {
             .0
             .set_video_crossfade(&mut self.0.borrow_mut(), video_t)
             .map_err(handle_err)
+    }
+
+    /// Registers `cb` as a key callback of `handle`'s component; see
+    /// [`Handle::on_key`](sdk::Handle::on_key). `cb` gets a `KeyEvent` object
+    /// and returns `true` to claim it.
+    #[wasm_bindgen(js_name = onKey)]
+    pub fn on_key(&mut self, handle: &Handle, cb: js_sys::Function) {
+        self.1
+            .borrow_mut()
+            .components
+            .entry(handle.0.id())
+            .or_default()
+            .push(cb);
+    }
+
+    /// Registers `cb` as one of the app's key callbacks; see
+    /// [`Proteus::on_key`](sdk::Proteus::on_key). `cb` gets a `KeyEvent`
+    /// object and returns `true` to claim it.
+    #[wasm_bindgen(js_name = onAppKey)]
+    pub fn on_app_key(&mut self, cb: js_sys::Function) {
+        self.1.borrow_mut().app.push(cb);
+    }
+
+    /// Calls [`Proteus::bind`](sdk::Proteus::bind). `binding` is a
+    /// `KeyBinding` object, and `action` a built-in action's name or one of the
+    /// app's, which is defined if it isn't yet. Throws if `binding` isn't
+    /// valid.
+    #[wasm_bindgen(js_name = bindKey)]
+    pub fn bind_key(&mut self, binding: JsValue, action: &str) -> Result<(), JsValue> {
+        let binding = dto::parse_key_binding(binding)?;
+        let mut proteus = self.0.borrow_mut();
+        let action = dto::action_from_name(action)
+            .unwrap_or_else(|| sdk::Action::App(proteus.define_action(action)));
+        proteus.bind(binding, action);
+        Ok(())
+    }
+
+    /// Calls [`Proteus::unbind`](sdk::Proteus::unbind), and returns the name of
+    /// the action the binding was bound to, if any. Throws if `binding` isn't
+    /// valid.
+    #[wasm_bindgen(js_name = unbindKey)]
+    pub fn unbind_key(&mut self, binding: JsValue) -> Result<Option<String>, JsValue> {
+        let binding = dto::parse_key_binding(binding)?;
+        let mut proteus = self.0.borrow_mut();
+        let action = proteus.unbind(&binding);
+        Ok(action.and_then(|a| dto::action_name(a, proteus.key_map())))
+    }
+
+    /// Calls [`Proteus::reset_key_map`](sdk::Proteus::reset_key_map).
+    #[wasm_bindgen(js_name = resetKeyMap)]
+    pub fn reset_key_map(&mut self) {
+        self.0.borrow_mut().reset_key_map();
     }
 
     /// Calls [`Handle::focus`](sdk::Handle::focus). Throws, saying why, if the

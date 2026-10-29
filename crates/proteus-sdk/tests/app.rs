@@ -8,11 +8,11 @@ use std::rc::Rc;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    Code, ComponentSpec, FocusBlocked, FocusLost, HandleError, ImageCrop, InputDevices, Key,
-    KeyEvent, KeyState, MergeLayout, Modifiers, NamedKey, Proteus, QuadState, SplitStrategy,
-    StyleOverride, Text, TransitionConfig,
+    Action, Code, ComponentSpec, FocusBlocked, FocusLost, HandleError, ImageCrop, InputDevices,
+    Key, KeyBinding, KeyEvent, KeyResult, KeyState, MergeLayout, Modifiers, NamedKey, Proteus,
+    QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
 };
-use proteus_ui::{FocusState, KeyInput};
+use proteus_ui::{FocusState, KeyInput, NavigationRequests};
 
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
@@ -2380,13 +2380,13 @@ fn declared_geometry_is_where_a_moving_component_will_rest() {
 #[test]
 fn a_tick_clears_its_key_events() {
     let mut app = Proteus::new();
-    app.key_event(KeyEvent {
-        key: Key::Named(NamedKey::Enter),
-        code: Code::Enter,
-        state: KeyState::Pressed,
-        modifiers: Modifiers::default(),
-        text: None,
-    });
+    app.key_event(KeyEvent::new(
+        Key::Named(NamedKey::Enter),
+        Code::Enter,
+        KeyState::Pressed,
+        Modifiers::default(),
+        None,
+    ));
     assert_eq!(app.world().resource::<KeyInput>().events.len(), 1);
 
     app.tick(0.016);
@@ -2404,13 +2404,13 @@ fn a_tick_clears_its_key_events() {
 // ---------------------------------------------------------------------------
 
 fn enter_key(state: KeyState) -> KeyEvent {
-    KeyEvent {
-        key: Key::Named(NamedKey::Enter),
-        code: Code::Enter,
+    KeyEvent::new(
+        Key::Named(NamedKey::Enter),
+        Code::Enter,
         state,
-        modifiers: Modifiers::default(),
-        text: None,
-    }
+        Modifiers::default(),
+        None,
+    )
 }
 
 fn counter() -> (Rc<Cell<u32>>, impl FnMut(&mut Proteus) + 'static) {
@@ -2817,4 +2817,170 @@ fn focus_leaves_a_destroyed_component() {
     );
     let lost_at = app.world().resource::<FocusState>().lost_at.clone();
     assert_eq!(lost_at.map(|q| q.position.x), Some(40.0));
+}
+
+// ---------------------------------------------------------------------------
+// key callbacks
+// ---------------------------------------------------------------------------
+
+// Which callback saw a key event, and the event's action.
+type KeyLog = Rc<std::cell::RefCell<Vec<(&'static str, Option<Action>)>>>;
+
+fn key_log(
+    app: &mut Proteus,
+    handle: Option<proteus_sdk::Handle>,
+    name: &'static str,
+    result: KeyResult,
+    log: &KeyLog,
+) {
+    let log = log.clone();
+    let cb = move |_: &mut Proteus, e: &KeyEvent| {
+        log.borrow_mut().push((name, e.action));
+        result
+    };
+    match handle {
+        Some(h) => h.on_key(app, cb),
+        None => app.on_key(cb),
+    }
+}
+
+#[test]
+fn a_key_goes_to_the_focused_component_then_its_ancestors_then_the_app() {
+    let mut app = Proteus::new();
+    let inner = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let outer = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).child(inner));
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    key_log(&mut app, Some(inner), "inner", KeyResult::Ignored, &log);
+    key_log(&mut app, Some(outer), "outer", KeyResult::Ignored, &log);
+    key_log(&mut app, None, "app", KeyResult::Ignored, &log);
+    inner.focus(&mut app).unwrap();
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+    let activate = Some(Action::Activate);
+    assert_eq!(
+        *log.borrow(),
+        vec![("inner", activate), ("outer", activate), ("app", activate)]
+    );
+}
+
+#[test]
+fn a_claimed_key_goes_no_further() {
+    let mut app = Proteus::new();
+    let inner = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let outer = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).child(inner));
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    key_log(&mut app, Some(inner), "inner", KeyResult::Handled, &log);
+    key_log(&mut app, Some(outer), "outer", KeyResult::Ignored, &log);
+    key_log(&mut app, None, "app", KeyResult::Ignored, &log);
+    inner.focus(&mut app).unwrap();
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec![("inner", Some(Action::Activate))]);
+}
+
+// A disabled parent is skipped, but the key goes on past it: disabling a
+// container mustn't stop the app's shortcuts.
+#[test]
+fn a_key_skips_components_that_cannot_take_it() {
+    let mut app = Proteus::new();
+    let inner = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let middle = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .child(inner)
+            .start_disabled(),
+    );
+    let outer = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).child(middle));
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    key_log(&mut app, Some(middle), "middle", KeyResult::Ignored, &log);
+    key_log(&mut app, Some(outer), "outer", KeyResult::Ignored, &log);
+    inner.focus(&mut app).unwrap();
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec![("outer", Some(Action::Activate))]);
+}
+
+#[test]
+fn the_app_gets_keys_when_nothing_has_focus() {
+    let mut app = Proteus::new();
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    key_log(&mut app, None, "app", KeyResult::Ignored, &log);
+
+    let a = KeyEvent::new(
+        Key::Character("a".to_owned()),
+        Code::KeyA,
+        KeyState::Pressed,
+        Modifiers::default(),
+        Some("a".to_owned()),
+    );
+    app.key_event(a);
+    app.tick(0.016);
+    assert_eq!(
+        *log.borrow(),
+        vec![("app", None)],
+        "an unbound key has no action"
+    );
+}
+
+#[test]
+fn keys_bound_to_the_apps_own_actions_carry_them() {
+    let mut app = Proteus::new();
+    let search = Action::App(app.define_action("search"));
+    app.bind(KeyBinding::key(Key::Character("/".to_owned())), search);
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    key_log(&mut app, None, "app", KeyResult::Ignored, &log);
+
+    app.key_event(KeyEvent::new(
+        Key::Character("/".to_owned()),
+        Code::Slash,
+        KeyState::Pressed,
+        Modifiers::default(),
+        Some("/".to_owned()),
+    ));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec![("app", Some(search))]);
+}
+
+// Only navigation no callback claimed reaches navigation, and only presses
+// and repeats move focus.
+#[test]
+fn unclaimed_navigation_is_queued_for_navigation() {
+    let mut app = Proteus::new();
+    let arrow = |state| {
+        KeyEvent::new(
+            Key::Named(NamedKey::ArrowDown),
+            Code::ArrowDown,
+            state,
+            Modifiers::default(),
+            None,
+        )
+    };
+    app.key_event(arrow(KeyState::Pressed));
+    app.key_event(arrow(KeyState::Released));
+    app.key_event(enter_key(KeyState::Pressed));
+    while let Some(event) = app.next_key_event() {
+        app.apply_key_default(&event);
+    }
+    assert_eq!(
+        app.world().resource::<NavigationRequests>().0,
+        vec![Action::Down]
+    );
+}
+
+#[test]
+fn the_key_chain_leaves_out_components_that_cannot_take_keys() {
+    let mut app = Proteus::new();
+    let inner = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let middle = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0))
+            .child(inner)
+            .non_interactive(),
+    );
+    let outer = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).child(middle));
+    assert!(app.key_chain().is_empty(), "nothing has focus");
+
+    inner.focus(&mut app).unwrap();
+    assert_eq!(app.key_chain(), vec![inner, outer]);
 }

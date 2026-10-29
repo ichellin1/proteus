@@ -17,9 +17,9 @@ use std::hash::Hash;
 use bevy_ecs::prelude::Entity;
 use glam::Vec2;
 
-use proteus_ui::{ChannelRegistry, TransitionChannelId, TransitionDropped};
+use proteus_ui::{ChannelRegistry, KeyEvent, TransitionChannelId, TransitionDropped};
 
-use crate::{FocusLost, Proteus};
+use crate::{FocusLost, KeyResult, Proteus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EventKind {
@@ -37,14 +37,17 @@ type PlainCallback = Box<dyn FnMut(&mut Proteus)>;
 type DragCallback = Box<dyn FnMut(&mut Proteus, Vec2)>;
 type DroppedCallback = Box<dyn FnMut(&mut Proteus, TransitionDropped)>;
 type FocusLostCallback = Box<dyn FnMut(&mut Proteus, FocusLost)>;
+type KeyCallback = Box<dyn FnMut(&mut Proteus, &KeyEvent) -> KeyResult>;
 
 #[derive(Default)]
 pub(crate) struct CallbackRegistry {
     handlers: HashMap<(Entity, EventKind), Vec<PlainCallback>>,
     drag_handlers: HashMap<Entity, Vec<DragCallback>>,
     dropped_handlers: HashMap<TransitionChannelId, Vec<DroppedCallback>>,
+    key_handlers: HashMap<Entity, Vec<KeyCallback>>,
     // The app's own, not any component's.
     focus_lost_handlers: Vec<FocusLostCallback>,
+    app_key_handlers: Vec<KeyCallback>,
 }
 
 impl CallbackRegistry {
@@ -59,6 +62,7 @@ impl CallbackRegistry {
     pub(crate) fn forget_entity(&mut self, entity: Entity) {
         self.handlers.retain(|(e, _), _| *e != entity);
         self.drag_handlers.remove(&entity);
+        self.key_handlers.remove(&entity);
     }
 
     /// Drops every `on_dropped` handler registered for `channel`.
@@ -73,7 +77,9 @@ impl CallbackRegistry {
         self.handlers.values().map(Vec::len).sum::<usize>()
             + self.drag_handlers.values().map(Vec::len).sum::<usize>()
             + self.dropped_handlers.values().map(Vec::len).sum::<usize>()
+            + self.key_handlers.values().map(Vec::len).sum::<usize>()
             + self.focus_lost_handlers.len()
+            + self.app_key_handlers.len()
     }
 
     pub(crate) fn register_drag(&mut self, entity: Entity, cb: DragCallback) {
@@ -86,6 +92,14 @@ impl CallbackRegistry {
 
     pub(crate) fn register_focus_lost(&mut self, cb: FocusLostCallback) {
         self.focus_lost_handlers.push(cb);
+    }
+
+    pub(crate) fn register_key(&mut self, entity: Entity, cb: KeyCallback) {
+        self.key_handlers.entry(entity).or_default().push(cb);
+    }
+
+    pub(crate) fn register_app_key(&mut self, cb: KeyCallback) {
+        self.app_key_handlers.push(cb);
     }
 }
 
@@ -140,6 +154,35 @@ pub(crate) fn fire_drag(app: &mut Proteus, entity: Entity, delta: Vec2) {
 /// [`fire`] for [`TransitionChannel::on_dropped`](crate::TransitionChannel::on_dropped)
 /// handlers. These are registered per channel, and each receives the
 /// [`TransitionDropped`] describing the request that couldn't run and why.
+/// Calls every key handler registered for `entity` with `event`, and returns
+/// whether any of them claimed it. All of them run, whether or not an earlier
+/// one claimed it.
+pub(crate) fn fire_key(app: &mut Proteus, entity: Entity, event: &KeyEvent) -> bool {
+    let Some(mut cbs) = app.callbacks.key_handlers.remove(&entity) else {
+        return false;
+    };
+    let mut handled = false;
+    for cb in &mut cbs {
+        handled |= cb(app, event) == KeyResult::Handled;
+    }
+    if is_alive(app, entity) {
+        put_back(&mut app.callbacks.key_handlers, entity, cbs);
+    }
+    handled
+}
+
+/// [`fire_key`] for the app's own key handlers.
+pub(crate) fn fire_app_key(app: &mut Proteus, event: &KeyEvent) -> bool {
+    let mut cbs = std::mem::take(&mut app.callbacks.app_key_handlers);
+    let mut handled = false;
+    for cb in &mut cbs {
+        handled |= cb(app, event) == KeyResult::Handled;
+    }
+    cbs.append(&mut app.callbacks.app_key_handlers);
+    app.callbacks.app_key_handlers = cbs;
+    handled
+}
+
 /// Calls every `on_focus_lost` handler with `lost`, keeping any registered
 /// during the call after them.
 pub(crate) fn fire_focus_lost(app: &mut Proteus, lost: FocusLost) {

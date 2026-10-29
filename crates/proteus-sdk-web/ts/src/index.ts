@@ -19,10 +19,13 @@ import {
 } from "../pkg/proteus_sdk_web.js";
 
 import type {
+  Action,
   ImageCrop,
   ImageSpec,
   FocusBlocked,
   InputDevice,
+  KeyBinding,
+  KeyEvent,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
@@ -60,6 +63,12 @@ export interface FocusLost {
 
 /** {@link ProteusApp.onFocusLost}'s callback. */
 export type FocusLostCallback = (lost: FocusLost) => void;
+
+/**
+ * A key callback, for {@link Handle.onKey} and {@link ProteusApp.onKey}.
+ * Return `true` to claim the event, so it goes no further.
+ */
+export type KeyCallback = (event: KeyEvent) => boolean | void;
 
 /** {@link TransitionChannel.onDropped}'s callback: the request that couldn't run, and why. */
 export type DroppedCallback = (dropped: TransitionDropped) => void;
@@ -152,6 +161,25 @@ export class Handle {
    */
   onRelease(cb: PlainCallback): void {
     this.app.wasmApp.onRelease(this.wasmHandle, cb);
+  }
+
+  /**
+   * Calls `cb` with each key event while this component has focus, or a
+   * component under it does and didn't claim the event. Return `true` to claim
+   * it, so it goes no further: not to this component's ancestors, the app's
+   * key callbacks, or the engine's default for its action, such as
+   * `"activate"`'s click.
+   *
+   * Match on the event's `action` rather than its key, so the callback works
+   * with any key, or other device, bound to it. Use the key for typing, and for
+   * keys no action covers.
+   *
+   * It runs at the start of the next frame after the key, and not while this
+   * component is disabled, non-interactive, doesn't accept the keyboard, or is
+   * transitioning without {@link TransitionInteractionConfig.allowNavigation}.
+   */
+  onKey(cb: KeyCallback): void {
+    this.app.wasmApp.onKey(this.wasmHandle, cb);
   }
 
   /** Calls `cb` each time this component gains focus. */
@@ -999,6 +1027,43 @@ export class ProteusApp {
   /** The input devices the app accepts. */
   inputDevices(): InputDevice[] {
     return this.wasmApp.inputDevices() as InputDevice[];
+  }
+
+  /**
+   * Calls `cb` with each key event that no component's key callback claimed,
+   * whether or not a component has focus. Return `true` to claim it, so the
+   * engine's default for its action doesn't happen.
+   *
+   * Use it for the app's own shortcuts, and for actions that don't belong to a
+   * component, such as `"back"`.
+   */
+  onKey(cb: KeyCallback): void {
+    this.wasmApp.onAppKey(cb);
+  }
+
+  /**
+   * Binds `binding` to `action`, replacing what it was bound to. `action` is a
+   * built-in action, or a name of the app's own, such as `"search"`.
+   *
+   * @throws If `binding` names both or neither of `key` and `code`.
+   */
+  bindKey(binding: KeyBinding, action: Action): void {
+    this.wasmApp.bindKey(binding, action);
+  }
+
+  /**
+   * Unbinds `binding`, so its key reaches callbacks without an action. Returns
+   * the action it was bound to, if any.
+   *
+   * @throws If `binding` names both or neither of `key` and `code`.
+   */
+  unbindKey(binding: KeyBinding): Action | undefined {
+    return this.wasmApp.unbindKey(binding) as Action | undefined;
+  }
+
+  /** Puts back the default key bindings, removing all the others. */
+  resetKeyMap(): void {
+    this.wasmApp.resetKeyMap();
   }
 
   /** The component that has focus, or `undefined` if none has. */
