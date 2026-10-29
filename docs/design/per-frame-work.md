@@ -1,7 +1,8 @@
 # Only redo per-frame work that changed
 
-**Status:** done in v0.2.0, with an instance cache; see PLANNING's step 4 and
-ARCHITECTURE's [Rendering](../../ARCHITECTURE.md#rendering). Found by the M14 benchmarks; see
+**Status:** done in v0.2.0, with an instance cache; see step 4 of
+[v0.2.0's planning](../archive/PLANNING-v0.2.0.md) and ARCHITECTURE's
+[Rendering](../../ARCHITECTURE.md#rendering). Found by the M14 benchmarks; see
 [BENCHMARKS.md](../../BENCHMARKS.md). On the benchmarks' Apple M4 it only matters at hundreds of
 thousands of components, but there are reports of fans turning on with Proteus on low-end
 devices, such as an old Chromebook, where this work may be part of the cause.
