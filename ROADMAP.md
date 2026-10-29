@@ -45,7 +45,8 @@ done in PLANNING, when it comes up, and its scope can change then.
 - Keyboard input: both hosts read key events and report them to the engine, and a key map binds
   keys to actions, such as Up, Activate and Back, that apps and navigation respond to.
 - Focus navigation: the schedule's navigation stage, a placeholder today, moves focus between
-  components with the arrow keys and Tab, and the focused style follows it.
+  components with the arrow keys and Tab, and the focused style follows it. Focus groups keep
+  it inside a row or a dialog, in the directions they choose.
 - Every new kind of input skips non-interactive and disabled components, as the pointer does;
   see the decision in PLANNING.
 - An app chooses which input devices it accepts, pointer, keyboard or both, and so can each
