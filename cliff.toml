@@ -11,8 +11,8 @@ RELEASING.md.
 """
 # Each version's section. Version 0.1.0 opens with a summary of everything in
 # it: the work before it didn't use Conventional Commits, so the list below
-# the summary only covers the work that prepared the release. Version 0.2.0
-# opens with what to change when upgrading. The blank line first separates it
+# the summary only covers the work that prepared the release. Versions 0.2.0
+# and 0.3.0 open with what to change when upgrading. The blank line first separates it
 # from the one before: git-cliff trims the header's.
 body = """
 
@@ -60,6 +60,16 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   filled its atlas in 0.1 can lower `resources.max_bake_scale`, or raise its memory.
 - **A corner radius past half the shorter side draws as half,** as in CSS, so a short, wide
   component with a large radius is a pill. In 0.1 the shape shrank instead.
+{% endif %}
+{%- if version == "v0.3.0" %}
+### Upgrading from 0.2
+
+- **TypeScript apps built against this repository's SDK,** as the examples are, need it built
+  again: run `make build-sdk-web` before `npm install`. The SDK from npm needs nothing.
+- **`InputConfig` written out in full** no longer compiles in Rust: `input.autofocus` is new,
+  off by default. Fill in the rest with `..Default::default()`.
+- **The web canvas can take keyboard focus:** the host gives it `tabindex="0"` unless the page
+  set one, so a click focuses it, and a browser may outline it while it has focus.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 

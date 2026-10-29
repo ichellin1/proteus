@@ -29,6 +29,16 @@ pub struct ProteusConfigDto {
     /// Overrides for [`ProteusConfig::text`].
     #[serde(default)]
     pub text: Option<TextDto>,
+    /// Overrides for [`ProteusConfig::input`].
+    #[serde(default)]
+    pub input: Option<InputDto>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InputDto {
+    #[serde(default)]
+    pub autofocus: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -197,6 +207,11 @@ impl ProteusConfigDto {
             if let Some(bytes) = &t.font {
                 config.text.default_font = crate::config::FontSource::from_bytes(bytes.as_slice())
                     .map_err(|e| format!("text.font: {e}"))?;
+            }
+        }
+        if let Some(i) = &self.input {
+            if let Some(v) = i.autofocus {
+                config.input.autofocus = v;
             }
         }
         Ok(config)

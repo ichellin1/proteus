@@ -11,13 +11,16 @@
 //! proteus_host_winit::run(my_app, proteus_host_winit::RunConfig::default());
 //! ```
 //!
-//! It handles the window, the frame loop, pointer input, resizing and changes of
-//! display scale. A frame that would look the same as the last one isn't drawn
-//! or presented; the loop then waits for the display's next frame instead. Assets are read from a directory ([`DirHostServices`]).
-//! Keyboard input is not handled yet, and the surface is not recreated after
-//! the app is suspended, which only happens on mobile platforms.
+//! It handles the window, the frame loop, pointer and keyboard input, resizing
+//! and changes of display scale. A frame that would look the same as the last
+//! one isn't drawn or presented; the loop then waits for the display's next
+//! frame instead. Assets are read from a directory ([`DirHostServices`]). The
+//! surface is not recreated after the app is suspended, which only happens on
+//! mobile platforms.
 
 #![warn(missing_docs)]
+
+mod keys;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -27,6 +30,7 @@ use std::time::{Duration, Instant};
 use proteus_runtime::config::RenderConfig;
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
+use proteus_runtime::Modifiers;
 use proteus_runtime::{
     App, Engine, FetchId, FetchResult, FetchTracker, GpuSurface, HostServices, ProteusConfig,
     SurfaceRequest, Viewport,
@@ -253,6 +257,8 @@ struct Running {
     /// Whether the last frame was presented. Presenting waits for the display,
     /// which paces the loop; a frame that wasn't has to wait for it instead.
     presented: bool,
+    /// The modifiers held, which winit reports apart from the keys.
+    modifiers: Modifiers,
 }
 
 impl Running {
@@ -366,6 +372,7 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
             last_frame: Instant::now(),
             must_draw: true,
             presented: false,
+            modifiers: Modifiers::default(),
         };
         running.window.request_redraw();
         self.running = Some(running);
@@ -426,6 +433,19 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
                 ElementState::Pressed => running.engine.pointer_pressed(),
                 ElementState::Released => running.engine.pointer_released(),
             },
+            WindowEvent::ModifiersChanged(modifiers) => {
+                running.modifiers = keys::modifiers(modifiers.state());
+            }
+            // A synthetic press is one winit makes up, when the window gains
+            // focus, for a key already held: it wasn't pressed in this window.
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => running
+                .engine
+                .key_event(keys::key_event(&event, running.modifiers)),
+            WindowEvent::Focused(false) => running.engine.release_keys(),
             WindowEvent::RedrawRequested => running.render(&mut self.app),
             _ => {}
         }

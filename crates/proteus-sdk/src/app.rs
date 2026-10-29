@@ -6,7 +6,7 @@ use glam::Vec2;
 
 use proteus_ui::{
     create_channel, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
-    InteractionDef, ProteusWorld, QuadState, Visibility,
+    InteractionDef, KeyEvent, ProteusWorld, QuadState, Visibility,
 };
 
 use proteus_render::{
@@ -333,6 +333,11 @@ impl Proteus {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = false;
         pointer.just_released = false;
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .events
+            .clear();
     }
 
     fn dispatch_events(&mut self) {
@@ -433,6 +438,27 @@ impl Proteus {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_released = true;
         pointer.is_pressed = false;
+    }
+
+    /// Records a key being pressed, repeated or released.
+    ///
+    /// A repeat or a release of a key that isn't held is ignored, so every
+    /// release follows a press.
+    pub fn key_event(&mut self, event: KeyEvent) {
+        log::trace!("{event:?}");
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .record(event);
+    }
+
+    /// Releases every key still held. Hosts call this when the window or
+    /// canvas loses focus, since the keys' own releases won't arrive.
+    pub fn release_keys(&mut self) {
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .release_all();
     }
 }
 

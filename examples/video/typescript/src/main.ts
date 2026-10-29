@@ -79,4 +79,5 @@ await mount("app", {
   setup(app) {
     main(app, canvas);
   },
+  config: { input: { autofocus: true } },
 });

@@ -128,7 +128,9 @@ What outside developers need to build real apps.
 - Mobile packaging for TypeScript apps, through a Capacitor webview.
 - TV remotes: the D-pad, OK and Back buttons. On web-based TVs they arrive as key events, so they
   build on keyboard input and focus navigation; native TV platforms need their hosts to report
-  them.
+  them. Some remotes, such as infrared ones, send a press and then repeats, but never a release:
+  the engine releases such a key when its repeats stop for longer than a timeout. Key repeat is
+  set for each device, so a keyboard can keep the engine's timing while a remote uses its own.
 - Game controllers: buttons and sticks, read through the browser's Gamepad API on the web and
   the platform's controller support natively, driving focus navigation and reaching apps.
 - Native mobile hosts: iOS and Android on a native surface.

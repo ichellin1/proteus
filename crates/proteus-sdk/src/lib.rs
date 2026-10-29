@@ -74,7 +74,8 @@ pub use glam;
 // The value types this API takes and returns, so an app needs no direct
 // `proteus-ui` dependency.
 pub use proteus_ui::{
-    Border, DropReason, DropShadow, Easing, Glow, Image, ImageCrop, InteractionStateKind,
-    MergeLayout, Opacity, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
-    TransitionDropped, TransitionInteractionConfig, Visibility,
+    Border, Code, DropReason, DropShadow, Easing, Glow, Image, ImageCrop, InteractionStateKind,
+    Key, KeyEvent, KeyState, MergeLayout, Modifiers, NamedKey, Opacity, QuadState, SplitStrategy,
+    StyleOverride, Text, TransitionConfig, TransitionDropped, TransitionInteractionConfig,
+    Visibility,
 };

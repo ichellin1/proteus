@@ -159,5 +159,8 @@ function main(app: ProteusApp): void {
 
 await mount("app", {
   setup: main,
-  config: { render: { clearColor: [BACKGROUND.r, BACKGROUND.g, BACKGROUND.b, 1] } },
+  config: {
+    render: { clearColor: [BACKGROUND.r, BACKGROUND.g, BACKGROUND.b, 1] },
+    input: { autofocus: true },
+  },
 });

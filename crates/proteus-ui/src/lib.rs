@@ -31,6 +31,7 @@ pub mod image;
 pub mod input;
 mod instance_cache;
 pub mod interaction;
+pub mod keyboard;
 pub mod schedule;
 pub mod spawn_order;
 pub mod text;
@@ -68,6 +69,7 @@ pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{
     interaction_style_system, InteractionDef, InteractionState, InteractionStateKind, StyleOverride,
 };
+pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyState, Modifiers, NamedKey};
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};

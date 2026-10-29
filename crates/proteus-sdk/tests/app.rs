@@ -5,9 +5,10 @@
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    ComponentSpec, HandleError, ImageCrop, Proteus, QuadState, StyleOverride, Text,
-    TransitionConfig,
+    Code, ComponentSpec, HandleError, ImageCrop, Key, KeyEvent, KeyState, Modifiers, NamedKey,
+    Proteus, QuadState, StyleOverride, Text, TransitionConfig,
 };
+use proteus_ui::KeyInput;
 
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
@@ -2369,4 +2370,27 @@ fn declared_geometry_is_where_a_moving_component_will_rest() {
         app.get(card).unwrap().geometry.position,
         quad_at(100.0, 0.0).position
     );
+}
+
+// Key events are this tick's alone: the next tick must not see them again.
+#[test]
+fn a_tick_clears_its_key_events() {
+    let mut app = Proteus::new();
+    app.key_event(KeyEvent {
+        key: Key::Named(NamedKey::Enter),
+        code: Code::Enter,
+        state: KeyState::Pressed,
+        modifiers: Modifiers::default(),
+        text: None,
+    });
+    assert_eq!(app.world().resource::<KeyInput>().events.len(), 1);
+
+    app.tick(0.016);
+    assert!(app.world().resource::<KeyInput>().events.is_empty());
+
+    // The key is still held, so losing focus releases it.
+    app.release_keys();
+    let events = &app.world().resource::<KeyInput>().events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].state, KeyState::Released);
 }

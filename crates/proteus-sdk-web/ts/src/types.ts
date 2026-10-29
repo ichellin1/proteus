@@ -351,6 +351,14 @@ export interface ProteusConfigOverrides {
      */
     font?: Uint8Array;
   };
+  /** Input settings. */
+  input?: {
+    /**
+     * Give the canvas keyboard focus when the app starts, so keys reach it without a click
+     * first. Default `false`, so an app in a page doesn't take the page's focus.
+     */
+    autofocus?: boolean;
+  };
 }
 
 /** How to add a texture to the atlas. */

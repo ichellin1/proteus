@@ -153,11 +153,23 @@ it's planned.
   component was chosen, by whatever device, as a `click` does on the web.
 - **Decided (2026-10-29): a key held long enough is long-pressed.** The event fires once, when
   the key has been held past a threshold, 500 ms by default as on Android, which an app can
-  change. The engine measures it from the key down, not from the system's key repeat, which
-  starts after another delay and which some remotes don't send. The released event says whether
-  a long press happened, so an app can tell a tap from a hold. Activate's click has already
-  fired by then, so an app that wants a tap and a hold to do different things handles Activate
-  itself: the guides show it. A long press of the pointer can follow when touch is built.
+  change. The engine measures it from the key down. The released event says whether a long
+  press happened, so an app can tell a tap from a hold. Activate's click has already fired by
+  then, so an app that wants a tap and a hold to do different things handles Activate itself,
+  ignoring the key's repeats: the guides show it. A long press of the pointer can follow when
+  touch is built.
+- **Decided (2026-10-29): the engine repeats held keys itself,** rather than passing on the
+  system's repeats, whose timing each user sets, as long as about two seconds before the first,
+  and which some remotes don't send. A held key repeats first 250 ms after its press, then every
+  100 ms until it's released, the same on every platform and device. The app's config sets both
+  as `input.key_repeat`, and can change them while it runs; `System` uses the system's repeats
+  instead, as they arrive, for an app whose typing should feel like the rest of the platform, and
+  for devices such as infrared remotes that send a press and then repeats, but no release. The
+  engine can only tell such a key was released when its repeats stop, so those devices need
+  their own repeats; inferring the release, and a setting for each device, come with remotes in
+  v0.8.0.
+  Repeats follow the engine's tick, so they're accurate to about a frame. A long press and
+  repeats both happen while a key is held; an app that wants the long press ignores the repeats.
 - **Decided (2026-10-29): a component can name its neighbours,** for any of Up, Down, Left,
   Right, Next and Previous, and a neighbour it names wins over the one navigation would choose.
   This is how an app sets an order its layout doesn't suggest; there's no separate tab index.
@@ -168,7 +180,7 @@ it's planned.
   the next item in it; without one, distance along the direction and a weighted sideways
   distance decide, as on Android and in the W3C's spatial navigation draft. Components are
   measured where they're drawn, as hit testing does, a rotated one by its bounding box. The
-  arrows don't wrap, and a held arrow moves focus at the system's key repeat.
+  arrows don't wrap, and a held arrow moves focus each time the key repeats.
 - **Decided (2026-10-29): Next and Previous follow reading order on screen,** not the order
   components were made in, which in apps like the demo doesn't match the screen: rows from top
   to bottom, two components being in one row when their vertical extents mostly overlap. They
@@ -193,7 +205,28 @@ it's planned.
 
 Both hosts read key events and report them to the engine as the common set of keys, with the
 modifiers, whether the key repeats and the text it types. Keys still held are released when the
-window or canvas loses focus.
+window or canvas loses focus. Nothing acts on them until step 3.
+
+- **Decided (2026-10-29): Proteus has key types of its own,** rather than the `keyboard-types`
+  crate, which would put another 0.x crate in the SDK's public API, and wouldn't save the
+  mapping from winit or from TV remotes' codes.
+- **Decided (2026-10-29): focusing the canvas at the start is the app's choice,** through an
+  `autofocus` option of the web host, off by default, so an app in a page doesn't take the
+  page's focus. The demo and the examples turn it on.
+- **Decided (2026-10-29): which keys the browser is kept from acting on waits for step 3,**
+  since it depends on what the key map binds. Step 3 also keeps Tab from trapping keyboard
+  users in a canvas embedded in a page, which WCAG's success criterion 2.1.2 rules out.
+- [x] The engine has the common set of keys, by meaning and by position, with a catch-all for a
+  key without a name of its own, and key events with their state, modifiers and text.
+- [x] The native host reports winit's key events, without the synthetic ones, with the
+  modifiers.
+- [x] The web host reports the canvas's key events, without those during an input method's
+  composition. The canvas can take focus, and `autofocus` gives it focus.
+- [x] Keys still held are released when the window or canvas loses focus, or the page is hidden.
+- [x] Tests cover turning winit's keys and the web's names into the set of keys, the order of a
+  tick's events and their clearing after it, and releasing held keys.
+- [x] Each key event is logged at `trace` level, so the step can be checked by hand before step
+  3 uses them. `Proteus::key_event` logs it, for both hosts.
 
 ### Step 2 — Input devices and focus
 
@@ -207,7 +240,7 @@ can no longer take it. Today focus is never cleared, so a destroyed component ke
 
 The key map, its built-in actions and the app's own, and callbacks for key events on components
 and on the app, in Rust and TypeScript, going up from the focused component, with long presses
-measured by the engine. Unclaimed, Activate presses and clicks the focused component.
+measured and held keys repeated by the engine. Unclaimed, Activate presses and clicks the focused component.
 
 ### Step 4 — Navigation
 
