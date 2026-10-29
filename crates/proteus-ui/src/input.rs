@@ -33,8 +33,9 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 
 use crate::component::{Disabled, Lifecycle, TransitionInteractionConfig, Virtual};
-use crate::devices::{AcceptsDevices, InputDevice};
+use crate::devices::{AcceptsDevices, AppDevices, InputDevice};
 use crate::draw_order::DrawKey;
+use crate::focus::FocusBlocked;
 use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
 use crate::spawn_order::SpawnOrder;
 use crate::{QuadState, Visibility};
@@ -91,9 +92,13 @@ pub struct InteractionEvents {
     pub released: Vec<Entity>,
     /// Entities that gained focus.
     pub focused: Vec<Entity>,
-    /// Entities that lost focus because another entity gained it. Clicking
-    /// empty space doesn't remove focus.
+    /// Entities that lost focus: because another entity gained it, focus was
+    /// cleared, or they could no longer keep it. Clicking empty space doesn't
+    /// remove focus.
     pub blurred: Vec<Entity>,
+    /// Entities that lost focus because they could no longer keep it, and
+    /// why. See [`crate::focus::focus_validity_system`].
+    pub focus_lost: Vec<(Entity, FocusBlocked)>,
     /// The pressed entity and how far the pointer moved since the last tick,
     /// every tick while it is pressed. `(0, 0)` on the tick of the press.
     pub dragged: Vec<(Entity, Vec2)>,
@@ -117,12 +122,42 @@ pub struct PressedEntity {
     last_position: Option<Vec2>,
 }
 
-/// The entity that has focus, if any. Clicking an entity gives it focus;
-/// clicking empty space leaves focus where it is.
+/// The entity that has focus, if any. Clicking an entity that can take focus
+/// gives it focus; clicking empty space, or one that can't, leaves focus where
+/// it is. See [`crate::focus`].
 #[derive(Resource, Default)]
 pub struct FocusState {
     /// The focused entity.
     pub focused: Option<Entity>,
+    /// Where the focused entity was, in world units, when it last lost focus
+    /// because it could no longer keep it. Navigation starts from here while
+    /// nothing has focus.
+    pub lost_at: Option<QuadState>,
+    // Where the focused entity is, in world units, as of the last tick, so
+    // that `lost_at` is known even for one destroyed since.
+    pub(crate) geometry: Option<QuadState>,
+    // Focus changes made between ticks, reported as this tick's events.
+    pending_focused: Vec<Entity>,
+    pending_blurred: Vec<Entity>,
+}
+
+impl FocusState {
+    /// Gives `entity` focus, or clears it with `None`, between ticks. The next
+    /// tick reports the change in [`InteractionEvents`], as if it happened
+    /// then. Doesn't check that `entity` can take focus.
+    pub fn set(&mut self, entity: Option<Entity>) {
+        if self.focused == entity {
+            return;
+        }
+        if let Some(prev) = self.focused {
+            self.pending_blurred.push(prev);
+        }
+        if let Some(next) = entity {
+            self.pending_focused.push(next);
+        }
+        self.focused = entity;
+        self.geometry = None;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +257,7 @@ pub fn hit_test_system(
     mut hovered: ResMut<HoveredEntity>,
     mut pressed_entity: ResMut<PressedEntity>,
     mut focus: ResMut<FocusState>,
+    app_devices: Res<AppDevices>,
     query: HitTestQuery,
     quad_states: Query<&QuadState>,
     parents: Query<&ChildOf>,
@@ -235,7 +271,10 @@ pub fn hit_test_system(
     events.released.clear();
     events.focused.clear();
     events.blurred.clear();
+    events.focus_lost.clear();
     events.dragged.clear();
+    events.blurred.append(&mut focus.pending_blurred);
+    events.focused.append(&mut focus.pending_focused);
 
     let Some(pos) = pointer.position else {
         // The pointer left the viewport: end any hover. A press or focus
@@ -250,7 +289,9 @@ pub fn hit_test_system(
 
     // Find the topmost entity containing the pointer, in the order
     // `collect_instances` draws in.
-    let mut hit: Option<(Entity, DrawKey, bool)> = None;
+    // The topmost entity, its draw key, whether it's disabled, and whether it
+    // can take focus.
+    let mut hit: Option<(Entity, DrawKey, bool, bool)> = None;
     for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled, accepts) in query.iter() {
         if !AcceptsDevices::allows(accepts, InputDevice::Pointer) {
             continue;
@@ -268,6 +309,10 @@ pub fn hit_test_system(
         if transitioning && !allow_pointer {
             continue;
         }
+        let allow_navigation = transitioning_config.is_some_and(|c| c.allow_navigation);
+        let takes_focus = app_devices.0.contains(InputDevice::Keyboard)
+            && AcceptsDevices::allows(accepts, InputDevice::Keyboard)
+            && (!transitioning || allow_navigation);
         let world_qs = resolve_world_position_query(e, qs, &quad_states, &parents);
         if !quad_contains(&world_qs, pos) {
             continue;
@@ -277,14 +322,15 @@ pub fn hit_test_system(
             None => true,
             // `is_ge`, not `is_gt`: in an exact tie, the last one checked
             // wins.
-            Some((_, best, _)) => key.draw_cmp(best).is_ge(),
+            Some((_, best, _, _)) => key.draw_cmp(best).is_ge(),
         };
         if wins {
-            hit = Some((e, key, disabled));
+            hit = Some((e, key, disabled, takes_focus));
         }
     }
     // A disabled entity on top absorbs the pointer: nothing is hit.
-    let hit = hit.and_then(|(e, _, disabled)| (!disabled).then_some(e));
+    let takes_focus = hit.as_ref().is_some_and(|h| h.3);
+    let hit = hit.and_then(|(e, _, disabled, _)| (!disabled).then_some(e));
 
     // Compute hover enter / exit.
     if hit != hovered.0 {
@@ -303,13 +349,15 @@ pub fn hit_test_system(
             events.clicked.push(e);
 
             // Clicking gives the entity focus, and the old one loses it.
-            // Clicking empty space doesn't change focus.
-            if focus.focused != Some(e) {
+            // Clicking empty space, or an entity that can't take focus,
+            // doesn't change focus.
+            if takes_focus && focus.focused != Some(e) {
                 if let Some(prev) = focus.focused {
                     events.blurred.push(prev);
                 }
                 events.focused.push(e);
                 focus.focused = Some(e);
+                focus.geometry = None;
             }
         }
     }

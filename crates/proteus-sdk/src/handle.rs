@@ -12,10 +12,11 @@ use glam::Vec2;
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
     AcceptsDevices, Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry,
-    CompositeTextureRef, Disabled, GroupSource, GroupTarget, Image, ImageCrop, ImageTextureRef,
-    InputDevices, Interactable, InteractionDef, MergeLayout, NToOneRequest, OneToNRequest, Opacity,
-    QuadState, SplitStrategy, Text, TextTextureRef, TransitionChannelId, TransitionConfig,
-    TransitionInteractionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    CompositeTextureRef, DefaultFocus, Disabled, FocusBlocked, FocusState, GroupSource,
+    GroupTarget, Image, ImageCrop, ImageTextureRef, InputDevices, Interactable, InteractionDef,
+    MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text,
+    TextTextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
+    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -53,6 +54,9 @@ pub enum HandleError {
         /// `cols × rows`.
         cells: usize,
     },
+    /// [`Handle::focus`] was called on a component that can't take focus, for
+    /// this reason.
+    CannotTakeFocus(FocusBlocked),
 }
 
 impl std::fmt::Display for HandleError {
@@ -67,6 +71,9 @@ impl std::fmt::Display for HandleError {
             Self::NotAChild => f.write_str("the component isn't a child of this one"),
             Self::GridTooSmall { pieces, cells } => {
                 write!(f, "the grid has {cells} cells for {pieces} pieces")
+            }
+            Self::CannotTakeFocus(reason) => {
+                write!(f, "the component can't take focus: {reason}")
             }
         }
     }
@@ -602,6 +609,49 @@ impl Handle {
                 .get::<AcceptsDevices>()
                 .map_or(InputDevices::ALL, |a| a.0),
         )
+    }
+
+    /// Gives this component focus, taking it from the one that has it. Their
+    /// `on_blur` and `on_focus` fire on the next tick.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::CannotTakeFocus`] if it can't take focus: it's
+    /// destroyed, hidden, disabled or non-interactive, it or the app doesn't
+    /// accept the keyboard, or it's transitioning without
+    /// `TransitionInteractionConfig::allow_navigation`.
+    pub fn focus(&self, app: &mut Proteus) -> Result<(), HandleError> {
+        if let Some(reason) = proteus_ui::focus_blocked(&app.world.world, self.0) {
+            log::warn!("Handle::focus: {:?} can't take focus: {reason}", self.0);
+            return Err(HandleError::CannotTakeFocus(reason));
+        }
+        app.world
+            .world
+            .resource_mut::<FocusState>()
+            .set(Some(self.0));
+        Ok(())
+    }
+
+    /// Whether this component has focus.
+    pub fn is_focused(&self, app: &Proteus) -> bool {
+        app.world.world.resource::<FocusState>().focused == Some(self.0)
+    }
+
+    /// Marks or unmarks this component as where focus starts, as
+    /// [`ComponentSpec::default_focus`](crate::ComponentSpec::default_focus)
+    /// does at creation.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_default_focus(&self, app: &mut Proteus, default: bool) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_default_focus")?;
+        if default {
+            entity.insert(DefaultFocus);
+        } else {
+            entity.remove::<DefaultFocus>();
+        }
+        Ok(())
     }
 
     /// Shows or hides this component and its children.

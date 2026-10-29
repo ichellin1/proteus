@@ -27,6 +27,7 @@ use bevy_ecs::world::World;
 use slotmap::{new_key_type, SlotMap};
 
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Visibility};
+use crate::focus::FocusMover;
 use crate::transition::TransitionConfig;
 
 new_key_type! {
@@ -244,11 +245,13 @@ impl DroppedRequests {
 /// [`crate::transition::transition_setup_system`].
 ///
 /// A valid request hides `from` and shows `to`: `to` takes over from `from`'s
-/// geometry, so `from` has nothing left to show.
+/// geometry, so `from` has nothing left to show. If `from` has focus, `to`
+/// takes it.
 ///
 /// A request on a `to` that is already transitioning, with `interruptible`,
 /// starts again from wherever `to` is. Otherwise the transition starts from
 /// `from`'s current geometry.
+#[allow(clippy::too_many_arguments)]
 pub fn channel_dispatch_system(
     mut commands: Commands,
     registry: Res<ChannelRegistry>,
@@ -257,6 +260,7 @@ pub fn channel_dispatch_system(
     lifecycles: Query<&Lifecycle>,
     quad_states: Query<&QuadState>,
     visibilities: Query<Option<&Visibility>>,
+    mut focus: FocusMover,
 ) {
     dropped.entries.clear();
 
@@ -318,5 +322,6 @@ pub fn channel_dispatch_system(
         // Reveal after the hide, so `set(x, x)` leaves `x` visible and
         // degenerates into an `animate_to` rather than hiding it.
         commands.entity(req.to).insert(Visibility::VISIBLE);
+        focus.follow(req.from, req.to);
     }
 }

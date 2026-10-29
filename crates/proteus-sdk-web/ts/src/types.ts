@@ -235,6 +235,12 @@ export interface ComponentSpec {
    */
   devices?: InputDevice[];
   /**
+   * Marks the component as where focus starts: a split whose source has focus
+   * gives it to the target marked this way, or else to its first. See
+   * {@link Handle.setDefaultFocus}.
+   */
+  defaultFocus?: boolean;
+  /**
    * Whether the component starts visible. Defaults to `true`.
    *
    * A hidden component is neither drawn nor hit-tested. A transition into it
@@ -375,6 +381,25 @@ export interface ProteusConfigOverrides {
  * controllers.
  */
 export type InputDevice = "pointer" | "keyboard";
+
+/**
+ * Why a component can't take focus, or lost it:
+ *
+ * - `"destroyed"`: it was destroyed.
+ * - `"hidden"`: it's hidden, or a parent of it is.
+ * - `"disabled"`: it's disabled.
+ * - `"nonInteractive"`: it's non-interactive.
+ * - `"keyboardNotAccepted"`: it, or the app, doesn't accept the keyboard.
+ * - `"transitioning"`: it's transitioning, and doesn't accept navigation
+ *   while it does.
+ */
+export type FocusBlocked =
+  | "destroyed"
+  | "hidden"
+  | "disabled"
+  | "nonInteractive"
+  | "keyboardNotAccepted"
+  | "transitioning";
 
 /** How to add a texture to the atlas. */
 export interface TextureRequest {

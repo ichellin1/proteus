@@ -5,9 +5,9 @@ use bevy_ecs::prelude::Component;
 use glam::Vec2;
 
 use proteus_ui::{
-    create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, EffectiveOpacity,
-    EffectiveVisibility, InputDevice, InputDevices, Interactable, InteractionDef, KeyEvent,
-    ProteusWorld, QuadState, Visibility,
+    create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
+    EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
+    Interactable, InteractionDef, KeyEvent, ProteusWorld, QuadState, Visibility,
 };
 
 use proteus_render::{
@@ -73,6 +73,9 @@ impl Proteus {
             .id();
         if !spec.non_interactive {
             self.world.world.entity_mut(entity).insert(Interactable);
+        }
+        if spec.default_focus {
+            self.world.world.entity_mut(entity).insert(DefaultFocus);
         }
         if let Some(devices) = spec.devices {
             self.world
@@ -348,7 +351,17 @@ impl Proteus {
     }
 
     fn dispatch_events(&mut self) {
-        let (clicked, hover_entered, hover_exited, pressed, released, focused, blurred, dragged) = {
+        let (
+            clicked,
+            hover_entered,
+            hover_exited,
+            pressed,
+            released,
+            focused,
+            blurred,
+            focus_lost,
+            dragged,
+        ) = {
             let ev = self.world.world.resource::<proteus_ui::InteractionEvents>();
             (
                 ev.clicked.clone(),
@@ -358,6 +371,7 @@ impl Proteus {
                 ev.released.clone(),
                 ev.focused.clone(),
                 ev.blurred.clone(),
+                ev.focus_lost.clone(),
                 ev.dragged.clone(),
             )
         };
@@ -382,6 +396,15 @@ impl Proteus {
         }
         for e in blurred {
             callback::fire(self, e, callback::EventKind::Blur);
+        }
+        for (e, reason) in focus_lost {
+            callback::fire_focus_lost(
+                self,
+                FocusLost {
+                    component: Handle(e),
+                    reason,
+                },
+            );
         }
         for (e, delta) in dragged {
             callback::fire_drag(self, e, delta);
@@ -519,6 +542,33 @@ impl Proteus {
     fn accepts(&self, device: InputDevice) -> bool {
         self.input_devices().contains(device)
     }
+
+    /// The component that has focus, if any.
+    pub fn focused(&self) -> Option<Handle> {
+        self.world
+            .world
+            .resource::<FocusState>()
+            .focused
+            .filter(|e| self.world.world.entities().contains(*e))
+            .map(Handle)
+    }
+
+    /// Clears focus, so no component has it. Its `on_blur` fires on the next
+    /// tick, and `on_focus_lost` doesn't, since the app cleared it.
+    pub fn clear_focus(&mut self) {
+        self.world.world.resource_mut::<FocusState>().set(None);
+    }
+
+    /// Calls `cb` each time a component loses focus because it can no longer
+    /// keep it: it was destroyed, hidden, disabled, made non-interactive, or
+    /// stopped accepting the keyboard. Not when the app clears focus or gives
+    /// it to another component.
+    ///
+    /// Nothing has focus afterwards. This is where the app puts focus where it
+    /// belongs, such as on the component that replaced the one lost.
+    pub fn on_focus_lost(&mut self, cb: impl FnMut(&mut Proteus, FocusLost) + 'static) {
+        self.callbacks.register_focus_lost(Box::new(cb));
+    }
 }
 
 impl Proteus {
@@ -528,6 +578,16 @@ impl Proteus {
     pub(crate) fn callback_count(&self) -> usize {
         self.callbacks.len()
     }
+}
+
+/// A component that lost focus because it could no longer keep it; see
+/// [`Proteus::on_focus_lost`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusLost {
+    /// The component that lost focus. It may no longer exist.
+    pub component: Handle,
+    /// Why it lost focus.
+    pub reason: FocusBlocked,
 }
 
 impl Default for Proteus {

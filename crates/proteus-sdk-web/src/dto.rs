@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use wasm_bindgen::JsValue;
 
 use proteus_sdk::{
-    ComponentData, ComponentSpec, DropReason, Easing, InputDevice, InputDevices,
+    ComponentData, ComponentSpec, DropReason, Easing, FocusBlocked, InputDevice, InputDevices,
     InteractionStateKind, QuadState, StyleOverride, TransitionConfig, TransitionData,
     TransitionDropped,
 };
@@ -312,6 +312,8 @@ pub struct ComponentSpecDto {
     pub non_interactive: bool,
     #[serde(default)]
     pub devices: Option<Vec<InputDeviceDto>>,
+    #[serde(default, deserialize_with = "or_default")]
+    pub default_focus: bool,
     /// Defaults to `true`: an omitted `visible` means shown.
     #[serde(default = "default_visible", deserialize_with = "or_visible")]
     pub visible: bool,
@@ -356,6 +358,19 @@ pub fn input_device_names(devices: InputDevices) -> js_sys::Array {
             })
         })
         .collect()
+}
+
+/// TypeScript's name for why a component can't take focus, or lost it.
+pub fn focus_blocked_name(reason: FocusBlocked) -> &'static str {
+    match reason {
+        FocusBlocked::Destroyed => "destroyed",
+        FocusBlocked::Hidden => "hidden",
+        FocusBlocked::Disabled => "disabled",
+        FocusBlocked::NonInteractive => "nonInteractive",
+        FocusBlocked::KeyboardNotAccepted => "keyboardNotAccepted",
+        FocusBlocked::Transitioning => "transitioning",
+        _ => "unknown",
+    }
 }
 
 /// `{ maxSide?, eternal? }`: how to add a texture to the atlas.
@@ -448,6 +463,9 @@ impl ComponentSpecDto {
         }
         if let Some(devices) = &self.devices {
             spec = spec.devices(input_devices(devices));
+        }
+        if self.default_focus {
+            spec = spec.default_focus();
         }
         spec = spec.visible(self.visible);
         if let Some(opacity) = self.opacity {

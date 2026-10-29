@@ -249,16 +249,16 @@ can no longer take it. Today focus is never cleared, so a destroyed component ke
 - [x] `InputDevices`, for the app and for each component, set when a component is created and
   changed while the app runs, in Rust and TypeScript. Input from a device the app doesn't
   accept is dropped, and a component that doesn't accept the pointer lets it through.
-- [ ] The focus API, in Rust and TypeScript: give a component focus, failing with the reason;
+- [x] The focus API, in Rust and TypeScript: give a component focus, failing with the reason;
   ask whether it has focus and which component does; clear it; mark a default focus; and the
   app-wide callback for focus that's lost.
-- [ ] Focus follows 1→1 transitions, splits and merges from when they start; a split's goes to
+- [x] Focus follows 1→1 transitions, splits and merges from when they start; a split's goes to
   the target marked as the default focus, or the first.
-- [ ] Focus is cleared, with `on_blur` and the focus-lost callback, when its component is
+- [x] Focus is cleared, with `on_blur` and the focus-lost callback, when its component is
   destroyed, hidden, disabled, made non-interactive or stops accepting the keyboard, and where
   it was is recorded. A component hidden for a split or merge in progress keeps its focus.
-- [ ] Tests for each of these.
-- [ ] The release notes say what changes for apps: focus now leaves a disabled or hidden
+- [x] Tests for each of these.
+- [x] The release notes say what changes for apps: focus now leaves a disabled or hidden
   component, where it used to stay.
 
 ### Step 3 — The key map and actions

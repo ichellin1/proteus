@@ -95,6 +95,19 @@ fn wrap_drag(cb: js_sys::Function) -> impl FnMut(&mut sdk::Proteus, glam::Vec2) 
     }
 }
 
+fn wrap_focus_lost(
+    cb: js_sys::Function,
+) -> impl FnMut(&mut sdk::Proteus, sdk::FocusLost) + 'static {
+    move |_app: &mut sdk::Proteus, lost: sdk::FocusLost| {
+        let cb = cb.clone();
+        let id = JsValue::from_f64(bevy_ecs::prelude::Entity::to_bits(lost.component.id()) as f64);
+        let reason = JsValue::from_str(dto::focus_blocked_name(lost.reason));
+        wasm_bindgen_futures::spawn_local(async move {
+            report_throw(cb.call2(&JsValue::NULL, &id, &reason));
+        });
+    }
+}
+
 fn wrap_dropped(
     cb: js_sys::Function,
 ) -> impl FnMut(&mut sdk::Proteus, proteus_ui::TransitionDropped) + 'static {
@@ -818,6 +831,45 @@ impl ProteusApp {
             .0
             .set_video_crossfade(&mut self.0.borrow_mut(), video_t)
             .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::focus`](sdk::Handle::focus). Throws, saying why, if the
+    /// component can't take focus.
+    pub fn focus(&mut self, handle: &Handle) -> Result<(), JsValue> {
+        handle.0.focus(&mut self.0.borrow_mut()).map_err(handle_err)
+    }
+
+    /// Calls [`Handle::is_focused`](sdk::Handle::is_focused).
+    #[wasm_bindgen(js_name = isFocused)]
+    pub fn is_focused(&self, handle: &Handle) -> bool {
+        handle.0.is_focused(&self.0.borrow())
+    }
+
+    /// Calls [`Handle::set_default_focus`](sdk::Handle::set_default_focus).
+    #[wasm_bindgen(js_name = setDefaultFocus)]
+    pub fn set_default_focus(&mut self, handle: &Handle, default: bool) -> Result<(), JsValue> {
+        handle
+            .0
+            .set_default_focus(&mut self.0.borrow_mut(), default)
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Proteus::focused`](sdk::Proteus::focused).
+    pub fn focused(&self) -> Option<Handle> {
+        self.0.borrow().focused().map(Handle)
+    }
+
+    /// Calls [`Proteus::clear_focus`](sdk::Proteus::clear_focus).
+    #[wasm_bindgen(js_name = clearFocus)]
+    pub fn clear_focus(&mut self) {
+        self.0.borrow_mut().clear_focus();
+    }
+
+    /// Calls [`Proteus::on_focus_lost`](sdk::Proteus::on_focus_lost). `cb`
+    /// gets the component's ID and the reason's name.
+    #[wasm_bindgen(js_name = onFocusLost)]
+    pub fn on_focus_lost(&mut self, cb: js_sys::Function) {
+        self.0.borrow_mut().on_focus_lost(wrap_focus_lost(cb));
     }
 
     /// Calls [`Proteus::set_input_devices`](sdk::Proteus::set_input_devices).
