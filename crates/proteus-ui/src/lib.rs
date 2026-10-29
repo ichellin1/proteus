@@ -67,15 +67,15 @@ pub use hierarchy::{
 };
 pub use image::{BakedImage, Image, ImageCrop};
 pub use input::{
-    quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, PointerInput,
-    PressedEntity,
+    quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, KeyPressedEntity,
+    PointerInput, PressedEntity,
 };
 pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{
     interaction_style_system, InteractionDef, InteractionState, InteractionStateKind, StyleOverride,
 };
-pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyState, Modifiers, NamedKey};
-pub use keymap::{Action, AppAction, BoundKey, KeyBinding, KeyMap, NavigationRequests};
+pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};
+pub use keymap::{Action, AppAction, BoundKey, KeyBinding, KeyMap, NavigationRequests, TabWraps};
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};

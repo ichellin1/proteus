@@ -7,8 +7,8 @@ use glam::Vec2;
 use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
-    Interactable, InteractionDef, KeyEvent, KeyMap, KeyState, NavigationRequests, ProteusWorld,
-    QuadState, Visibility,
+    Interactable, InteractionDef, KeyEvent, KeyMap, KeyPressedEntity, KeyRepeat, KeyState,
+    NavigationRequests, ProteusWorld, QuadState, TabWraps, Visibility,
 };
 use proteus_ui::{Action, AppAction, KeyBinding};
 
@@ -349,10 +349,11 @@ impl Proteus {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = false;
         pointer.just_released = false;
-        self.world
-            .world
-            .resource_mut::<proteus_ui::KeyInput>()
-            .clear_events();
+        let mut keys = self.world.world.resource_mut::<proteus_ui::KeyInput>();
+        keys.clear_events();
+        // Its repeats and long presses go to the next tick, with the keys the
+        // host reports by then.
+        keys.advance(dt);
         self.world
             .world
             .resource_mut::<NavigationRequests>()
@@ -393,7 +394,11 @@ impl Proteus {
         input.dispatched += 1;
         let event = &mut input.events[i];
         event.action = action;
-        Some(event.clone())
+        let event = event.clone();
+        // The key that pressed a component releases it, whether or not a
+        // callback claims the release, so it can't be left pressed.
+        world.resource_mut::<KeyPressedEntity>().release_by(&event);
+        Some(event)
     }
 
     /// The components a key event goes to, in order: the focused component,
@@ -418,18 +423,29 @@ impl Proteus {
 
     /// Does what the engine does with a key event no callback claimed: queues
     /// a navigation action, when pressed or repeated, for navigation to move
-    /// focus with. For a language binding that runs key callbacks of its own.
+    /// focus with; and on a press of [`Action::Activate`], presses and clicks
+    /// the focused component, as the pointer does, until the key is released.
+    /// For a language binding that runs key callbacks of its own.
     pub fn apply_key_default(&mut self, event: &KeyEvent) {
         let Some(action) = event.action else {
             return;
         };
-        let moves = matches!(event.state, KeyState::Pressed | KeyState::Repeated);
-        if action.is_navigation() && moves {
-            self.world
-                .world
-                .resource_mut::<NavigationRequests>()
-                .0
-                .push(action);
+        let world = &mut self.world.world;
+        match event.state {
+            KeyState::Pressed | KeyState::Repeated if action.moves_focus() => {
+                world.resource_mut::<NavigationRequests>().0.push(action);
+            }
+            KeyState::Pressed if action == Action::Activate => {
+                let focused = world.resource::<FocusState>().focused;
+                if let Some(entity) = focused {
+                    if proteus_ui::focus_blocked(world, entity).is_none() {
+                        world
+                            .resource_mut::<KeyPressedEntity>()
+                            .press(entity, event.clone());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -467,6 +483,52 @@ impl Proteus {
     /// [`KeyMap::default_bindings`].
     pub fn reset_key_map(&mut self) {
         self.world.world.resource_mut::<KeyMap>().reset();
+    }
+
+    /// Sets whether [`Action::Next`] and [`Action::Previous`] wrap round from
+    /// the last component to the first, and back. They do by default. The web
+    /// host turns it off unless the config's `input.keep_tab` is set, so Tab
+    /// can leave the canvas at either end.
+    pub fn set_tab_wraps(&mut self, wraps: bool) {
+        self.world.world.resource_mut::<TabWraps>().0 = wraps;
+    }
+
+    /// Whether [`Action::Next`] and [`Action::Previous`] wrap round.
+    pub fn tab_wraps(&self) -> bool {
+        self.world.world.resource::<TabWraps>().0
+    }
+
+    /// Sets how held keys repeat: by the engine, after a delay and at an
+    /// interval of its own, the same on every platform, or as the system
+    /// repeats them. The engine's, first after 250 ms then every 100 ms, by
+    /// default.
+    pub fn set_key_repeat(&mut self, repeat: KeyRepeat) {
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .repeat = repeat;
+    }
+
+    /// How held keys repeat.
+    pub fn key_repeat(&self) -> KeyRepeat {
+        self.world.world.resource::<proteus_ui::KeyInput>().repeat
+    }
+
+    /// Sets how long a key is held before it's long-pressed, in milliseconds.
+    /// 500 by default.
+    pub fn set_long_press_ms(&mut self, ms: u32) {
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .long_press_ms = ms;
+    }
+
+    /// How long a key is held before it's long-pressed, in milliseconds.
+    pub fn long_press_ms(&self) -> u32 {
+        self.world
+            .world
+            .resource::<proteus_ui::KeyInput>()
+            .long_press_ms
     }
 
     /// Defines an action of the app's own, named `name`, to bind keys to and

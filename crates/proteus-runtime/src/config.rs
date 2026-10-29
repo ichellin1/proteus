@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use proteus_render::{AtlasConfig, FontAtlas, FontError, QuadInstance};
-use proteus_ui::{Easing, TransitionConfig};
+use proteus_ui::{Easing, KeyRepeat, TransitionConfig};
 
 // ---------------------------------------------------------------------------
 // ProteusConfig
@@ -377,8 +377,9 @@ impl Default for FrameConfig {
 // InputConfig
 // ---------------------------------------------------------------------------
 
-/// Input settings. Only [`InputConfig::autofocus`] is read yet: for the
-/// others, input uses fixed defaults, which they match.
+/// Input settings. Only `autofocus`, `keep_tab`, `key_repeat` and
+/// `long_press_ms` are read yet: for the others, input uses fixed defaults,
+/// which they match.
 #[derive(Debug, Clone, Copy)]
 pub struct InputConfig {
     /// Whether the web host gives the canvas keyboard focus when the app
@@ -386,6 +387,19 @@ pub struct InputConfig {
     /// app in a page doesn't take the page's focus. A native window has
     /// focus when it opens.
     pub autofocus: bool,
+    /// Whether the web host keeps Tab and Shift+Tab in the canvas, wrapping
+    /// round from the last component to the first and back, as a native window
+    /// does. Off by default, so Tab can leave a canvas in a page at either end,
+    /// as keyboard users need; turn it on for a full-screen or TV app.
+    pub keep_tab: bool,
+    /// How held keys repeat: by the engine, first after 250 ms then every
+    /// 100 ms, by default. The app can change it while it runs, with
+    /// `Proteus::set_key_repeat`.
+    pub key_repeat: KeyRepeat,
+    /// How long a key is held before it's long-pressed, in milliseconds. 500
+    /// by default. The app can change it while it runs, with
+    /// `Proteus::set_long_press_ms`.
+    pub long_press_ms: u32,
     /// How long, in milliseconds, a newly focused component waits before it
     /// accepts input.
     pub focus_input_delay_ms: u32,
@@ -405,6 +419,9 @@ impl Default for InputConfig {
     fn default() -> Self {
         Self {
             autofocus: false,
+            keep_tab: false,
+            key_repeat: KeyRepeat::default(),
+            long_press_ms: 500,
             focus_input_delay_ms: 0,
             transition_interaction_allow_pointer: false,
             transition_interaction_allow_navigation: false,

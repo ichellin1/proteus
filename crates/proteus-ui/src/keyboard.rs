@@ -207,13 +207,42 @@ pub struct Modifiers {
 pub enum KeyState {
     /// The key was pressed.
     Pressed,
-    /// The key is still held, and the system repeated it.
+    /// The key is still held, and repeated; see [`KeyRepeat`].
     Repeated,
+    /// The key has been held for the long-press time, once per press; see
+    /// [`KeyInput::long_press_ms`].
+    LongPressed,
     /// The key was released.
     Released,
 }
 
-/// A key being pressed, repeated or released.
+/// How held keys repeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyRepeat {
+    /// The engine repeats held keys itself, the same on every platform and
+    /// device, and ignores the system's repeats.
+    Engine {
+        /// How long a key is held before it first repeats, in milliseconds.
+        delay_ms: u32,
+        /// How long between repeats after that, in milliseconds.
+        interval_ms: u32,
+    },
+    /// Keys repeat as the system repeats them, at the speed each user set.
+    /// Also for devices that send a press and then repeats, but no release.
+    System,
+}
+
+impl Default for KeyRepeat {
+    /// The engine's repeats: first after 250 ms, then every 100 ms.
+    fn default() -> Self {
+        Self::Engine {
+            delay_ms: 250,
+            interval_ms: 100,
+        }
+    }
+}
+
+/// A key being pressed, repeated, long-pressed or released.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyEvent {
     /// What the key means.
@@ -229,6 +258,9 @@ pub struct KeyEvent {
     /// The action the key stands for in the [`KeyMap`](crate::keymap::KeyMap),
     /// if it's bound. The engine sets it before key callbacks see the event.
     pub action: Option<Action>,
+    /// On a release, whether the key was long-pressed before it, so a tap can
+    /// be told from a hold. `false` on any other event.
+    pub after_long_press: bool,
 }
 
 impl KeyEvent {
@@ -247,34 +279,72 @@ impl KeyEvent {
             modifiers,
             text,
             action: None,
+            after_long_press: false,
         }
     }
 
     /// Whether `self` and `other` are events of the same key: the same
     /// [`Code`], or, for a key whose position is unknown, the same [`Key`].
-    fn is_same_key(&self, other: &KeyEvent) -> bool {
+    pub fn is_same_key(&self, other: &KeyEvent) -> bool {
         if self.code == Code::Unidentified {
             self.key == other.key
         } else {
             self.code == other.code
         }
     }
+
+    /// This event's key in `state`, with its modifiers and text.
+    fn with_state(&self, state: KeyState) -> KeyEvent {
+        KeyEvent {
+            state,
+            action: None,
+            after_long_press: false,
+            ..self.clone()
+        }
+    }
 }
 
-/// This tick's key events, written by the host before each tick, and the keys
-/// still held.
+/// A key still held: its press, and how long it has been held.
+#[derive(Debug)]
+struct Held {
+    press: KeyEvent,
+    held_secs: f32,
+    // When it repeats next, in seconds held.
+    next_repeat_secs: f32,
+    long_pressed: bool,
+}
+
+/// This tick's key events, written by the host before each tick, the keys
+/// still held, and how they repeat and long-press.
 ///
 /// Whoever drives the world clears the events after each tick, with
-/// [`KeyInput::clear_events`]; `Proteus::tick` does this.
-#[derive(Resource, Debug, Default)]
+/// [`KeyInput::clear_events`], then calls [`KeyInput::advance`], whose
+/// repeats and long presses go to the next tick; `Proteus::tick` does both.
+#[derive(Resource, Debug)]
 pub struct KeyInput {
     /// This tick's key events, in the order they happened.
     pub events: Vec<KeyEvent>,
     /// How many of [`KeyInput::events`], from the first, have gone to the
     /// app's key callbacks. `Proteus::tick` sends the rest at its start.
     pub dispatched: usize,
-    // The press of each key still held.
-    held: Vec<KeyEvent>,
+    /// How held keys repeat.
+    pub repeat: KeyRepeat,
+    /// How long a key is held before it's long-pressed, in milliseconds.
+    /// 500 by default.
+    pub long_press_ms: u32,
+    held: Vec<Held>,
+}
+
+impl Default for KeyInput {
+    fn default() -> Self {
+        Self {
+            events: Vec::new(),
+            dispatched: 0,
+            repeat: KeyRepeat::default(),
+            long_press_ms: 500,
+            held: Vec::new(),
+        }
+    }
 }
 
 impl KeyInput {
@@ -282,9 +352,10 @@ impl KeyInput {
     ///
     /// A repeat or a release of a key that isn't held, such as one pressed
     /// before the window had focus, is ignored, so every release follows a
-    /// press.
-    pub fn record(&mut self, event: KeyEvent) {
-        let held = self.held.iter().position(|h| h.is_same_key(&event));
+    /// press. So is every repeat while the engine repeats keys itself. A
+    /// release says whether the key was long-pressed.
+    pub fn record(&mut self, mut event: KeyEvent) {
+        let held = self.held.iter().position(|h| h.press.is_same_key(&event));
         match event.state {
             KeyState::Pressed => {
                 // A press of a key already held means its release was never
@@ -292,21 +363,59 @@ impl KeyInput {
                 if let Some(i) = held {
                     self.held.remove(i);
                 }
-                self.held.push(event.clone());
+                let next_repeat_secs = match self.repeat {
+                    KeyRepeat::Engine { delay_ms, .. } => delay_ms as f32 / 1000.0,
+                    KeyRepeat::System => 0.0,
+                };
+                self.held.push(Held {
+                    press: event.clone(),
+                    held_secs: 0.0,
+                    next_repeat_secs,
+                    long_pressed: false,
+                });
             }
             KeyState::Repeated => {
-                if held.is_none() {
+                if held.is_none() || self.repeat != KeyRepeat::System {
                     return;
                 }
             }
             KeyState::Released => match held {
                 Some(i) => {
-                    self.held.remove(i);
+                    event.after_long_press = self.held.remove(i).long_pressed;
                 }
                 None => return,
             },
+            _ => return,
         }
         self.events.push(event);
+    }
+
+    /// Advances the time keys have been held by `dt` seconds, adding the
+    /// repeats and long presses it brings, after the events already recorded.
+    ///
+    /// Repeats and long presses are accurate to one call. At most one repeat
+    /// is added per key per call, so a long `dt`, such as after the app was in
+    /// the background, doesn't add a burst of them.
+    pub fn advance(&mut self, dt: f32) {
+        let long_press_secs = self.long_press_ms as f32 / 1000.0;
+        let repeat = self.repeat;
+        let mut added = Vec::new();
+        for held in &mut self.held {
+            held.held_secs += dt;
+            if let KeyRepeat::Engine { interval_ms, .. } = repeat {
+                if held.held_secs >= held.next_repeat_secs {
+                    added.push(held.press.with_state(KeyState::Repeated));
+                    let interval = (interval_ms as f32 / 1000.0).max(f32::EPSILON);
+                    held.next_repeat_secs =
+                        (held.next_repeat_secs + interval).max(held.held_secs + interval / 2.0);
+                }
+            }
+            if !held.long_pressed && held.held_secs >= long_press_secs {
+                held.long_pressed = true;
+                added.push(held.press.with_state(KeyState::LongPressed));
+            }
+        }
+        self.events.extend(added);
     }
 
     /// Clears this tick's events, once every system and callback has seen
@@ -322,12 +431,14 @@ impl KeyInput {
     /// Each release has the key and code of its press, no modifiers and no
     /// text.
     pub fn release_all(&mut self) {
-        for press in std::mem::take(&mut self.held) {
+        for held in std::mem::take(&mut self.held) {
             self.events.push(KeyEvent {
                 state: KeyState::Released,
                 modifiers: Modifiers::default(),
                 text: None,
-                ..press
+                action: None,
+                after_long_press: held.long_pressed,
+                ..held.press
             });
         }
     }

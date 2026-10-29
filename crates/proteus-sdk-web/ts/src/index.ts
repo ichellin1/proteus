@@ -26,6 +26,7 @@ import type {
   InputDevice,
   KeyBinding,
   KeyEvent,
+  KeyRepeat,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
@@ -110,7 +111,14 @@ export class Handle {
     return this.app.get(this);
   }
 
-  /** Calls `cb` each time the pointer is pressed on this component. A click also gives it focus. */
+  /**
+   * Calls `cb` each time this component is clicked: the pointer is pressed on
+   * it, or, while it has focus, a key bound to `"activate"` is pressed, such as
+   * Enter or Space, and no key callback claims it. A click means the component
+   * was chosen, by whatever device, as `click` does on the web.
+   *
+   * A pointer click also gives the component focus, if it can take it.
+   */
   onClick(cb: PlainCallback): void {
     this.app.wasmApp.onClick(this.wasmHandle, cb);
   }
@@ -147,17 +155,19 @@ export class Handle {
   }
 
   /**
-   * Calls `cb` each time the pointer is pressed on this component. This fires
-   * at the same moment as {@link Handle.onClick}; use it with
-   * {@link Handle.onRelease} to follow a press from start to end.
+   * Calls `cb` each time this component is pressed, by the pointer or the
+   * keyboard, as for {@link Handle.onClick}. This fires at the same moment as
+   * {@link Handle.onClick}; use it with {@link Handle.onRelease} to follow a
+   * press from start to end.
    */
   onPress(cb: PlainCallback): void {
     this.app.wasmApp.onPress(this.wasmHandle, cb);
   }
 
   /**
-   * Calls `cb` each time the pointer is released after a press on this
-   * component, even if the pointer has moved off it.
+   * Calls `cb` each time a press of this component ends: the pointer is
+   * released, even if it has moved off it, or the key that pressed it is, even
+   * if focus has moved since.
    */
   onRelease(cb: PlainCallback): void {
     this.app.wasmApp.onRelease(this.wasmHandle, cb);
@@ -1059,6 +1069,27 @@ export class ProteusApp {
    */
   unbindKey(binding: KeyBinding): Action | undefined {
     return this.wasmApp.unbindKey(binding) as Action | undefined;
+  }
+
+  /**
+   * Sets how held keys repeat: `{ delayMs, intervalMs }` for the engine's own
+   * repeats, the same on every platform and device, or `"system"` for the
+   * system's, at the speed each user set, which also suits devices that send
+   * a press and then repeats but no release. The engine's, first after 250 ms
+   * then every 100 ms, by default.
+   *
+   * @throws If `repeat` is neither.
+   */
+  setKeyRepeat(repeat: KeyRepeat): void {
+    this.wasmApp.setKeyRepeat(repeat);
+  }
+
+  /**
+   * Sets how long a key is held before it's long-pressed, in milliseconds.
+   * 500 by default.
+   */
+  setLongPressMs(ms: number): void {
+    this.wasmApp.setLongPressMs(ms);
   }
 
   /** Puts back the default key bindings, removing all the others. */

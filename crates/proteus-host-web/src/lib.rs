@@ -15,7 +15,11 @@
 //! input comes from Pointer Events (mouse, touch and pen), and keys from the
 //! canvas's keyboard events. The canvas can take keyboard focus: a click gives
 //! it focus, and `ProteusConfig`'s `input.autofocus` gives it focus at the
-//! start. While the tab is hidden, the
+//! start. The browser doesn't act on a key the app's key map binds, so Space
+//! and the arrows don't scroll the page, except for Tab and Shift+Tab, which
+//! can leave the canvas unless `input.keep_tab` is set. A key the map doesn't
+//! bind is left to the browser, even if a key callback claims it, since key
+//! callbacks run at the next frame. While the tab is hidden, the
 //! browser stops running the frame loop; the first frame after it returns has
 //! a time step of zero, not the whole time it was hidden.
 //!
@@ -66,7 +70,7 @@ use std::rc::Rc;
 
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
-use proteus_runtime::{Code, Key, KeyEvent, KeyState, Modifiers, Viewport};
+use proteus_runtime::{Action, Code, Key, KeyEvent, KeyMap, KeyState, Modifiers, Viewport};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -89,6 +93,39 @@ pub(crate) trait FrameDriver {
     fn pointer_released(&mut self);
     fn key_event(&mut self, event: KeyEvent);
     fn release_keys(&mut self);
+    fn set_tab_wraps(&mut self, wraps: bool);
+    /// The key map's [`KeyMap::version`](proteus_runtime::KeyMap::version).
+    fn key_map_version(&self) -> u64;
+    fn key_map(&self) -> KeyMap;
+}
+
+// ---------------------------------------------------------------------------
+// BoundKeys: the bindings the key listener reads
+// ---------------------------------------------------------------------------
+
+/// The key map's bindings, copied where the key listener can read them. It
+/// has to tell the browser whether to act on a key while the event is being
+/// handled, but key callbacks only run at the next frame, so it goes by the
+/// bindings: a bound key is the app's.
+#[derive(Default)]
+struct BoundKeys {
+    key_map: KeyMap,
+    // The key map's version it was copied at.
+    version: Option<u64>,
+    keep_tab: bool,
+}
+
+impl BoundKeys {
+    /// Whether the browser should leave `event` to the app. Tab and Shift+Tab
+    /// are left to the browser unless the app keeps them, so they can move
+    /// focus out of the canvas.
+    fn keeps(&self, event: &KeyEvent) -> bool {
+        match self.key_map.action_for(event) {
+            Some(Action::Next | Action::Previous) => self.keep_tab,
+            Some(_) => true,
+            None => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +179,7 @@ pub(crate) struct WebLoop<D: FrameDriver + 'static> {
     surface: surface::WebSurface,
     driver: D,
     inbox: Rc<RefCell<Inbox>>,
+    bound_keys: Rc<RefCell<BoundKeys>>,
     last_frame: Option<f64>,
     // Set when the WebGL context is lost; frames are skipped while it is.
     context_lost: bool,
@@ -159,6 +197,7 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             surface,
             driver,
             inbox: Rc::default(),
+            bound_keys: Rc::default(),
             last_frame: None,
             context_lost: false,
             must_draw: true,
@@ -166,13 +205,17 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
     }
 
     /// Adds the event listeners and starts the frame loop, giving the canvas
-    /// keyboard focus first if `autofocus` is set. The frame loop owns
-    /// `self`, so it keeps running after this returns, with nothing for the
-    /// caller to keep.
-    pub(crate) fn start(self, autofocus: bool) {
+    /// keyboard focus first if `autofocus` is set. Unless `keep_tab` is set,
+    /// Tab and Shift+Tab can leave the canvas. The frame loop owns `self`, so
+    /// it keeps running after this returns, with nothing for the caller to
+    /// keep.
+    pub(crate) fn start(mut self, autofocus: bool, keep_tab: bool) {
+        self.driver.set_tab_wraps(keep_tab);
+        self.bound_keys.borrow_mut().keep_tab = keep_tab;
+        self.copy_bindings();
         wire_resize(&self.canvas, &self.inbox);
         wire_pointer(&self.canvas, &self.inbox);
-        wire_keys(&self.canvas, &self.inbox);
+        wire_keys(&self.canvas, &self.inbox, &self.bound_keys);
         wire_visibility(&self.inbox);
         wire_context_loss(&self.canvas, &self.inbox);
 
@@ -183,6 +226,16 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         }
 
         start_raf_loop(self);
+    }
+
+    /// Copies the key map's bindings for the key listener, if they changed.
+    fn copy_bindings(&mut self) {
+        let version = self.driver.key_map_version();
+        let mut bound = self.bound_keys.borrow_mut();
+        if bound.version != Some(version) {
+            bound.key_map = self.driver.key_map();
+            bound.version = Some(version);
+        }
     }
 
     fn render_frame(&mut self, ts_ms: f64) {
@@ -201,6 +254,8 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         self.last_frame = Some(ts_ms);
 
         let changed = self.driver.update(dt);
+        // After `update`, where app code may have changed the key map.
+        self.copy_bindings();
         if !changed && !self.must_draw {
             return;
         }
@@ -356,7 +411,11 @@ fn wire_pointer(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
     });
 }
 
-fn wire_keys(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
+fn wire_keys(
+    canvas: &HtmlCanvasElement,
+    inbox: &Rc<RefCell<Inbox>>,
+    bound_keys: &Rc<RefCell<BoundKeys>>,
+) {
     use web_sys::KeyboardEvent;
 
     // A canvas only takes keyboard focus, and so key events, with a tabindex.
@@ -367,16 +426,20 @@ fn wire_keys(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
 
     let listen = |event: &str, pressed: bool| {
         let inbox = inbox.clone();
+        let bound_keys = bound_keys.clone();
         let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::new(move |e: KeyboardEvent| {
             // Keys pressed while an input method composes text are the input
             // method's, not the app's.
             if e.is_composing() {
                 return;
             }
-            inbox
-                .borrow_mut()
-                .input
-                .push(Input::Key(key_event(&e, pressed)));
+            let event = key_event(&e, pressed);
+            // So that, for example, Space and the arrows don't scroll the
+            // page.
+            if bound_keys.borrow().keeps(&event) {
+                e.prevent_default();
+            }
+            inbox.borrow_mut().input.push(Input::Key(event));
         });
         canvas
             .add_event_listener_with_callback(event, closure.as_ref().unchecked_ref())

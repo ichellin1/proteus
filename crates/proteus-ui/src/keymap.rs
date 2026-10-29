@@ -58,8 +58,9 @@ impl Action {
     ];
 
     /// Whether it moves focus: `Up`, `Down`, `Left`, `Right`, `Next` or
-    /// `Previous`.
-    pub fn is_navigation(self) -> bool {
+    /// `Previous`. Navigation moves focus with these when no key callback
+    /// claims them.
+    pub fn moves_focus(self) -> bool {
         matches!(
             self,
             Action::Up
@@ -143,6 +144,7 @@ pub struct KeyMap {
     bindings: Vec<(KeyBinding, Action)>,
     // The names of the app's actions; an `AppAction` is an index into it.
     action_names: Vec<String>,
+    version: u64,
 }
 
 impl Default for KeyMap {
@@ -150,6 +152,7 @@ impl Default for KeyMap {
         Self {
             bindings: Self::default_bindings(),
             action_names: Vec::new(),
+            version: 0,
         }
     }
 }
@@ -187,11 +190,13 @@ impl KeyMap {
     pub fn bind(&mut self, binding: KeyBinding, action: Action) {
         self.unbind(&binding);
         self.bindings.push((binding, action));
+        self.version += 1;
     }
 
     /// Unbinds `binding`, and returns the action it was bound to, if any.
     pub fn unbind(&mut self, binding: &KeyBinding) -> Option<Action> {
         let i = self.bindings.iter().position(|(b, _)| b == binding)?;
+        self.version += 1;
         Some(self.bindings.remove(i).1)
     }
 
@@ -199,6 +204,13 @@ impl KeyMap {
     /// stay defined.
     pub fn reset(&mut self) {
         self.bindings = Self::default_bindings();
+        self.version += 1;
+    }
+
+    /// A number that changes each time the bindings do, so a copy of them,
+    /// such as the one a web host keeps, can tell when it's out of date.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// The bindings, in the order they were made.
@@ -241,6 +253,19 @@ impl KeyMap {
     /// The name `action` was defined with, if this map defined it.
     pub fn action_name(&self, action: AppAction) -> Option<&str> {
         self.action_names.get(action.0 as usize).map(String::as_str)
+    }
+}
+
+/// Whether [`Action::Next`] and [`Action::Previous`] wrap round from the last
+/// component to the first, and back. They do by default, as in a native window.
+/// A web host turns it off unless the app keeps Tab in the canvas, so that Tab
+/// can leave the canvas at either end, as it leaves the end of a page.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabWraps(pub bool);
+
+impl Default for TabWraps {
+    fn default() -> Self {
+        Self(true)
     }
 }
 

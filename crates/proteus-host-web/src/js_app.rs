@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use proteus_runtime::glam::Vec2;
-use proteus_runtime::{wgpu, KeyEvent, ProteusConfig, Renderer, Viewport};
+use proteus_runtime::{wgpu, KeyEvent, KeyMap, ProteusConfig, Renderer, Viewport};
 use proteus_sdk_web::ProteusApp;
 use wasm_bindgen::prelude::*;
 
@@ -62,6 +62,7 @@ pub async fn mount(
         .map_err(|e| crate::js_error(&e.to_string()))?;
 
     let autofocus = config.input.autofocus;
+    let keep_tab = config.input.keep_tab;
     let surface = WebSurface::new(&canvas, config.render).await?;
     let viewport = surface.viewport();
     let surface_format = surface.surface_format();
@@ -88,7 +89,7 @@ pub async fn mount(
         renderer,
         update,
     };
-    WebLoop::new(canvas, surface, driver).start(autofocus);
+    WebLoop::new(canvas, surface, driver).start(autofocus, keep_tab);
     Ok(())
 }
 
@@ -146,5 +147,17 @@ impl FrameDriver for JsDriver {
 
     fn release_keys(&mut self) {
         self.proteus.borrow_mut().release_keys();
+    }
+
+    fn set_tab_wraps(&mut self, wraps: bool) {
+        self.proteus.borrow_mut().set_tab_wraps(wraps);
+    }
+
+    fn key_map_version(&self) -> u64 {
+        self.proteus.borrow().key_map().version()
+    }
+
+    fn key_map(&self) -> KeyMap {
+        self.proteus.borrow().key_map().clone()
     }
 }

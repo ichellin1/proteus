@@ -2468,7 +2468,8 @@ fn turning_the_pointer_off_ends_its_hover_and_press() {
 fn turning_the_keyboard_off_releases_the_keys_held() {
     let mut app = Proteus::new();
     app.key_event(enter_key(KeyState::Pressed));
-    app.tick(1.0);
+    // Shorter than the repeat delay, so the release is the only event.
+    app.tick(0.016);
 
     app.set_input_devices(InputDevices::POINTER);
     let events = &app.world().resource::<KeyInput>().events;
@@ -2983,4 +2984,184 @@ fn the_key_chain_leaves_out_components_that_cannot_take_keys() {
 
     inner.focus(&mut app).unwrap();
     assert_eq!(app.key_chain(), vec![inner, outer]);
+}
+
+// A held key's repeats reach key callbacks on the ticks after it's pressed,
+// whatever the system's repeat settings.
+#[test]
+fn a_held_key_repeats_to_key_callbacks() {
+    let mut app = Proteus::new();
+    let states = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let inner = states.clone();
+    app.on_key(move |_, e| {
+        inner.borrow_mut().push(e.state);
+        KeyResult::Ignored
+    });
+    app.key_event(enter_key(KeyState::Pressed));
+    for _ in 0..12 {
+        app.tick(0.05);
+    }
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.05);
+
+    let states = states.borrow();
+    assert_eq!(states.first(), Some(&KeyState::Pressed));
+    assert_eq!(states.last(), Some(&KeyState::Released));
+    let repeats = states.iter().filter(|s| **s == KeyState::Repeated).count();
+    let long_presses = states
+        .iter()
+        .filter(|s| **s == KeyState::LongPressed)
+        .count();
+    assert_eq!((repeats, long_presses), (4, 1));
+}
+
+// ---------------------------------------------------------------------------
+// Activate
+// ---------------------------------------------------------------------------
+
+fn press_log(
+    app: &mut Proteus,
+    handle: proteus_sdk::Handle,
+) -> Rc<std::cell::RefCell<Vec<&'static str>>> {
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (a, b, c) = (log.clone(), log.clone(), log.clone());
+    handle.on_press(app, move |_| a.borrow_mut().push("press"));
+    handle.on_click(app, move |_| b.borrow_mut().push("click"));
+    handle.on_release(app, move |_| c.borrow_mut().push("release"));
+    log
+}
+
+fn space(state: KeyState) -> KeyEvent {
+    KeyEvent::new(
+        Key::Character(" ".to_owned()),
+        Code::Space,
+        state,
+        Modifiers::default(),
+        None,
+    )
+}
+
+// So a button works from the keyboard with the click handler it already has.
+#[test]
+fn activate_presses_and_clicks_the_focused_component_until_its_key_is_released() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(0.0, 0.0)).pressed(StyleOverride {
+            scale: Some(0.9),
+            ..StyleOverride::default()
+        }),
+    );
+    let log = press_log(&mut app, button);
+    button.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec!["click", "press"]);
+    app.tick(0.016);
+    assert_eq!(
+        app.get(button).unwrap().state,
+        proteus_sdk::InteractionStateKind::Pressed
+    );
+
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec!["click", "press", "release"]);
+    app.tick(0.016);
+    assert_ne!(
+        app.get(button).unwrap().state,
+        proteus_sdk::InteractionStateKind::Pressed
+    );
+}
+
+// Holding Enter is one click, not a stream of them; a component that wants
+// repeats handles the action itself.
+#[test]
+fn repeats_and_long_presses_do_not_click_again() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let log = press_log(&mut app, button);
+    button.focus(&mut app).unwrap();
+
+    app.key_event(space(KeyState::Pressed));
+    for _ in 0..15 {
+        app.tick(0.05);
+    }
+    app.key_event(space(KeyState::Released));
+    app.tick(0.05);
+    assert_eq!(*log.borrow(), vec!["click", "press", "release"]);
+}
+
+#[test]
+fn a_claimed_activate_does_not_click() {
+    let mut app = Proteus::new();
+    let slider = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let log = press_log(&mut app, slider);
+    slider.on_key(&mut app, |_, e| match e.action {
+        Some(Action::Activate) => KeyResult::Handled,
+        _ => KeyResult::Ignored,
+    });
+    slider.focus(&mut app).unwrap();
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.016);
+    assert!(log.borrow().is_empty());
+}
+
+// A click often transforms the component, which moves focus to what it
+// becomes; the key's release must still end the press it started.
+#[test]
+fn the_release_goes_to_the_component_pressed_even_after_focus_moves() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let other = app.component(ComponentSpec::new(quad_at(200.0, 0.0)));
+    let log = press_log(&mut app, button);
+    button.focus(&mut app).unwrap();
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+
+    other.focus(&mut app).unwrap();
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec!["click", "press", "release"]);
+}
+
+// A callback claiming the release mustn't leave the component pressed, with
+// no release to come.
+#[test]
+fn a_claimed_release_still_ends_the_press() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let log = press_log(&mut app, button);
+    app.on_key(|_, e| match e.state {
+        KeyState::Released => KeyResult::Handled,
+        _ => KeyResult::Ignored,
+    });
+    button.focus(&mut app).unwrap();
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.016);
+    assert_eq!(*log.borrow(), vec!["click", "press", "release"]);
+}
+
+#[test]
+fn activate_with_nothing_focused_does_nothing() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let log = press_log(&mut app, button);
+    app.key_event(enter_key(KeyState::Pressed));
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.016);
+    assert!(log.borrow().is_empty());
+}
+
+// Native windows wrap Tab; the web host turns it off unless the app keeps Tab.
+#[test]
+fn tab_wraps_by_default() {
+    let mut app = Proteus::new();
+    assert!(app.tab_wraps());
+    app.set_tab_wraps(false);
+    assert!(!app.tab_wraps());
 }

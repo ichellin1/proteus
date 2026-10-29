@@ -109,6 +109,10 @@ impl Renderer {
         world.insert_resource(BakeScale(
             config.resources.bake_scale(viewport.scale_factor),
         ));
+        // Every host makes its renderer from the config, so the key settings
+        // reach the app here too.
+        proteus.set_key_repeat(config.input.key_repeat);
+        proteus.set_long_press_ms(config.input.long_press_ms);
 
         // Use the configured font, or the embedded one. Bytes that aren't a
         // font fall back to the embedded font rather than stopping the app;
