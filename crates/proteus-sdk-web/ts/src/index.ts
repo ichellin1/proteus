@@ -21,6 +21,7 @@ import {
 import type {
   ImageCrop,
   ImageSpec,
+  FocusBlocked,
   InputDevice,
   ChildBehavior,
   ComponentData,
@@ -49,6 +50,17 @@ export type PlainCallback = () => void;
  * frame, in world units (x right, y up).
  */
 export type DragCallback = (delta: { x: number; y: number }) => void;
+/** A component that lost focus because it could no longer keep it, and why. */
+export interface FocusLost {
+  /** The component that lost focus. It may no longer exist. */
+  component: Handle;
+  /** Why it lost focus. */
+  reason: FocusBlocked;
+}
+
+/** {@link ProteusApp.onFocusLost}'s callback. */
+export type FocusLostCallback = (lost: FocusLost) => void;
+
 /** {@link TransitionChannel.onDropped}'s callback: the request that couldn't run, and why. */
 export type DroppedCallback = (dropped: TransitionDropped) => void;
 
@@ -464,6 +476,33 @@ export class Handle {
    */
   setInteractive(interactive: boolean): void {
     this.app.wasmApp.setInteractive(this.wasmHandle, interactive);
+  }
+
+  /**
+   * Gives this component focus, taking it from the one that has it. Their
+   * {@link Handle.onBlur} and {@link Handle.onFocus} callbacks run on the next
+   * frame.
+   *
+   * @throws If it can't take focus: it's destroyed, hidden, disabled or
+   * non-interactive, it or the app doesn't accept the keyboard, or it's
+   * transitioning without {@link TransitionInteractionConfig.allowNavigation}.
+   * The message says which.
+   */
+  focus(): void {
+    this.app.wasmApp.focus(this.wasmHandle);
+  }
+
+  /** Whether this component has focus. */
+  isFocused(): boolean {
+    return this.app.wasmApp.isFocused(this.wasmHandle);
+  }
+
+  /**
+   * Marks or unmarks this component as where focus starts, as
+   * {@link ComponentSpec.defaultFocus} does at creation.
+   */
+  setDefaultFocus(defaultFocus: boolean): void {
+    this.app.wasmApp.setDefaultFocus(this.wasmHandle, defaultFocus);
   }
 
   /**
@@ -960,6 +999,36 @@ export class ProteusApp {
   /** The input devices the app accepts. */
   inputDevices(): InputDevice[] {
     return this.wasmApp.inputDevices() as InputDevice[];
+  }
+
+  /** The component that has focus, or `undefined` if none has. */
+  focused(): Handle | undefined {
+    const focused = this.wasmApp.focused();
+    return focused ? new Handle(this, focused) : undefined;
+  }
+
+  /**
+   * Clears focus, so no component has it. Its {@link Handle.onBlur} callback
+   * runs on the next frame, and {@link ProteusApp.onFocusLost}'s don't, since
+   * the app cleared it.
+   */
+  clearFocus(): void {
+    this.wasmApp.clearFocus();
+  }
+
+  /**
+   * Calls `cb` each time a component loses focus because it can no longer
+   * keep it: it was destroyed, hidden, disabled, made non-interactive, or
+   * stopped accepting the keyboard. Not when the app clears focus or gives it
+   * to another component.
+   *
+   * Nothing has focus afterwards. This is where the app puts focus where it
+   * belongs, such as on the component that replaced the one lost.
+   */
+  onFocusLost(cb: FocusLostCallback): void {
+    this.wasmApp.onFocusLost((id: number, reason: string) =>
+      cb({ component: this.handleFromId(id), reason: reason as FocusBlocked }),
+    );
   }
 
   /**

@@ -35,6 +35,7 @@ use proteus_render::{
 use crate::collect::{quad_state_to_instance, BakedTexture};
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 use crate::effects::{Border, DropShadow, Glow};
+use crate::focus::{DefaultFocus, FocusMover};
 use crate::hierarchy::{compose_with_parent, EffectiveOpacity, Opacity};
 use crate::image::BakedImage;
 use crate::text::{BakedText, Text};
@@ -617,6 +618,9 @@ fn bake_one(
 /// present, it bakes the source once and each target once, and each piece
 /// fades from its part of the source's bake to its target's bake. Without
 /// them, or if a bake fails, a piece is a plain colored shape.
+///
+/// If the source has focus, the target marked with [`DefaultFocus`] takes it,
+/// or else the first.
 #[allow(clippy::too_many_arguments)]
 pub fn one_to_n_setup_system(
     mut commands: Commands,
@@ -628,6 +632,8 @@ pub fn one_to_n_setup_system(
     mut pipeline: Option<ResMut<QuadPipeline>>,
     atlas_size: Res<TransitionAtlasSize>,
     bake_scale: Option<Res<crate::bake::BakeScale>>,
+    mut focus: FocusMover,
+    default_focus: Query<(), With<DefaultFocus>>,
 ) {
     // 1 in a world without one, as in tests.
     let bake_scale = bake_scale.map_or(1.0, |s| s.0);
@@ -655,6 +661,12 @@ pub fn one_to_n_setup_system(
 
         // Hide the source: the targets replace it.
         commands.entity(source_entity).insert(Visibility::HIDDEN);
+        let focus_target = request
+            .targets
+            .iter()
+            .find(|t| default_focus.contains(t.entity))
+            .unwrap_or(&request.targets[0]);
+        focus.follow(source_entity, focus_target.entity);
 
         match request.strategy {
             SplitStrategy::PerTarget => {
@@ -862,6 +874,8 @@ pub fn one_to_n_setup_system(
 /// destination is baked once and shared, each piece fading from its source's
 /// bake to its part of the destination's. Without GPU resources, or if a bake
 /// fails, a piece is a plain colored shape.
+///
+/// If a source has focus, the destination takes it.
 #[allow(clippy::too_many_arguments)]
 pub fn n_to_one_setup_system(
     mut commands: Commands,
@@ -873,6 +887,7 @@ pub fn n_to_one_setup_system(
     mut pipeline: Option<ResMut<QuadPipeline>>,
     atlas_size: Res<TransitionAtlasSize>,
     bake_scale: Option<Res<crate::bake::BakeScale>>,
+    mut focus: FocusMover,
 ) {
     // 1 in a world without one, as in tests.
     let bake_scale = bake_scale.map_or(1.0, |s| s.0);
@@ -905,6 +920,7 @@ pub fn n_to_one_setup_system(
         // Hide all source entities.
         for source in &request.sources {
             commands.entity(source.entity).insert(Visibility::HIDDEN);
+            focus.follow(source.entity, dest_entity);
         }
 
         // The part of the destination each source moves to.

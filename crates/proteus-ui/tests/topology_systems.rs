@@ -15,7 +15,7 @@ use proteus_ui::{
         transition_tick_system, ActiveTransition, CompletedTransitions, Easing, FrameTime,
         TransitionConfig,
     },
-    QuadState,
+    FocusState, InteractionEvents, QuadState,
 };
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,9 @@ fn make_world() -> World {
     world.init_resource::<FrameTime>();
     world.init_resource::<CompletedTransitions>();
     world.init_resource::<TransitionAtlasSize>();
+    // Splits and merges move focus, as in `ProteusWorld::new()`.
+    world.init_resource::<FocusState>();
+    world.init_resource::<InteractionEvents>();
     world
 }
 

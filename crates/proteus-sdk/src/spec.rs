@@ -53,6 +53,7 @@ pub struct ComponentSpec {
     pub(crate) drop_shadow: Option<DropShadow>,
     pub(crate) non_interactive: bool,
     pub(crate) devices: Option<InputDevices>,
+    pub(crate) default_focus: bool,
     pub(crate) visible: bool,
     pub(crate) opacity: Option<f32>,
     pub(crate) start_disabled: bool,
@@ -76,6 +77,7 @@ impl Default for ComponentSpec {
             drop_shadow: None,
             non_interactive: false,
             devices: None,
+            default_focus: false,
             // The only field whose default is "on" rather than "absent".
             visible: true,
             opacity: None,
@@ -265,6 +267,14 @@ impl ComponentSpec {
     /// [`Proteus::set_input_devices`](crate::Proteus::set_input_devices).
     pub fn devices(mut self, devices: InputDevices) -> Self {
         self.devices = Some(devices);
+        self
+    }
+
+    /// Marks this component as where focus starts: a split whose source has
+    /// focus gives it to the target marked this way, or else to its first.
+    /// See [`Handle::set_default_focus`](crate::Handle::set_default_focus).
+    pub fn default_focus(mut self) -> Self {
+        self.default_focus = true;
         self
     }
 

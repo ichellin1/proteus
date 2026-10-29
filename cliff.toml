@@ -70,6 +70,10 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   off by default. Fill in the rest with `..Default::default()`.
 - **The web canvas can take keyboard focus:** the host gives it `tabindex="0"` unless the page
   set one, so a click focuses it, and a browser may outline it while it has focus.
+- **Focus leaves a component that can no longer keep it:** when the focused component is
+  destroyed, hidden, disabled or made non-interactive, focus is cleared, its `on_blur` fires, and
+  `on_focus_lost` says why. In 0.2 it kept focus, and showed its focused style again when
+  re-enabled.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 

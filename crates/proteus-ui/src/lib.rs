@@ -27,6 +27,7 @@ pub mod component;
 pub mod devices;
 mod draw_order;
 pub mod effects;
+pub mod focus;
 pub mod hierarchy;
 pub mod image;
 pub mod input;
@@ -58,6 +59,7 @@ pub use component::{
 };
 pub use devices::{AcceptsDevices, AppDevices, InputDevice, InputDevices};
 pub use effects::{Border, DropShadow, Glow};
+pub use focus::{focus_blocked, focus_validity_system, DefaultFocus, FocusBlocked, FocusMover};
 pub use hierarchy::{
     opacity_system, resolve_world_position, resolve_world_position_query, visibility_system,
     EffectiveOpacity, EffectiveVisibility, Opacity,

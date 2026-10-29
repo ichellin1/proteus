@@ -7,7 +7,7 @@
 //! flush_commands       apply mutations queued during the last tick
 //! input                hit-test the pointer and record input events
 //! interaction_style    start style transitions for hover, press, focus and disabled
-//! navigation           keyboard focus movement (placeholder, does nothing yet)
+//! navigation           clear focus from a component that can no longer keep it
 //! channel_dispatch      turn channel requests into transition requests
 //! transition_setup     start requested transitions, including splits and merges
 //! transition_tick      advance transitions and interpolate geometry
@@ -27,6 +27,7 @@ use bevy_ecs::schedule::ApplyDeferred;
 use crate::bake::bake_system;
 use crate::channel::{self, channel_dispatch_system, register_channel_hooks};
 use crate::devices::AppDevices;
+use crate::focus::focus_validity_system;
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{
     hit_test_system, FocusState, HoveredEntity, InteractionEvents, PointerInput, PressedEntity,
@@ -61,7 +62,8 @@ pub enum ProteusSet {
     /// Work out which interaction style applies to each component, and start
     /// a short transition to it.
     InteractionStyle,
-    /// Keyboard focus movement. A placeholder that does nothing yet.
+    /// Clear focus from a component that can no longer keep it; see
+    /// [`crate::focus`].
     Navigation,
     /// Turn pending `channel::set` calls into `TransitionRequest` components.
     ChannelDispatch,
@@ -134,7 +136,6 @@ pub fn flush_commands_system(world: &mut World) {
 // ---------------------------------------------------------------------------
 // Placeholders that hold their stage's place in the order.
 
-fn stub_navigation_system() {}
 fn stub_render_system() {}
 
 // ---------------------------------------------------------------------------
@@ -262,7 +263,7 @@ pub fn build_schedule() -> Schedule {
 
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     schedule.add_systems(interaction_style_system.in_set(ProteusSet::InteractionStyle));
-    schedule.add_systems(stub_navigation_system.in_set(ProteusSet::Navigation));
+    schedule.add_systems(focus_validity_system.in_set(ProteusSet::Navigation));
     schedule.add_systems(channel_dispatch_system.in_set(ProteusSet::ChannelDispatch));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
 

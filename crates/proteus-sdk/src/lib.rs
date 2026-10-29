@@ -60,7 +60,7 @@ mod handle;
 mod spec;
 pub mod video;
 
-pub use app::Proteus;
+pub use app::{FocusLost, Proteus};
 pub use coords::{top_left_to_world, world_to_top_left};
 pub use data::{ComponentData, TransitionData};
 pub use handle::{Handle, HandleError, TextureHandle, TextureRequest, TransitionChannel};
@@ -74,8 +74,8 @@ pub use glam;
 // The value types this API takes and returns, so an app needs no direct
 // `proteus-ui` dependency.
 pub use proteus_ui::{
-    Border, Code, DropReason, DropShadow, Easing, Glow, Image, ImageCrop, InputDevice,
-    InputDevices, InteractionStateKind, Key, KeyEvent, KeyState, MergeLayout, Modifiers, NamedKey,
-    Opacity, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionDropped,
-    TransitionInteractionConfig, Visibility,
+    Border, Code, DropReason, DropShadow, Easing, FocusBlocked, Glow, Image, ImageCrop,
+    InputDevice, InputDevices, InteractionStateKind, Key, KeyEvent, KeyState, MergeLayout,
+    Modifiers, NamedKey, Opacity, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
+    TransitionDropped, TransitionInteractionConfig, Visibility,
 };

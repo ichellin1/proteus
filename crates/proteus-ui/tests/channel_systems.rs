@@ -13,7 +13,7 @@ use proteus_ui::{
     flush_commands_system,
     schedule::CommandQueue,
     transition::TransitionConfig,
-    QuadState,
+    FocusState, InteractionEvents, QuadState,
 };
 
 // ---------------------------------------------------------------------------
@@ -26,6 +26,9 @@ fn make_world() -> World {
     world.init_resource::<PendingChannelSets>();
     world.init_resource::<DroppedRequests>();
     world.init_resource::<CommandQueue>();
+    // Dispatch moves focus with a transition, as in `ProteusWorld::new()`.
+    world.init_resource::<FocusState>();
+    world.init_resource::<InteractionEvents>();
     // Must run before any OwnedChannels component can exist in an archetype —
     // same requirement as ProteusWorld::new()'s own call.
     register_channel_hooks(&mut world);

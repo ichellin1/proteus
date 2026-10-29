@@ -19,7 +19,7 @@ use glam::Vec2;
 
 use proteus_ui::{ChannelRegistry, TransitionChannelId, TransitionDropped};
 
-use crate::Proteus;
+use crate::{FocusLost, Proteus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EventKind {
@@ -36,12 +36,15 @@ pub(crate) enum EventKind {
 type PlainCallback = Box<dyn FnMut(&mut Proteus)>;
 type DragCallback = Box<dyn FnMut(&mut Proteus, Vec2)>;
 type DroppedCallback = Box<dyn FnMut(&mut Proteus, TransitionDropped)>;
+type FocusLostCallback = Box<dyn FnMut(&mut Proteus, FocusLost)>;
 
 #[derive(Default)]
 pub(crate) struct CallbackRegistry {
     handlers: HashMap<(Entity, EventKind), Vec<PlainCallback>>,
     drag_handlers: HashMap<Entity, Vec<DragCallback>>,
     dropped_handlers: HashMap<TransitionChannelId, Vec<DroppedCallback>>,
+    // The app's own, not any component's.
+    focus_lost_handlers: Vec<FocusLostCallback>,
 }
 
 impl CallbackRegistry {
@@ -70,6 +73,7 @@ impl CallbackRegistry {
         self.handlers.values().map(Vec::len).sum::<usize>()
             + self.drag_handlers.values().map(Vec::len).sum::<usize>()
             + self.dropped_handlers.values().map(Vec::len).sum::<usize>()
+            + self.focus_lost_handlers.len()
     }
 
     pub(crate) fn register_drag(&mut self, entity: Entity, cb: DragCallback) {
@@ -78,6 +82,10 @@ impl CallbackRegistry {
 
     pub(crate) fn register_dropped(&mut self, channel: TransitionChannelId, cb: DroppedCallback) {
         self.dropped_handlers.entry(channel).or_default().push(cb);
+    }
+
+    pub(crate) fn register_focus_lost(&mut self, cb: FocusLostCallback) {
+        self.focus_lost_handlers.push(cb);
     }
 }
 
@@ -132,6 +140,17 @@ pub(crate) fn fire_drag(app: &mut Proteus, entity: Entity, delta: Vec2) {
 /// [`fire`] for [`TransitionChannel::on_dropped`](crate::TransitionChannel::on_dropped)
 /// handlers. These are registered per channel, and each receives the
 /// [`TransitionDropped`] describing the request that couldn't run and why.
+/// Calls every `on_focus_lost` handler with `lost`, keeping any registered
+/// during the call after them.
+pub(crate) fn fire_focus_lost(app: &mut Proteus, lost: FocusLost) {
+    let mut cbs = std::mem::take(&mut app.callbacks.focus_lost_handlers);
+    for cb in &mut cbs {
+        cb(app, lost);
+    }
+    cbs.append(&mut app.callbacks.focus_lost_handlers);
+    app.callbacks.focus_lost_handlers = cbs;
+}
+
 pub(crate) fn fire_dropped(app: &mut Proteus, dropped: TransitionDropped) {
     let channel = dropped.channel;
     let Some(mut cbs) = app.callbacks.dropped_handlers.remove(&channel) else {

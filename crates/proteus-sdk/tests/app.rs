@@ -8,10 +8,11 @@ use std::rc::Rc;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    Code, ComponentSpec, HandleError, ImageCrop, InputDevices, Key, KeyEvent, KeyState, Modifiers,
-    NamedKey, Proteus, QuadState, StyleOverride, Text, TransitionConfig,
+    Code, ComponentSpec, FocusBlocked, FocusLost, HandleError, ImageCrop, InputDevices, Key,
+    KeyEvent, KeyState, MergeLayout, Modifiers, NamedKey, Proteus, QuadState, SplitStrategy,
+    StyleOverride, Text, TransitionConfig,
 };
-use proteus_ui::KeyInput;
+use proteus_ui::{FocusState, KeyInput};
 
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
@@ -2513,4 +2514,307 @@ fn a_component_reports_the_devices_it_accepts() {
 
     narrowed.destroy(&mut app).unwrap();
     assert_eq!(narrowed.devices(&app), None);
+}
+
+// ---------------------------------------------------------------------------
+// focus
+// ---------------------------------------------------------------------------
+
+fn focus_events(
+    app: &mut Proteus,
+    handle: proteus_sdk::Handle,
+) -> Rc<std::cell::RefCell<Vec<&'static str>>> {
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let on_focus = log.clone();
+    handle.on_focus(app, move |_| on_focus.borrow_mut().push("focus"));
+    let on_blur = log.clone();
+    handle.on_blur(app, move |_| on_blur.borrow_mut().push("blur"));
+    log
+}
+
+fn lost_log(app: &mut Proteus) -> Rc<std::cell::RefCell<Vec<FocusLost>>> {
+    let log = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let inner = log.clone();
+    app.on_focus_lost(move |_, lost| inner.borrow_mut().push(lost));
+    log
+}
+
+#[test]
+fn focus_gives_a_component_focus_and_reports_it_on_the_next_tick() {
+    let mut app = Proteus::new();
+    let a = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let b = app.component(ComponentSpec::new(quad_at(200.0, 0.0)));
+    let a_events = focus_events(&mut app, a);
+    let b_events = focus_events(&mut app, b);
+
+    a.focus(&mut app).unwrap();
+    assert!(a.is_focused(&app));
+    assert_eq!(app.focused(), Some(a));
+    app.tick(0.016);
+    assert_eq!(*a_events.borrow(), vec!["focus"]);
+
+    b.focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert_eq!(*a_events.borrow(), vec!["focus", "blur"]);
+    assert_eq!(*b_events.borrow(), vec!["focus"]);
+    assert!(!a.is_focused(&app));
+}
+
+#[test]
+fn focus_says_why_a_component_cannot_take_it() {
+    let mut app = Proteus::new();
+    let disabled = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).start_disabled());
+    let passive = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).non_interactive());
+    let hidden = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).visible(false));
+    let pointer_only =
+        app.component(ComponentSpec::new(quad_at(0.0, 0.0)).devices(InputDevices::POINTER));
+    let gone = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    gone.destroy(&mut app).unwrap();
+
+    let refused = |reason| Err(HandleError::CannotTakeFocus(reason));
+    assert_eq!(disabled.focus(&mut app), refused(FocusBlocked::Disabled));
+    assert_eq!(
+        passive.focus(&mut app),
+        refused(FocusBlocked::NonInteractive)
+    );
+    assert_eq!(hidden.focus(&mut app), refused(FocusBlocked::Hidden));
+    assert_eq!(
+        pointer_only.focus(&mut app),
+        refused(FocusBlocked::KeyboardNotAccepted)
+    );
+    assert_eq!(gone.focus(&mut app), refused(FocusBlocked::Destroyed));
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn nothing_can_take_focus_in_an_app_without_the_keyboard() {
+    let mut app = Proteus::new();
+    let a = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    app.set_input_devices(InputDevices::POINTER);
+    assert_eq!(
+        a.focus(&mut app),
+        Err(HandleError::CannotTakeFocus(
+            FocusBlocked::KeyboardNotAccepted
+        ))
+    );
+}
+
+#[test]
+fn clearing_focus_blurs_without_reporting_it_lost() {
+    let mut app = Proteus::new();
+    let a = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let events = focus_events(&mut app, a);
+    let lost = lost_log(&mut app);
+    a.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    app.clear_focus();
+    app.tick(0.016);
+    assert_eq!(app.focused(), None);
+    assert_eq!(*events.borrow(), vec!["focus", "blur"]);
+    assert!(lost.borrow().is_empty());
+}
+
+// A component that only the pointer uses isn't a place for focus, so clicking
+// it leaves focus where it was, as clicking empty space does.
+#[test]
+fn a_click_gives_focus_only_to_a_component_that_can_take_it() {
+    let mut app = Proteus::new();
+    let field = app.component(ComponentSpec::new(quad_at(500.0, 0.0)));
+    let pointer_only =
+        app.component(ComponentSpec::new(quad_at(100.0, 100.0)).devices(InputDevices::POINTER));
+    field.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(0.016);
+    assert_eq!(app.focused(), Some(field));
+
+    pointer_only
+        .set_devices(&mut app, InputDevices::ALL)
+        .unwrap();
+    app.pointer_pressed();
+    app.tick(0.016);
+    assert_eq!(app.focused(), Some(pointer_only));
+}
+
+#[test]
+fn focus_follows_a_channel_to_the_component_it_becomes() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let list = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).visible(false));
+    let list_events = focus_events(&mut app, list);
+    let channel = app.transition_channel(None);
+    button.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    channel.set(&mut app, list, button, cfg(0.1), false);
+    app.tick(0.016);
+    assert_eq!(app.focused(), Some(list));
+    assert_eq!(*list_events.borrow(), vec!["focus"]);
+
+    // It keeps focus while it transitions, and after.
+    for _ in 0..10 {
+        app.tick(0.016);
+    }
+    assert_eq!(app.focused(), Some(list));
+}
+
+#[test]
+fn a_split_gives_focus_to_its_first_target() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let items: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 120.0, 0.0)).visible(false)))
+        .collect();
+    button.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    button
+        .split_to(&mut app, &items, cfg(0.1), SplitStrategy::Row)
+        .unwrap();
+    app.tick(0.016);
+    assert_eq!(app.focused(), Some(items[0]));
+}
+
+// The targets of a row split are hidden until every piece arrives. Focus
+// must stay on the one it moved to, rather than be cleared as hidden.
+#[test]
+fn a_split_gives_focus_to_the_target_marked_default_and_keeps_it_while_hidden() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let items: Vec<_> = (0..3)
+        .map(|i| {
+            let spec = ComponentSpec::new(quad_at(i as f32 * 120.0, 0.0)).visible(false);
+            app.component(if i == 1 { spec.default_focus() } else { spec })
+        })
+        .collect();
+    let lost = lost_log(&mut app);
+    button.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    button
+        .split_to(&mut app, &items, cfg(0.1), SplitStrategy::Row)
+        .unwrap();
+    for _ in 0..3 {
+        app.tick(0.016);
+        assert_eq!(app.focused(), Some(items[1]));
+    }
+    for _ in 0..10 {
+        app.tick(0.016);
+    }
+    assert_eq!(app.focused(), Some(items[1]));
+    assert!(lost.borrow().is_empty());
+}
+
+#[test]
+fn a_merge_gives_focus_to_its_destination_and_keeps_it_while_hidden() {
+    let mut app = Proteus::new();
+    let items: Vec<_> = (0..3)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 120.0, 0.0))))
+        .collect();
+    let button = app.component(ComponentSpec::new(quad_at(0.0, 0.0)).visible(false));
+    let lost = lost_log(&mut app);
+    items[2].focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    button
+        .merge_from(&mut app, &items, cfg(0.1), MergeLayout::Row)
+        .unwrap();
+    for _ in 0..3 {
+        app.tick(0.016);
+        assert_eq!(app.focused(), Some(button));
+    }
+    for _ in 0..10 {
+        app.tick(0.016);
+    }
+    assert_eq!(app.focused(), Some(button));
+    assert!(lost.borrow().is_empty());
+}
+
+#[test]
+fn a_component_moving_with_animate_to_keeps_its_focus() {
+    let mut app = Proteus::new();
+    let a = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    a.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    a.animate_to(&mut app, quad_at(300.0, 0.0), cfg(0.5))
+        .unwrap();
+    for _ in 0..5 {
+        app.tick(0.016);
+        assert_eq!(app.focused(), Some(a));
+    }
+}
+
+// Each way a focused component can stop being able to keep focus clears it,
+// says why, and records where it was, for navigation to start from.
+#[test]
+fn focus_leaves_a_component_that_can_no_longer_keep_it() {
+    type Change = fn(&mut Proteus, proteus_sdk::Handle);
+    let cases: [(Change, FocusBlocked); 4] = [
+        (
+            |app, h| h.set_visible(app, false).unwrap(),
+            FocusBlocked::Hidden,
+        ),
+        (
+            |app, h| h.set_disabled(app, true).unwrap(),
+            FocusBlocked::Disabled,
+        ),
+        (
+            |app, h| h.set_interactive(app, false).unwrap(),
+            FocusBlocked::NonInteractive,
+        ),
+        (
+            |app, h| h.set_devices(app, InputDevices::POINTER).unwrap(),
+            FocusBlocked::KeyboardNotAccepted,
+        ),
+    ];
+    for (change, reason) in cases {
+        let mut app = Proteus::new();
+        let a = app.component(ComponentSpec::new(quad_at(40.0, 0.0)));
+        let events = focus_events(&mut app, a);
+        let lost = lost_log(&mut app);
+        a.focus(&mut app).unwrap();
+        app.tick(0.016);
+
+        change(&mut app, a);
+        app.tick(0.016);
+        assert_eq!(app.focused(), None, "{reason:?}");
+        assert_eq!(*events.borrow(), vec!["focus", "blur"], "{reason:?}");
+        assert_eq!(
+            *lost.borrow(),
+            vec![FocusLost {
+                component: a,
+                reason
+            }]
+        );
+        let lost_at = app.world().resource::<FocusState>().lost_at.clone();
+        assert_eq!(lost_at.map(|q| q.position.x), Some(40.0), "{reason:?}");
+    }
+}
+
+// A destroyed component kept focus, pointing at nothing, before focus was
+// checked each tick.
+#[test]
+fn focus_leaves_a_destroyed_component() {
+    let mut app = Proteus::new();
+    let a = app.component(ComponentSpec::new(quad_at(40.0, 0.0)));
+    let lost = lost_log(&mut app);
+    a.focus(&mut app).unwrap();
+    app.tick(0.016);
+
+    a.destroy(&mut app).unwrap();
+    assert_eq!(app.focused(), None, "a destroyed component isn't reported");
+    app.tick(0.016);
+    assert_eq!(
+        *lost.borrow(),
+        vec![FocusLost {
+            component: a,
+            reason: FocusBlocked::Destroyed
+        }]
+    );
+    let lost_at = app.world().resource::<FocusState>().lost_at.clone();
+    assert_eq!(lost_at.map(|q| q.position.x), Some(40.0));
 }
