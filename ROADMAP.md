@@ -42,13 +42,17 @@ done in PLANNING, when it comes up, and its scope can change then.
 
 ### v0.3.0 — Keyboard and focus
 
-- Keyboard input: both hosts read key events and report them to the engine, and apps can
-  respond to keys.
+- Keyboard input: both hosts read key events and report them to the engine, and a key map binds
+  keys to actions, such as Up, Activate and Back, that apps and navigation respond to.
 - Focus navigation: the schedule's navigation stage, a placeholder today, moves focus between
   components with the arrow keys and Tab, and the focused style follows it.
 - Every new kind of input skips non-interactive and disabled components, as the pointer does;
   see the decision in PLANNING.
-- The reference demo uses interaction styles, rather than its own hover code.
+- An app chooses which input devices it accepts, pointer, keyboard or both, and so can each
+  component. When it accepts both, the last input wins.
+- A focus example, in Rust and TypeScript.
+- The reference demo's home page becomes one grid of features, and the demo works with the
+  keyboard, using interaction styles rather than its own hover code.
 
 ### v0.4.0 — Text
 
@@ -153,6 +157,9 @@ Not yet placed in a release. Unordered within each area.
 ### Text
 
 - Bidirectional text: left-to-right and right-to-left, with the Unicode bidi algorithm.
+- Text input: a text field, and typing that doesn't match one key press, through the text input
+  events browsers and winit send apart from keys: dead keys, input methods for Chinese, Japanese
+  and Korean, phone keyboards and pasting. v0.3.0's key events carry only each key's own text.
 - Resolution-independent text, with signed distance fields, if rasterized text proves
   insufficient.
 
