@@ -26,7 +26,7 @@ use bevy_ecs::schedule::ApplyDeferred;
 
 use crate::bake::bake_system;
 use crate::channel::{self, channel_dispatch_system, register_channel_hooks};
-use crate::devices::AppDevices;
+use crate::devices::{AppDevices, InputMode, NavigatingActions};
 use crate::focus::focus_validity_system;
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{
@@ -170,6 +170,8 @@ impl ProteusWorld {
         world.init_resource::<NavigationRequests>();
         world.init_resource::<TabWraps>();
         world.init_resource::<AppDevices>();
+        world.init_resource::<InputMode>();
+        world.init_resource::<NavigatingActions>();
         world.init_resource::<InteractionEvents>();
         world.init_resource::<HoveredEntity>();
         world.init_resource::<PressedEntity>();

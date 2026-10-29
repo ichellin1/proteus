@@ -67,7 +67,8 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **TypeScript apps built against this repository's SDK,** as the examples are, need it built
   again: run `make build-sdk-web` before `npm install`. The SDK from npm needs nothing.
 - **`InputConfig` written out in full** no longer compiles in Rust: `autofocus`, `keep_tab`,
-  `key_repeat` and `long_press_ms` are new. Fill in the rest with `..Default::default()`.
+  `key_repeat`, `long_press_ms` and `navigating_actions` are new. Fill in the rest with
+  `..Default::default()`. It's no longer `Copy`, since it holds a list of actions.
 - **The web canvas can take keyboard focus:** the host gives it `tabindex="0"` unless the page
   set one, so a click focuses it, and a browser may outline it while it has focus. While it has
   focus, the browser doesn't act on the keys the key map binds, so Space and the arrows no
@@ -81,6 +82,10 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   in an app that doesn't handle keys, Enter or Space clicks the last component clicked again.
   A component that shouldn't be clicked this way handles `Action::Activate` itself, or doesn't
   accept the keyboard.
+- **The focused style shows only after a navigating key, and the hover style only while
+  pointing:** a click still gives focus, but its focused style waits until the arrows or Tab are
+  pressed, and the hover style hides until the pointer moves again. In 0.2 a click showed the
+  focused style at once.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 

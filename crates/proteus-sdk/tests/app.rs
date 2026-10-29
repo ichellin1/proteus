@@ -9,8 +9,8 @@ use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
     Action, Code, ComponentSpec, FocusBlocked, FocusLost, HandleError, ImageCrop, InputDevices,
-    Key, KeyBinding, KeyEvent, KeyResult, KeyState, MergeLayout, Modifiers, NamedKey, Proteus,
-    QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
+    InputMode, Key, KeyBinding, KeyEvent, KeyResult, KeyState, MergeLayout, Modifiers, NamedKey,
+    Proteus, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
 };
 use proteus_ui::{FocusState, KeyInput, NavigationRequests};
 
@@ -3164,4 +3164,95 @@ fn tab_wraps_by_default() {
     assert!(app.tab_wraps());
     app.set_tab_wraps(false);
     assert!(!app.tab_wraps());
+}
+
+// ---------------------------------------------------------------------------
+// input mode
+// ---------------------------------------------------------------------------
+
+fn arrow_down(state: KeyState) -> KeyEvent {
+    KeyEvent::new(
+        Key::Named(NamedKey::ArrowDown),
+        Code::ArrowDown,
+        state,
+        Modifiers::default(),
+        None,
+    )
+}
+
+#[test]
+fn the_app_starts_pointing_and_a_navigating_key_switches_it() {
+    let mut app = Proteus::new();
+    assert_eq!(app.input_mode(), InputMode::Pointing);
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(
+        app.input_mode(),
+        InputMode::Pointing,
+        "Enter isn't a navigating action by default"
+    );
+
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(app.input_mode(), InputMode::Navigating);
+
+    // A pointer that reports the same place again hasn't moved.
+    app.pointer_moved(None);
+    app.tick(0.016);
+    assert_eq!(app.input_mode(), InputMode::Navigating);
+    app.pointer_moved(Some(Vec2::new(10.0, 10.0)));
+    assert_eq!(app.input_mode(), InputMode::Pointing);
+}
+
+#[test]
+fn the_app_chooses_which_actions_switch_to_navigating() {
+    let mut app = Proteus::new();
+    app.set_navigating_actions(&[Action::Activate]);
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(app.input_mode(), InputMode::Pointing);
+
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(app.input_mode(), InputMode::Navigating);
+}
+
+// A click gives focus, but its focused style waits until the user reaches for
+// the keys, and the hover style waits until the pointer moves again: one
+// highlight at a time.
+#[test]
+fn the_focused_style_shows_only_navigating_and_the_hover_style_only_pointing() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0))
+            .hover(StyleOverride {
+                scale: Some(1.1),
+                ..StyleOverride::default()
+            })
+            .focused(StyleOverride {
+                scale: Some(1.2),
+                ..StyleOverride::default()
+            }),
+    );
+    let state = |app: &Proteus| app.get(button).unwrap().state;
+    app.tick(1.0);
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    app.pointer_released();
+    app.tick(1.0);
+    assert!(button.is_focused(&app));
+    assert_eq!(state(&app), proteus_sdk::InteractionStateKind::Hover);
+
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(state(&app), proteus_sdk::InteractionStateKind::Focused);
+
+    app.pointer_moved(Some(Vec2::new(101.0, 100.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(state(&app), proteus_sdk::InteractionStateKind::Hover);
 }

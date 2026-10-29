@@ -58,7 +58,9 @@ pub use component::{
     Disabled, Lifecycle, QuadState, TransitionInteractionConfig, TransitionRequest, Virtual,
     Visibility,
 };
-pub use devices::{AcceptsDevices, AppDevices, InputDevice, InputDevices};
+pub use devices::{
+    AcceptsDevices, AppDevices, InputDevice, InputDevices, InputMode, NavigatingActions,
+};
 pub use effects::{Border, DropShadow, Glow};
 pub use focus::{focus_blocked, focus_validity_system, DefaultFocus, FocusBlocked, FocusMover};
 pub use hierarchy::{

@@ -305,7 +305,44 @@ The schedule's navigation stage moves focus with the Up, Down, Left, Right, Next
 actions, follows the last input wins, starts from where the user was when nothing has focus,
 and reads `TransitionInteractionConfig::allow_navigation`. Named neighbours, the arrows'
 nearest component, reading order for Next and Previous with the app's reading direction, and
-focus groups.
+focus groups. Built in four commits: the input mode; navigation; focus groups; and Tab leaving
+the web canvas only at the ends.
+
+- **Decided (2026-10-29): the first navigation in pointing mode shows focus rather than moving
+  it,** as on TVs and consoles, so the user sees where they are. It focuses the hovered
+  component, if it can take focus; or else reveals the focused one, whose focused style a click
+  left hidden; or else starts as navigation does with nothing focused. Later presses move focus.
+- **Decided (2026-10-29): the hover style shows only in pointing mode,** as the focused style
+  shows only in navigating mode, so a pointer resting on one component while the keys move to
+  another doesn't show two highlights. Hover is still tracked, and shows again when the pointer
+  moves.
+- **Decided (2026-10-29): which actions switch to navigating mode is the app's choice.** By
+  default, the six that move focus, so the arrows and Tab switch it, and Enter, Space, Escape
+  and typing don't. They're actions rather than keys, so a rebound key or a remote's D-pad
+  switches it too. The config sets them at the start, as `input.navigating_actions`, among the
+  built-in actions; `set_navigating_actions` changes them while the app runs, the app's own
+  actions among them.
+- **Decided (2026-10-29): the reading direction is set in code,** in `setup` like the app's
+  devices, not in the config.
+- **Decided (2026-10-29): the engine learns the viewport's size,** from the renderer when it's
+  made and on each resize, to tell which components are on screen.
+- **Decided (2026-10-29): the web host learns whether Tab would leave the app.** After each
+  tick, the engine works out whether Next or Previous would move focus out of the app, focus
+  groups included, and the host's key listener leaves Tab to the browser only then, unless the
+  app keeps Tab.
+- [ ] The input mode, set by the navigating actions and the pointer, with the focused style
+  shown only when navigating and the hover style only when pointing, readable in Rust and
+  TypeScript; and the first navigation in pointing mode showing focus.
+- [ ] Navigation: named neighbours; the arrows, in line first, then nearest; Next and Previous
+  in reading order, with the app's direction, wrapping as `TabWraps` says. Only components on
+  screen, skipping transitioning ones unless they allow navigation, and starting, with nothing
+  focused, from where focus was lost, the hovered component, the default focus, or the first in
+  reading order.
+- [ ] Focus groups on subtrees: leave, stop or wrap for each action; entry by the nearest
+  member, the last focused or the default; nesting; and members off screen within the group.
+- [ ] On the web, Tab and Shift+Tab leave the canvas only at the ends, unless the app keeps them
+  or a focus group wraps them.
+- [ ] Tests for each of these, and the release notes updated.
 
 ### Step 5 — Interaction styles for glow and border
 

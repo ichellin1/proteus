@@ -389,6 +389,14 @@ export interface ProteusConfigOverrides {
      * Default `500`.
      */
     longPressMs?: number;
+    /**
+     * The actions whose keys switch the app to navigating, where the focused
+     * style shows, rather than pointing, where the hover style does. Default
+     * the six that move focus, so the arrows and Tab switch it, and Enter,
+     * Space, Escape and typing don't. Only built-in actions here;
+     * {@link ProteusApp.setNavigatingActions} takes the app's own too.
+     */
+    navigatingActions?: Action[];
   };
 }
 
@@ -476,7 +484,14 @@ export interface KeyEvent {
  * repeats, the same on every platform and device, or `"system"` for the
  * system's, at the speed each user set.
  */
-export type KeyRepeat = { delayMs: number; intervalMs: number } | "system";
+export type KeyRepeat =
+  | {
+      /** How long a key is held before it first repeats, in milliseconds. */
+      delayMs: number;
+      /** How long between repeats after that, in milliseconds. */
+      intervalMs: number;
+    }
+  | "system";
 
 /**
  * A key and the modifiers held with it, for {@link ProteusApp.bindKey}. Name

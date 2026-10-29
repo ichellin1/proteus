@@ -7,7 +7,7 @@
 //! included: a setting that silently did nothing would be worse than none.
 
 use crate::{wgpu, ProteusConfig};
-use proteus_ui::KeyRepeat;
+use proteus_ui::{Action, KeyRepeat};
 use serde::Deserialize;
 
 /// Overrides for [`ProteusConfig`], deserialized with camelCase field names.
@@ -46,6 +46,8 @@ pub struct InputDto {
     pub key_repeat: Option<KeyRepeatDto>,
     #[serde(default)]
     pub long_press_ms: Option<u32>,
+    #[serde(default)]
+    pub navigating_actions: Option<Vec<String>>,
 }
 
 /// `"system"`, or `{ delayMs, intervalMs }` for the engine's own repeats.
@@ -262,6 +264,16 @@ impl ProteusConfigDto {
             if let Some(v) = i.long_press_ms {
                 config.input.long_press_ms = v;
             }
+            if let Some(names) = &i.navigating_actions {
+                config.input.navigating_actions = names
+                    .iter()
+                    .map(|name| {
+                        Action::from_built_in_name(name).ok_or_else(|| {
+                            format!("input.navigatingActions: unknown action {name:?}")
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
+            }
         }
         Ok(config)
     }
@@ -286,6 +298,17 @@ mod tests {
 
         let applied = dto(r#"{"input":{"keepTab":true}}"#).apply().unwrap();
         assert!(applied.input.keep_tab);
+
+        let applied = dto(r#"{"input":{"navigatingActions":["up","activate"]}}"#)
+            .apply()
+            .unwrap();
+        assert_eq!(
+            applied.input.navigating_actions,
+            vec![Action::Up, Action::Activate]
+        );
+        assert!(dto(r#"{"input":{"navigatingActions":["search"]}}"#)
+            .apply()
+            .is_err());
 
         let applied = dto(r#"{"input":{"keyRepeat":{"delayMs":300,"intervalMs":80}}}"#)
             .apply()

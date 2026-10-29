@@ -57,6 +57,41 @@ impl Action {
         Action::Back,
     ];
 
+    /// The built-in action named `name`, as in a config or TypeScript:
+    /// `"up"`, `"down"`, `"left"`, `"right"`, `"next"`, `"previous"`,
+    /// `"activate"` or `"back"`.
+    pub fn from_built_in_name(name: &str) -> Option<Action> {
+        Action::BUILT_IN
+            .into_iter()
+            .find(|a| a.built_in_name() == Some(name))
+    }
+
+    /// This built-in action's name, or `None` for one of the app's own.
+    pub fn built_in_name(self) -> Option<&'static str> {
+        Some(match self {
+            Action::Up => "up",
+            Action::Down => "down",
+            Action::Left => "left",
+            Action::Right => "right",
+            Action::Next => "next",
+            Action::Previous => "previous",
+            Action::Activate => "activate",
+            Action::Back => "back",
+            Action::App(_) => return None,
+        })
+    }
+
+    /// The actions that move focus: `Up`, `Down`, `Left`, `Right`, `Next` and
+    /// `Previous`.
+    pub const MOVING_FOCUS: [Action; 6] = [
+        Action::Up,
+        Action::Down,
+        Action::Left,
+        Action::Right,
+        Action::Next,
+        Action::Previous,
+    ];
+
     /// Whether it moves focus: `Up`, `Down`, `Left`, `Right`, `Next` or
     /// `Previous`. Navigation moves focus with these when no key callback
     /// claims them.

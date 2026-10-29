@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use proteus_render::{AtlasConfig, FontAtlas, FontError, QuadInstance};
-use proteus_ui::{Easing, KeyRepeat, TransitionConfig};
+use proteus_ui::{Action, Easing, KeyRepeat, TransitionConfig};
 
 // ---------------------------------------------------------------------------
 // ProteusConfig
@@ -377,10 +377,10 @@ impl Default for FrameConfig {
 // InputConfig
 // ---------------------------------------------------------------------------
 
-/// Input settings. Only `autofocus`, `keep_tab`, `key_repeat` and
-/// `long_press_ms` are read yet: for the others, input uses fixed defaults,
-/// which they match.
-#[derive(Debug, Clone, Copy)]
+/// Input settings. Only `autofocus`, `keep_tab`, `key_repeat`,
+/// `long_press_ms` and `navigating_actions` are read yet: for the others,
+/// input uses fixed defaults, which they match.
+#[derive(Debug, Clone)]
 pub struct InputConfig {
     /// Whether the web host gives the canvas keyboard focus when the app
     /// starts, so keys reach it without a click first. Off by default, so an
@@ -400,6 +400,13 @@ pub struct InputConfig {
     /// by default. The app can change it while it runs, with
     /// `Proteus::set_long_press_ms`.
     pub long_press_ms: u32,
+    /// The actions whose keys switch the app to navigating, where the focused
+    /// style shows, rather than pointing, where the hover style does. By
+    /// default the six that move focus, so the arrows and Tab switch it, and
+    /// Enter, Space, Escape and typing don't. Only built-in actions, since the
+    /// app's own are defined later; `Proteus::set_navigating_actions` takes
+    /// those too, while the app runs.
+    pub navigating_actions: Vec<Action>,
     /// How long, in milliseconds, a newly focused component waits before it
     /// accepts input.
     pub focus_input_delay_ms: u32,
@@ -422,6 +429,7 @@ impl Default for InputConfig {
             keep_tab: false,
             key_repeat: KeyRepeat::default(),
             long_press_ms: 500,
+            navigating_actions: Action::MOVING_FOCUS.to_vec(),
             focus_input_delay_ms: 0,
             transition_interaction_allow_pointer: false,
             transition_interaction_allow_navigation: false,

@@ -963,6 +963,33 @@ impl ProteusApp {
         self.0.borrow_mut().set_long_press_ms(ms);
     }
 
+    /// Calls [`Proteus::input_mode`](sdk::Proteus::input_mode):
+    /// `"pointing"` or `"navigating"`.
+    #[wasm_bindgen(js_name = inputMode)]
+    pub fn input_mode(&self) -> String {
+        match self.0.borrow().input_mode() {
+            sdk::InputMode::Pointing => "pointing",
+            sdk::InputMode::Navigating => "navigating",
+        }
+        .to_owned()
+    }
+
+    /// Calls [`Proteus::set_navigating_actions`](sdk::Proteus::set_navigating_actions).
+    /// Each of `actions` is a built-in action's name or one of the app's,
+    /// which is defined if it isn't yet.
+    #[wasm_bindgen(js_name = setNavigatingActions)]
+    pub fn set_navigating_actions(&mut self, actions: Vec<String>) {
+        let mut proteus = self.0.borrow_mut();
+        let actions: Vec<sdk::Action> = actions
+            .iter()
+            .map(|name| {
+                dto::action_from_name(name)
+                    .unwrap_or_else(|| sdk::Action::App(proteus.define_action(name)))
+            })
+            .collect();
+        proteus.set_navigating_actions(&actions);
+    }
+
     /// Calls [`Proteus::reset_key_map`](sdk::Proteus::reset_key_map).
     #[wasm_bindgen(js_name = resetKeyMap)]
     pub fn reset_key_map(&mut self) {
