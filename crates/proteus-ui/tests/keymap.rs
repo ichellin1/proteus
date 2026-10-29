@@ -109,6 +109,26 @@ fn the_binding_made_last_wins() {
     );
 }
 
+// A web host copies the bindings for its key listener only when this changes.
+#[test]
+fn the_version_changes_with_the_bindings() {
+    let mut map = KeyMap::default();
+    let v0 = map.version();
+    map.define_action("search");
+    assert_eq!(map.version(), v0, "defining an action binds nothing");
+
+    map.bind(KeyBinding::named(NamedKey::F1), Action::Back);
+    let v1 = map.version();
+    assert_ne!(v1, v0);
+    map.unbind(&KeyBinding::named(NamedKey::F1));
+    let v2 = map.version();
+    assert_ne!(v2, v1);
+    assert_eq!(map.unbind(&KeyBinding::named(NamedKey::F1)), None);
+    assert_eq!(map.version(), v2, "unbinding nothing changes nothing");
+    map.reset();
+    assert_ne!(map.version(), v2);
+}
+
 #[test]
 fn app_actions_are_found_by_name() {
     let mut map = KeyMap::default();

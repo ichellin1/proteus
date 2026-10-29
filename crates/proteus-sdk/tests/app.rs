@@ -3156,3 +3156,12 @@ fn activate_with_nothing_focused_does_nothing() {
     app.tick(0.016);
     assert!(log.borrow().is_empty());
 }
+
+// Native windows wrap Tab; the web host turns it off unless the app keeps Tab.
+#[test]
+fn tab_wraps_by_default() {
+    let mut app = Proteus::new();
+    assert!(app.tab_wraps());
+    app.set_tab_wraps(false);
+    assert!(!app.tab_wraps());
+}

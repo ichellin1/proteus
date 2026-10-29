@@ -79,5 +79,8 @@ pub use viewport::{Insets, Viewport};
 // same `wgpu` and `glam` versions this crate does.
 pub use glam;
 pub use proteus_gpu::{GpuError, GpuSurface, SurfaceRequest};
-pub use proteus_sdk::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey, Proteus, TextureHandle};
+pub use proteus_sdk::{
+    Action, Code, Key, KeyBinding, KeyEvent, KeyMap, KeyState, Modifiers, NamedKey, Proteus,
+    TextureHandle,
+};
 pub use wgpu;

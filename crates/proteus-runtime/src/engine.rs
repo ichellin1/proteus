@@ -171,6 +171,12 @@ impl Engine {
         self.proteus.key_event(event);
     }
 
+    /// Sets whether Tab and Shift+Tab wrap round at the last and first
+    /// components; see [`Proteus::set_tab_wraps`].
+    pub fn set_tab_wraps(&mut self, wraps: bool) {
+        self.proteus.set_tab_wraps(wraps);
+    }
+
     /// Releases every key still held, when the window or canvas loses focus.
     pub fn release_keys(&mut self) {
         self.proteus.release_keys();

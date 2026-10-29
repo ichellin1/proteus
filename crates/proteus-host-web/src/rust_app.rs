@@ -1,7 +1,7 @@
 //! [`run`]: runs a Rust [`App`] on a canvas.
 
 use proteus_runtime::wgpu;
-use proteus_runtime::{App, Engine, HostServices, KeyEvent, ProteusConfig, Viewport};
+use proteus_runtime::{App, Engine, HostServices, KeyEvent, KeyMap, ProteusConfig, Viewport};
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::surface::WebSurface;
@@ -44,6 +44,7 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
         .map_err(|e| crate::js_error(&e.to_string()))?;
     let render_cfg = config.render;
     let autofocus = config.input.autofocus;
+    let keep_tab = config.input.keep_tab;
     let surface = WebSurface::new(&canvas, render_cfg).await?;
     let viewport = surface.viewport();
     let surface_format = surface.surface_format();
@@ -63,7 +64,7 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
         app,
         services,
     };
-    WebLoop::new(canvas, surface, driver).start(autofocus);
+    WebLoop::new(canvas, surface, driver).start(autofocus, keep_tab);
     Ok(())
 }
 
@@ -105,5 +106,17 @@ impl<A: App, S: HostServices> FrameDriver for RustDriver<A, S> {
 
     fn release_keys(&mut self) {
         self.engine.release_keys();
+    }
+
+    fn set_tab_wraps(&mut self, wraps: bool) {
+        self.engine.set_tab_wraps(wraps);
+    }
+
+    fn key_map_version(&self) -> u64 {
+        self.engine.proteus().key_map().version()
+    }
+
+    fn key_map(&self) -> KeyMap {
+        self.engine.proteus().key_map().clone()
     }
 }

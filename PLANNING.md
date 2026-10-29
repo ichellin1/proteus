@@ -296,8 +296,8 @@ Activate's press and click; and the web host keeping bound keys from the browser
   after 500 ms, both configurable and `System` repeats among them.
 - [x] Unclaimed, Activate presses and clicks the focused component, with its pressed style, and
   releases it on key up.
-- [ ] The web host keeps the browser from acting on bound keys, and has `input.keep_tab`.
-- [ ] Tests for each of these, and the release notes updated.
+- [x] The web host keeps the browser from acting on bound keys, and has `input.keep_tab`.
+- [x] Tests for each of these, and the release notes updated.
 
 ### Step 4 — Navigation
 

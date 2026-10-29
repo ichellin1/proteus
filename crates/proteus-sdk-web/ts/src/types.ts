@@ -373,6 +373,13 @@ export interface ProteusConfigOverrides {
      */
     autofocus?: boolean;
     /**
+     * Keep Tab and Shift+Tab in the canvas, wrapping round from the last
+     * component to the first and back. Default `false`, so Tab can leave a
+     * canvas in a page at either end, as keyboard users need; set it for a
+     * full-screen or TV app.
+     */
+    keepTab?: boolean;
+    /**
      * How held keys repeat. Default `{ delayMs: 250, intervalMs: 100 }`. See
      * {@link ProteusApp.setKeyRepeat}.
      */

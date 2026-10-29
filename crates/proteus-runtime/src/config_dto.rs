@@ -41,6 +41,8 @@ pub struct InputDto {
     #[serde(default)]
     pub autofocus: Option<bool>,
     #[serde(default)]
+    pub keep_tab: Option<bool>,
+    #[serde(default)]
     pub key_repeat: Option<KeyRepeatDto>,
     #[serde(default)]
     pub long_press_ms: Option<u32>,
@@ -251,6 +253,9 @@ impl ProteusConfigDto {
             if let Some(v) = i.autofocus {
                 config.input.autofocus = v;
             }
+            if let Some(v) = i.keep_tab {
+                config.input.keep_tab = v;
+            }
             if let Some(v) = i.key_repeat {
                 config.input.key_repeat = v.into();
             }
@@ -277,6 +282,10 @@ mod tests {
             .unwrap();
         assert_eq!(applied.input.key_repeat, KeyRepeat::System);
         assert_eq!(applied.input.long_press_ms, 800);
+        assert!(!applied.input.keep_tab);
+
+        let applied = dto(r#"{"input":{"keepTab":true}}"#).apply().unwrap();
+        assert!(applied.input.keep_tab);
 
         let applied = dto(r#"{"input":{"keyRepeat":{"delayMs":300,"intervalMs":80}}}"#)
             .apply()

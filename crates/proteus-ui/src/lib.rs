@@ -75,7 +75,7 @@ pub use interaction::{
     interaction_style_system, InteractionDef, InteractionState, InteractionStateKind, StyleOverride,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};
-pub use keymap::{Action, AppAction, BoundKey, KeyBinding, KeyMap, NavigationRequests};
+pub use keymap::{Action, AppAction, BoundKey, KeyBinding, KeyMap, NavigationRequests, TabWraps};
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};

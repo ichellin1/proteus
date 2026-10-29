@@ -8,7 +8,7 @@ use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
     Interactable, InteractionDef, KeyEvent, KeyMap, KeyPressedEntity, KeyRepeat, KeyState,
-    NavigationRequests, ProteusWorld, QuadState, Visibility,
+    NavigationRequests, ProteusWorld, QuadState, TabWraps, Visibility,
 };
 use proteus_ui::{Action, AppAction, KeyBinding};
 
@@ -483,6 +483,19 @@ impl Proteus {
     /// [`KeyMap::default_bindings`].
     pub fn reset_key_map(&mut self) {
         self.world.world.resource_mut::<KeyMap>().reset();
+    }
+
+    /// Sets whether [`Action::Next`] and [`Action::Previous`] wrap round from
+    /// the last component to the first, and back. They do by default. The web
+    /// host turns it off unless the config's `input.keep_tab` is set, so Tab
+    /// can leave the canvas at either end.
+    pub fn set_tab_wraps(&mut self, wraps: bool) {
+        self.world.world.resource_mut::<TabWraps>().0 = wraps;
+    }
+
+    /// Whether [`Action::Next`] and [`Action::Previous`] wrap round.
+    pub fn tab_wraps(&self) -> bool {
+        self.world.world.resource::<TabWraps>().0
     }
 
     /// Sets how held keys repeat: by the engine, after a delay and at an
