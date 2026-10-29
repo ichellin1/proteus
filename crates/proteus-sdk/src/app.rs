@@ -5,8 +5,9 @@ use bevy_ecs::prelude::Component;
 use glam::Vec2;
 
 use proteus_ui::{
-    create_channel, ActiveTransition, Baked, EffectiveOpacity, EffectiveVisibility, Interactable,
-    InteractionDef, ProteusWorld, QuadState, Visibility,
+    create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, EffectiveOpacity,
+    EffectiveVisibility, InputDevice, InputDevices, Interactable, InteractionDef, KeyEvent,
+    ProteusWorld, QuadState, Visibility,
 };
 
 use proteus_render::{
@@ -72,6 +73,12 @@ impl Proteus {
             .id();
         if !spec.non_interactive {
             self.world.world.entity_mut(entity).insert(Interactable);
+        }
+        if let Some(devices) = spec.devices {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(AcceptsDevices(devices));
         }
 
         if spec.has_interaction_styles() {
@@ -333,6 +340,11 @@ impl Proteus {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = false;
         pointer.just_released = false;
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .events
+            .clear();
     }
 
     fn dispatch_events(&mut self) {
@@ -403,7 +415,13 @@ impl Proteus {
     /// The position is in world units: the origin is the center of the
     /// viewport and y points up. To convert from window coordinates, use
     /// `x - width / 2` and `height / 2 - y`. Hosts do this conversion for you.
+    ///
+    /// Ignored while the app doesn't accept the pointer; see
+    /// [`Proteus::set_input_devices`].
     pub fn pointer_moved(&mut self, pos: Option<Vec2>) {
+        if !self.accepts(InputDevice::Pointer) {
+            return;
+        }
         self.world
             .world
             .resource_mut::<proteus_ui::PointerInput>()
@@ -421,18 +439,85 @@ impl Proteus {
         self.world.refresh_cascades();
     }
 
-    /// Records that the pointer was pressed.
+    /// Records that the pointer was pressed. Ignored while the app doesn't
+    /// accept the pointer.
     pub fn pointer_pressed(&mut self) {
+        if !self.accepts(InputDevice::Pointer) {
+            return;
+        }
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = true;
         pointer.is_pressed = true;
     }
 
-    /// Records that the pointer was released.
+    /// Records that the pointer was released. Ignored while the app doesn't
+    /// accept the pointer.
     pub fn pointer_released(&mut self) {
+        if !self.accepts(InputDevice::Pointer) {
+            return;
+        }
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_released = true;
         pointer.is_pressed = false;
+    }
+
+    /// Records a key being pressed, repeated or released.
+    ///
+    /// A repeat or a release of a key that isn't held is ignored, so every
+    /// release follows a press. Ignored while the app doesn't accept the
+    /// keyboard.
+    pub fn key_event(&mut self, event: KeyEvent) {
+        if !self.accepts(InputDevice::Keyboard) {
+            return;
+        }
+        log::trace!("{event:?}");
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .record(event);
+    }
+
+    /// Releases every key still held. Hosts call this when the window or
+    /// canvas loses focus, since the keys' own releases won't arrive.
+    pub fn release_keys(&mut self) {
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .release_all();
+    }
+
+    /// Sets which input devices the app accepts. Every device by default.
+    ///
+    /// Input from a device the app doesn't accept is ignored, before any
+    /// component or callback sees it. Turning the pointer off ends its hover
+    /// and releases its press; turning the keyboard off releases the keys
+    /// held. A component can narrow the set further, with
+    /// [`ComponentSpec::devices`].
+    pub fn set_input_devices(&mut self, devices: InputDevices) {
+        let before = self.input_devices();
+        self.world.world.resource_mut::<AppDevices>().0 = devices;
+
+        let dropped = |device| before.contains(device) && !devices.contains(device);
+        if dropped(InputDevice::Pointer) {
+            let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
+            pointer.position = None;
+            if pointer.is_pressed {
+                pointer.is_pressed = false;
+                pointer.just_released = true;
+            }
+        }
+        if dropped(InputDevice::Keyboard) {
+            self.release_keys();
+        }
+    }
+
+    /// The input devices the app accepts.
+    pub fn input_devices(&self) -> InputDevices {
+        self.world.world.resource::<AppDevices>().0
+    }
+
+    fn accepts(&self, device: InputDevice) -> bool {
+        self.input_devices().contains(device)
     }
 }
 

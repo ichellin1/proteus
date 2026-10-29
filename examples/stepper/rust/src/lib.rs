@@ -102,6 +102,7 @@ const DOT_GAP: f32 = 12.0;
 pub fn config() -> ProteusConfig {
     let mut config = ProteusConfig::web();
     config.render.clear_color = BACKGROUND.as_dvec4().to_array();
+    config.input.autofocus = true;
     config
 }
 

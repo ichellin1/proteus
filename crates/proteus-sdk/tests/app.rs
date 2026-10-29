@@ -2,12 +2,16 @@
 // crate's own surface. The exceptions use `proteus-ui` or `proteus-render`
 // directly to set up GPU resources, which the public API can't do.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    ComponentSpec, HandleError, ImageCrop, Proteus, QuadState, StyleOverride, Text,
-    TransitionConfig,
+    Code, ComponentSpec, HandleError, ImageCrop, InputDevices, Key, KeyEvent, KeyState, Modifiers,
+    NamedKey, Proteus, QuadState, StyleOverride, Text, TransitionConfig,
 };
+use proteus_ui::KeyInput;
 
 fn quad_at(x: f32, y: f32) -> QuadState {
     QuadState {
@@ -2369,4 +2373,144 @@ fn declared_geometry_is_where_a_moving_component_will_rest() {
         app.get(card).unwrap().geometry.position,
         quad_at(100.0, 0.0).position
     );
+}
+
+// Key events are this tick's alone: the next tick must not see them again.
+#[test]
+fn a_tick_clears_its_key_events() {
+    let mut app = Proteus::new();
+    app.key_event(KeyEvent {
+        key: Key::Named(NamedKey::Enter),
+        code: Code::Enter,
+        state: KeyState::Pressed,
+        modifiers: Modifiers::default(),
+        text: None,
+    });
+    assert_eq!(app.world().resource::<KeyInput>().events.len(), 1);
+
+    app.tick(0.016);
+    assert!(app.world().resource::<KeyInput>().events.is_empty());
+
+    // The key is still held, so losing focus releases it.
+    app.release_keys();
+    let events = &app.world().resource::<KeyInput>().events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].state, KeyState::Released);
+}
+
+// ---------------------------------------------------------------------------
+// input devices
+// ---------------------------------------------------------------------------
+
+fn enter_key(state: KeyState) -> KeyEvent {
+    KeyEvent {
+        key: Key::Named(NamedKey::Enter),
+        code: Code::Enter,
+        state,
+        modifiers: Modifiers::default(),
+        text: None,
+    }
+}
+
+fn counter() -> (Rc<Cell<u32>>, impl FnMut(&mut Proteus) + 'static) {
+    let count = Rc::new(Cell::new(0));
+    let inner = count.clone();
+    (count, move |_: &mut Proteus| inner.set(inner.get() + 1))
+}
+
+#[test]
+fn an_app_accepts_every_device_by_default() {
+    let app = Proteus::new();
+    assert_eq!(app.input_devices(), InputDevices::ALL);
+}
+
+#[test]
+fn input_from_a_device_the_app_does_not_accept_is_ignored() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    let (clicks, on_click) = counter();
+    button.on_click(&mut app, on_click);
+
+    app.set_input_devices(InputDevices::KEYBOARD);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert_eq!(clicks.get(), 0);
+
+    app.set_input_devices(InputDevices::POINTER);
+    app.key_event(enter_key(KeyState::Pressed));
+    assert!(app.world().resource::<KeyInput>().events.is_empty());
+}
+
+// Turning the pointer off mid-press must end the press, or the component
+// would stay pressed, with no release ever to come.
+#[test]
+fn turning_the_pointer_off_ends_its_hover_and_press() {
+    let mut app = Proteus::new();
+    let button = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    let (exits, on_exit) = counter();
+    let (releases, on_release) = counter();
+    button.on_hover_exit(&mut app, on_exit);
+    button.on_release(&mut app, on_release);
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+
+    app.set_input_devices(InputDevices::KEYBOARD);
+    app.tick(1.0);
+    assert_eq!(exits.get(), 1);
+    assert_eq!(releases.get(), 1);
+}
+
+#[test]
+fn turning_the_keyboard_off_releases_the_keys_held() {
+    let mut app = Proteus::new();
+    app.key_event(enter_key(KeyState::Pressed));
+    app.tick(1.0);
+
+    app.set_input_devices(InputDevices::POINTER);
+    let events = &app.world().resource::<KeyInput>().events;
+    assert_eq!(events, &vec![enter_key(KeyState::Released)]);
+}
+
+#[test]
+fn a_component_that_does_not_accept_the_pointer_lets_it_through() {
+    let mut app = Proteus::new();
+    let below = app.component(ComponentSpec::new(quad_at(100.0, 100.0)));
+    let above =
+        app.component(ComponentSpec::new(quad_at(100.0, 100.0)).devices(InputDevices::KEYBOARD));
+    let (below_clicks, on_below) = counter();
+    let (above_clicks, on_above) = counter();
+    below.on_click(&mut app, on_below);
+    above.on_click(&mut app, on_above);
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert_eq!((below_clicks.get(), above_clicks.get()), (1, 0));
+
+    // Accepting the pointer again puts it back in the pointer's way.
+    above.set_devices(&mut app, InputDevices::ALL).unwrap();
+    app.pointer_pressed();
+    app.tick(1.0);
+    assert_eq!((below_clicks.get(), above_clicks.get()), (1, 1));
+}
+
+#[test]
+fn a_component_reports_the_devices_it_accepts() {
+    let mut app = Proteus::new();
+    let plain = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    let narrowed =
+        app.component(ComponentSpec::new(quad_at(0.0, 0.0)).devices(InputDevices::POINTER));
+    assert_eq!(plain.devices(&app), Some(InputDevices::ALL));
+    assert_eq!(narrowed.devices(&app), Some(InputDevices::POINTER));
+
+    narrowed
+        .set_devices(&mut app, InputDevices::POINTER | InputDevices::KEYBOARD)
+        .unwrap();
+    assert_eq!(narrowed.devices(&app), Some(InputDevices::ALL));
+
+    narrowed.destroy(&mut app).unwrap();
+    assert_eq!(narrowed.devices(&app), None);
 }

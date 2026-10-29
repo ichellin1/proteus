@@ -29,7 +29,7 @@ wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true, features = [
     "Window", "Document", "Element", "HtmlCanvasElement", "Navigator", "DomRect",
     "ResizeObserver", "ResizeObserverEntry", "ResizeObserverBoxOptions", "ResizeObserverOptions",
-    "PointerEvent", "EventTarget", "AddEventListenerOptions",
+    "PointerEvent", "KeyboardEvent", "HtmlElement", "EventTarget", "AddEventListenerOptions",
     "VisibilityState", "Request", "RequestInit", "Response",
     "AbortController", "AbortSignal",
 ] }

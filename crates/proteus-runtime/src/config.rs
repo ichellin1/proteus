@@ -28,7 +28,7 @@ pub struct ProteusConfig {
     pub render: RenderConfig,
     /// Frame timing.
     pub frame: FrameConfig,
-    /// Input defaults. Not read yet.
+    /// Input settings.
     pub input: InputConfig,
     /// Transition defaults. Not read yet.
     pub transitions: TransitionDefaults,
@@ -377,10 +377,15 @@ impl Default for FrameConfig {
 // InputConfig
 // ---------------------------------------------------------------------------
 
-/// Input defaults. Not read yet: input uses fixed defaults, which these
-/// fields match.
+/// Input settings. Only [`InputConfig::autofocus`] is read yet: for the
+/// others, input uses fixed defaults, which they match.
 #[derive(Debug, Clone, Copy)]
 pub struct InputConfig {
+    /// Whether the web host gives the canvas keyboard focus when the app
+    /// starts, so keys reach it without a click first. Off by default, so an
+    /// app in a page doesn't take the page's focus. A native window has
+    /// focus when it opens.
+    pub autofocus: bool,
     /// How long, in milliseconds, a newly focused component waits before it
     /// accepts input.
     pub focus_input_delay_ms: u32,
@@ -399,6 +404,7 @@ pub struct InputConfig {
 impl Default for InputConfig {
     fn default() -> Self {
         Self {
+            autofocus: false,
             focus_input_delay_ms: 0,
             transition_interaction_allow_pointer: false,
             transition_interaction_allow_navigation: false,

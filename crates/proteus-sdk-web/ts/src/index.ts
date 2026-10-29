@@ -21,6 +21,7 @@ import {
 import type {
   ImageCrop,
   ImageSpec,
+  InputDevice,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
@@ -463,6 +464,24 @@ export class Handle {
    */
   setInteractive(interactive: boolean): void {
     this.app.wasmApp.setInteractive(this.wasmHandle, interactive);
+  }
+
+  /**
+   * Narrows the input devices this component accepts, as
+   * {@link ComponentSpec.devices} does at creation. Passing every device
+   * makes it accept all the app does again. A component can change what it
+   * accepts as its state changes.
+   */
+  setDevices(devices: InputDevice[]): void {
+    this.app.wasmApp.setDevices(this.wasmHandle, devices);
+  }
+
+  /**
+   * The input devices this component accepts, before narrowing by the app's:
+   * every device unless it was narrowed. `undefined` if it no longer exists.
+   */
+  devices(): InputDevice[] | undefined {
+    return this.app.wasmApp.devices(this.wasmHandle) as InputDevice[] | undefined;
   }
 
   /**
@@ -924,6 +943,23 @@ export class ProteusApp {
   /** Records that the pointer was released. */
   pointerReleased(): void {
     this.wasmApp.pointerReleased();
+  }
+
+  /**
+   * Sets which input devices the app accepts. Every device by default.
+   *
+   * Input from a device the app doesn't accept is ignored, before any
+   * component or callback sees it. Turning the pointer off ends its hover and
+   * releases its press; turning the keyboard off releases the keys held. A
+   * component can narrow the set further, with {@link ComponentSpec.devices}.
+   */
+  setInputDevices(devices: InputDevice[]): void {
+    this.wasmApp.setInputDevices(devices);
+  }
+
+  /** The input devices the app accepts. */
+  inputDevices(): InputDevice[] {
+    return this.wasmApp.inputDevices() as InputDevice[];
   }
 
   /**

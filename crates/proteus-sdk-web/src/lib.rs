@@ -51,6 +51,12 @@ use dto::{
     TargetStateDto, TextDto, TransitionConfigDto, TransitionDroppedDto,
 };
 
+fn parse_devices(devices: JsValue) -> Result<sdk::InputDevices, JsValue> {
+    let names: Vec<dto::InputDeviceDto> = serde_wasm_bindgen::from_value(devices)
+        .map_err(|e| crate::js_error(&format!("invalid input devices: {e}")))?;
+    Ok(dto::input_devices(&names))
+}
+
 // ---------------------------------------------------------------------------
 // Callback wrapping — js_sys::Function -> Rust closure
 // ---------------------------------------------------------------------------
@@ -812,6 +818,42 @@ impl ProteusApp {
             .0
             .set_video_crossfade(&mut self.0.borrow_mut(), video_t)
             .map_err(handle_err)
+    }
+
+    /// Calls [`Proteus::set_input_devices`](sdk::Proteus::set_input_devices).
+    /// Throws if `devices` isn't an array of device names.
+    #[wasm_bindgen(js_name = setInputDevices)]
+    pub fn set_input_devices(&mut self, devices: JsValue) -> Result<(), JsValue> {
+        let devices = parse_devices(devices)?;
+        self.0.borrow_mut().set_input_devices(devices);
+        Ok(())
+    }
+
+    /// Calls [`Proteus::input_devices`](sdk::Proteus::input_devices), as an
+    /// array of device names.
+    #[wasm_bindgen(js_name = inputDevices)]
+    pub fn input_devices(&self) -> js_sys::Array {
+        dto::input_device_names(self.0.borrow().input_devices())
+    }
+
+    /// Calls [`Handle::set_devices`](sdk::Handle::set_devices). Throws if
+    /// `devices` isn't an array of device names.
+    #[wasm_bindgen(js_name = setDevices)]
+    pub fn set_devices(&mut self, handle: &Handle, devices: JsValue) -> Result<(), JsValue> {
+        let devices = parse_devices(devices)?;
+        handle
+            .0
+            .set_devices(&mut self.0.borrow_mut(), devices)
+            .map_err(handle_err)
+    }
+
+    /// Calls [`Handle::devices`](sdk::Handle::devices), as an array of device
+    /// names, or `undefined` if the component no longer exists.
+    pub fn devices(&self, handle: &Handle) -> Option<js_sys::Array> {
+        handle
+            .0
+            .devices(&self.0.borrow())
+            .map(dto::input_device_names)
     }
 
     /// Calls [`Handle::set_disabled`](sdk::Handle::set_disabled).

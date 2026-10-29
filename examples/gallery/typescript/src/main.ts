@@ -563,4 +563,5 @@ await mount("app", {
   update(deltaSeconds) {
     advanceLoader(deltaSeconds);
   },
+  config: { input: { autofocus: true } },
 });

@@ -100,6 +100,7 @@ const fn transition(duration: f32, delay: f32) -> TransitionConfig {
 pub fn config() -> ProteusConfig {
     let mut config = ProteusConfig::web();
     config.render.clear_color = BACKGROUND.as_dvec4().to_array();
+    config.input.autofocus = true;
     config
 }
 

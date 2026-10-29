@@ -226,6 +226,7 @@ impl DemoApp {
         let mut config = base;
         config.render.clear_color = CLEAR_COLOR;
         config.resources.image_max_side = Some(IMAGE_MAX_SIDE);
+        config.input.autofocus = true;
         config
     }
 

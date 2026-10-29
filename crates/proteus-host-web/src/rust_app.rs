@@ -1,7 +1,7 @@
 //! [`run`]: runs a Rust [`App`] on a canvas.
 
 use proteus_runtime::wgpu;
-use proteus_runtime::{App, Engine, HostServices, ProteusConfig, Viewport};
+use proteus_runtime::{App, Engine, HostServices, KeyEvent, ProteusConfig, Viewport};
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::surface::WebSurface;
@@ -43,6 +43,7 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
         .check(&crate::limits())
         .map_err(|e| crate::js_error(&e.to_string()))?;
     let render_cfg = config.render;
+    let autofocus = config.input.autofocus;
     let surface = WebSurface::new(&canvas, render_cfg).await?;
     let viewport = surface.viewport();
     let surface_format = surface.surface_format();
@@ -62,7 +63,7 @@ pub async fn run<A: App + 'static, S: HostServices + 'static>(
         app,
         services,
     };
-    WebLoop::new(canvas, surface, driver).start();
+    WebLoop::new(canvas, surface, driver).start(autofocus);
     Ok(())
 }
 
@@ -96,5 +97,13 @@ impl<A: App, S: HostServices> FrameDriver for RustDriver<A, S> {
 
     fn pointer_released(&mut self) {
         self.engine.pointer_released();
+    }
+
+    fn key_event(&mut self, event: KeyEvent) {
+        self.engine.key_event(event);
+    }
+
+    fn release_keys(&mut self) {
+        self.engine.release_keys();
     }
 }

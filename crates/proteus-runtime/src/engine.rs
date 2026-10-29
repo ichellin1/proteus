@@ -21,7 +21,7 @@
 
 use glam::Vec2;
 
-use proteus_sdk::Proteus;
+use proteus_sdk::{KeyEvent, Proteus};
 
 use crate::app::{App, Frame};
 use crate::config::ProteusConfig;
@@ -164,5 +164,15 @@ impl Engine {
     /// Records that the pointer was released.
     pub fn pointer_released(&mut self) {
         self.proteus.pointer_released();
+    }
+
+    /// Records a key being pressed, repeated or released.
+    pub fn key_event(&mut self, event: KeyEvent) {
+        self.proteus.key_event(event);
+    }
+
+    /// Releases every key still held, when the window or canvas loses focus.
+    pub fn release_keys(&mut self) {
+        self.proteus.release_keys();
     }
 }

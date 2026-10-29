@@ -11,8 +11,11 @@
 //!   as [`Engine::frame`](proteus_runtime::Engine::frame) itself, calling the
 //!   JavaScript `update` function in place of `App::update`.
 //!
-//! The canvas follows the device's pixel density and its CSS size, input comes
-//! from Pointer Events (mouse, touch and pen). While the tab is hidden, the
+//! The canvas follows the device's pixel density and its CSS size, pointer
+//! input comes from Pointer Events (mouse, touch and pen), and keys from the
+//! canvas's keyboard events. The canvas can take keyboard focus: a click gives
+//! it focus, and `ProteusConfig`'s `input.autofocus` gives it focus at the
+//! start. While the tab is hidden, the
 //! browser stops running the frame loop; the first frame after it returns has
 //! a time step of zero, not the whole time it was hidden.
 //!
@@ -30,7 +33,6 @@
 //! - **Recovering a lost GPU context:** the loss is logged, and when the
 //!   browser restores the context the surface is reconfigured, but textures
 //!   are not rebuilt, so the canvas stays blank until the page reloads.
-//! - **Keyboard input.**
 
 #![warn(missing_docs)]
 
@@ -64,7 +66,7 @@ use std::rc::Rc;
 
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
-use proteus_runtime::Viewport;
+use proteus_runtime::{Code, Key, KeyEvent, KeyState, Modifiers, Viewport};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -85,6 +87,8 @@ pub(crate) trait FrameDriver {
     fn pointer_moved(&mut self, pos: Option<Vec2>);
     fn pointer_pressed(&mut self);
     fn pointer_released(&mut self);
+    fn key_event(&mut self, event: KeyEvent);
+    fn release_keys(&mut self);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +105,8 @@ pub(crate) trait FrameDriver {
 /// moment, never while JavaScript runs.
 #[derive(Default)]
 struct Inbox {
-    /// Pointer input, in the order it happened.
-    pointer: Vec<PointerInput>,
+    /// Pointer and keyboard input, in the order it happened.
+    input: Vec<Input>,
     /// The canvas's latest size in CSS pixels, if it changed.
     resize: Option<(f64, f64)>,
     /// The page was hidden, so the next frame's time step starts over.
@@ -113,12 +117,16 @@ struct Inbox {
     context_restored: bool,
 }
 
-enum PointerInput {
+enum Input {
     /// `offsetX` and `offsetY`: CSS pixels from the canvas's corner. `None`
     /// when the pointer left the canvas.
-    Moved(Option<(f32, f32)>),
-    Pressed,
-    Released,
+    PointerMoved(Option<(f32, f32)>),
+    PointerPressed,
+    PointerReleased,
+    Key(KeyEvent),
+    /// The canvas lost focus, or the page was hidden, so the keys held won't
+    /// report their releases.
+    ReleaseKeys,
 }
 
 // ---------------------------------------------------------------------------
@@ -157,14 +165,22 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         }
     }
 
-    /// Adds the event listeners and starts the frame loop. The frame loop
-    /// owns `self`, so it keeps running after this returns, with nothing for
-    /// the caller to keep.
-    pub(crate) fn start(self) {
+    /// Adds the event listeners and starts the frame loop, giving the canvas
+    /// keyboard focus first if `autofocus` is set. The frame loop owns
+    /// `self`, so it keeps running after this returns, with nothing for the
+    /// caller to keep.
+    pub(crate) fn start(self, autofocus: bool) {
         wire_resize(&self.canvas, &self.inbox);
         wire_pointer(&self.canvas, &self.inbox);
+        wire_keys(&self.canvas, &self.inbox);
         wire_visibility(&self.inbox);
         wire_context_loss(&self.canvas, &self.inbox);
+
+        if autofocus {
+            if let Err(e) = self.canvas.focus() {
+                log::warn!("proteus-host-web: couldn't focus the canvas: {e:?}");
+            }
+        }
 
         start_raf_loop(self);
     }
@@ -218,17 +234,19 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
         if let Some((width, height)) = inbox.resize {
             self.resize(width, height);
         }
-        for input in inbox.pointer {
+        for input in inbox.input {
             match input {
-                PointerInput::Moved(Some((x, y))) => {
+                Input::PointerMoved(Some((x, y))) => {
                     // The offsets are from the canvas's top-left, in the
                     // same units as `Viewport::logical_size`.
                     let world = self.surface.viewport().top_left_to_world(Vec2::new(x, y));
                     self.driver.pointer_moved(Some(world));
                 }
-                PointerInput::Moved(None) => self.driver.pointer_moved(None),
-                PointerInput::Pressed => self.driver.pointer_pressed(),
-                PointerInput::Released => self.driver.pointer_released(),
+                Input::PointerMoved(None) => self.driver.pointer_moved(None),
+                Input::PointerPressed => self.driver.pointer_pressed(),
+                Input::PointerReleased => self.driver.pointer_released(),
+                Input::Key(event) => self.driver.key_event(event),
+                Input::ReleaseKeys => self.driver.release_keys(),
             }
         }
         if inbox.hidden {
@@ -309,11 +327,11 @@ fn wire_resize(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
 fn wire_pointer(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
     use web_sys::PointerEvent;
 
-    let listen = |event: &str, record: fn(&PointerEvent) -> Option<PointerInput>| {
+    let listen = |event: &str, record: fn(&PointerEvent) -> Option<Input>| {
         let inbox = inbox.clone();
         let closure: Closure<dyn FnMut(PointerEvent)> = Closure::new(move |e: PointerEvent| {
             if let Some(input) = record(&e) {
-                inbox.borrow_mut().pointer.push(input);
+                inbox.borrow_mut().input.push(input);
             }
         });
         canvas
@@ -323,19 +341,89 @@ fn wire_pointer(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
     };
 
     listen("pointermove", |e| {
-        Some(PointerInput::Moved(Some((
+        Some(Input::PointerMoved(Some((
             e.offset_x() as f32,
             e.offset_y() as f32,
         ))))
     });
-    listen("pointerleave", |_| Some(PointerInput::Moved(None)));
+    listen("pointerleave", |_| Some(Input::PointerMoved(None)));
     // Only the primary button: the left mouse button, a touch or a pen tip.
     listen("pointerdown", |e| {
-        (e.button() == 0).then_some(PointerInput::Pressed)
+        (e.button() == 0).then_some(Input::PointerPressed)
     });
     listen("pointerup", |e| {
-        (e.button() == 0).then_some(PointerInput::Released)
+        (e.button() == 0).then_some(Input::PointerReleased)
     });
+}
+
+fn wire_keys(canvas: &HtmlCanvasElement, inbox: &Rc<RefCell<Inbox>>) {
+    use web_sys::KeyboardEvent;
+
+    // A canvas only takes keyboard focus, and so key events, with a tabindex.
+    // One the page set is kept.
+    if !canvas.has_attribute("tabindex") {
+        let _ = canvas.set_attribute("tabindex", "0");
+    }
+
+    let listen = |event: &str, pressed: bool| {
+        let inbox = inbox.clone();
+        let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::new(move |e: KeyboardEvent| {
+            // Keys pressed while an input method composes text are the input
+            // method's, not the app's.
+            if e.is_composing() {
+                return;
+            }
+            inbox
+                .borrow_mut()
+                .input
+                .push(Input::Key(key_event(&e, pressed)));
+        });
+        canvas
+            .add_event_listener_with_callback(event, closure.as_ref().unchecked_ref())
+            .unwrap_or_else(|_| panic!("addEventListener({event}) failed"));
+        closure.forget();
+    };
+    listen("keydown", true);
+    listen("keyup", false);
+
+    let blur_inbox = inbox.clone();
+    let on_blur: Closure<dyn FnMut()> = Closure::new(move || {
+        blur_inbox.borrow_mut().input.push(Input::ReleaseKeys);
+    });
+    canvas
+        .add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref())
+        .expect("addEventListener(blur) failed");
+    on_blur.forget();
+}
+
+/// The [`KeyEvent`] for the browser's `e`, a `keydown` if `pressed` and a
+/// `keyup` otherwise.
+fn key_event(e: &web_sys::KeyboardEvent, pressed: bool) -> KeyEvent {
+    let key = Key::from_web_name(&e.key());
+    let modifiers = Modifiers {
+        shift: e.shift_key(),
+        control: e.ctrl_key(),
+        alt: e.alt_key(),
+        meta: e.meta_key(),
+    };
+    let state = match (pressed, e.repeat()) {
+        (true, false) => KeyState::Pressed,
+        (true, true) => KeyState::Repeated,
+        (false, _) => KeyState::Released,
+    };
+    // The browser doesn't say what text a key types. A character typed with
+    // Control or Meta held is a shortcut, not text.
+    let text = match &key {
+        Key::Character(c) if pressed && !modifiers.control && !modifiers.meta => Some(c.clone()),
+        _ => None,
+    };
+    KeyEvent {
+        key,
+        code: Code::from_web_name(&e.code()),
+        state,
+        modifiers,
+        text,
+    }
 }
 
 fn wire_visibility(inbox: &Rc<RefCell<Inbox>>) {
@@ -350,7 +438,9 @@ fn wire_visibility(inbox: &Rc<RefCell<Inbox>>) {
             .map(|d| d.hidden())
             .unwrap_or(false);
         if hidden {
-            inbox.borrow_mut().hidden = true;
+            let mut inbox = inbox.borrow_mut();
+            inbox.hidden = true;
+            inbox.input.push(Input::ReleaseKeys);
         }
     });
     document

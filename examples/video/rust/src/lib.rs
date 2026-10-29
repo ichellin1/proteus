@@ -55,6 +55,7 @@ const BACKGROUND: Vec4 = Vec4::new(0.08, 0.08, 0.1, 1.0);
 pub fn config() -> proteus_runtime::ProteusConfig {
     let mut config = proteus_runtime::ProteusConfig::web();
     config.render.clear_color = BACKGROUND.as_dvec4().to_array();
+    config.input.autofocus = true;
     config
 }
 
