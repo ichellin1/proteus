@@ -10,10 +10,12 @@
 //! entity index: not a concern for a UI app.
 
 use serde::{Deserialize, Deserializer, Serialize};
+use wasm_bindgen::JsValue;
 
 use proteus_sdk::{
-    ComponentData, ComponentSpec, DropReason, Easing, InteractionStateKind, QuadState,
-    StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
+    ComponentData, ComponentSpec, DropReason, Easing, InputDevice, InputDevices,
+    InteractionStateKind, QuadState, StyleOverride, TransitionConfig, TransitionData,
+    TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
 
@@ -308,6 +310,8 @@ pub struct ComponentSpecDto {
     pub drop_shadow: Option<DropShadowDto>,
     #[serde(default, deserialize_with = "or_default")]
     pub non_interactive: bool,
+    #[serde(default)]
+    pub devices: Option<Vec<InputDeviceDto>>,
     /// Defaults to `true`: an omitted `visible` means shown.
     #[serde(default = "default_visible", deserialize_with = "or_visible")]
     pub visible: bool,
@@ -317,6 +321,41 @@ pub struct ComponentSpecDto {
     pub start_disabled: bool,
     #[serde(default)]
     pub transition_interaction: Option<TransitionInteractionConfigDto>,
+}
+
+/// An input device, by its TypeScript name.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InputDeviceDto {
+    Pointer,
+    Keyboard,
+}
+
+impl From<InputDeviceDto> for InputDevice {
+    fn from(d: InputDeviceDto) -> Self {
+        match d {
+            InputDeviceDto::Pointer => InputDevice::Pointer,
+            InputDeviceDto::Keyboard => InputDevice::Keyboard,
+        }
+    }
+}
+
+pub fn input_devices(devices: &[InputDeviceDto]) -> InputDevices {
+    devices.iter().map(|d| InputDevice::from(*d)).collect()
+}
+
+/// TypeScript's names for the devices in `devices`.
+pub fn input_device_names(devices: InputDevices) -> js_sys::Array {
+    devices
+        .iter()
+        .map(|d| {
+            JsValue::from_str(match d {
+                InputDevice::Pointer => "pointer",
+                InputDevice::Keyboard => "keyboard",
+                _ => "unknown",
+            })
+        })
+        .collect()
 }
 
 /// `{ maxSide?, eternal? }`: how to add a texture to the atlas.
@@ -406,6 +445,9 @@ impl ComponentSpecDto {
         }
         if self.non_interactive {
             spec = spec.non_interactive();
+        }
+        if let Some(devices) = &self.devices {
+            spec = spec.devices(input_devices(devices));
         }
         spec = spec.visible(self.visible);
         if let Some(opacity) = self.opacity {
@@ -740,6 +782,16 @@ impl TextureStateDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_devices_by_name() {
+        let names: Vec<InputDeviceDto> = serde_json::from_str(r#"["keyboard"]"#).unwrap();
+        assert_eq!(input_devices(&names), InputDevices::KEYBOARD);
+        let names: Vec<InputDeviceDto> =
+            serde_json::from_str(r#"["pointer", "keyboard"]"#).unwrap();
+        assert_eq!(input_devices(&names), InputDevices::ALL);
+        assert!(serde_json::from_str::<Vec<InputDeviceDto>>(r#"["mouse"]"#).is_err());
+    }
 
     // TypeScript code often passes an optional value through as `undefined`.
     // `serde-wasm-bindgen` gives `undefined` to serde as JSON gives `null`,

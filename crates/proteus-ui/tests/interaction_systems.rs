@@ -7,7 +7,8 @@ use proteus_ui::{
     component::{Disabled, Lifecycle, TransitionInteractionConfig},
     input::{FocusState, HoveredEntity, InteractionEvents, PointerInput, PressedEntity},
     interaction::{InteractionDef, InteractionState, InteractionStateKind, StyleOverride},
-    ActiveTransition, CompletedTransitions, Interactable, ProteusWorld, QuadState,
+    AcceptsDevices, ActiveTransition, CompletedTransitions, InputDevices, Interactable,
+    ProteusWorld, QuadState,
 };
 
 // ---------------------------------------------------------------------------
@@ -270,6 +271,53 @@ fn disabled_entity_that_is_not_interactable_passes_the_press_through() {
         .spawn((quad_at(100.0, 100.0), Interactable))
         .id();
     world.world.spawn((quad_at(100.0, 100.0), Disabled));
+
+    press_at(&mut world, Vec2::new(100.0, 100.0));
+
+    assert_eq!(
+        world.world.resource::<InteractionEvents>().pressed,
+        vec![below]
+    );
+}
+
+// A press that ends after the pointer left the window must still end, or the
+// component stays pressed, in its pressed style, with no release to come.
+#[test]
+fn a_release_outside_the_viewport_ends_the_press() {
+    let mut world = ProteusWorld::new();
+    let e = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+    press_at(&mut world, Vec2::new(100.0, 100.0));
+
+    {
+        let mut pi = world.world.resource_mut::<PointerInput>();
+        pi.position = None;
+        pi.is_pressed = false;
+        pi.just_released = true;
+    }
+    world.update(SETTLE_DT);
+
+    assert_eq!(
+        world.world.resource::<InteractionEvents>().released,
+        vec![e]
+    );
+    assert_eq!(world.world.resource::<PressedEntity>().entity, None);
+}
+
+#[test]
+fn entity_that_does_not_accept_the_pointer_passes_the_press_through() {
+    let mut world = ProteusWorld::new();
+    let below = world
+        .world
+        .spawn((quad_at(100.0, 100.0), Interactable))
+        .id();
+    world.world.spawn((
+        quad_at(100.0, 100.0),
+        Interactable,
+        AcceptsDevices(InputDevices::KEYBOARD),
+    ));
 
     press_at(&mut world, Vec2::new(100.0, 100.0));
 

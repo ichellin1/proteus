@@ -24,6 +24,7 @@ pub mod bake;
 pub mod channel;
 pub mod collect;
 pub mod component;
+pub mod devices;
 mod draw_order;
 pub mod effects;
 pub mod hierarchy;
@@ -55,6 +56,7 @@ pub use component::{
     Disabled, Lifecycle, QuadState, TransitionInteractionConfig, TransitionRequest, Virtual,
     Visibility,
 };
+pub use devices::{AcceptsDevices, AppDevices, InputDevice, InputDevices};
 pub use effects::{Border, DropShadow, Glow};
 pub use hierarchy::{
     opacity_system, resolve_world_position, resolve_world_position_query, visibility_system,

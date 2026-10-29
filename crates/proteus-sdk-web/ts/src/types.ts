@@ -227,6 +227,14 @@ export interface ComponentSpec {
    */
   nonInteractive?: boolean;
   /**
+   * Narrows the input devices the component accepts. It accepts the devices
+   * both it and the app accept; without this, every device the app does. A
+   * component that doesn't accept the pointer lets it through to whatever is
+   * behind it, as a non-interactive one does. See {@link Handle.setDevices}
+   * and {@link ProteusApp.setInputDevices}.
+   */
+  devices?: InputDevice[];
+  /**
    * Whether the component starts visible. Defaults to `true`.
    *
    * A hidden component is neither drawn nor hit-tested. A transition into it
@@ -360,6 +368,13 @@ export interface ProteusConfigOverrides {
     autofocus?: boolean;
   };
 }
+
+/**
+ * A kind of input device: `"pointer"` is a mouse, touch or pen, and
+ * `"keyboard"` a keyboard. More will be added, such as TV remotes and game
+ * controllers.
+ */
+export type InputDevice = "pointer" | "keyboard";
 
 /** How to add a texture to the atlas. */
 export interface TextureRequest {

@@ -11,11 +11,11 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry, CompositeTextureRef, Disabled,
-    GroupSource, GroupTarget, Image, ImageCrop, ImageTextureRef, Interactable, InteractionDef,
-    MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text,
-    TextTextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
-    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    AcceptsDevices, Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry,
+    CompositeTextureRef, Disabled, GroupSource, GroupTarget, Image, ImageCrop, ImageTextureRef,
+    InputDevices, Interactable, InteractionDef, MergeLayout, NToOneRequest, OneToNRequest, Opacity,
+    QuadState, SplitStrategy, Text, TextTextureRef, TransitionChannelId, TransitionConfig,
+    TransitionInteractionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::DeclaredGeometry;
@@ -569,6 +569,39 @@ impl Handle {
             entity.remove::<Interactable>();
         }
         Ok(())
+    }
+
+    /// Narrows the input devices this component accepts to `devices`, as
+    /// [`ComponentSpec::devices`](crate::ComponentSpec::devices) does at
+    /// creation. [`InputDevices::ALL`] accepts every device the app does
+    /// again.
+    ///
+    /// A component can change what it accepts as its state changes, such as a
+    /// list that only the keyboard moves through while it's being edited.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_devices(&self, app: &mut Proteus, devices: InputDevices) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_devices")?;
+        if devices == InputDevices::ALL {
+            entity.remove::<AcceptsDevices>();
+        } else {
+            entity.insert(AcceptsDevices(devices));
+        }
+        Ok(())
+    }
+
+    /// The input devices this component accepts, before narrowing by the
+    /// app's: [`InputDevices::ALL`] unless it was narrowed. `None` if it no
+    /// longer exists.
+    pub fn devices(&self, app: &Proteus) -> Option<InputDevices> {
+        let entity = app.world.world.get_entity(self.0).ok()?;
+        Some(
+            entity
+                .get::<AcceptsDevices>()
+                .map_or(InputDevices::ALL, |a| a.0),
+        )
     }
 
     /// Shows or hides this component and its children.

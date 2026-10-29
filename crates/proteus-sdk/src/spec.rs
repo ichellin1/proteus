@@ -1,7 +1,8 @@
 //! [`ComponentSpec`], the builder passed to [`Proteus::component`](crate::Proteus::component).
 
 use proteus_ui::{
-    Border, DropShadow, Glow, Image, QuadState, StyleOverride, Text, TransitionInteractionConfig,
+    Border, DropShadow, Glow, Image, InputDevices, QuadState, StyleOverride, Text,
+    TransitionInteractionConfig,
 };
 
 use crate::handle::Handle;
@@ -51,6 +52,7 @@ pub struct ComponentSpec {
     pub(crate) glow: Option<Glow>,
     pub(crate) drop_shadow: Option<DropShadow>,
     pub(crate) non_interactive: bool,
+    pub(crate) devices: Option<InputDevices>,
     pub(crate) visible: bool,
     pub(crate) opacity: Option<f32>,
     pub(crate) start_disabled: bool,
@@ -73,6 +75,7 @@ impl Default for ComponentSpec {
             glow: None,
             drop_shadow: None,
             non_interactive: false,
+            devices: None,
             // The only field whose default is "on" rather than "absent".
             visible: true,
             opacity: None,
@@ -250,6 +253,18 @@ impl ComponentSpec {
     /// [`ComponentSpec::start_disabled`]. See [`Handle::set_interactive`].
     pub fn non_interactive(mut self) -> Self {
         self.non_interactive = true;
+        self
+    }
+
+    /// Narrows the input devices this component accepts to `devices`.
+    ///
+    /// It accepts the devices both it and the app accept; without this, every
+    /// device the app does. A component that doesn't accept the pointer lets
+    /// it through to whatever is behind it, as a non-interactive one does.
+    /// See [`Handle::set_devices`](crate::Handle::set_devices) and
+    /// [`Proteus::set_input_devices`](crate::Proteus::set_input_devices).
+    pub fn devices(mut self, devices: InputDevices) -> Self {
+        self.devices = Some(devices);
         self
     }
 

@@ -236,6 +236,31 @@ it has focus and which component does; clear it; mark a default focus; and the a
 callback for focus that's lost. Focus follows transformations, and is cleared when its component
 can no longer take it. Today focus is never cleared, so a destroyed component keeps it.
 
+- **Decided (2026-10-29): a click gives focus only to a component that can take it.** Clicking
+  one that doesn't accept the keyboard leaves focus where it is, as clicking empty space does.
+  Every component accepts every device by default, so apps that don't narrow them are
+  unchanged.
+- **Decided (2026-10-29): the app's devices are set in code, not in its config,** in `setup`
+  like the rest of its starting state.
+- **Decided (2026-10-29): a split gives focus to the target marked as the default focus,** or
+  to the first target when none is. The same mark says where focus starts in step 4, so one mark
+  means "start here" in both. Calling `focus` on a target doesn't work, since a split's targets
+  are usually hidden until it starts, and it starts on the next tick.
+- [x] `InputDevices`, for the app and for each component, set when a component is created and
+  changed while the app runs, in Rust and TypeScript. Input from a device the app doesn't
+  accept is dropped, and a component that doesn't accept the pointer lets it through.
+- [ ] The focus API, in Rust and TypeScript: give a component focus, failing with the reason;
+  ask whether it has focus and which component does; clear it; mark a default focus; and the
+  app-wide callback for focus that's lost.
+- [ ] Focus follows 1→1 transitions, splits and merges from when they start; a split's goes to
+  the target marked as the default focus, or the first.
+- [ ] Focus is cleared, with `on_blur` and the focus-lost callback, when its component is
+  destroyed, hidden, disabled, made non-interactive or stops accepting the keyboard, and where
+  it was is recorded. A component hidden for a split or merge in progress keeps its focus.
+- [ ] Tests for each of these.
+- [ ] The release notes say what changes for apps: focus now leaves a disabled or hidden
+  component, where it used to stay.
+
 ### Step 3 — The key map and actions
 
 The key map, its built-in actions and the app's own, and callbacks for key events on components

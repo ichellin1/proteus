@@ -18,9 +18,10 @@
 //! ## Non-interactive and disabled
 //!
 //! An entity without [`Interactable`] is not there for input: the pointer
-//! passes through it to whatever is behind. Virtual and hidden entities, and
-//! transitioning entities without `TransitionInteractionConfig::allow_pointer`,
-//! are passed through the same way.
+//! passes through it to whatever is behind. Virtual and hidden entities,
+//! entities whose [`AcceptsDevices`] leaves out the pointer, and transitioning
+//! entities without `TransitionInteractionConfig::allow_pointer`, are passed
+//! through the same way.
 //!
 //! A [`Disabled`] entity is there but inert: it can be the topmost hit, and
 //! then it blocks the pointer from reaching what is behind it but receives no
@@ -32,6 +33,7 @@ use bevy_ecs::prelude::*;
 use glam::Vec2;
 
 use crate::component::{Disabled, Lifecycle, TransitionInteractionConfig, Virtual};
+use crate::devices::{AcceptsDevices, InputDevice};
 use crate::draw_order::DrawKey;
 use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
 use crate::spawn_order::SpawnOrder;
@@ -187,8 +189,9 @@ pub fn quad_contains(qs: &QuadState, point: Vec2) -> bool {
 // ---------------------------------------------------------------------------
 
 /// The entities [`hit_test_system`] considers: every interactable entity that
-/// isn't virtual. `Lifecycle`, `TransitionInteractionConfig` and `Disabled` are
-/// optional; an entity without them is never excluded by them.
+/// isn't virtual. `Lifecycle`, `TransitionInteractionConfig`, `Disabled` and
+/// `AcceptsDevices` are optional; an entity without them is never excluded by
+/// them.
 type HitTestQuery<'w, 's> = Query<
     'w,
     's,
@@ -200,6 +203,7 @@ type HitTestQuery<'w, 's> = Query<
         Option<&'static Lifecycle>,
         Option<&'static TransitionInteractionConfig>,
         Has<Disabled>,
+        Option<&'static AcceptsDevices>,
     ),
     (With<Interactable>, Without<Virtual>),
 >;
@@ -235,17 +239,22 @@ pub fn hit_test_system(
 
     let Some(pos) = pointer.position else {
         // The pointer left the viewport: end any hover. A press or focus
-        // stays, since leaving doesn't end either.
+        // stays, since leaving doesn't end either, but a release outside the
+        // viewport still ends the press.
         if let Some(prev) = hovered.0.take() {
             events.hover_exited.push(prev);
         }
+        release(&pointer, &mut events, &mut pressed_entity);
         return;
     };
 
     // Find the topmost entity containing the pointer, in the order
     // `collect_instances` draws in.
     let mut hit: Option<(Entity, DrawKey, bool)> = None;
-    for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled) in query.iter() {
+    for (e, qs, vis, eff_vis, lifecycle, transitioning_config, disabled, accepts) in query.iter() {
+        if !AcceptsDevices::allows(accepts, InputDevice::Pointer) {
+            continue;
+        }
         // The cascaded visibility if it has been computed, else the entity's
         // own, for tests that run this system without the full schedule.
         let visible = eff_vis
@@ -325,8 +334,17 @@ pub fn hit_test_system(
         }
     }
 
-    // The release goes to whatever was pressed, wherever the pointer is now:
-    // dragging off a button and releasing still releases that button.
+    release(&pointer, &mut events, &mut pressed_entity);
+}
+
+/// Records this tick's release, if any. The release goes to whatever was
+/// pressed, wherever the pointer is now: dragging off a button and releasing
+/// still releases that button.
+fn release(
+    pointer: &PointerInput,
+    events: &mut InteractionEvents,
+    pressed_entity: &mut PressedEntity,
+) {
     if pointer.just_released {
         if let Some(e) = pressed_entity.entity.take() {
             events.released.push(e);
