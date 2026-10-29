@@ -265,7 +265,39 @@ can no longer take it. Today focus is never cleared, so a destroyed component ke
 
 The key map, its built-in actions and the app's own, and callbacks for key events on components
 and on the app, in Rust and TypeScript, going up from the focused component, with long presses
-measured and held keys repeated by the engine. Unclaimed, Activate presses and clicks the focused component.
+measured and held keys repeated by the engine. Unclaimed, Activate presses and clicks the
+focused component. Built in four commits: the key map and callbacks; repeats and long press;
+Activate's press and click; and the web host keeping bound keys from the browser.
+
+- **Decided (2026-10-29): actions and keys are enums.** An enum without data is a byte or two
+  however many variants it has, so the web's whole list of key names would cost nothing to copy
+  or compare; only the variants holding a name, for keys without one of their own, allocate, at
+  the rate keys are typed. Devices add bindings to the same actions, so `Action` doesn't grow
+  with them; a game controller's buttons get an enum of their own.
+- **Decided (2026-10-29): an app's own actions are ids, not names.** `define_action("search")`
+  returns an `AppAction`, a number, so `Action` holds no string and is `Copy`, though it's
+  looked up for every key event. TypeScript uses the names, turned into ids at the boundary.
+- **Decided (2026-10-29): on the web, Tab can leave the canvas.** Next on the last component,
+  and Previous on the first, are left to the browser, which moves focus out of the canvas as it
+  does at the end of a page, rather than wrapping: wrapping would trap keyboard users in a
+  canvas embedded in a page, which WCAG's success criterion 2.1.2 rules out. An app sets
+  `input.keep_tab` to wrap instead, for a full-screen or TV app. Native windows always wrap.
+  This step adds the setting; step 4, which knows the first and last components, uses it.
+- **Decided (2026-10-29): the web host keeps the browser from acting on bound keys.** Its
+  listener has to decide at once, but handlers run at the next tick, so the host copies the
+  bindings where the listener can read them each frame. A key that isn't bound but that a
+  handler claims still reaches the browser; the guides say so.
+- [x] The key map, with the built-in actions and the app's own, bound by meaning or position
+  with exact modifiers, and changed while the app runs, in Rust and TypeScript.
+- [x] Key callbacks on components and on the app. Events go up from the focused component,
+  skipping those that can't take them, before the update; unclaimed navigation actions are
+  queued for navigation.
+- [ ] The engine repeats held keys, after 250 ms and every 100 ms, and reports long presses,
+  after 500 ms, both configurable and `System` repeats among them.
+- [ ] Unclaimed, Activate presses and clicks the focused component, with its pressed style, and
+  releases it on key up.
+- [ ] The web host keeps the browser from acting on bound keys, and has `input.keep_tab`.
+- [ ] Tests for each of these, and the release notes updated.
 
 ### Step 4 — Navigation
 

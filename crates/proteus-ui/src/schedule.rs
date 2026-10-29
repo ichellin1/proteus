@@ -34,6 +34,7 @@ use crate::input::{
 };
 use crate::interaction::interaction_style_system;
 use crate::keyboard::KeyInput;
+use crate::keymap::{KeyMap, NavigationRequests};
 use crate::spawn_order::register_spawn_order_hooks;
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
@@ -164,6 +165,8 @@ impl ProteusWorld {
         world.init_resource::<CompletedTransitions>();
         world.init_resource::<PointerInput>();
         world.init_resource::<KeyInput>();
+        world.init_resource::<KeyMap>();
+        world.init_resource::<NavigationRequests>();
         world.init_resource::<AppDevices>();
         world.init_resource::<InteractionEvents>();
         world.init_resource::<HoveredEntity>();

@@ -7,8 +7,10 @@ use glam::Vec2;
 use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
-    Interactable, InteractionDef, KeyEvent, ProteusWorld, QuadState, Visibility,
+    Interactable, InteractionDef, KeyEvent, KeyMap, KeyState, NavigationRequests, ProteusWorld,
+    QuadState, Visibility,
 };
+use proteus_ui::{Action, AppAction, KeyBinding};
 
 use proteus_render::{
     decode_image, resize_to_fit, DecodedImage, GpuContext, QuadPipeline, TextureId,
@@ -334,9 +336,13 @@ impl Proteus {
     /// Advances the app by `dt` seconds, then runs callbacks for the events
     /// that occurred.
     ///
-    /// Callbacks run after the update, so anything they start, such as a
-    /// transition from an `on_click` handler, will start on the next tick.
+    /// Key callbacks run first, before the update, for the keys reported since
+    /// the last tick, so that navigation only moves focus with the keys none
+    /// of them claimed. The other callbacks run after the update, so anything
+    /// they start, such as a transition from an `on_click` handler, will start
+    /// on the next tick.
     pub fn tick(&mut self, dt: f32) {
+        self.dispatch_keys();
         self.world.update(dt);
         self.dispatch_events();
 
@@ -346,8 +352,131 @@ impl Proteus {
         self.world
             .world
             .resource_mut::<proteus_ui::KeyInput>()
-            .events
+            .clear_events();
+        self.world
+            .world
+            .resource_mut::<NavigationRequests>()
+            .0
             .clear();
+    }
+
+    /// Sends each key event not yet sent to the key callbacks: those of the
+    /// focused component, then its ancestors', then the app's, until one claims
+    /// it, and to the engine's default for its action if none does.
+    fn dispatch_keys(&mut self) {
+        while let Some(event) = self.next_key_event() {
+            let mut handled = false;
+            for component in self.key_chain() {
+                if callback::fire_key(self, component.0, &event) {
+                    handled = true;
+                    break;
+                }
+            }
+            if !handled && !callback::fire_app_key(self, &event) {
+                self.apply_key_default(&event);
+            }
+        }
+    }
+
+    /// The next key event the key callbacks haven't had, with its action from
+    /// the key map, marked as sent. For a language binding that runs key
+    /// callbacks of its own, instead of [`Proteus::tick`].
+    pub fn next_key_event(&mut self) -> Option<KeyEvent> {
+        let world = &mut self.world.world;
+        let i = world.resource::<proteus_ui::KeyInput>().dispatched;
+        let action = {
+            let input = world.resource::<proteus_ui::KeyInput>();
+            let event = input.events.get(i)?;
+            world.resource::<KeyMap>().action_for(event)
+        };
+        let mut input = world.resource_mut::<proteus_ui::KeyInput>();
+        input.dispatched += 1;
+        let event = &mut input.events[i];
+        event.action = action;
+        Some(event.clone())
+    }
+
+    /// The components a key event goes to, in order: the focused component,
+    /// then its ancestors, nearest first, leaving out those that can't take
+    /// keys, such as a disabled one. For a language binding that runs key
+    /// callbacks of its own.
+    pub fn key_chain(&self) -> Vec<Handle> {
+        let world = &self.world.world;
+        let mut chain = Vec::new();
+        let mut next = world.resource::<FocusState>().focused;
+        while let Some(entity) = next {
+            if !world.entities().contains(entity) {
+                break;
+            }
+            if proteus_ui::focus_blocked(world, entity).is_none() {
+                chain.push(Handle(entity));
+            }
+            next = world.get::<ChildOf>(entity).map(|c| c.parent());
+        }
+        chain
+    }
+
+    /// Does what the engine does with a key event no callback claimed: queues
+    /// a navigation action, when pressed or repeated, for navigation to move
+    /// focus with. For a language binding that runs key callbacks of its own.
+    pub fn apply_key_default(&mut self, event: &KeyEvent) {
+        let Some(action) = event.action else {
+            return;
+        };
+        let moves = matches!(event.state, KeyState::Pressed | KeyState::Repeated);
+        if action.is_navigation() && moves {
+            self.world
+                .world
+                .resource_mut::<NavigationRequests>()
+                .0
+                .push(action);
+        }
+    }
+
+    /// Calls `cb` with each key event that no component's key callback
+    /// claimed, whether or not a component has focus. Return
+    /// [`KeyResult::Handled`] to claim it, so the engine's default for its
+    /// action doesn't happen.
+    ///
+    /// Use it for the app's own shortcuts, and for actions that don't belong
+    /// to a component, such as [`Action::Back`](crate::Action::Back).
+    pub fn on_key(&mut self, cb: impl FnMut(&mut Proteus, &KeyEvent) -> KeyResult + 'static) {
+        self.callbacks.register_app_key(Box::new(cb));
+    }
+
+    /// The key map: which keys stand for which actions.
+    pub fn key_map(&self) -> &KeyMap {
+        self.world.world.resource::<KeyMap>()
+    }
+
+    /// Binds `binding` to `action`, replacing what it was bound to.
+    pub fn bind(&mut self, binding: KeyBinding, action: Action) {
+        self.world
+            .world
+            .resource_mut::<KeyMap>()
+            .bind(binding, action);
+    }
+
+    /// Unbinds `binding`, so its key reaches callbacks without an action.
+    /// Returns the action it was bound to, if any.
+    pub fn unbind(&mut self, binding: &KeyBinding) -> Option<Action> {
+        self.world.world.resource_mut::<KeyMap>().unbind(binding)
+    }
+
+    /// Puts back the key map's default bindings, removing all the others. See
+    /// [`KeyMap::default_bindings`].
+    pub fn reset_key_map(&mut self) {
+        self.world.world.resource_mut::<KeyMap>().reset();
+    }
+
+    /// Defines an action of the app's own, named `name`, to bind keys to and
+    /// match in key callbacks, as `Action::App(search)`. Defining a name again
+    /// returns the same action.
+    pub fn define_action(&mut self, name: &str) -> AppAction {
+        self.world
+            .world
+            .resource_mut::<KeyMap>()
+            .define_action(name)
     }
 
     fn dispatch_events(&mut self) {
@@ -578,6 +707,16 @@ impl Proteus {
     pub(crate) fn callback_count(&self) -> usize {
         self.callbacks.len()
     }
+}
+
+/// Whether a key callback claimed a key event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyResult {
+    /// Claimed: the event goes no further, to other components, the app's key
+    /// callbacks, or the engine's default for its action.
+    Handled,
+    /// Not claimed: the event goes on.
+    Ignored,
 }
 
 /// A component that lost focus because it could no longer keep it; see

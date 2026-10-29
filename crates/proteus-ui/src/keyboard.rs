@@ -14,6 +14,8 @@
 
 use bevy_ecs::prelude::*;
 
+use crate::keymap::Action;
+
 /// Declares an enum of web key names whose variants are named exactly as the
 /// web names them, with the name of each, and optionally a variant holding the
 /// name of any other.
@@ -224,9 +226,30 @@ pub struct KeyEvent {
     pub modifiers: Modifiers,
     /// The text the key types, if any. Only a press or a repeat types text.
     pub text: Option<String>,
+    /// The action the key stands for in the [`KeyMap`](crate::keymap::KeyMap),
+    /// if it's bound. The engine sets it before key callbacks see the event.
+    pub action: Option<Action>,
 }
 
 impl KeyEvent {
+    /// An event of `key`, at position `code`, with no action yet.
+    pub fn new(
+        key: Key,
+        code: Code,
+        state: KeyState,
+        modifiers: Modifiers,
+        text: Option<String>,
+    ) -> Self {
+        Self {
+            key,
+            code,
+            state,
+            modifiers,
+            text,
+            action: None,
+        }
+    }
+
     /// Whether `self` and `other` are events of the same key: the same
     /// [`Code`], or, for a key whose position is unknown, the same [`Key`].
     fn is_same_key(&self, other: &KeyEvent) -> bool {
@@ -241,12 +264,15 @@ impl KeyEvent {
 /// This tick's key events, written by the host before each tick, and the keys
 /// still held.
 ///
-/// Whoever drives the world clears [`KeyInput::events`] after each tick;
-/// `Proteus::tick` does this.
+/// Whoever drives the world clears the events after each tick, with
+/// [`KeyInput::clear_events`]; `Proteus::tick` does this.
 #[derive(Resource, Debug, Default)]
 pub struct KeyInput {
     /// This tick's key events, in the order they happened.
     pub events: Vec<KeyEvent>,
+    /// How many of [`KeyInput::events`], from the first, have gone to the
+    /// app's key callbacks. `Proteus::tick` sends the rest at its start.
+    pub dispatched: usize,
     // The press of each key still held.
     held: Vec<KeyEvent>,
 }
@@ -281,6 +307,13 @@ impl KeyInput {
             },
         }
         self.events.push(event);
+    }
+
+    /// Clears this tick's events, once every system and callback has seen
+    /// them.
+    pub fn clear_events(&mut self) {
+        self.events.clear();
+        self.dispatched = 0;
     }
 
     /// Releases every key still held, as when the window or canvas loses

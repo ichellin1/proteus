@@ -14,12 +14,12 @@ use proteus_ui::{
     AcceptsDevices, Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry,
     CompositeTextureRef, DefaultFocus, Disabled, FocusBlocked, FocusState, GroupSource,
     GroupTarget, Image, ImageCrop, ImageTextureRef, InputDevices, Interactable, InteractionDef,
-    MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text,
+    KeyEvent, MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text,
     TextTextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
     TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
-use crate::app::DeclaredGeometry;
+use crate::app::{DeclaredGeometry, KeyResult};
 use crate::callback::EventKind;
 use crate::Proteus;
 
@@ -761,6 +761,29 @@ impl Handle {
     /// component, even if the pointer has moved off it.
     pub fn on_release(&self, app: &mut Proteus, cb: impl FnMut(&mut Proteus) + 'static) {
         self.on(app, EventKind::Release, cb);
+    }
+
+    /// Calls `cb` with each key event while this component has focus, or a
+    /// component under it does and didn't claim the event. Return
+    /// [`KeyResult::Handled`](crate::KeyResult::Handled) to claim it, so it
+    /// goes no further: not to this component's ancestors, the app's key
+    /// callbacks, or the engine's default for its action, such as
+    /// [`Action::Activate`](crate::Action::Activate)'s click.
+    ///
+    /// Match on the event's `action` rather than its key, so the callback
+    /// works with any key, or other device, bound to it. Use the key for
+    /// typing, and for keys no action covers.
+    ///
+    /// It runs at the start of the next tick after the key, before the
+    /// update, and not while this component is disabled, non-interactive,
+    /// doesn't accept the keyboard, or is transitioning without
+    /// `TransitionInteractionConfig::allow_navigation`.
+    pub fn on_key(
+        &self,
+        app: &mut Proteus,
+        cb: impl FnMut(&mut Proteus, &KeyEvent) -> KeyResult + 'static,
+    ) {
+        app.callbacks.register_key(self.0, Box::new(cb));
     }
 
     /// Calls `cb` each time this component gains focus.

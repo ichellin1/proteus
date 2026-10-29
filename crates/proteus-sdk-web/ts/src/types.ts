@@ -383,6 +383,90 @@ export interface ProteusConfigOverrides {
 export type InputDevice = "pointer" | "keyboard";
 
 /**
+ * Something a key stands for, which apps and navigation respond to. The
+ * built-in actions:
+ *
+ * - `"up"`, `"down"`, `"left"`, `"right"`: move focus. The arrows.
+ * - `"next"`, `"previous"`: move focus to the next or previous component. Tab
+ *   and Shift+Tab.
+ * - `"activate"`: choose the focused component, as a click does. Enter and
+ *   Space.
+ * - `"back"`: go back. Escape and Backspace. The app decides what it means.
+ *
+ * Any other name is one of the app's own actions, bound with
+ * {@link ProteusApp.bindKey}. The built-in names can't be used for the app's
+ * own.
+ */
+export type Action =
+  | "up"
+  | "down"
+  | "left"
+  | "right"
+  | "next"
+  | "previous"
+  | "activate"
+  | "back"
+  | (string & {});
+
+/** The modifier keys held during a key event. */
+export interface Modifiers {
+  /** Shift. */
+  shift: boolean;
+  /** Control. */
+  control: boolean;
+  /** Alt, or Option on a Mac. */
+  alt: boolean;
+  /** Meta: the Windows key, or Command on a Mac. */
+  meta: boolean;
+}
+
+/** A key being pressed, repeated or released. */
+export interface KeyEvent {
+  /**
+   * What the key means, as a `KeyboardEvent`'s `key` names it, such as
+   * `"Enter"`, `"ArrowUp"` or `"a"`. The space bar is `" "`.
+   */
+  key: string;
+  /**
+   * Where the key is, as a `KeyboardEvent`'s `code` names it, such as `"KeyW"`,
+   * whatever the layout prints on it.
+   */
+  code: string;
+  /**
+   * The action the key stands for, if it's bound. Match on this rather than
+   * the key, so a callback works with any key, or other device, bound to it.
+   */
+  action?: Action;
+  /** What happened to the key. */
+  state: "pressed" | "repeated" | "released";
+  /** The modifiers held at the time. */
+  modifiers: Modifiers;
+  /** The text the key types, if any. Only a press or a repeat types text. */
+  text?: string;
+}
+
+/**
+ * A key and the modifiers held with it, for {@link ProteusApp.bindKey}. Name
+ * the key by what it means, with `key`, or by where it is, with `code`, as a
+ * `KeyboardEvent` names them; not both. The modifiers must match exactly: a
+ * binding for `"Tab"` doesn't match Shift+Tab. Each defaults to `false`.
+ */
+export interface KeyBinding {
+  /** The key that means this, such as `"Enter"` or `"/"`. */
+  key?: string;
+  /** The key in this position, such as `"KeyW"`. */
+  code?: string;
+  /** Shift held. */
+  shift?: boolean;
+  /** Control held. */
+  control?: boolean;
+  /** Alt held. */
+  alt?: boolean;
+  /** Meta held. */
+  meta?: boolean;
+}
+
+/**
  * Why a component can't take focus, or lost it:
  *
  * - `"destroyed"`: it was destroyed.

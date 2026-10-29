@@ -4,13 +4,7 @@
 use proteus_ui::{Code, Key, KeyEvent, KeyInput, KeyState, Modifiers, NamedKey};
 
 fn event(key: Key, code: Code, state: KeyState) -> KeyEvent {
-    KeyEvent {
-        key,
-        code,
-        state,
-        modifiers: Modifiers::default(),
-        text: None,
-    }
+    KeyEvent::new(key, code, state, Modifiers::default(), None)
 }
 
 fn enter(state: KeyState) -> KeyEvent {

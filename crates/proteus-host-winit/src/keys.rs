@@ -20,16 +20,17 @@ macro_rules! same_names {
 /// The [`KeyEvent`] for winit's `event`, with the modifiers held at the time.
 pub(crate) fn key_event(event: &winit::event::KeyEvent, modifiers: Modifiers) -> KeyEvent {
     let state = key_state(event.state, event.repeat);
-    KeyEvent {
-        key: key(&event.logical_key),
-        code: code(event.physical_key),
+    let text = match state {
+        KeyState::Released => None,
+        _ => event.text.as_ref().map(|text| text.to_string()),
+    };
+    KeyEvent::new(
+        key(&event.logical_key),
+        code(event.physical_key),
         state,
         modifiers,
-        text: match state {
-            KeyState::Released => None,
-            _ => event.text.as_ref().map(|text| text.to_string()),
-        },
-    }
+        text,
+    )
 }
 
 pub(crate) fn key_state(state: ElementState, repeat: bool) -> KeyState {
