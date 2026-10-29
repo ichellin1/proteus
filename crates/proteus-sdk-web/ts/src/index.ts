@@ -1072,6 +1072,26 @@ export class ProteusApp {
   }
 
   /**
+   * Which style of input the app is in: `"pointing"`, after the pointer moved
+   * or was pressed, or `"navigating"`, after a key bound to one of the
+   * navigating actions was pressed. The focused style shows only while
+   * navigating, and the hover style only while pointing. Use it, for example,
+   * to show hints for one style of input or the other.
+   */
+  inputMode(): "pointing" | "navigating" {
+    return this.wasmApp.inputMode() as "pointing" | "navigating";
+  }
+
+  /**
+   * Sets the actions whose keys switch the app to navigating; see
+   * {@link ProteusApp.inputMode}. By default the six that move focus, so the
+   * arrows and Tab switch it, and Enter, Space, Escape and typing don't.
+   */
+  setNavigatingActions(actions: Action[]): void {
+    this.wasmApp.setNavigatingActions(actions);
+  }
+
+  /**
    * Sets how held keys repeat: `{ delayMs, intervalMs }` for the engine's own
    * repeats, the same on every platform and device, or `"system"` for the
    * system's, at the speed each user set, which also suits devices that send

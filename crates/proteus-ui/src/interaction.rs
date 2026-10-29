@@ -21,7 +21,8 @@
 //! ## Which style wins
 //!
 //! When several apply at once: `Disabled`, then `Pressed`, then `Focused`, then
-//! `Hover`, then `Default`.
+//! `Hover`, then `Default`. `Focused` applies only while the app is navigating,
+//! and `Hover` only while it's pointing; see [`InputMode`].
 //!
 //! ## The declared geometry
 //!
@@ -43,6 +44,7 @@ use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use crate::component::{Disabled, Lifecycle};
+use crate::devices::InputMode;
 use crate::input::{FocusState, HoveredEntity, KeyPressedEntity, PressedEntity};
 use crate::transition::{ActiveTransition, Easing, TransitionConfig};
 use crate::QuadState;
@@ -184,8 +186,10 @@ pub fn interaction_style_system(
     pressed: Res<PressedEntity>,
     key_pressed: Res<KeyPressedEntity>,
     focus: Res<FocusState>,
+    mode: Res<InputMode>,
     query: InteractionStyleQuery,
 ) {
+    let navigating = *mode == InputMode::Navigating;
     for (entity, quad_state, def, existing, lifecycle, disabled) in query.iter() {
         if matches!(lifecycle, Some(Lifecycle::Transitioning)) {
             continue;
@@ -204,9 +208,9 @@ pub fn interaction_style_system(
                 .is_some_and(|(e, _)| *e == entity)
         {
             InteractionStateKind::Pressed
-        } else if focus.focused == Some(entity) {
+        } else if navigating && focus.focused == Some(entity) {
             InteractionStateKind::Focused
-        } else if hovered.0 == Some(entity) {
+        } else if !navigating && hovered.0 == Some(entity) {
             InteractionStateKind::Hover
         } else {
             InteractionStateKind::Default

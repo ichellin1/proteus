@@ -147,7 +147,9 @@ impl ComponentSpec {
         self
     }
 
-    /// Sets the style applied while the pointer is over this component.
+    /// Sets the style applied while the pointer is over this component, and
+    /// the app is pointing rather than navigating; see
+    /// [`Proteus::input_mode`](crate::Proteus::input_mode).
     pub fn hover(mut self, style: StyleOverride) -> Self {
         self.hover = Some(style);
         self
@@ -159,7 +161,10 @@ impl ComponentSpec {
         self
     }
 
-    /// Sets the style applied while this component has focus.
+    /// Sets the style applied while this component has focus, and the app is
+    /// navigating rather than pointing, so a click's focus doesn't show until
+    /// the user moves on with the keys; see
+    /// [`Proteus::input_mode`](crate::Proteus::input_mode).
     pub fn focused(mut self, style: StyleOverride) -> Self {
         self.focused = Some(style);
         self

@@ -360,16 +360,9 @@ pub fn input_device_names(devices: InputDevices) -> js_sys::Array {
         .collect()
 }
 
-/// TypeScript's names for the built-in actions, in the order of
-/// [`Action::BUILT_IN`].
-const ACTION_NAMES: [&str; 8] = [
-    "up", "down", "left", "right", "next", "previous", "activate", "back",
-];
-
 /// The built-in action TypeScript names `name`, if any.
 pub fn action_from_name(name: &str) -> Option<Action> {
-    let i = ACTION_NAMES.iter().position(|n| *n == name)?;
-    Some(Action::BUILT_IN[i])
+    Action::from_built_in_name(name)
 }
 
 /// TypeScript's name for `action`: a built-in's name, or the name the app
@@ -377,10 +370,7 @@ pub fn action_from_name(name: &str) -> Option<Action> {
 pub fn action_name(action: Action, key_map: &KeyMap) -> Option<String> {
     match action {
         Action::App(app) => key_map.action_name(app).map(str::to_owned),
-        built_in => Action::BUILT_IN
-            .iter()
-            .position(|a| *a == built_in)
-            .map(|i| ACTION_NAMES[i].to_owned()),
+        built_in => built_in.built_in_name().map(str::to_owned),
     }
 }
 

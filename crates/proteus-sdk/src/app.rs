@@ -7,8 +7,8 @@ use glam::Vec2;
 use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
-    Interactable, InteractionDef, KeyEvent, KeyMap, KeyPressedEntity, KeyRepeat, KeyState,
-    NavigationRequests, ProteusWorld, QuadState, TabWraps, Visibility,
+    InputMode, Interactable, InteractionDef, KeyEvent, KeyMap, KeyPressedEntity, KeyRepeat,
+    KeyState, NavigatingActions, NavigationRequests, ProteusWorld, QuadState, TabWraps, Visibility,
 };
 use proteus_ui::{Action, AppAction, KeyBinding};
 
@@ -398,7 +398,41 @@ impl Proteus {
         // The key that pressed a component releases it, whether or not a
         // callback claims the release, so it can't be left pressed.
         world.resource_mut::<KeyPressedEntity>().release_by(&event);
+        let navigates =
+            action.is_some_and(|a| world.resource::<NavigatingActions>().0.contains(&a));
+        if event.state == KeyState::Pressed && navigates {
+            self.set_input_mode(InputMode::Navigating);
+        }
         Some(event)
+    }
+
+    fn set_input_mode(&mut self, mode: InputMode) {
+        let mut current = self.world.world.resource_mut::<InputMode>();
+        // Only on a change, so that change detection sees one.
+        if *current != mode {
+            *current = mode;
+        }
+    }
+
+    /// Which style of input the app is in: pointing, after the pointer moved
+    /// or was pressed, or navigating, after a key bound to one of the
+    /// navigating actions was pressed. The focused style shows only while
+    /// navigating, and the hover style only while pointing. Use it, for
+    /// example, to show hints for one style of input or the other.
+    pub fn input_mode(&self) -> InputMode {
+        *self.world.world.resource::<InputMode>()
+    }
+
+    /// Sets the actions whose keys switch the app to navigating; see
+    /// [`Proteus::input_mode`]. By default the six that move focus, so the
+    /// arrows and Tab switch it, and Enter, Space, Escape and typing don't.
+    pub fn set_navigating_actions(&mut self, actions: &[Action]) {
+        self.world.world.resource_mut::<NavigatingActions>().0 = actions.to_vec();
+    }
+
+    /// The actions whose keys switch the app to navigating.
+    pub fn navigating_actions(&self) -> &[Action] {
+        &self.world.world.resource::<NavigatingActions>().0
     }
 
     /// The components a key event goes to, in order: the focused component,
@@ -636,10 +670,12 @@ impl Proteus {
         if !self.accepts(InputDevice::Pointer) {
             return;
         }
-        self.world
-            .world
-            .resource_mut::<proteus_ui::PointerInput>()
-            .position = pos;
+        let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
+        let moved = pos.is_some() && pos != pointer.position;
+        pointer.position = pos;
+        if moved {
+            self.set_input_mode(InputMode::Pointing);
+        }
     }
 
     /// Recomputes which components are visible and how opaque they are,
@@ -662,6 +698,7 @@ impl Proteus {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = true;
         pointer.is_pressed = true;
+        self.set_input_mode(InputMode::Pointing);
     }
 
     /// Records that the pointer was released. Ignored while the app doesn't

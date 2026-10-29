@@ -4,11 +4,16 @@
 //! [`AppDevices`]. Input from a device it doesn't accept is dropped before
 //! anything sees it. A component can narrow the set with [`AcceptsDevices`]:
 //! it accepts the devices both it and the app accept.
+//!
+//! When the app accepts both styles of input, the one used last wins: see
+//! [`InputMode`].
 
 use std::fmt;
 use std::ops::{BitAnd, BitOr};
 
 use bevy_ecs::prelude::*;
+
+use crate::keymap::Action;
 
 /// A kind of input device.
 ///
@@ -124,5 +129,32 @@ impl AcceptsDevices {
     /// `device`.
     pub fn allows(accepts: Option<&AcceptsDevices>, device: InputDevice) -> bool {
         accepts.is_none_or(|a| a.0.contains(device))
+    }
+}
+
+/// Which style of input the app is in: whichever was used last, as on TVs and
+/// consoles with a pointer.
+///
+/// The focused style shows only while navigating, and the hover style only
+/// while pointing, so a pointer resting on one component while the keys move
+/// to another doesn't show two highlights.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputMode {
+    /// The pointer was used last: moved or pressed.
+    #[default]
+    Pointing,
+    /// One of the [`NavigatingActions`] was used last.
+    Navigating,
+}
+
+/// The actions whose keys switch the app to [`InputMode::Navigating`]. By
+/// default the six that move focus, so the arrows and Tab switch it, and
+/// Enter, Space, Escape and typing don't.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct NavigatingActions(pub Vec<Action>);
+
+impl Default for NavigatingActions {
+    fn default() -> Self {
+        Self(Action::MOVING_FOCUS.to_vec())
     }
 }
