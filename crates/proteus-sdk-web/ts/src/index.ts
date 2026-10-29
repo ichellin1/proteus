@@ -111,7 +111,14 @@ export class Handle {
     return this.app.get(this);
   }
 
-  /** Calls `cb` each time the pointer is pressed on this component. A click also gives it focus. */
+  /**
+   * Calls `cb` each time this component is clicked: the pointer is pressed on
+   * it, or, while it has focus, a key bound to `"activate"` is pressed, such as
+   * Enter or Space, and no key callback claims it. A click means the component
+   * was chosen, by whatever device, as `click` does on the web.
+   *
+   * A pointer click also gives the component focus, if it can take it.
+   */
   onClick(cb: PlainCallback): void {
     this.app.wasmApp.onClick(this.wasmHandle, cb);
   }
@@ -148,17 +155,19 @@ export class Handle {
   }
 
   /**
-   * Calls `cb` each time the pointer is pressed on this component. This fires
-   * at the same moment as {@link Handle.onClick}; use it with
-   * {@link Handle.onRelease} to follow a press from start to end.
+   * Calls `cb` each time this component is pressed, by the pointer or the
+   * keyboard, as for {@link Handle.onClick}. This fires at the same moment as
+   * {@link Handle.onClick}; use it with {@link Handle.onRelease} to follow a
+   * press from start to end.
    */
   onPress(cb: PlainCallback): void {
     this.app.wasmApp.onPress(this.wasmHandle, cb);
   }
 
   /**
-   * Calls `cb` each time the pointer is released after a press on this
-   * component, even if the pointer has moved off it.
+   * Calls `cb` each time a press of this component ends: the pointer is
+   * released, even if it has moved off it, or the key that pressed it is, even
+   * if focus has moved since.
    */
   onRelease(cb: PlainCallback): void {
     this.app.wasmApp.onRelease(this.wasmHandle, cb);

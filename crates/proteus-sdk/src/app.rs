@@ -7,8 +7,8 @@ use glam::Vec2;
 use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
-    Interactable, InteractionDef, KeyEvent, KeyMap, KeyRepeat, KeyState, NavigationRequests,
-    ProteusWorld, QuadState, Visibility,
+    Interactable, InteractionDef, KeyEvent, KeyMap, KeyPressedEntity, KeyRepeat, KeyState,
+    NavigationRequests, ProteusWorld, QuadState, Visibility,
 };
 use proteus_ui::{Action, AppAction, KeyBinding};
 
@@ -394,7 +394,11 @@ impl Proteus {
         input.dispatched += 1;
         let event = &mut input.events[i];
         event.action = action;
-        Some(event.clone())
+        let event = event.clone();
+        // The key that pressed a component releases it, whether or not a
+        // callback claims the release, so it can't be left pressed.
+        world.resource_mut::<KeyPressedEntity>().release_by(&event);
+        Some(event)
     }
 
     /// The components a key event goes to, in order: the focused component,
@@ -419,18 +423,29 @@ impl Proteus {
 
     /// Does what the engine does with a key event no callback claimed: queues
     /// a navigation action, when pressed or repeated, for navigation to move
-    /// focus with. For a language binding that runs key callbacks of its own.
+    /// focus with; and on a press of [`Action::Activate`], presses and clicks
+    /// the focused component, as the pointer does, until the key is released.
+    /// For a language binding that runs key callbacks of its own.
     pub fn apply_key_default(&mut self, event: &KeyEvent) {
         let Some(action) = event.action else {
             return;
         };
-        let moves = matches!(event.state, KeyState::Pressed | KeyState::Repeated);
-        if action.is_navigation() && moves {
-            self.world
-                .world
-                .resource_mut::<NavigationRequests>()
-                .0
-                .push(action);
+        let world = &mut self.world.world;
+        match event.state {
+            KeyState::Pressed | KeyState::Repeated if action.moves_focus() => {
+                world.resource_mut::<NavigationRequests>().0.push(action);
+            }
+            KeyState::Pressed if action == Action::Activate => {
+                let focused = world.resource::<FocusState>().focused;
+                if let Some(entity) = focused {
+                    if proteus_ui::focus_blocked(world, entity).is_none() {
+                        world
+                            .resource_mut::<KeyPressedEntity>()
+                            .press(entity, event.clone());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

@@ -30,7 +30,8 @@ use crate::devices::AppDevices;
 use crate::focus::focus_validity_system;
 use crate::hierarchy::{opacity_system, visibility_system};
 use crate::input::{
-    hit_test_system, FocusState, HoveredEntity, InteractionEvents, PointerInput, PressedEntity,
+    hit_test_system, FocusState, HoveredEntity, InteractionEvents, KeyPressedEntity, PointerInput,
+    PressedEntity,
 };
 use crate::interaction::interaction_style_system;
 use crate::keyboard::KeyInput;
@@ -171,6 +172,7 @@ impl ProteusWorld {
         world.init_resource::<InteractionEvents>();
         world.init_resource::<HoveredEntity>();
         world.init_resource::<PressedEntity>();
+        world.init_resource::<KeyPressedEntity>();
         world.init_resource::<FocusState>();
         world.init_resource::<CommandQueue>();
         // A default, replaced with the configured size when a renderer is

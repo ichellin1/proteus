@@ -67,8 +67,8 @@ pub use hierarchy::{
 };
 pub use image::{BakedImage, Image, ImageCrop};
 pub use input::{
-    quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, PointerInput,
-    PressedEntity,
+    quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, KeyPressedEntity,
+    PointerInput, PressedEntity,
 };
 pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{

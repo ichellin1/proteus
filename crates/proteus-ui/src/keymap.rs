@@ -58,8 +58,9 @@ impl Action {
     ];
 
     /// Whether it moves focus: `Up`, `Down`, `Left`, `Right`, `Next` or
-    /// `Previous`.
-    pub fn is_navigation(self) -> bool {
+    /// `Previous`. Navigation moves focus with these when no key callback
+    /// claims them.
+    pub fn moves_focus(self) -> bool {
         matches!(
             self,
             Action::Up

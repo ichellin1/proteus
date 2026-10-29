@@ -294,7 +294,7 @@ Activate's press and click; and the web host keeping bound keys from the browser
   queued for navigation.
 - [x] The engine repeats held keys, after 250 ms and every 100 ms, and reports long presses,
   after 500 ms, both configurable and `System` repeats among them.
-- [ ] Unclaimed, Activate presses and clicks the focused component, with its pressed style, and
+- [x] Unclaimed, Activate presses and clicks the focused component, with its pressed style, and
   releases it on key up.
 - [ ] The web host keeps the browser from acting on bound keys, and has `input.keep_tab`.
 - [ ] Tests for each of these, and the release notes updated.

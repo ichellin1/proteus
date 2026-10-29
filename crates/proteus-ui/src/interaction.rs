@@ -43,7 +43,7 @@ use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 
 use crate::component::{Disabled, Lifecycle};
-use crate::input::{FocusState, HoveredEntity, PressedEntity};
+use crate::input::{FocusState, HoveredEntity, KeyPressedEntity, PressedEntity};
 use crate::transition::{ActiveTransition, Easing, TransitionConfig};
 use crate::QuadState;
 
@@ -182,6 +182,7 @@ pub fn interaction_style_system(
     mut commands: Commands,
     hovered: Res<HoveredEntity>,
     pressed: Res<PressedEntity>,
+    key_pressed: Res<KeyPressedEntity>,
     focus: Res<FocusState>,
     query: InteractionStyleQuery,
 ) {
@@ -196,7 +197,12 @@ pub fn interaction_style_system(
 
         let resolved = if disabled {
             InteractionStateKind::Disabled
-        } else if pressed.entity == Some(entity) {
+        } else if pressed.entity == Some(entity)
+            || key_pressed
+                .pressed
+                .as_ref()
+                .is_some_and(|(e, _)| *e == entity)
+        {
             InteractionStateKind::Pressed
         } else if focus.focused == Some(entity) {
             InteractionStateKind::Focused

@@ -285,7 +285,7 @@ impl KeyEvent {
 
     /// Whether `self` and `other` are events of the same key: the same
     /// [`Code`], or, for a key whose position is unknown, the same [`Key`].
-    fn is_same_key(&self, other: &KeyEvent) -> bool {
+    pub fn is_same_key(&self, other: &KeyEvent) -> bool {
         if self.code == Code::Unidentified {
             self.key == other.key
         } else {

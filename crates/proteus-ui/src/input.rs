@@ -37,6 +37,7 @@ use crate::devices::{AcceptsDevices, AppDevices, InputDevice};
 use crate::draw_order::DrawKey;
 use crate::focus::FocusBlocked;
 use crate::hierarchy::{resolve_world_position_query, EffectiveVisibility};
+use crate::keyboard::{KeyEvent, KeyState};
 use crate::spawn_order::SpawnOrder;
 use crate::{QuadState, Visibility};
 
@@ -79,7 +80,8 @@ pub struct PointerInput {
 /// filled again every tick.
 #[derive(Resource, Default)]
 pub struct InteractionEvents {
-    /// Entities the pointer was pressed on: clicked.
+    /// Entities clicked: the pointer was pressed on them, or the keyboard
+    /// pressed them with [`Action::Activate`](crate::keymap::Action::Activate).
     pub clicked: Vec<Entity>,
     /// Entities the pointer moved onto.
     pub hover_entered: Vec<Entity>,
@@ -88,7 +90,7 @@ pub struct InteractionEvents {
     /// Entities that were pressed.
     pub pressed: Vec<Entity>,
     /// Entities that were released: whatever was pressed, wherever the pointer
-    /// is now.
+    /// is now, or wherever focus is now.
     pub released: Vec<Entity>,
     /// Entities that gained focus.
     pub focused: Vec<Entity>,
@@ -120,6 +122,50 @@ pub struct PressedEntity {
     /// The pressed entity.
     pub entity: Option<Entity>,
     last_position: Option<Vec2>,
+}
+
+/// The entity the keyboard is pressing, through [`Action::Activate`], and the
+/// presses, clicks and releases it made between ticks, which the next tick
+/// reports in [`InteractionEvents`] with the pointer's.
+///
+/// The interaction style system shows the pressed style on it, as on the
+/// pointer's [`PressedEntity`].
+///
+/// [`Action::Activate`]: crate::keymap::Action::Activate
+#[derive(Resource, Default)]
+pub struct KeyPressedEntity {
+    /// The entity pressed, and the press of the key that pressed it.
+    pub pressed: Option<(Entity, KeyEvent)>,
+    pending_pressed: Vec<Entity>,
+    pending_released: Vec<Entity>,
+}
+
+impl KeyPressedEntity {
+    /// Presses and clicks `entity` with the key `press`, releasing the entity
+    /// it was pressing, if any.
+    pub fn press(&mut self, entity: Entity, press: KeyEvent) {
+        self.release();
+        self.pending_pressed.push(entity);
+        self.pressed = Some((entity, press));
+    }
+
+    /// Releases the entity pressed, if `event` is a release of the key that
+    /// pressed it.
+    pub fn release_by(&mut self, event: &KeyEvent) {
+        let by_this_key = self
+            .pressed
+            .as_ref()
+            .is_some_and(|(_, press)| press.is_same_key(event));
+        if event.state == KeyState::Released && by_this_key {
+            self.release();
+        }
+    }
+
+    fn release(&mut self) {
+        if let Some((entity, _)) = self.pressed.take() {
+            self.pending_released.push(entity);
+        }
+    }
 }
 
 /// The entity that has focus, if any. Clicking an entity that can take focus
@@ -257,6 +303,7 @@ pub fn hit_test_system(
     mut hovered: ResMut<HoveredEntity>,
     mut pressed_entity: ResMut<PressedEntity>,
     mut focus: ResMut<FocusState>,
+    mut key_pressed: ResMut<KeyPressedEntity>,
     app_devices: Res<AppDevices>,
     query: HitTestQuery,
     quad_states: Query<&QuadState>,
@@ -275,6 +322,12 @@ pub fn hit_test_system(
     events.dragged.clear();
     events.blurred.append(&mut focus.pending_blurred);
     events.focused.append(&mut focus.pending_focused);
+    // A key press is a click as well, as a pointer press is.
+    events
+        .clicked
+        .extend(key_pressed.pending_pressed.iter().copied());
+    events.pressed.append(&mut key_pressed.pending_pressed);
+    events.released.append(&mut key_pressed.pending_released);
 
     let Some(pos) = pointer.position else {
         // The pointer left the viewport: end any hover. A press or focus
