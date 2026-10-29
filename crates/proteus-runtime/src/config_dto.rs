@@ -7,6 +7,7 @@
 //! included: a setting that silently did nothing would be worse than none.
 
 use crate::{wgpu, ProteusConfig};
+use proteus_ui::KeyRepeat;
 use serde::Deserialize;
 
 /// Overrides for [`ProteusConfig`], deserialized with camelCase field names.
@@ -39,6 +40,43 @@ pub struct ProteusConfigDto {
 pub struct InputDto {
     #[serde(default)]
     pub autofocus: Option<bool>,
+    #[serde(default)]
+    pub key_repeat: Option<KeyRepeatDto>,
+    #[serde(default)]
+    pub long_press_ms: Option<u32>,
+}
+
+/// `"system"`, or `{ delayMs, intervalMs }` for the engine's own repeats.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(untagged)]
+pub enum KeyRepeatDto {
+    System(SystemRepeat),
+    #[serde(rename_all = "camelCase")]
+    Engine {
+        delay_ms: u32,
+        interval_ms: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SystemRepeat {
+    System,
+}
+
+impl From<KeyRepeatDto> for KeyRepeat {
+    fn from(d: KeyRepeatDto) -> Self {
+        match d {
+            KeyRepeatDto::System(_) => KeyRepeat::System,
+            KeyRepeatDto::Engine {
+                delay_ms,
+                interval_ms,
+            } => KeyRepeat::Engine {
+                delay_ms,
+                interval_ms,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -213,6 +251,12 @@ impl ProteusConfigDto {
             if let Some(v) = i.autofocus {
                 config.input.autofocus = v;
             }
+            if let Some(v) = i.key_repeat {
+                config.input.key_repeat = v.into();
+            }
+            if let Some(v) = i.long_press_ms {
+                config.input.long_press_ms = v;
+            }
         }
         Ok(config)
     }
@@ -224,6 +268,29 @@ mod tests {
 
     fn dto(json: &str) -> ProteusConfigDto {
         serde_json::from_str(json).expect("valid DTO")
+    }
+
+    #[test]
+    fn key_repeat_by_the_engine_or_the_system() {
+        let applied = dto(r#"{"input":{"keyRepeat":"system","longPressMs":800}}"#)
+            .apply()
+            .unwrap();
+        assert_eq!(applied.input.key_repeat, KeyRepeat::System);
+        assert_eq!(applied.input.long_press_ms, 800);
+
+        let applied = dto(r#"{"input":{"keyRepeat":{"delayMs":300,"intervalMs":80}}}"#)
+            .apply()
+            .unwrap();
+        assert_eq!(
+            applied.input.key_repeat,
+            KeyRepeat::Engine {
+                delay_ms: 300,
+                interval_ms: 80
+            }
+        );
+        assert!(
+            serde_json::from_str::<ProteusConfigDto>(r#"{"input":{"keyRepeat":"os"}}"#).is_err()
+        );
     }
 
     #[test]

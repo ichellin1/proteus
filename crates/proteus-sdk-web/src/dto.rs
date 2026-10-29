@@ -14,8 +14,8 @@ use wasm_bindgen::JsValue;
 
 use proteus_sdk::{
     Action, Code, ComponentData, ComponentSpec, DropReason, Easing, FocusBlocked, InputDevice,
-    InputDevices, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyState, Modifiers,
-    QuadState, StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
+    InputDevices, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyRepeat, KeyState,
+    Modifiers, QuadState, StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
 
@@ -394,6 +394,7 @@ pub struct KeyEventDto {
     pub state: &'static str,
     pub modifiers: ModifiersDto,
     pub text: Option<String>,
+    pub after_long_press: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -418,6 +419,7 @@ impl KeyEventDto {
             state: match event.state {
                 KeyState::Pressed => "pressed",
                 KeyState::Repeated => "repeated",
+                KeyState::LongPressed => "longPressed",
                 KeyState::Released => "released",
                 _ => "unknown",
             },
@@ -428,6 +430,7 @@ impl KeyEventDto {
                 meta: event.modifiers.meta,
             },
             text: event.text.clone(),
+            after_long_press: event.after_long_press,
         }
     }
 }
@@ -435,6 +438,39 @@ impl KeyEventDto {
 /// `event` as a TypeScript `KeyEvent` object.
 pub fn key_event_to_js(event: &KeyEvent, key_map: &KeyMap) -> JsValue {
     serde_wasm_bindgen::to_value(&KeyEventDto::new(event, key_map)).unwrap_or(JsValue::NULL)
+}
+
+/// `"system"`, or `{ delayMs, intervalMs }` for the engine's own repeats.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(untagged)]
+pub enum KeyRepeatDto {
+    System(SystemRepeat),
+    #[serde(rename_all = "camelCase")]
+    Engine {
+        delay_ms: u32,
+        interval_ms: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SystemRepeat {
+    System,
+}
+
+impl From<KeyRepeatDto> for KeyRepeat {
+    fn from(d: KeyRepeatDto) -> Self {
+        match d {
+            KeyRepeatDto::System(_) => KeyRepeat::System,
+            KeyRepeatDto::Engine {
+                delay_ms,
+                interval_ms,
+            } => KeyRepeat::Engine {
+                delay_ms,
+                interval_ms,
+            },
+        }
+    }
 }
 
 /// `{ key?, code?, shift?, control?, alt?, meta? }`: a key binding, naming the

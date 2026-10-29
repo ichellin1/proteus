@@ -1,7 +1,7 @@
 // Tests of keyboard input: turning the web's key names into keys, and
 // `KeyInput`'s record of a tick's key events and the keys held.
 
-use proteus_ui::{Code, Key, KeyEvent, KeyInput, KeyState, Modifiers, NamedKey};
+use proteus_ui::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};
 
 fn event(key: Key, code: Code, state: KeyState) -> KeyEvent {
     KeyEvent::new(key, code, state, Modifiers::default(), None)
@@ -84,9 +84,11 @@ fn web_names_round_trip() {
 // KeyInput
 // ---------------------------------------------------------------------------
 
+// With the system's repeats, so the host's repeat is kept.
 #[test]
 fn events_keep_the_order_they_happened_in() {
     let mut input = KeyInput::default();
+    input.repeat = KeyRepeat::System;
     input.record(letter("a", Code::KeyA, KeyState::Pressed));
     input.record(enter(KeyState::Pressed));
     input.record(letter("a", Code::KeyA, KeyState::Released));
@@ -187,4 +189,121 @@ fn a_second_press_of_a_held_key_replaces_the_first() {
 
     input.release_all();
     assert_eq!(input.events, vec![enter(KeyState::Released)]);
+}
+
+// ---------------------------------------------------------------------------
+// repeats and long presses
+// ---------------------------------------------------------------------------
+
+// The states `advance` adds over `secs` seconds in steps of `dt`.
+fn states_over(input: &mut KeyInput, secs: f32, dt: f32) -> Vec<(u32, KeyState)> {
+    let mut added = Vec::new();
+    let steps = (secs / dt).round() as u32;
+    for step in 1..=steps {
+        input.clear_events();
+        input.advance(dt);
+        for e in &input.events {
+            added.push((step * (dt * 1000.0).round() as u32, e.state));
+        }
+    }
+    added
+}
+
+// The engine's timing, the same whatever the user's keyboard settings: first
+// after 250 ms, then every 100 ms, and a long press once at 500 ms.
+#[test]
+fn the_engine_repeats_a_held_key_and_long_presses_it_once() {
+    let mut input = KeyInput::default();
+    input.record(enter(KeyState::Pressed));
+
+    let added = states_over(&mut input, 0.7, 0.05);
+    assert_eq!(
+        added,
+        vec![
+            (250, KeyState::Repeated),
+            (350, KeyState::Repeated),
+            (450, KeyState::Repeated),
+            (500, KeyState::LongPressed),
+            (550, KeyState::Repeated),
+            (650, KeyState::Repeated),
+        ]
+    );
+}
+
+#[test]
+fn the_engine_ignores_the_systems_repeats() {
+    let mut input = KeyInput::default();
+    input.record(enter(KeyState::Pressed));
+    input.record(enter(KeyState::Repeated));
+    assert_eq!(input.events, vec![enter(KeyState::Pressed)]);
+}
+
+#[test]
+fn with_the_systems_repeats_the_engine_adds_none() {
+    let mut input = KeyInput::default();
+    input.repeat = KeyRepeat::System;
+    input.record(enter(KeyState::Pressed));
+    let added = states_over(&mut input, 0.7, 0.05);
+    assert_eq!(added, vec![(500, KeyState::LongPressed)]);
+}
+
+// After a long pause, such as the app in the background, a held key repeats
+// once, not once for every interval it missed.
+#[test]
+fn a_long_step_adds_one_repeat() {
+    let mut input = KeyInput::default();
+    input.record(enter(KeyState::Pressed));
+    input.clear_events();
+    input.advance(2.0);
+    let repeats = input
+        .events
+        .iter()
+        .filter(|e| e.state == KeyState::Repeated)
+        .count();
+    assert_eq!(repeats, 1);
+}
+
+#[test]
+fn a_release_says_whether_the_key_was_long_pressed() {
+    let mut input = KeyInput::default();
+    input.record(enter(KeyState::Pressed));
+    input.advance(0.1);
+    input.record(enter(KeyState::Released));
+    assert!(!input.events.last().unwrap().after_long_press, "a tap");
+
+    input.record(enter(KeyState::Pressed));
+    input.advance(0.6);
+    input.record(enter(KeyState::Released));
+    assert!(input.events.last().unwrap().after_long_press, "a hold");
+
+    input.record(enter(KeyState::Pressed));
+    input.advance(0.6);
+    input.release_all();
+    assert!(
+        input.events.last().unwrap().after_long_press,
+        "a hold ended by losing focus"
+    );
+}
+
+#[test]
+fn repeat_and_long_press_times_can_change() {
+    let mut input = KeyInput::default();
+    input.repeat = KeyRepeat::Engine {
+        delay_ms: 100,
+        interval_ms: 50,
+    };
+    input.long_press_ms = 300;
+    input.record(enter(KeyState::Pressed));
+    let added = states_over(&mut input, 0.3, 0.05);
+    assert_eq!(
+        added,
+        vec![
+            (100, KeyState::Repeated),
+            (150, KeyState::Repeated),
+            (200, KeyState::Repeated),
+            (250, KeyState::Repeated),
+            (300, KeyState::Repeated),
+            (300, KeyState::LongPressed),
+        ]
+    );
 }

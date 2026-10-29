@@ -2468,7 +2468,8 @@ fn turning_the_pointer_off_ends_its_hover_and_press() {
 fn turning_the_keyboard_off_releases_the_keys_held() {
     let mut app = Proteus::new();
     app.key_event(enter_key(KeyState::Pressed));
-    app.tick(1.0);
+    // Shorter than the repeat delay, so the release is the only event.
+    app.tick(0.016);
 
     app.set_input_devices(InputDevices::POINTER);
     let events = &app.world().resource::<KeyInput>().events;
@@ -2983,4 +2984,33 @@ fn the_key_chain_leaves_out_components_that_cannot_take_keys() {
 
     inner.focus(&mut app).unwrap();
     assert_eq!(app.key_chain(), vec![inner, outer]);
+}
+
+// A held key's repeats reach key callbacks on the ticks after it's pressed,
+// whatever the system's repeat settings.
+#[test]
+fn a_held_key_repeats_to_key_callbacks() {
+    let mut app = Proteus::new();
+    let states = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let inner = states.clone();
+    app.on_key(move |_, e| {
+        inner.borrow_mut().push(e.state);
+        KeyResult::Ignored
+    });
+    app.key_event(enter_key(KeyState::Pressed));
+    for _ in 0..12 {
+        app.tick(0.05);
+    }
+    app.key_event(enter_key(KeyState::Released));
+    app.tick(0.05);
+
+    let states = states.borrow();
+    assert_eq!(states.first(), Some(&KeyState::Pressed));
+    assert_eq!(states.last(), Some(&KeyState::Released));
+    let repeats = states.iter().filter(|s| **s == KeyState::Repeated).count();
+    let long_presses = states
+        .iter()
+        .filter(|s| **s == KeyState::LongPressed)
+        .count();
+    assert_eq!((repeats, long_presses), (4, 1));
 }

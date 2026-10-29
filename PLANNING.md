@@ -292,7 +292,7 @@ Activate's press and click; and the web host keeping bound keys from the browser
 - [x] Key callbacks on components and on the app. Events go up from the focused component,
   skipping those that can't take them, before the update; unclaimed navigation actions are
   queued for navigation.
-- [ ] The engine repeats held keys, after 250 ms and every 100 ms, and reports long presses,
+- [x] The engine repeats held keys, after 250 ms and every 100 ms, and reports long presses,
   after 500 ms, both configurable and `System` repeats among them.
 - [ ] Unclaimed, Activate presses and clicks the focused component, with its pressed style, and
   releases it on key up.

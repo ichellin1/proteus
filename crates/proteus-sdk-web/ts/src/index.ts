@@ -26,6 +26,7 @@ import type {
   InputDevice,
   KeyBinding,
   KeyEvent,
+  KeyRepeat,
   ChildBehavior,
   ComponentData,
   ComponentSpec,
@@ -1059,6 +1060,27 @@ export class ProteusApp {
    */
   unbindKey(binding: KeyBinding): Action | undefined {
     return this.wasmApp.unbindKey(binding) as Action | undefined;
+  }
+
+  /**
+   * Sets how held keys repeat: `{ delayMs, intervalMs }` for the engine's own
+   * repeats, the same on every platform and device, or `"system"` for the
+   * system's, at the speed each user set, which also suits devices that send
+   * a press and then repeats but no release. The engine's, first after 250 ms
+   * then every 100 ms, by default.
+   *
+   * @throws If `repeat` is neither.
+   */
+  setKeyRepeat(repeat: KeyRepeat): void {
+    this.wasmApp.setKeyRepeat(repeat);
+  }
+
+  /**
+   * Sets how long a key is held before it's long-pressed, in milliseconds.
+   * 500 by default.
+   */
+  setLongPressMs(ms: number): void {
+    this.wasmApp.setLongPressMs(ms);
   }
 
   /** Puts back the default key bindings, removing all the others. */

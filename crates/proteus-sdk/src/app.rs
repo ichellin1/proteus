@@ -7,8 +7,8 @@ use glam::Vec2;
 use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
-    Interactable, InteractionDef, KeyEvent, KeyMap, KeyState, NavigationRequests, ProteusWorld,
-    QuadState, Visibility,
+    Interactable, InteractionDef, KeyEvent, KeyMap, KeyRepeat, KeyState, NavigationRequests,
+    ProteusWorld, QuadState, Visibility,
 };
 use proteus_ui::{Action, AppAction, KeyBinding};
 
@@ -349,10 +349,11 @@ impl Proteus {
         let mut pointer = self.world.world.resource_mut::<proteus_ui::PointerInput>();
         pointer.just_pressed = false;
         pointer.just_released = false;
-        self.world
-            .world
-            .resource_mut::<proteus_ui::KeyInput>()
-            .clear_events();
+        let mut keys = self.world.world.resource_mut::<proteus_ui::KeyInput>();
+        keys.clear_events();
+        // Its repeats and long presses go to the next tick, with the keys the
+        // host reports by then.
+        keys.advance(dt);
         self.world
             .world
             .resource_mut::<NavigationRequests>()
@@ -467,6 +468,39 @@ impl Proteus {
     /// [`KeyMap::default_bindings`].
     pub fn reset_key_map(&mut self) {
         self.world.world.resource_mut::<KeyMap>().reset();
+    }
+
+    /// Sets how held keys repeat: by the engine, after a delay and at an
+    /// interval of its own, the same on every platform, or as the system
+    /// repeats them. The engine's, first after 250 ms then every 100 ms, by
+    /// default.
+    pub fn set_key_repeat(&mut self, repeat: KeyRepeat) {
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .repeat = repeat;
+    }
+
+    /// How held keys repeat.
+    pub fn key_repeat(&self) -> KeyRepeat {
+        self.world.world.resource::<proteus_ui::KeyInput>().repeat
+    }
+
+    /// Sets how long a key is held before it's long-pressed, in milliseconds.
+    /// 500 by default.
+    pub fn set_long_press_ms(&mut self, ms: u32) {
+        self.world
+            .world
+            .resource_mut::<proteus_ui::KeyInput>()
+            .long_press_ms = ms;
+    }
+
+    /// How long a key is held before it's long-pressed, in milliseconds.
+    pub fn long_press_ms(&self) -> u32 {
+        self.world
+            .world
+            .resource::<proteus_ui::KeyInput>()
+            .long_press_ms
     }
 
     /// Defines an action of the app's own, named `name`, to bind keys to and

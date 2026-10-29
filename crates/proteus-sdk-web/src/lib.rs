@@ -946,6 +946,23 @@ impl ProteusApp {
         Ok(action.and_then(|a| dto::action_name(a, proteus.key_map())))
     }
 
+    /// Calls [`Proteus::set_key_repeat`](sdk::Proteus::set_key_repeat).
+    /// `repeat` is `"system"` or `{ delayMs, intervalMs }`. Throws if it's
+    /// neither.
+    #[wasm_bindgen(js_name = setKeyRepeat)]
+    pub fn set_key_repeat(&mut self, repeat: JsValue) -> Result<(), JsValue> {
+        let dto: dto::KeyRepeatDto = serde_wasm_bindgen::from_value(repeat)
+            .map_err(|e| crate::js_error(&format!("invalid key repeat: {e}")))?;
+        self.0.borrow_mut().set_key_repeat(dto.into());
+        Ok(())
+    }
+
+    /// Calls [`Proteus::set_long_press_ms`](sdk::Proteus::set_long_press_ms).
+    #[wasm_bindgen(js_name = setLongPressMs)]
+    pub fn set_long_press_ms(&mut self, ms: u32) {
+        self.0.borrow_mut().set_long_press_ms(ms);
+    }
+
     /// Calls [`Proteus::reset_key_map`](sdk::Proteus::reset_key_map).
     #[wasm_bindgen(js_name = resetKeyMap)]
     pub fn reset_key_map(&mut self) {

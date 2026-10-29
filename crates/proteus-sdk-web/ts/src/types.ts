@@ -372,6 +372,16 @@ export interface ProteusConfigOverrides {
      * first. Default `false`, so an app in a page doesn't take the page's focus.
      */
     autofocus?: boolean;
+    /**
+     * How held keys repeat. Default `{ delayMs: 250, intervalMs: 100 }`. See
+     * {@link ProteusApp.setKeyRepeat}.
+     */
+    keyRepeat?: KeyRepeat;
+    /**
+     * How long a key is held before it's long-pressed, in milliseconds.
+     * Default `500`.
+     */
+    longPressMs?: number;
   };
 }
 
@@ -437,13 +447,29 @@ export interface KeyEvent {
    * the key, so a callback works with any key, or other device, bound to it.
    */
   action?: Action;
-  /** What happened to the key. */
-  state: "pressed" | "repeated" | "released";
+  /**
+   * What happened to the key. A held key is `"repeated"`, as
+   * {@link ProteusApp.setKeyRepeat} sets, and once `"longPressed"`, after the
+   * time {@link ProteusApp.setLongPressMs} sets.
+   */
+  state: "pressed" | "repeated" | "longPressed" | "released";
   /** The modifiers held at the time. */
   modifiers: Modifiers;
   /** The text the key types, if any. Only a press or a repeat types text. */
   text?: string;
+  /**
+   * On a release, whether the key was long-pressed before it, so a tap can be
+   * told from a hold. `false` on any other event.
+   */
+  afterLongPress: boolean;
 }
+
+/**
+ * How held keys repeat: `{ delayMs, intervalMs }` for the engine's own
+ * repeats, the same on every platform and device, or `"system"` for the
+ * system's, at the speed each user set.
+ */
+export type KeyRepeat = { delayMs: number; intervalMs: number } | "system";
 
 /**
  * A key and the modifiers held with it, for {@link ProteusApp.bindKey}. Name

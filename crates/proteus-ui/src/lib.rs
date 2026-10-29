@@ -74,7 +74,7 @@ pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{
     interaction_style_system, InteractionDef, InteractionState, InteractionStateKind, StyleOverride,
 };
-pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyState, Modifiers, NamedKey};
+pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};
 pub use keymap::{Action, AppAction, BoundKey, KeyBinding, KeyMap, NavigationRequests};
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
