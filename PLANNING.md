@@ -116,6 +116,32 @@ it's planned.
   doesn't match one key press, and need the text input events browsers and winit send apart from
   keys. Each key's own text is enough for simple typing in this release; full text input is a
   candidate in ROADMAP.
+- **Decided (2026-10-29): any interactive component can take focus,** as the pointer already
+  treats it: one that's enabled, visible, accepts a navigating device the app accepts, and isn't
+  transitioning, unless its `allow_navigation` is set. A component the app forgot to make
+  non-interactive becomes a stop for navigation, as it's already a target for the pointer; the
+  guides say so. An opt-in, like the web's `tabindex`, would go against components accepting
+  every device by default.
+- **Decided (2026-10-29): focus follows a component into what it transforms into,** by
+  default. Through a channel, it goes to the `to` component; in a split, to the first target;
+  in a merge in which any source had focus, to the destination. It moves when the transition
+  starts, and while the target can't take events, they go on to its ancestors and the app. The
+  app can put focus elsewhere in code. A component moving with `animate_to` keeps its focus.
+- **Decided (2026-10-29): the engine never moves focus on its own.** When the focused component
+  can no longer take focus, because it's destroyed, hidden, disabled, made non-interactive or
+  stops accepting navigating devices, focus is cleared, `on_blur` fires (except on a destroyed
+  component, whose callbacks are gone), and the app is told through an app-wide callback,
+  where a well-designed app puts focus where it belongs. Otherwise focus stays empty until the
+  user presses a navigation action. Back still reaches the app-wide handler with nothing
+  focused, so an app that handles it can't leave a screen locked.
+- **Decided (2026-10-29): with nothing focused, navigation starts from where the user was.**
+  The engine records where the lost component was, and the first navigation action starts from
+  there: Up, Down, Left and Right go to the nearest component in that direction, Next and
+  Previous carry on in Tab order, and Activate does nothing. Browsers keep the same starting
+  point when the focused element is removed. With no such place, at the start or after the
+  screen has changed, it starts from the hovered component, then a component the app has marked
+  as its default focus, like tvOS's preferred focus, and last the first component in Tab order.
+  A first component is never focused except in answer to a key.
 
 ### Step 1 — Keys reach the engine
 
@@ -125,9 +151,11 @@ window or canvas loses focus.
 
 ### Step 2 — Input devices and focus
 
-The set of devices an app and each component accept, and an API to give a component focus,
-clear it and ask which component has it. To decide: what happens to focus when the focused
-component is destroyed, hidden, disabled or made non-interactive.
+The set of devices an app and each component accept, and the focus API, in Rust and
+TypeScript: give a component focus, failing with the reason when it can't take it; ask whether
+it has focus and which component does; clear it; mark a default focus; and the app-wide
+callback for focus that's lost. Focus follows transformations, and is cleared when its component
+can no longer take it. Today focus is never cleared, so a destroyed component keeps it.
 
 ### Step 3 — The key map and actions
 
@@ -138,9 +166,10 @@ Activate's default is to fire the focused component's click.
 ### Step 4 — Navigation
 
 The schedule's navigation stage moves focus with the Up, Down, Left, Right, Next and Previous
-actions, follows the last input wins, and reads `TransitionInteractionConfig::allow_navigation`. To decide: the Tab
-order, how the arrow keys choose the next component, and whether focus can be kept inside a
-component, such as a dialog, in this release.
+actions, follows the last input wins, starts from where the user was when nothing has focus,
+and reads `TransitionInteractionConfig::allow_navigation`. To decide: the Tab order, how the
+arrow keys choose the next component, and whether focus can be kept inside a component, such as
+a dialog, in this release.
 
 ### Step 5 — Interaction styles for glow and border
 
