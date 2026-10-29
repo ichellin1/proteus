@@ -142,6 +142,14 @@ it's planned.
   screen has changed, it starts from the hovered component, then a component the app has marked
   as its default focus, like tvOS's preferred focus, and last the first component in Tab order.
   A first component is never focused except in answer to a key.
+- **Decided (2026-10-29): Activate presses and clicks the focused component, as the pointer
+  does,** unless a handler claims it. Its key down fires `on_press` and `on_click` and shows the
+  pressed style; its key up fires `on_release` on the component that was pressed, even if focus
+  has moved since, as a pointer released off a button still releases it. A repeat doesn't click
+  again. So a component is styled and wired once and behaves the same with every device, and
+  apps that handle clicks work from the keyboard unchanged. A component that should behave
+  otherwise, such as a slider, handles Activate itself. The guides say that a click means the
+  component was chosen, by whatever device, as a `click` does on the web.
 
 ### Step 1 — Keys reach the engine
 
@@ -160,8 +168,8 @@ can no longer take it. Today focus is never cleared, so a destroyed component ke
 ### Step 3 — The key map and actions
 
 The key map, its built-in actions and the app's own, and callbacks for key events on components
-and on the app, in Rust and TypeScript, going up from the focused component. To decide: whether
-Activate's default is to fire the focused component's click.
+and on the app, in Rust and TypeScript, going up from the focused component. Unclaimed,
+Activate presses and clicks the focused component.
 
 ### Step 4 — Navigation
 
