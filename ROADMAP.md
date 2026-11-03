@@ -145,6 +145,10 @@ Tied to no version; each is done when it's ready.
 
 - **The README on GitHub, npm and crates.io:** check that it renders correctly on all three,
   and that its images load off GitHub. Left over from v0.1.0.
+- **Linux CI on Ubuntu 26.04:** CI's test job runs on Ubuntu 24.04, since on 26.04 Mesa 26's
+  software Vulkan driver, lavapipe, crashes the renderer's GPU tests with a segfault, while they
+  pass on macOS and Windows. Find which test crashes, report it to Mesa if it's the driver, and
+  move back to `ubuntu-latest` once it passes.
 
 ## Candidates
 
