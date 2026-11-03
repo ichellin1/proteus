@@ -20,6 +20,15 @@
 //! Components are measured where they're drawn, a rotated one by the box
 //! around it.
 //!
+//! A component with a [`FocusGroup`] makes the components under it a group.
+//! Focus moves among a group's members first, and when it would go past the
+//! group's edge, the group lets it leave, stops it, or wraps it round, for
+//! each action. Focus entering a group lands on the nearest member, the one
+//! focused last, or the one marked [`DefaultFocus`]. Groups nest: the
+//! innermost group's rules apply first. A group's members come together in
+//! Tab order, and a member of a group focus is in can take focus off screen,
+//! so a scrolling row's next item can be reached.
+//!
 //! With nothing focused, navigation starts from where focus was lost,
 //! [`FocusState::lost_at`]; or else focuses the hovered component, the one
 //! marked [`DefaultFocus`], or the first in reading order, the last for
@@ -69,6 +78,284 @@ impl Neighbours {
         if let Some(e) = neighbour {
             self.0.push((action, e));
         }
+    }
+}
+
+/// What a focus group does with an action that would take focus past its
+/// edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Containment {
+    /// Let focus leave the group, to the next group out, or the app.
+    #[default]
+    Leave,
+    /// Keep focus where it is.
+    Stop,
+    /// Wrap focus round to the other end of the group.
+    Wrap,
+}
+
+/// Where focus lands when it enters a focus group from outside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FocusEntry {
+    /// On the member nearest where focus came from.
+    #[default]
+    Nearest,
+    /// On the member that had focus last, as a row of a TV home page does;
+    /// the nearest the first time.
+    LastFocused,
+    /// On the member marked [`DefaultFocus`]; the nearest if none is.
+    Default,
+}
+
+/// Makes the components under a component a focus group; see the module
+/// docs.
+///
+/// ```
+/// use proteus_ui::{Action, FocusEntry, FocusGroup};
+/// // A row of a TV home page: Left and Right stay in it, Up and Down leave it,
+/// // and coming back lands where the user was.
+/// let row = FocusGroup::new()
+///     .stop(&[Action::Left, Action::Right])
+///     .entry(FocusEntry::LastFocused);
+/// // A dialog: nothing leaves it, and Tab wraps round.
+/// let dialog = FocusGroup::new()
+///     .stop(&[Action::Up, Action::Down, Action::Left, Action::Right])
+///     .wrap(&[Action::Next, Action::Previous]);
+/// # let _ = (row, dialog);
+/// ```
+#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
+pub struct FocusGroup {
+    // For each of `Action::MOVING_FOCUS`, in its order.
+    containment: [Containment; 6],
+    entry: FocusEntry,
+    last_focused: Option<Entity>,
+}
+
+impl FocusGroup {
+    /// A group that lets every action leave it, and that focus enters at the
+    /// nearest member.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Keeps focus in the group for `actions`: at its edge, they don't move
+    /// focus.
+    pub fn stop(self, actions: &[Action]) -> Self {
+        self.with(actions, Containment::Stop)
+    }
+
+    /// Wraps `actions` round at the group's edge: past the last member, focus
+    /// goes to the first, and the other way.
+    pub fn wrap(self, actions: &[Action]) -> Self {
+        self.with(actions, Containment::Wrap)
+    }
+
+    /// Lets `actions` take focus out of the group at its edge, as every action
+    /// does by default.
+    pub fn leave(self, actions: &[Action]) -> Self {
+        self.with(actions, Containment::Leave)
+    }
+
+    /// Sets where focus lands when it enters the group.
+    pub fn entry(mut self, entry: FocusEntry) -> Self {
+        self.entry = entry;
+        self
+    }
+
+    fn with(mut self, actions: &[Action], containment: Containment) -> Self {
+        for action in actions {
+            if let Some(i) = Action::MOVING_FOCUS.iter().position(|a| a == action) {
+                self.containment[i] = containment;
+            }
+        }
+        self
+    }
+
+    /// What the group does with `action` at its edge. [`Containment::Leave`]
+    /// for an action that doesn't move focus.
+    pub fn containment(&self, action: Action) -> Containment {
+        Action::MOVING_FOCUS
+            .iter()
+            .position(|a| *a == action)
+            .map_or(Containment::Leave, |i| self.containment[i])
+    }
+
+    /// Where focus lands when it enters the group.
+    pub fn entry_rule(&self) -> FocusEntry {
+        self.entry
+    }
+
+    /// The member that had focus last, if any.
+    pub fn last_focused(&self) -> Option<Entity> {
+        self.last_focused
+    }
+}
+
+/// The focus groups `entity` is in, innermost first.
+fn groups_of(world: &World, entity: Entity) -> Vec<Entity> {
+    let mut groups = Vec::new();
+    let mut next = world.get::<ChildOf>(entity).map(|c| c.parent());
+    while let Some(e) = next {
+        if world.get::<FocusGroup>(e).is_some() {
+            groups.push(e);
+        }
+        next = world.get::<ChildOf>(e).map(|c| c.parent());
+    }
+    groups
+}
+
+/// Whether `entity` is under `ancestor`.
+fn is_under(world: &World, entity: Entity, ancestor: Entity) -> bool {
+    let mut next = world.get::<ChildOf>(entity).map(|c| c.parent());
+    while let Some(e) = next {
+        if e == ancestor {
+            return true;
+        }
+        next = world.get::<ChildOf>(e).map(|c| c.parent());
+    }
+    false
+}
+
+/// The outermost focus group `entity` is in under `scope`, or under the app
+/// for `None`.
+fn outermost_group_under(world: &World, entity: Entity, scope: Option<Entity>) -> Option<Entity> {
+    let mut outermost = None;
+    let mut next = world.get::<ChildOf>(entity).map(|c| c.parent());
+    while let Some(e) = next {
+        if Some(e) == scope {
+            break;
+        }
+        if world.get::<FocusGroup>(e).is_some() {
+            outermost = Some(e);
+        }
+        next = world.get::<ChildOf>(e).map(|c| c.parent());
+    }
+    outermost
+}
+
+/// `items`, all under `scope`, in Tab order: reading order, with each focus
+/// group's members together, read in their own order, where the group
+/// appears.
+fn tab_order(
+    world: &World,
+    items: &[(Entity, Rect)],
+    scope: Option<Entity>,
+    direction: ReadingDirection,
+) -> Vec<(Entity, Rect)> {
+    let mut units: Vec<(Entity, Rect)> = Vec::new();
+    let mut groups: Vec<(Entity, Vec<(Entity, Rect)>)> = Vec::new();
+    for item in items {
+        match outermost_group_under(world, item.0, scope) {
+            None => units.push(*item),
+            Some(g) => match groups.iter_mut().find(|(e, _)| *e == g) {
+                Some((_, members)) => members.push(*item),
+                None => groups.push((g, vec![*item])),
+            },
+        }
+    }
+    for (g, members) in &groups {
+        let rect = world_rect(world, *g).unwrap_or_else(|| bounds(members));
+        units.push((*g, rect));
+    }
+    let mut ordered = Vec::new();
+    for unit in reading_order(&units, direction) {
+        match groups.iter().find(|(g, _)| *g == unit.0) {
+            Some((g, members)) => {
+                ordered.extend(tab_order(world, members, Some(*g), direction));
+            }
+            None => ordered.push(unit),
+        }
+    }
+    ordered
+}
+
+/// The box around `items`.
+fn bounds(items: &[(Entity, Rect)]) -> Rect {
+    items.iter().fold(
+        Rect {
+            min: Vec2::INFINITY,
+            max: Vec2::NEG_INFINITY,
+        },
+        |b, (_, r)| Rect {
+            min: b.min.min(r.min),
+            max: b.max.max(r.max),
+        },
+    )
+}
+
+/// The member a group wraps round to for an arrow in `dir`: the one furthest
+/// the other way among those in line with `from`, or among all if none is.
+fn wrap_in_direction(from: &Rect, dir: Vec2, members: &[(Entity, Rect)]) -> Option<Entity> {
+    let in_line: Vec<&(Entity, Rect)> = members
+        .iter()
+        .filter(|(_, r)| {
+            if dir.x != 0.0 {
+                r.min.y < from.max.y && from.min.y < r.max.y
+            } else {
+                r.min.x < from.max.x && from.min.x < r.max.x
+            }
+        })
+        .collect();
+    let pool: Vec<&(Entity, Rect)> = if in_line.is_empty() {
+        members.iter().collect()
+    } else {
+        in_line
+    };
+    pool.into_iter()
+        .min_by(|(_, a), (_, b)| a.center().dot(dir).total_cmp(&b.center().dot(dir)))
+        .map(|(e, _)| *e)
+}
+
+/// Where focus lands in the groups `target` is in that `focused` isn't, from
+/// the outermost in, by each group's [`FocusEntry`].
+fn enter(world: &World, target: Entity, focused: Option<Entity>) -> Entity {
+    let entered: Vec<Entity> = groups_of(world, target)
+        .into_iter()
+        .rev()
+        .filter(|g| focused.is_none_or(|f| !is_under(world, f, *g)))
+        .collect();
+    let mut target = target;
+    for g in entered {
+        if !is_under(world, target, g) {
+            continue;
+        }
+        let Some(group) = world.get::<FocusGroup>(g) else {
+            continue;
+        };
+        let can_take = |e: &Entity| is_under(world, *e, g) && focus_blocked(world, *e).is_none();
+        target = match group.entry {
+            FocusEntry::Nearest => target,
+            FocusEntry::LastFocused => group.last_focused.filter(can_take).unwrap_or(target),
+            FocusEntry::Default => {
+                let mut query = world.try_query_filtered::<Entity, With<DefaultFocus>>();
+                query
+                    .as_mut()
+                    .and_then(|q| q.iter(world).find(can_take))
+                    .unwrap_or(target)
+            }
+        };
+    }
+    target
+}
+
+/// Records, in each focus group the focused component is in, that it had
+/// focus last. Runs after [`navigation_system`].
+pub fn remember_group_focus_system(
+    focus: Res<FocusState>,
+    parents: Query<&ChildOf>,
+    mut groups: Query<&mut FocusGroup>,
+) {
+    let Some(focused) = focus.focused else {
+        return;
+    };
+    let mut next = parents.get(focused).ok().map(|c| c.parent());
+    while let Some(e) = next {
+        if let Ok(mut group) = groups.get_mut(e) {
+            if group.last_focused != Some(focused) {
+                group.last_focused = Some(focused);
+            }
+        }
+        next = parents.get(e).ok().map(|c| c.parent());
     }
 }
 
@@ -229,11 +516,16 @@ fn step(
             None => (-1, false),
         },
         Err(place) => {
+            // The place goes before the first component that doesn't read
+            // before it.
             let marker = Entity::PLACEHOLDER;
-            let mut with_place = ordered.to_vec();
-            with_place.push((marker, place));
-            let order = reading_order(&with_place, direction);
-            let i = order.iter().position(|(c, _)| *c == marker).expect("added");
+            let reads_before = |r: Rect| {
+                reading_order(&[(marker, place), (Entity::PLACEHOLDER, r)], direction)[0].1 != place
+            };
+            let i = ordered
+                .iter()
+                .position(|(_, r)| !reads_before(*r))
+                .unwrap_or(ordered.len());
             (i as isize - 1, false)
         }
     };
@@ -255,8 +547,8 @@ fn step(
 }
 
 /// The components focus can move to: those that can take focus and are on
-/// screen, with the box each is drawn in.
-fn candidates(world: &World) -> Vec<(Entity, Rect)> {
+/// screen, or off screen in one of `groups`, with the box each is drawn in.
+fn candidates(world: &World, groups: &[Entity]) -> Vec<(Entity, Rect)> {
     let viewport = world.resource::<ViewportSize>().0.map(|size| Rect {
         min: -size / 2.0,
         max: size / 2.0,
@@ -270,9 +562,9 @@ fn candidates(world: &World) -> Vec<(Entity, Rect)> {
         .filter(|e| focus_blocked(world, *e).is_none())
         .filter_map(|e| {
             let rect = world_rect(world, e)?;
-            viewport
-                .is_none_or(|v| v.overlaps(&rect))
-                .then_some((e, rect))
+            let shown = viewport.is_none_or(|v| v.overlaps(&rect))
+                || groups.iter().any(|g| is_under(world, e, *g));
+            shown.then_some((e, rect))
         })
         .collect()
 }
@@ -332,7 +624,8 @@ fn move_target(world: &World, action: Action) -> Option<Entity> {
         return Some(named);
     }
 
-    let candidates: Vec<(Entity, Rect)> = candidates(world)
+    let groups = focused.map_or_else(Vec::new, |f| groups_of(world, f));
+    let all: Vec<(Entity, Rect)> = candidates(world, &groups)
         .into_iter()
         .filter(|(e, _)| Some(*e) != focused)
         .collect();
@@ -340,30 +633,64 @@ fn move_target(world: &World, action: Action) -> Option<Entity> {
         Some(rect) => Some((focused, rect)),
         None => focus.lost_at.as_ref().map(|qs| (None, Rect::around(qs))),
     };
-
     let Some((from_entity, from_rect)) = from else {
-        return start_target(world, action, &candidates);
+        return start_target(world, action, &all).map(|t| enter(world, t, None));
     };
-    if let Some(dir) = direction(action) {
-        return nearest_in_direction(&from_rect, dir, &candidates);
-    }
-    let forward = match action {
-        Action::Next => true,
-        Action::Previous => false,
-        _ => return None,
-    };
+
     let reading = *world.resource::<ReadingDirection>();
-    let wraps = world.resource::<TabWraps>().0;
-    let mut ordered = candidates;
-    let from = match from_entity {
-        Some(e) => {
-            ordered.push((e, from_rect));
-            Ok(e)
+    // From the innermost group focus is in, out to the app: the first that
+    // has a member to move to, or stops or wraps the action, decides.
+    for scope in groups.iter().map(|g| Some(*g)).chain([None]) {
+        let members: Vec<(Entity, Rect)> = all
+            .iter()
+            .filter(|(e, _)| scope.is_none_or(|g| is_under(world, *e, g)))
+            .copied()
+            .collect();
+        let containment = match scope {
+            Some(g) => world
+                .get::<FocusGroup>(g)
+                .map_or(Containment::Leave, |group| group.containment(action)),
+            None if world.resource::<TabWraps>().0 => Containment::Wrap,
+            None => Containment::Stop,
+        };
+        let target = if let Some(dir) = direction(action) {
+            nearest_in_direction(&from_rect, dir, &members).or_else(|| {
+                // The arrows don't wrap at the app's edge, whatever Tab does.
+                (scope.is_some() && containment == Containment::Wrap)
+                    .then(|| wrap_in_direction(&from_rect, dir, &members))
+                    .flatten()
+            })
+        } else {
+            let forward = match action {
+                Action::Next => true,
+                Action::Previous => false,
+                _ => return None,
+            };
+            let mut ordered = members;
+            let from = match from_entity {
+                Some(e) => {
+                    ordered.push((e, from_rect));
+                    Ok(e)
+                }
+                None => Err(from_rect),
+            };
+            let ordered = tab_order(world, &ordered, scope, reading);
+            step(
+                &ordered,
+                from,
+                forward,
+                containment == Containment::Wrap,
+                reading,
+            )
+        };
+        if let Some(target) = target {
+            return Some(enter(world, target, focused));
         }
-        None => Err(from_rect),
-    };
-    let ordered = reading_order(&ordered, reading);
-    step(&ordered, from, forward, wraps, reading)
+        if containment != Containment::Leave {
+            return None;
+        }
+    }
+    None
 }
 
 /// Where navigation starts with nothing focused and nowhere focus was lost:
@@ -375,7 +702,7 @@ fn start_target(world: &World, action: Action, candidates: &[(Entity, Rect)]) ->
         return Some(h);
     }
     let reading = *world.resource::<ReadingDirection>();
-    let ordered = reading_order(candidates, reading);
+    let ordered = tab_order(world, candidates, None, reading);
     if let Some((e, _)) = ordered
         .iter()
         .find(|(e, _)| world.get::<DefaultFocus>(*e).is_some())

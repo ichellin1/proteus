@@ -1,7 +1,7 @@
 //! [`ComponentSpec`], the builder passed to [`Proteus::component`](crate::Proteus::component).
 
 use proteus_ui::{
-    Border, DropShadow, Glow, Image, InputDevices, QuadState, StyleOverride, Text,
+    Border, DropShadow, FocusGroup, Glow, Image, InputDevices, QuadState, StyleOverride, Text,
     TransitionInteractionConfig,
 };
 
@@ -54,6 +54,7 @@ pub struct ComponentSpec {
     pub(crate) non_interactive: bool,
     pub(crate) devices: Option<InputDevices>,
     pub(crate) default_focus: bool,
+    pub(crate) focus_group: Option<FocusGroup>,
     pub(crate) visible: bool,
     pub(crate) opacity: Option<f32>,
     pub(crate) start_disabled: bool,
@@ -78,6 +79,7 @@ impl Default for ComponentSpec {
             non_interactive: false,
             devices: None,
             default_focus: false,
+            focus_group: None,
             // The only field whose default is "on" rather than "absent".
             visible: true,
             opacity: None,
@@ -280,6 +282,16 @@ impl ComponentSpec {
     /// See [`Handle::set_default_focus`](crate::Handle::set_default_focus).
     pub fn default_focus(mut self) -> Self {
         self.default_focus = true;
+        self
+    }
+
+    /// Makes the components under this one a focus group: focus moves among
+    /// them first, and at the group's edge, `group` says whether each action
+    /// lets it leave, stops it, or wraps it round, and where focus lands when
+    /// it enters. Use it for a row that the left and right arrows stay in, or
+    /// a dialog that Tab wraps round. See [`FocusGroup`].
+    pub fn focus_group(mut self, group: FocusGroup) -> Self {
+        self.focus_group = Some(group);
         self
     }
 

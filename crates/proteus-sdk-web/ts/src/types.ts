@@ -241,6 +241,14 @@ export interface ComponentSpec {
    */
   defaultFocus?: boolean;
   /**
+   * Makes the components under this one a focus group: focus moves among them
+   * first, and at the group's edge, each action lets it leave, stops it, or
+   * wraps it round, and focus entering it lands where `entry` says. Use it for
+   * a row that the left and right arrows stay in, or a dialog that Tab wraps
+   * round. See {@link Handle.setFocusGroup}.
+   */
+  focusGroup?: FocusGroup;
+  /**
    * Whether the component starts visible. Defaults to `true`.
    *
    * A hidden component is neither drawn nor hit-tested. A transition into it
@@ -512,6 +520,37 @@ export interface KeyBinding {
   alt?: boolean;
   /** Meta held. */
   meta?: boolean;
+}
+
+/**
+ * A focus group's rules. Every action lets focus leave the group unless it's
+ * listed in `stop` or `wrap`.
+ *
+ * @example
+ * ```ts
+ * // A row of a TV home page: left and right stay in it, up and down leave it,
+ * // and coming back lands where the user was.
+ * const row: FocusGroup = { stop: ["left", "right"], entry: "lastFocused" };
+ * // A dialog: nothing leaves it, and Tab wraps round.
+ * const dialog: FocusGroup = {
+ *   stop: ["up", "down", "left", "right"],
+ *   wrap: ["next", "previous"],
+ * };
+ * ```
+ */
+export interface FocusGroup {
+  /** Actions that keep focus in the group: at its edge, they don't move it. */
+  stop?: Action[];
+  /** Actions that wrap round at the group's edge, to its other end. */
+  wrap?: Action[];
+  /** Actions that let focus leave the group, as every action does by default. */
+  leave?: Action[];
+  /**
+   * Where focus lands when it enters the group: on the `"nearest"` member, the
+   * default; on the one focused `"lastFocused"`; or on the one marked
+   * {@link ComponentSpec.defaultFocus}, `"default"`.
+   */
+  entry?: "nearest" | "lastFocused" | "default";
 }
 
 /**

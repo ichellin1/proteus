@@ -80,6 +80,9 @@ impl Proteus {
         if spec.default_focus {
             self.world.world.entity_mut(entity).insert(DefaultFocus);
         }
+        if let Some(group) = spec.focus_group.clone() {
+            self.world.world.entity_mut(entity).insert(group);
+        }
         if let Some(devices) = spec.devices {
             self.world
                 .world

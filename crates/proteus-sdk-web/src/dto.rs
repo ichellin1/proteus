@@ -13,9 +13,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use wasm_bindgen::JsValue;
 
 use proteus_sdk::{
-    Action, Code, ComponentData, ComponentSpec, DropReason, Easing, FocusBlocked, InputDevice,
-    InputDevices, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyRepeat, KeyState,
-    Modifiers, QuadState, StyleOverride, TransitionConfig, TransitionData, TransitionDropped,
+    Action, Code, ComponentData, ComponentSpec, DropReason, Easing, FocusBlocked, FocusEntry,
+    FocusGroup, InputDevice, InputDevices, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap,
+    KeyRepeat, KeyState, Modifiers, QuadState, StyleOverride, TransitionConfig, TransitionData,
+    TransitionDropped,
 };
 use proteus_ui::{Border, DropShadow, Glow, Image, Text};
 
@@ -314,6 +315,8 @@ pub struct ComponentSpecDto {
     pub devices: Option<Vec<InputDeviceDto>>,
     #[serde(default, deserialize_with = "or_default")]
     pub default_focus: bool,
+    #[serde(default)]
+    pub focus_group: Option<FocusGroupDto>,
     /// Defaults to `true`: an omitted `visible` means shown.
     #[serde(default = "default_visible", deserialize_with = "or_visible")]
     pub visible: bool,
@@ -499,6 +502,47 @@ pub fn parse_key_binding(binding: JsValue) -> Result<KeyBinding, JsValue> {
         .map_err(|e| crate::js_error(&format!("invalid KeyBinding: {e}")))
 }
 
+/// `{ stop?, wrap?, leave?, entry? }`: a focus group, with the actions it stops
+/// or wraps, by name, and where focus enters it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusGroupDto {
+    #[serde(default)]
+    pub stop: Vec<String>,
+    #[serde(default)]
+    pub wrap: Vec<String>,
+    #[serde(default)]
+    pub leave: Vec<String>,
+    #[serde(default)]
+    pub entry: Option<String>,
+}
+
+impl FocusGroupDto {
+    pub fn to_group(&self) -> Result<FocusGroup, String> {
+        let actions = |names: &[String]| -> Result<Vec<Action>, String> {
+            names
+                .iter()
+                .map(|name| {
+                    Action::from_built_in_name(name)
+                        .filter(|a| a.moves_focus())
+                        .ok_or_else(|| format!("{name:?} isn't an action that moves focus"))
+                })
+                .collect()
+        };
+        let entry = match self.entry.as_deref() {
+            None | Some("nearest") => FocusEntry::Nearest,
+            Some("lastFocused") => FocusEntry::LastFocused,
+            Some("default") => FocusEntry::Default,
+            Some(other) => return Err(format!("unknown focus group entry {other:?}")),
+        };
+        Ok(FocusGroup::new()
+            .stop(&actions(&self.stop)?)
+            .wrap(&actions(&self.wrap)?)
+            .leave(&actions(&self.leave)?)
+            .entry(entry))
+    }
+}
+
 /// TypeScript's name for why a component can't take focus, or lost it.
 pub fn focus_blocked_name(reason: FocusBlocked) -> &'static str {
     match reason {
@@ -605,6 +649,10 @@ impl ComponentSpecDto {
         }
         if self.default_focus {
             spec = spec.default_focus();
+        }
+        // The caller has checked the group is valid.
+        if let Some(group) = self.focus_group.as_ref().and_then(|g| g.to_group().ok()) {
+            spec = spec.focus_group(group);
         }
         spec = spec.visible(self.visible);
         if let Some(opacity) = self.opacity {

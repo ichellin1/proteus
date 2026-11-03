@@ -286,6 +286,11 @@ impl ProteusApp {
     pub fn component(&mut self, spec: JsValue) -> Result<Handle, JsValue> {
         let dto: ComponentSpecDto = serde_wasm_bindgen::from_value(spec)
             .map_err(|e| crate::js_error(&format!("invalid ComponentSpec: {e}")))?;
+        if let Some(group) = &dto.focus_group {
+            group
+                .to_group()
+                .map_err(|e| crate::js_error(&format!("invalid ComponentSpec: focusGroup: {e}")))?;
+        }
         let (mut spec, children_bits) = dto.into_spec_without_children();
         for bits in children_bits {
             let entity = bevy_ecs::prelude::Entity::from_bits(bits as u64);
@@ -978,6 +983,27 @@ impl ProteusApp {
         };
         self.0.borrow_mut().set_reading_direction(direction);
         Ok(())
+    }
+
+    /// Calls [`Handle::set_focus_group`](sdk::Handle::set_focus_group).
+    /// `group` is a `FocusGroup` object, or `undefined` to stop the component
+    /// being one. Throws if `group` isn't valid.
+    #[wasm_bindgen(js_name = setFocusGroup)]
+    pub fn set_focus_group(&mut self, handle: &Handle, group: JsValue) -> Result<(), JsValue> {
+        let group = if group.is_null() || group.is_undefined() {
+            None
+        } else {
+            let dto: dto::FocusGroupDto = serde_wasm_bindgen::from_value(group)
+                .map_err(|e| crate::js_error(&format!("invalid FocusGroup: {e}")))?;
+            Some(
+                dto.to_group()
+                    .map_err(|e| crate::js_error(&format!("invalid FocusGroup: {e}")))?,
+            )
+        };
+        handle
+            .0
+            .set_focus_group(&mut self.0.borrow_mut(), group)
+            .map_err(handle_err)
     }
 
     /// Calls [`Handle::set_neighbour`](sdk::Handle::set_neighbour). `action`

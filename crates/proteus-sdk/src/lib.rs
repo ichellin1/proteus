@@ -74,9 +74,10 @@ pub use glam;
 // The value types this API takes and returns, so an app needs no direct
 // `proteus-ui` dependency.
 pub use proteus_ui::{
-    Action, AppAction, Border, BoundKey, Code, DropReason, DropShadow, Easing, FocusBlocked, Glow,
-    Image, ImageCrop, InputDevice, InputDevices, InputMode, InteractionStateKind, Key, KeyBinding,
-    KeyEvent, KeyMap, KeyRepeat, KeyState, MergeLayout, Modifiers, NamedKey, Opacity, QuadState,
-    ReadingDirection, SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionDropped,
-    TransitionInteractionConfig, Visibility,
+    Action, AppAction, Border, BoundKey, Code, Containment, DropReason, DropShadow, Easing,
+    FocusBlocked, FocusEntry, FocusGroup, Glow, Image, ImageCrop, InputDevice, InputDevices,
+    InputMode, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyRepeat, KeyState,
+    MergeLayout, Modifiers, NamedKey, Opacity, QuadState, ReadingDirection, SplitStrategy,
+    StyleOverride, Text, TransitionConfig, TransitionDropped, TransitionInteractionConfig,
+    Visibility,
 };

@@ -37,7 +37,9 @@ use crate::input::{
 use crate::interaction::interaction_style_system;
 use crate::keyboard::KeyInput;
 use crate::keymap::{KeyMap, NavigationRequests, TabWraps};
-use crate::navigation::{navigation_system, ReadingDirection, ViewportSize};
+use crate::navigation::{
+    navigation_system, remember_group_focus_system, ReadingDirection, ViewportSize,
+};
 use crate::spawn_order::register_spawn_order_hooks;
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
@@ -277,7 +279,11 @@ pub fn build_schedule() -> Schedule {
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     schedule.add_systems(interaction_style_system.in_set(ProteusSet::InteractionStyle));
     schedule.add_systems(
-        (focus_validity_system, navigation_system)
+        (
+            focus_validity_system,
+            navigation_system,
+            remember_group_focus_system,
+        )
             .chain()
             .in_set(ProteusSet::Navigation),
     );
