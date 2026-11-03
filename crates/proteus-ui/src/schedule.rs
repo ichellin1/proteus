@@ -7,7 +7,8 @@
 //! flush_commands       apply mutations queued during the last tick
 //! input                hit-test the pointer and record input events
 //! interaction_style    start style transitions for hover, press, focus and disabled
-//! navigation           clear focus from a component that can no longer keep it
+//! navigation           clear focus from a component that can no longer keep it,
+//!                      then move focus with the arrows and Tab
 //! channel_dispatch      turn channel requests into transition requests
 //! transition_setup     start requested transitions, including splits and merges
 //! transition_tick      advance transitions and interpolate geometry
@@ -36,6 +37,7 @@ use crate::input::{
 use crate::interaction::interaction_style_system;
 use crate::keyboard::KeyInput;
 use crate::keymap::{KeyMap, NavigationRequests, TabWraps};
+use crate::navigation::{navigation_system, ReadingDirection, ViewportSize};
 use crate::spawn_order::register_spawn_order_hooks;
 use crate::texture_ref::{register_texture_ref_hooks, touch_texture_refs_system};
 use crate::topology::{
@@ -64,8 +66,9 @@ pub enum ProteusSet {
     /// Work out which interaction style applies to each component, and start
     /// a short transition to it.
     InteractionStyle,
-    /// Clear focus from a component that can no longer keep it; see
-    /// [`crate::focus`].
+    /// Clear focus from a component that can no longer keep it, see
+    /// [`crate::focus`], then move focus with the keys, see
+    /// [`crate::navigation`].
     Navigation,
     /// Turn pending `channel::set` calls into `TransitionRequest` components.
     ChannelDispatch,
@@ -169,6 +172,8 @@ impl ProteusWorld {
         world.init_resource::<KeyMap>();
         world.init_resource::<NavigationRequests>();
         world.init_resource::<TabWraps>();
+        world.init_resource::<ReadingDirection>();
+        world.init_resource::<ViewportSize>();
         world.init_resource::<AppDevices>();
         world.init_resource::<InputMode>();
         world.init_resource::<NavigatingActions>();
@@ -271,7 +276,11 @@ pub fn build_schedule() -> Schedule {
 
     schedule.add_systems(hit_test_system.in_set(ProteusSet::Input));
     schedule.add_systems(interaction_style_system.in_set(ProteusSet::InteractionStyle));
-    schedule.add_systems(focus_validity_system.in_set(ProteusSet::Navigation));
+    schedule.add_systems(
+        (focus_validity_system, navigation_system)
+            .chain()
+            .in_set(ProteusSet::Navigation),
+    );
     schedule.add_systems(channel_dispatch_system.in_set(ProteusSet::ChannelDispatch));
     schedule.add_systems(stub_render_system.in_set(ProteusSet::Render));
 

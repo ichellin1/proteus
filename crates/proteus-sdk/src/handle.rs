@@ -11,12 +11,12 @@ use glam::Vec2;
 
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
-    AcceptsDevices, Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry,
+    AcceptsDevices, Action, Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry,
     CompositeTextureRef, DefaultFocus, Disabled, FocusBlocked, FocusState, GroupSource,
     GroupTarget, Image, ImageCrop, ImageTextureRef, InputDevices, Interactable, InteractionDef,
-    KeyEvent, MergeLayout, NToOneRequest, OneToNRequest, Opacity, QuadState, SplitStrategy, Text,
-    TextTextureRef, TransitionChannelId, TransitionConfig, TransitionInteractionConfig,
-    TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
+    KeyEvent, MergeLayout, NToOneRequest, Neighbours, OneToNRequest, Opacity, QuadState,
+    SplitStrategy, Text, TextTextureRef, TransitionChannelId, TransitionConfig,
+    TransitionInteractionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
 use crate::app::{DeclaredGeometry, KeyResult};
@@ -635,6 +635,31 @@ impl Handle {
     /// Whether this component has focus.
     pub fn is_focused(&self, app: &Proteus) -> bool {
         app.world.world.resource::<FocusState>().focused == Some(self.0)
+    }
+
+    /// Names `neighbour` as where `action` moves focus from this component, or
+    /// removes the one named with `None`. A neighbour named this way wins over
+    /// the one navigation would choose, as long as it can take focus; use it
+    /// for an order the layout doesn't suggest, or to wrap round a carousel.
+    /// `action` is one that moves focus: `Up`, `Down`, `Left`, `Right`,
+    /// `Next` or `Previous`; others are ignored.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_neighbour(
+        &self,
+        app: &mut Proteus,
+        action: Action,
+        neighbour: Option<Handle>,
+    ) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_neighbour")?;
+        let mut neighbours = entity.take::<Neighbours>().unwrap_or_default();
+        neighbours.set(action, neighbour.map(|h| h.0));
+        if !neighbours.0.is_empty() {
+            entity.insert(neighbours);
+        }
+        Ok(())
     }
 
     /// Marks or unmarks this component as where focus starts, as

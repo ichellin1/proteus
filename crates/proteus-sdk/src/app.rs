@@ -8,7 +8,8 @@ use proteus_ui::{
     create_channel, AcceptsDevices, ActiveTransition, AppDevices, Baked, DefaultFocus,
     EffectiveOpacity, EffectiveVisibility, FocusBlocked, FocusState, InputDevice, InputDevices,
     InputMode, Interactable, InteractionDef, KeyEvent, KeyMap, KeyPressedEntity, KeyRepeat,
-    KeyState, NavigatingActions, NavigationRequests, ProteusWorld, QuadState, TabWraps, Visibility,
+    KeyState, NavigatingActions, NavigationRequests, ProteusWorld, QuadState, ReadingDirection,
+    TabWraps, ViewportSize, Visibility,
 };
 use proteus_ui::{Action, AppAction, KeyBinding};
 
@@ -354,11 +355,9 @@ impl Proteus {
         // Its repeats and long presses go to the next tick, with the keys the
         // host reports by then.
         keys.advance(dt);
-        self.world
-            .world
-            .resource_mut::<NavigationRequests>()
-            .0
-            .clear();
+        let mut requests = self.world.world.resource_mut::<NavigationRequests>();
+        requests.actions.clear();
+        requests.reveal = false;
     }
 
     /// Sends each key event not yet sent to the key callbacks: those of the
@@ -401,6 +400,11 @@ impl Proteus {
         let navigates =
             action.is_some_and(|a| world.resource::<NavigatingActions>().0.contains(&a));
         if event.state == KeyState::Pressed && navigates {
+            // The first navigation after pointing only shows focus.
+            let was_pointing = self.input_mode() == InputMode::Pointing;
+            if was_pointing && action.is_some_and(Action::moves_focus) {
+                self.world.world.resource_mut::<NavigationRequests>().reveal = true;
+            }
             self.set_input_mode(InputMode::Navigating);
         }
         Some(event)
@@ -467,7 +471,10 @@ impl Proteus {
         let world = &mut self.world.world;
         match event.state {
             KeyState::Pressed | KeyState::Repeated if action.moves_focus() => {
-                world.resource_mut::<NavigationRequests>().0.push(action);
+                world
+                    .resource_mut::<NavigationRequests>()
+                    .actions
+                    .push(action);
             }
             KeyState::Pressed if action == Action::Activate => {
                 let focused = world.resource::<FocusState>().focused;
@@ -517,6 +524,24 @@ impl Proteus {
     /// [`KeyMap::default_bindings`].
     pub fn reset_key_map(&mut self) {
         self.world.world.resource_mut::<KeyMap>().reset();
+    }
+
+    /// Sets the order components are read in along a row, which
+    /// [`Action::Next`] and [`Action::Previous`] follow. Left to right by
+    /// default. The arrows keep their direction either way.
+    pub fn set_reading_direction(&mut self, direction: ReadingDirection) {
+        *self.world.world.resource_mut::<ReadingDirection>() = direction;
+    }
+
+    /// The order components are read in along a row.
+    pub fn reading_direction(&self) -> ReadingDirection {
+        *self.world.world.resource::<ReadingDirection>()
+    }
+
+    /// Sets the viewport's size in world units, so navigation can tell which
+    /// components are on screen. Hosts do this for you.
+    pub fn set_viewport_size(&mut self, size: Vec2) {
+        self.world.world.resource_mut::<ViewportSize>().0 = Some(size);
     }
 
     /// Sets whether [`Action::Next`] and [`Action::Previous`] wrap round from

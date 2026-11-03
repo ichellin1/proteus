@@ -114,6 +114,7 @@ impl Renderer {
         proteus.set_key_repeat(config.input.key_repeat);
         proteus.set_long_press_ms(config.input.long_press_ms);
         proteus.set_navigating_actions(&config.input.navigating_actions);
+        proteus.set_viewport_size(viewport.logical_size);
 
         // Use the configured font, or the embedded one. Bytes that aren't a
         // font fall back to the embedded font rather than stopping the app;
@@ -149,6 +150,7 @@ impl Renderer {
     /// they were baked at: baking destroys what they were drawn from.
     pub fn resize(&mut self, proteus: &mut Proteus, viewport: Viewport) {
         self.viewport = viewport;
+        proteus.set_viewport_size(viewport.logical_size);
         let queue = proteus.world().resource::<GpuContext>().queue.clone();
         proteus
             .world()

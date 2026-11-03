@@ -307,4 +307,10 @@ impl Default for TabWraps {
 /// The navigation actions no key callback claimed this tick, in order, for
 /// navigation to move focus with.
 #[derive(Resource, Debug, Default)]
-pub struct NavigationRequests(pub Vec<Action>);
+pub struct NavigationRequests {
+    /// The actions, in order.
+    pub actions: Vec<Action>,
+    /// Whether the first only shows focus, rather than moving it, because the
+    /// app was pointing when its key was pressed.
+    pub reveal: bool,
+}
