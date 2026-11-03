@@ -8,10 +8,10 @@ use std::rc::Rc;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    Action, Code, ComponentSpec, FocusBlocked, FocusEntry, FocusGroup, FocusLost, HandleError,
-    ImageCrop, InputDevices, InputMode, Key, KeyBinding, KeyEvent, KeyResult, KeyState,
-    MergeLayout, Modifiers, NamedKey, Proteus, QuadState, ReadingDirection, SplitStrategy,
-    StyleOverride, Text, TransitionConfig, TransitionInteractionConfig,
+    Action, Border, Code, ComponentSpec, DropShadow, FocusBlocked, FocusEntry, FocusGroup,
+    FocusLost, Glow, HandleError, ImageCrop, InputDevices, InputMode, Key, KeyBinding, KeyEvent,
+    KeyResult, KeyState, MergeLayout, Modifiers, NamedKey, Proteus, QuadState, ReadingDirection,
+    SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionInteractionConfig,
 };
 use proteus_ui::{FocusState, KeyInput, NavigationRequests};
 
@@ -3660,4 +3660,216 @@ fn a_member_off_screen_of_the_group_focus_is_in_can_take_focus() {
     navigating_from(&mut app, tiles[1]);
     nav(&mut app, NamedKey::ArrowRight, false);
     assert_eq!(app.focused(), Some(tiles[2]));
+}
+
+// ---------------------------------------------------------------------------
+// Tab leaving the app
+// ---------------------------------------------------------------------------
+
+// A web host asks this when Tab is pressed, and leaves Tab to the browser
+// only where it's true, so focus can leave the canvas at either end and
+// nowhere else.
+#[test]
+fn tab_leaves_the_app_only_past_either_end() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    app.set_tab_wraps(false);
+    navigating_from(&mut app, t[8]);
+    assert!(app.tab_leaves_app(true), "Next past the last");
+    assert!(!app.tab_leaves_app(false));
+
+    t[4].focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert!(!app.tab_leaves_app(true));
+    assert!(!app.tab_leaves_app(false));
+
+    t[0].focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert!(app.tab_leaves_app(false), "Previous before the first");
+
+    app.set_tab_wraps(true);
+    assert!(!app.tab_leaves_app(false), "never while Tab wraps");
+}
+
+#[test]
+fn tab_stays_in_a_dialog_that_wraps_it() {
+    let mut app = Proteus::new();
+    let dialog = FocusGroup::new().wrap(&[Action::Next, Action::Previous]);
+    let (_, buttons) = row(&mut app, 0.0, 2, Some(dialog));
+    app.set_tab_wraps(false);
+    navigating_from(&mut app, buttons[1]);
+    assert!(!app.tab_leaves_app(true));
+}
+
+// The first Tab after a click only shows focus, so it stays in the app even
+// on the last component.
+#[test]
+fn the_first_tab_after_pointing_stays_in_the_app() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    app.set_tab_wraps(false);
+    t[8].focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert_eq!(app.input_mode(), InputMode::Pointing);
+    assert!(!app.tab_leaves_app(true));
+}
+
+#[test]
+fn tab_leaves_an_app_with_nothing_to_focus() {
+    let mut app = Proteus::new();
+    app.set_tab_wraps(false);
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(0.016);
+    assert!(app.tab_leaves_app(true));
+}
+
+// ---------------------------------------------------------------------------
+// effects in interaction styles
+// ---------------------------------------------------------------------------
+
+fn glow_of(app: &Proteus, h: proteus_sdk::Handle) -> Glow {
+    *app.world().get::<Glow>(h.id()).unwrap()
+}
+
+// A hover that grows a glow from nothing, as the demo's buttons do.
+fn glowing_button(app: &mut Proteus) -> proteus_sdk::Handle {
+    app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0))
+            .glow(Glow {
+                radius: 0.0,
+                color: Vec4::new(0.5, 0.3, 0.9, 1.0),
+                intensity: 1.0,
+            })
+            .hover(StyleOverride {
+                glow_radius: Some(15.0),
+                ..StyleOverride::default()
+            }),
+    )
+}
+
+#[test]
+fn a_hover_style_grows_a_glow_and_it_shrinks_back() {
+    let mut app = Proteus::new();
+    let button = glowing_button(&mut app);
+    app.tick(1.0);
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(glow_of(&app, button).radius, 15.0);
+
+    app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(glow_of(&app, button).radius, 0.0);
+}
+
+#[test]
+fn a_focused_style_changes_the_border_and_a_hover_the_shadow() {
+    let mut app = Proteus::new();
+    let gold = Vec4::new(1.0, 0.8, 0.0, 1.0);
+    let field = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0))
+            .border(Border::new(2.0, Vec4::ONE))
+            .drop_shadow(DropShadow::default())
+            .focused(StyleOverride {
+                border_color: Some(gold),
+                border_width: Some(4.0),
+                ..StyleOverride::default()
+            })
+            .hover(StyleOverride {
+                shadow_offset: Some(Vec2::new(0.0, -10.0)),
+                ..StyleOverride::default()
+            }),
+    );
+    app.tick(1.0);
+    field.focus(&mut app).unwrap();
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(1.0);
+    app.tick(1.0);
+    let border = *app.world().get::<Border>(field.id()).unwrap();
+    assert_eq!((border.width, border.color), (4.0, gold));
+
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    let shadow = *app.world().get::<DropShadow>(field.id()).unwrap();
+    assert_eq!(shadow.offset, Vec2::new(0.0, -10.0));
+    let border = *app.world().get::<Border>(field.id()).unwrap();
+    assert_eq!(border.width, 2.0, "pointing hides the focused style");
+}
+
+// The demo blends its glow's color by theme every frame. A hover that only
+// grows the radius must leave the color the app sets, at rest or meanwhile.
+#[test]
+fn properties_a_style_doesnt_change_are_left_to_the_app() {
+    let mut app = Proteus::new();
+    let button = glowing_button(&mut app);
+    app.tick(1.0);
+
+    let at_rest = Vec4::new(0.1, 0.9, 0.1, 1.0);
+    app.world_mut().get_mut::<Glow>(button.id()).unwrap().color = at_rest;
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(0.05);
+    let meanwhile = Vec4::new(0.9, 0.1, 0.1, 1.0);
+    app.world_mut().get_mut::<Glow>(button.id()).unwrap().color = meanwhile;
+    app.tick(1.0);
+    assert_eq!(glow_of(&app, button).color, meanwhile);
+
+    app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(glow_of(&app, button).color, meanwhile);
+    assert_eq!(glow_of(&app, button).radius, 0.0);
+}
+
+#[test]
+fn a_component_times_its_own_style_changes() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0))
+            .glow(Glow {
+                radius: 0.0,
+                ..Glow::default()
+            })
+            .hover(StyleOverride {
+                glow_radius: Some(10.0),
+                ..StyleOverride::default()
+            })
+            .style_transition(TransitionConfig {
+                duration: 1.0,
+                delay: 0.0,
+                easing: proteus_sdk::Easing::Linear,
+            }),
+    );
+    app.tick(0.016);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(0.016);
+    for _ in 0..5 {
+        app.tick(0.1);
+    }
+    let radius = glow_of(&app, button).radius;
+    assert!(radius > 3.0 && radius < 7.0, "halfway, got {radius}");
+}
+
+#[test]
+fn a_style_changes_nothing_on_a_component_without_the_effect() {
+    let mut app = Proteus::new();
+    let plain = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0)).hover(StyleOverride {
+            glow_radius: Some(10.0),
+            scale: Some(1.1),
+            ..StyleOverride::default()
+        }),
+    );
+    app.tick(1.0);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert!(app.world().get::<Glow>(plain.id()).is_none());
+    assert_eq!(
+        app.get(plain).unwrap().geometry.scale,
+        1.1,
+        "the rest applies"
+    );
 }

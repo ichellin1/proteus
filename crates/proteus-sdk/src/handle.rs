@@ -662,6 +662,27 @@ impl Handle {
         Ok(())
     }
 
+    /// Sets how this component's changes of interaction style are timed, as
+    /// [`ComponentSpec::style_transition`](crate::ComponentSpec::style_transition)
+    /// does at creation, or restores the default, 0.15 s easing out, with
+    /// `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_style_transition(
+        &self,
+        app: &mut Proteus,
+        config: Option<TransitionConfig>,
+    ) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_style_transition")?;
+        match config {
+            Some(config) => entity.insert(proteus_ui::StyleTiming(config)),
+            None => entity.remove::<proteus_ui::StyleTiming>(),
+        };
+        Ok(())
+    }
+
     /// Makes the components under this one a focus group, as
     /// [`ComponentSpec::focus_group`](crate::ComponentSpec::focus_group) does
     /// at creation, or stops them being one with `None`. A new group starts

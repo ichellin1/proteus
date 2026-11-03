@@ -39,6 +39,7 @@ use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 
+use crate::devices::InputMode;
 use crate::focus::{focus_blocked, DefaultFocus};
 use crate::hierarchy::resolve_world_position_query;
 use crate::input::{FocusState, HoveredEntity, Interactable, InteractionEvents};
@@ -612,16 +613,64 @@ fn reveal_target(world: &World, action: Action) -> Option<Entity> {
     move_target(world, action)
 }
 
+/// What an action does with focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Move {
+    /// Moves it to this component.
+    To(Entity),
+    /// Leaves it where it is.
+    Stay,
+    /// Would take it out of the app: `Next` past the last component, or
+    /// `Previous` before the first, when Tab doesn't wrap.
+    LeaveApp,
+}
+
 /// Where `action` moves focus to, if anywhere.
 fn move_target(world: &World, action: Action) -> Option<Entity> {
+    match resolve_move(world, action) {
+        Move::To(target) => Some(target),
+        Move::Stay | Move::LeaveApp => None,
+    }
+}
+
+/// Whether `Next`, if `forward`, or else `Previous`, would take focus out of
+/// the app, so that a web host can leave Tab to the browser, to move focus
+/// out of the canvas. Never while Tab wraps, nor for the first Tab after the
+/// app was pointing, which only shows focus.
+///
+/// It works out the whole move, so a host asks when Tab is pressed rather
+/// than every frame.
+pub fn tab_leaves_app(world: &World, forward: bool) -> bool {
+    if world.resource::<TabWraps>().0 {
+        return false;
+    }
+    if *world.resource::<InputMode>() == InputMode::Pointing {
+        let hovered = world.resource::<HoveredEntity>().0;
+        let shows = hovered.is_some_and(|h| focus_blocked(world, h).is_none())
+            || world.resource::<FocusState>().focused.is_some();
+        if shows {
+            return false;
+        }
+    }
+    let action = if forward {
+        Action::Next
+    } else {
+        Action::Previous
+    };
+    resolve_move(world, action) == Move::LeaveApp
+}
+
+/// What `action` does with focus; see the module docs.
+fn resolve_move(world: &World, action: Action) -> Move {
     let focus = world.resource::<FocusState>();
     let focused = focus.focused;
+    let tab = matches!(action, Action::Next | Action::Previous);
     if let Some(named) = focused
         .and_then(|f| world.get::<Neighbours>(f))
         .and_then(|n| n.get(action))
         .filter(|n| focus_blocked(world, *n).is_none())
     {
-        return Some(named);
+        return Move::To(named);
     }
 
     let groups = focused.map_or_else(Vec::new, |f| groups_of(world, f));
@@ -634,7 +683,12 @@ fn move_target(world: &World, action: Action) -> Option<Entity> {
         None => focus.lost_at.as_ref().map(|qs| (None, Rect::around(qs))),
     };
     let Some((from_entity, from_rect)) = from else {
-        return start_target(world, action, &all).map(|t| enter(world, t, None));
+        return match start_target(world, action, &all) {
+            Some(t) => Move::To(enter(world, t, None)),
+            // Nothing to focus: Tab goes on past the app.
+            None if tab && !world.resource::<TabWraps>().0 => Move::LeaveApp,
+            None => Move::Stay,
+        };
     };
 
     let reading = *world.resource::<ReadingDirection>();
@@ -664,7 +718,7 @@ fn move_target(world: &World, action: Action) -> Option<Entity> {
             let forward = match action {
                 Action::Next => true,
                 Action::Previous => false,
-                _ => return None,
+                _ => return Move::Stay,
             };
             let mut ordered = members;
             let from = match from_entity {
@@ -684,13 +738,16 @@ fn move_target(world: &World, action: Action) -> Option<Entity> {
             )
         };
         if let Some(target) = target {
-            return Some(enter(world, target, focused));
+            return Move::To(enter(world, target, focused));
+        }
+        if scope.is_none() && tab && containment == Containment::Stop {
+            return Move::LeaveApp;
         }
         if containment != Containment::Leave {
-            return None;
+            return Move::Stay;
         }
     }
-    None
+    Move::Stay
 }
 
 /// Where navigation starts with nothing focused and nowhere focus was lost:

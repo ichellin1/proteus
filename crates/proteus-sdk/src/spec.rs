@@ -1,8 +1,8 @@
 //! [`ComponentSpec`], the builder passed to [`Proteus::component`](crate::Proteus::component).
 
 use proteus_ui::{
-    Border, DropShadow, FocusGroup, Glow, Image, InputDevices, QuadState, StyleOverride, Text,
-    TransitionInteractionConfig,
+    Border, DropShadow, EffectValues, FocusGroup, Glow, Image, InputDevices, QuadState,
+    StyleOverride, Text, TransitionConfig, TransitionInteractionConfig,
 };
 
 use crate::handle::Handle;
@@ -55,6 +55,7 @@ pub struct ComponentSpec {
     pub(crate) devices: Option<InputDevices>,
     pub(crate) default_focus: bool,
     pub(crate) focus_group: Option<FocusGroup>,
+    pub(crate) style_transition: Option<TransitionConfig>,
     pub(crate) visible: bool,
     pub(crate) opacity: Option<f32>,
     pub(crate) start_disabled: bool,
@@ -80,6 +81,7 @@ impl Default for ComponentSpec {
             devices: None,
             default_focus: false,
             focus_group: None,
+            style_transition: None,
             // The only field whose default is "on" rather than "absent".
             visible: true,
             opacity: None,
@@ -293,6 +295,38 @@ impl ComponentSpec {
     pub fn focus_group(mut self, group: FocusGroup) -> Self {
         self.focus_group = Some(group);
         self
+    }
+
+    /// Sets how this component's changes of interaction style are timed, such
+    /// as a hover that grows over 0.25 s. Without it, 0.15 s, easing out. See
+    /// [`Handle::set_style_transition`](crate::Handle::set_style_transition).
+    pub fn style_transition(mut self, config: TransitionConfig) -> Self {
+        self.style_transition = Some(config);
+        self
+    }
+
+    /// The effect changes in this component's styles that it has no effect
+    /// for, each as the style's name and the effect's: they do nothing.
+    pub(crate) fn styles_missing_effects(&self) -> Vec<(&'static str, &'static str)> {
+        let effects = EffectValues {
+            glow: self.glow,
+            border: self.border,
+            shadow: self.drop_shadow,
+        };
+        [
+            ("hover", &self.hover),
+            ("pressed", &self.pressed),
+            ("focused", &self.focused),
+            ("disabled", &self.disabled),
+        ]
+        .into_iter()
+        .filter_map(|(name, style)| style.as_ref().map(|s| (name, s)))
+        .flat_map(|(name, s)| {
+            s.missing_effects(&effects)
+                .into_iter()
+                .map(move |effect| (name, effect))
+        })
+        .collect()
     }
 
     /// Whether any interaction style was declared. A component with none

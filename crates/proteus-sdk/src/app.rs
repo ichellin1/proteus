@@ -90,6 +90,19 @@ impl Proteus {
                 .insert(AcceptsDevices(devices));
         }
 
+        for (style, effect) in spec.styles_missing_effects() {
+            log::warn!(
+                "component {entity:?}: its {style} style changes a {effect} it doesn't have, \
+                 so the change does nothing; give it a {effect} at rest, such as a glow of \
+                 radius 0"
+            );
+        }
+        if let Some(config) = spec.style_transition {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::StyleTiming(config));
+        }
         if spec.has_interaction_styles() {
             // The style state starts here, rather than on the style system's
             // first tick, so that its resting geometry is the one declared
@@ -553,6 +566,15 @@ impl Proteus {
     /// can leave the canvas at either end.
     pub fn set_tab_wraps(&mut self, wraps: bool) {
         self.world.world.resource_mut::<TabWraps>().0 = wraps;
+    }
+
+    /// Whether [`Action::Next`], if `forward`, or else [`Action::Previous`],
+    /// would take focus out of the app, past its last or before its first
+    /// component, when Tab doesn't wrap. A web host asks when Tab is pressed,
+    /// to leave it to the browser then, so focus can leave the canvas. It
+    /// works out the whole move, so ask when it's needed, not every frame.
+    pub fn tab_leaves_app(&self, forward: bool) -> bool {
+        proteus_ui::navigation::tab_leaves_app(&self.world.world, forward)
     }
 
     /// Whether [`Action::Next`] and [`Action::Previous`] wrap round.

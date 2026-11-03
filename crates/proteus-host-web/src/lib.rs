@@ -16,8 +16,10 @@
 //! canvas's keyboard events. The canvas can take keyboard focus: a click gives
 //! it focus, and `ProteusConfig`'s `input.autofocus` gives it focus at the
 //! start. The browser doesn't act on a key the app's key map binds, so Space
-//! and the arrows don't scroll the page, except for Tab and Shift+Tab, which
-//! can leave the canvas unless `input.keep_tab` is set. A key the map doesn't
+//! and the arrows don't scroll the page, except for Tab and Shift+Tab where
+//! they would take focus out of the app, past its last component or before its
+//! first, which are left to the browser, so they can move focus out of the
+//! canvas, unless `input.keep_tab` is set. A key the map doesn't
 //! bind is left to the browser, even if a key callback claims it, since key
 //! callbacks run at the next frame. While the tab is hidden, the
 //! browser stops running the frame loop; the first frame after it returns has
@@ -97,6 +99,9 @@ pub(crate) trait FrameDriver {
     /// The key map's [`KeyMap::version`](proteus_runtime::KeyMap::version).
     fn key_map_version(&self) -> u64;
     fn key_map(&self) -> KeyMap;
+    /// [`Proteus::tab_leaves_app`](proteus_runtime::Proteus::tab_leaves_app),
+    /// or `None` if the app is busy and can't be asked.
+    fn tab_leaves_app(&self, forward: bool) -> Option<bool>;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,18 +118,29 @@ struct BoundKeys {
     // The key map's version it was copied at.
     version: Option<u64>,
     keep_tab: bool,
+    // Asks the app whether Tab, forward or back, would take focus out of it;
+    // `None` while it's busy.
+    tab_leaves: Option<Rc<dyn Fn(bool) -> Option<bool>>>,
 }
 
 impl BoundKeys {
     /// Whether the browser should leave `event` to the app. Tab and Shift+Tab
-    /// are left to the browser unless the app keeps them, so they can move
-    /// focus out of the canvas.
+    /// are left to the browser, unless the app keeps them, only where they
+    /// would take focus out of the app, so they can move focus out of the
+    /// canvas at either end.
     fn keeps(&self, event: &KeyEvent) -> bool {
-        match self.key_map.action_for(event) {
-            Some(Action::Next | Action::Previous) => self.keep_tab,
-            Some(_) => true,
-            None => false,
+        let forward = match self.key_map.action_for(event) {
+            Some(Action::Next) => true,
+            Some(Action::Previous) => false,
+            Some(_) => return true,
+            None => return false,
+        };
+        if self.keep_tab {
+            return true;
         }
+        // Kept while the app is busy, so Tab can't skip a component.
+        let leaves = self.tab_leaves.as_ref().and_then(|ask| ask(forward));
+        leaves != Some(true)
     }
 }
 
@@ -225,7 +241,18 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
             }
         }
 
-        start_raf_loop(self);
+        let bound_keys = self.bound_keys.clone();
+        let web_loop = Rc::new(RefCell::new(self));
+        // Weak, so the listener doesn't keep the loop alive. It only reads,
+        // and a frame in progress, or JavaScript running from one, has the
+        // loop borrowed, so it asks only if it can.
+        let weak = Rc::downgrade(&web_loop);
+        bound_keys.borrow_mut().tab_leaves = Some(Rc::new(move |forward| {
+            let web_loop = weak.upgrade()?;
+            let web_loop = web_loop.try_borrow().ok()?;
+            web_loop.driver.tab_leaves_app(forward)
+        }));
+        start_raf_loop(web_loop);
     }
 
     /// Copies the key map's bindings for the key listener, if they changed.
@@ -339,11 +366,11 @@ impl<D: FrameDriver + 'static> WebLoop<D> {
 // leaks it with `Closure::forget`, since it lives as long as the page.
 // ---------------------------------------------------------------------------
 
-fn start_raf_loop<D: FrameDriver + 'static>(mut web_loop: WebLoop<D>) {
+fn start_raf_loop<D: FrameDriver + 'static>(web_loop: Rc<RefCell<WebLoop<D>>>) {
     let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |ts_ms: f64| {
-        web_loop.render_frame(ts_ms);
+        web_loop.borrow_mut().render_frame(ts_ms);
         request_animation_frame(f.borrow().as_ref().unwrap());
     }));
     request_animation_frame(g.borrow().as_ref().unwrap());

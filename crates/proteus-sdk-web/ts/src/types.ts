@@ -73,7 +73,12 @@ export interface Geometry {
 /**
  * The style a component takes in one interaction state, such as hover.
  * Declare only the fields that change; the rest come from the component's
- * declared geometry.
+ * declared geometry, and from the effects it rests with.
+ *
+ * The effect fields change an effect the component has: a glow's only on a
+ * component with a glow, and so on; a warning says so when the component is
+ * made. To have a style add a glow, give the component one at rest, such as a
+ * glow of radius `0`.
  */
 export interface StyleOverride {
   /** Position, in world units. */
@@ -90,6 +95,27 @@ export interface StyleOverride {
   color?: Color;
   /** Corner radius, in pixels. */
   cornerRadius?: number;
+  /** The glow's radius, in pixels. Only on a component with a glow. */
+  glowRadius?: number;
+  /** The glow's color. Only on a component with a glow. */
+  glowColor?: Color;
+  /** The glow's intensity. Only on a component with a glow. */
+  glowIntensity?: number;
+  /** The border's width, in pixels. Only on a component with a border. */
+  borderWidth?: number;
+  /** The border's color. Only on a component with a border. */
+  borderColor?: Color;
+  /** The drop shadow's offset, in pixels. Only on a component with a drop shadow. */
+  shadowOffset?: Vec2;
+  /** The drop shadow's color. Only on a component with a drop shadow. */
+  shadowColor?: Color;
+  /** How soft the drop shadow's edge is, in pixels. Only on a component with a drop shadow. */
+  shadowSoftness?: number;
+  /**
+   * How much larger than the component the drop shadow is, in pixels. Only on a component with
+   * a drop shadow.
+   */
+  shadowSpread?: number;
 }
 
 /**
@@ -279,6 +305,12 @@ export interface ComponentSpec {
   startDisabled?: boolean;
   /** Whether the component accepts input while transitioning. Without this, it doesn't. */
   transitionInteraction?: TransitionInteractionConfig;
+  /**
+   * How the component's changes of interaction style are timed, such as a
+   * hover that grows over 0.25 s. Without it, 0.15 s, easing out. See
+   * {@link Handle.setStyleTransition}.
+   */
+  styleTransition?: TransitionConfig;
 }
 
 /**

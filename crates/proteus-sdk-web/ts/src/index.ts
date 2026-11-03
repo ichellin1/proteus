@@ -537,6 +537,15 @@ export class Handle {
   }
 
   /**
+   * Sets how this component's changes of interaction style are timed, as
+   * {@link ComponentSpec.styleTransition} does at creation, or restores the
+   * default, 0.15 s easing out, with `undefined`.
+   */
+  setStyleTransition(config: TransitionConfig | undefined): void {
+    this.app.wasmApp.setStyleTransition(this.wasmHandle, config);
+  }
+
+  /**
    * Makes the components under this one a focus group, as
    * {@link ComponentSpec.focusGroup} does at creation, or stops them being one
    * with `undefined`. A new group starts with no member focused last.

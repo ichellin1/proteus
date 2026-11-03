@@ -160,6 +160,28 @@ pub struct StyleOverrideDto {
     pub color: Option<ColorDto>,
     #[serde(default)]
     pub corner_radius: Option<f32>,
+    #[serde(default)]
+    pub glow_radius: Option<f32>,
+    #[serde(default)]
+    pub glow_color: Option<ColorDto>,
+    #[serde(default)]
+    pub glow_intensity: Option<f32>,
+    #[serde(default)]
+    pub border_width: Option<f32>,
+    #[serde(default)]
+    pub border_color: Option<ColorDto>,
+    #[serde(default)]
+    pub shadow_offset: Option<Vec2Dto>,
+    #[serde(default)]
+    pub shadow_color: Option<ColorDto>,
+    #[serde(default)]
+    pub shadow_softness: Option<f32>,
+    #[serde(default)]
+    pub shadow_spread: Option<f32>,
+}
+
+fn color(c: ColorDto) -> glam::Vec4 {
+    glam::Vec4::new(c.r, c.g, c.b, c.a)
 }
 
 impl From<&StyleOverrideDto> for StyleOverride {
@@ -170,8 +192,17 @@ impl From<&StyleOverrideDto> for StyleOverride {
             rotation: d.rotation,
             scale: d.scale,
             anchor: d.anchor.map(|a| glam::Vec2::new(a.x, a.y)),
-            color: d.color.map(|c| glam::Vec4::new(c.r, c.g, c.b, c.a)),
+            color: d.color.map(color),
             corner_radius: d.corner_radius,
+            glow_radius: d.glow_radius,
+            glow_color: d.glow_color.map(color),
+            glow_intensity: d.glow_intensity,
+            border_width: d.border_width,
+            border_color: d.border_color.map(color),
+            shadow_offset: d.shadow_offset.map(|o| glam::Vec2::new(o.x, o.y)),
+            shadow_color: d.shadow_color.map(color),
+            shadow_softness: d.shadow_softness,
+            shadow_spread: d.shadow_spread,
         }
     }
 }
@@ -326,6 +357,8 @@ pub struct ComponentSpecDto {
     pub start_disabled: bool,
     #[serde(default)]
     pub transition_interaction: Option<TransitionInteractionConfigDto>,
+    #[serde(default)]
+    pub style_transition: Option<TransitionConfigDto>,
 }
 
 /// An input device, by its TypeScript name.
@@ -663,6 +696,9 @@ impl ComponentSpecDto {
         }
         if let Some(interaction) = &self.transition_interaction {
             spec = spec.transition_interaction(interaction.into());
+        }
+        if let Some(config) = &self.style_transition {
+            spec = spec.style_transition(config.into());
         }
         (spec, self.children)
     }
