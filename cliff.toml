@@ -69,6 +69,8 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **`InputConfig` written out in full** no longer compiles in Rust: `autofocus`, `keep_tab`,
   `key_repeat`, `long_press_ms` and `navigating_actions` are new. Fill in the rest with
   `..Default::default()`. It's no longer `Copy`, since it holds a list of actions.
+- **`StyleOverride` written out in full** no longer compiles in Rust: it has fields for glow,
+  border and drop shadow. Fill in the rest with `..StyleOverride::default()`.
 - **The web canvas can take keyboard focus:** the host gives it `tabindex="0"` unless the page
   set one, so a click focuses it, and a browser may outline it while it has focus. While it has
   focus, the browser doesn't act on the keys the key map binds, so Space and the arrows no

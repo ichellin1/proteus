@@ -985,6 +985,28 @@ impl ProteusApp {
         Ok(())
     }
 
+    /// Calls [`Handle::set_style_transition`](sdk::Handle::set_style_transition).
+    /// `config` is a `TransitionConfig` object, or `undefined` for the
+    /// default. Throws if `config` isn't valid.
+    #[wasm_bindgen(js_name = setStyleTransition)]
+    pub fn set_style_transition(
+        &mut self,
+        handle: &Handle,
+        config: JsValue,
+    ) -> Result<(), JsValue> {
+        let config = if config.is_null() || config.is_undefined() {
+            None
+        } else {
+            let dto: TransitionConfigDto = serde_wasm_bindgen::from_value(config)
+                .map_err(|e| crate::js_error(&format!("invalid TransitionConfig: {e}")))?;
+            Some((&dto).into())
+        };
+        handle
+            .0
+            .set_style_transition(&mut self.0.borrow_mut(), config)
+            .map_err(handle_err)
+    }
+
     /// Calls [`Handle::set_focus_group`](sdk::Handle::set_focus_group).
     /// `group` is a `FocusGroup` object, or `undefined` to stop the component
     /// being one. Throws if `group` isn't valid.

@@ -52,7 +52,7 @@ use glam::{Vec2, Vec4};
 /// };
 /// ```
 
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct DropShadow {
     /// How far the shadow is moved from the entity, in the entity's own pixels
     /// (x right, y up).
@@ -100,7 +100,7 @@ impl DropShadow {
 /// An entity shows a glow or a [`DropShadow`], not both, since the glow is
 /// drawn as a shadow with no offset. If both are set, the drop shadow is
 /// drawn.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Glow {
     /// How far the glow spreads, in pixels. Around `4.0` is the smallest that
     /// shows well.
@@ -143,7 +143,7 @@ impl Glow {
 /// only the inner half of the border shows, and at `1.0` nothing does, because
 /// the quad isn't enlarged to make room outside the edge. [`Border::new`] uses
 /// `-1.0`.
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Border {
     /// Thickness in pixels. `0.0` turns the border off.
     pub width: f32,

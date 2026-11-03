@@ -835,10 +835,10 @@ pub fn one_to_n_setup_system(
                         // Not baked: carry the source's own visual
                         // components.
                         if let Some(ref s) = src_shadow {
-                            entity_cmd.insert(s.clone());
+                            entity_cmd.insert(*s);
                         }
                         if let Some(ref g) = src_glow {
-                            entity_cmd.insert(g.clone());
+                            entity_cmd.insert(*g);
                         }
                         if let Some(ref b) = src_baked {
                             entity_cmd.insert(b.clone());
@@ -1039,10 +1039,10 @@ pub fn n_to_one_setup_system(
             } else if let Ok((_, glow, shadow, baked, _, _, _, _)) = visuals.get(source.entity) {
                 // Not baked: carry the source's own visual components.
                 if let Some(s) = shadow {
-                    entity_cmd.insert(s.clone());
+                    entity_cmd.insert(*s);
                 }
                 if let Some(g) = glow {
-                    entity_cmd.insert(g.clone());
+                    entity_cmd.insert(*g);
                 }
                 if let Some(b) = baked {
                     entity_cmd.insert(b.clone());

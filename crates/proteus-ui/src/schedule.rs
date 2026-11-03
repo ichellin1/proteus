@@ -34,7 +34,7 @@ use crate::input::{
     hit_test_system, FocusState, HoveredEntity, InteractionEvents, KeyPressedEntity, PointerInput,
     PressedEntity,
 };
-use crate::interaction::interaction_style_system;
+use crate::interaction::{effect_transition_system, interaction_style_system};
 use crate::keyboard::KeyInput;
 use crate::keymap::{KeyMap, NavigationRequests, TabWraps};
 use crate::navigation::{
@@ -308,6 +308,7 @@ pub fn build_schedule() -> Schedule {
     // Transitions.
     schedule.add_systems(transition_setup_system.in_set(ProteusSet::TransitionSetup));
     schedule.add_systems(transition_tick_system.in_set(ProteusSet::TransitionTick));
+    schedule.add_systems(effect_transition_system.in_set(ProteusSet::TransitionTick));
     schedule.add_systems(transition_complete_system.in_set(ProteusSet::TransitionComplete));
 
     // Splits and merges. Their setup systems share TransitionSetup; their

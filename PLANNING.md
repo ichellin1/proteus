@@ -344,9 +344,36 @@ the web canvas only at the ends.
   or a focus group wraps them.
 - [x] Tests for each of these, and the release notes updated.
 
-### Step 5 — Interaction styles for glow and border
+### Step 5 — Interaction styles for glow, border and shadow
 
-Interaction styles can change a component's glow and border, which the demo's hover needs.
+Interaction styles can change a component's glow, border and drop shadow, which the demo's
+hover needs, and each component can time its own style changes.
+
+- **Decided (2026-11-03): a style changes each effect property on its own,** with fields such
+  as `glow_radius` and `border_color` beside `color` and `corner_radius`, rather than a whole
+  glow or border, which would replace its color too, and fight an app that sets the color
+  itself, as the demo blends it by theme.
+- **Decided (2026-11-03): drop shadows are included,** the same way: offset, color, softness and
+  spread.
+- **Decided (2026-11-03): effects animate with the geometry and return to where they rest.**
+  When a component leaves its default style, the effect values its styles change are recorded
+  as its resting ones, which the default style returns to. Only the properties a style changes
+  are animated, so an app setting the others meanwhile is left alone; one it sets that a style
+  changes is undone when the style ends, and the docs say so.
+- **Decided (2026-11-03): each component can time its style changes,** with
+  `ComponentSpec::style_transition` and a `Handle` setter, 0.15 s by default, so the demo keeps
+  its 0.25 s hover.
+- **Decided (2026-11-03): a style can only change an effect the component has.** On one without
+  it, the change does nothing, and a warning says so when the component is created; the docs say
+  to give the component the effect at rest, such as a glow of radius 0.
+- [x] Styles change a glow's radius, color and intensity, a border's width and color, and a
+  drop shadow's offset, color, softness and spread, in Rust and TypeScript, animating with the
+  geometry and returning to the component's resting values.
+- [x] A component can time its own style changes.
+- [x] A style's change to an effect the component lacks does nothing, with a warning when the
+  component is created, and the docs say how to give it the effect at rest.
+- [x] Tests: a hover glow growing and shrinking back, a border color on focus, a shadow, other
+  properties the app sets left alone, a custom timing, and a component without the effect.
 
 ### Step 6 — A focus example
 

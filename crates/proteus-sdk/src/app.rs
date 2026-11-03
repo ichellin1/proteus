@@ -90,6 +90,19 @@ impl Proteus {
                 .insert(AcceptsDevices(devices));
         }
 
+        for (style, effect) in spec.styles_missing_effects() {
+            log::warn!(
+                "component {entity:?}: its {style} style changes a {effect} it doesn't have, \
+                 so the change does nothing; give it a {effect} at rest, such as a glow of \
+                 radius 0"
+            );
+        }
+        if let Some(config) = spec.style_transition {
+            self.world
+                .world
+                .entity_mut(entity)
+                .insert(proteus_ui::StyleTiming(config));
+        }
         if spec.has_interaction_styles() {
             // The style state starts here, rather than on the style system's
             // first tick, so that its resting geometry is the one declared
