@@ -536,6 +536,19 @@ export class Handle {
   }
 
   /**
+   * Names `neighbour` as where `action` moves focus from this component, or
+   * removes the one named with `undefined`. A neighbour named this way wins
+   * over the one navigation would choose, as long as it can take focus; use it
+   * for an order the layout doesn't suggest, or to wrap round a carousel.
+   *
+   * @throws If `action` isn't one that moves focus: `"up"`, `"down"`,
+   * `"left"`, `"right"`, `"next"` or `"previous"`.
+   */
+  setNeighbour(action: Action, neighbour: Handle | undefined): void {
+    this.app.wasmApp.setNeighbour(this.wasmHandle, action, neighbour?.id());
+  }
+
+  /**
    * Marks or unmarks this component as where focus starts, as
    * {@link ComponentSpec.defaultFocus} does at creation.
    */
@@ -1069,6 +1082,15 @@ export class ProteusApp {
    */
   unbindKey(binding: KeyBinding): Action | undefined {
     return this.wasmApp.unbindKey(binding) as Action | undefined;
+  }
+
+  /**
+   * Sets the order components are read in along a row, which `"next"` and
+   * `"previous"` follow. `"leftToRight"` by default. The arrows keep their
+   * direction either way.
+   */
+  setReadingDirection(direction: "leftToRight" | "rightToLeft"): void {
+    this.wasmApp.setReadingDirection(direction);
   }
 
   /**

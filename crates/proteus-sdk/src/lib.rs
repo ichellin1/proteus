@@ -77,6 +77,6 @@ pub use proteus_ui::{
     Action, AppAction, Border, BoundKey, Code, DropReason, DropShadow, Easing, FocusBlocked, Glow,
     Image, ImageCrop, InputDevice, InputDevices, InputMode, InteractionStateKind, Key, KeyBinding,
     KeyEvent, KeyMap, KeyRepeat, KeyState, MergeLayout, Modifiers, NamedKey, Opacity, QuadState,
-    SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionDropped,
+    ReadingDirection, SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionDropped,
     TransitionInteractionConfig, Visibility,
 };

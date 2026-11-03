@@ -330,10 +330,10 @@ the web canvas only at the ends.
   tick, the engine works out whether Next or Previous would move focus out of the app, focus
   groups included, and the host's key listener leaves Tab to the browser only then, unless the
   app keeps Tab.
-- [ ] The input mode, set by the navigating actions and the pointer, with the focused style
+- [x] The input mode, set by the navigating actions and the pointer, with the focused style
   shown only when navigating and the hover style only when pointing, readable in Rust and
   TypeScript; and the first navigation in pointing mode showing focus.
-- [ ] Navigation: named neighbours; the arrows, in line first, then nearest; Next and Previous
+- [x] Navigation: named neighbours; the arrows, in line first, then nearest; Next and Previous
   in reading order, with the app's direction, wrapping as `TabWraps` says. Only components on
   screen, skipping transitioning ones unless they allow navigation, and starting, with nothing
   focused, from where focus was lost, the hovered component, the default focus, or the first in

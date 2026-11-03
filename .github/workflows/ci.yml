@@ -69,12 +69,15 @@ jobs:
     # included: `REQUIRE_GPU` makes a missing GPU fail them rather than skip.
     # Linux gets one from Mesa's software Vulkan driver, lavapipe; Windows
     # from Direct3D's software renderer, WARP; macOS from the runner's Metal.
+    # Linux is Ubuntu 24.04 rather than ubuntu-latest: on 26.04, Mesa 26's
+    # lavapipe crashes the renderer's GPU tests with a segfault, though they
+    # pass on macOS and Windows.
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-24.04, macos-latest, windows-latest]
 
     steps:
       - name: Keep line endings as committed

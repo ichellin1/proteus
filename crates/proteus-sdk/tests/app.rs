@@ -10,7 +10,8 @@ use glam::{Vec2, Vec3, Vec4};
 use proteus_sdk::{
     Action, Code, ComponentSpec, FocusBlocked, FocusLost, HandleError, ImageCrop, InputDevices,
     InputMode, Key, KeyBinding, KeyEvent, KeyResult, KeyState, MergeLayout, Modifiers, NamedKey,
-    Proteus, QuadState, SplitStrategy, StyleOverride, Text, TransitionConfig,
+    Proteus, QuadState, ReadingDirection, SplitStrategy, StyleOverride, Text, TransitionConfig,
+    TransitionInteractionConfig,
 };
 use proteus_ui::{FocusState, KeyInput, NavigationRequests};
 
@@ -2965,7 +2966,7 @@ fn unclaimed_navigation_is_queued_for_navigation() {
         app.apply_key_default(&event);
     }
     assert_eq!(
-        app.world().resource::<NavigationRequests>().0,
+        app.world().resource::<NavigationRequests>().actions,
         vec![Action::Down]
     );
 }
@@ -3255,4 +3256,220 @@ fn the_focused_style_shows_only_navigating_and_the_hover_style_only_pointing() {
     app.tick(1.0);
     app.tick(1.0);
     assert_eq!(state(&app), proteus_sdk::InteractionStateKind::Hover);
+}
+
+// ---------------------------------------------------------------------------
+// navigation
+// ---------------------------------------------------------------------------
+
+fn nav(app: &mut Proteus, key: NamedKey, shift: bool) {
+    let code = match key {
+        NamedKey::ArrowUp => Code::ArrowUp,
+        NamedKey::ArrowDown => Code::ArrowDown,
+        NamedKey::ArrowLeft => Code::ArrowLeft,
+        NamedKey::ArrowRight => Code::ArrowRight,
+        _ => Code::Tab,
+    };
+    let modifiers = Modifiers {
+        shift,
+        ..Modifiers::default()
+    };
+    for state in [KeyState::Pressed, KeyState::Released] {
+        app.key_event(KeyEvent::new(
+            Key::Named(key),
+            code.clone(),
+            state,
+            modifiers,
+            None,
+        ));
+    }
+    app.tick(0.016);
+}
+
+// A 3 × 3 grid of 100 × 60 tiles, 150 apart, row by row from the top left.
+fn grid(app: &mut Proteus) -> Vec<proteus_sdk::Handle> {
+    let mut tiles = Vec::new();
+    for row in 0..3 {
+        for col in 0..3 {
+            let mut q = quad_at(col as f32 * 150.0 - 150.0, 150.0 - row as f32 * 150.0);
+            q.size = Vec2::new(100.0, 60.0);
+            tiles.push(app.component(ComponentSpec::new(q)));
+        }
+    }
+    tiles
+}
+
+// Focus on `start`, and switch to navigating: the first key after pointing
+// only shows focus.
+fn navigating_from(app: &mut Proteus, start: proteus_sdk::Handle) {
+    start.focus(app).unwrap();
+    nav(app, NamedKey::ArrowUp, false);
+    assert_eq!(app.focused(), Some(start), "the first key only shows focus");
+}
+
+#[test]
+fn the_arrows_move_focus_to_the_nearest_component_in_their_direction() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    navigating_from(&mut app, t[4]);
+
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(t[5]));
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(t[8]));
+    nav(&mut app, NamedKey::ArrowLeft, false);
+    assert_eq!(app.focused(), Some(t[7]));
+    nav(&mut app, NamedKey::ArrowUp, false);
+    assert_eq!(app.focused(), Some(t[4]));
+}
+
+#[test]
+fn the_arrows_stop_at_the_edge() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    navigating_from(&mut app, t[2]);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(t[2]));
+}
+
+#[test]
+fn next_and_previous_follow_reading_order_and_wrap() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    navigating_from(&mut app, t[2]);
+
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(
+        app.focused(),
+        Some(t[3]),
+        "the end of a row goes to the next"
+    );
+    nav(&mut app, NamedKey::Tab, true);
+    assert_eq!(app.focused(), Some(t[2]));
+
+    t[8].focus(&mut app).unwrap();
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(t[0]), "it wraps round");
+}
+
+#[test]
+fn next_reads_right_to_left_when_the_app_does() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    app.set_reading_direction(ReadingDirection::RightToLeft);
+    navigating_from(&mut app, t[2]);
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(t[1]));
+}
+
+// On the web, Tab can leave the canvas at either end rather than wrap.
+#[test]
+fn next_stops_at_the_end_when_tab_does_not_wrap() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    app.set_tab_wraps(false);
+    navigating_from(&mut app, t[8]);
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(t[8]));
+}
+
+#[test]
+fn a_named_neighbour_wins_while_it_can_take_focus() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    t[0].set_neighbour(&mut app, Action::Right, Some(t[8]))
+        .unwrap();
+    navigating_from(&mut app, t[0]);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(t[8]));
+
+    t[8].set_disabled(&mut app, true).unwrap();
+    t[0].focus(&mut app).unwrap();
+    app.tick(0.016);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(t[1]), "it falls back to the nearest");
+}
+
+#[test]
+fn components_off_screen_are_skipped() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    // Only the middle column shows.
+    app.set_viewport_size(Vec2::new(200.0, 1000.0));
+    navigating_from(&mut app, t[4]);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(t[4]));
+}
+
+#[test]
+fn a_transitioning_component_is_skipped_unless_it_allows_navigation() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    navigating_from(&mut app, t[4]);
+    let mut moved = quad_at(150.0, 0.0);
+    moved.size = Vec2::new(100.0, 60.0);
+    t[5].animate_to(&mut app, moved.clone(), cfg(10.0)).unwrap();
+    app.tick(0.016);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_ne!(app.focused(), Some(t[5]), "the moving tile is skipped");
+
+    t[4].focus(&mut app).unwrap();
+    t[5].set_transition_interaction(
+        &mut app,
+        Some(TransitionInteractionConfig {
+            allow_pointer: false,
+            allow_navigation: true,
+        }),
+    )
+    .unwrap();
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(t[5]));
+}
+
+// After a click, the hovered component takes focus on the first key, rather
+// than focus jumping from something the user couldn't see.
+#[test]
+fn the_first_key_after_pointing_focuses_the_hovered_component() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    t[0].focus(&mut app).unwrap();
+    app.pointer_moved(Some(Vec2::new(0.0, 0.0)));
+    app.tick(0.016);
+
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(t[4]));
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(t[7]), "later keys move focus");
+}
+
+#[test]
+fn with_nothing_focused_navigation_starts_where_focus_was_lost() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    navigating_from(&mut app, t[4]);
+    t[4].destroy(&mut app).unwrap();
+    app.tick(0.016);
+    assert_eq!(app.focused(), None);
+
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(t[7]));
+}
+
+#[test]
+fn with_nothing_focused_navigation_starts_at_the_default_focus_or_the_first() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(t[0]));
+
+    app.clear_focus();
+    app.tick(0.016);
+    nav(&mut app, NamedKey::Tab, true);
+    assert_eq!(app.focused(), Some(t[8]), "Previous starts at the last");
+
+    app.clear_focus();
+    t[5].set_default_focus(&mut app, true).unwrap();
+    app.tick(0.016);
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(t[5]));
 }

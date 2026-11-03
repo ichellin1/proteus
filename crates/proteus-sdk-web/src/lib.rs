@@ -963,6 +963,50 @@ impl ProteusApp {
         self.0.borrow_mut().set_long_press_ms(ms);
     }
 
+    /// Calls [`Proteus::set_reading_direction`](sdk::Proteus::set_reading_direction).
+    /// `direction` is `"leftToRight"` or `"rightToLeft"`; throws otherwise.
+    #[wasm_bindgen(js_name = setReadingDirection)]
+    pub fn set_reading_direction(&mut self, direction: &str) -> Result<(), JsValue> {
+        let direction = match direction {
+            "leftToRight" => sdk::ReadingDirection::LeftToRight,
+            "rightToLeft" => sdk::ReadingDirection::RightToLeft,
+            other => {
+                return Err(crate::js_error(&format!(
+                    "unknown reading direction {other:?}"
+                )))
+            }
+        };
+        self.0.borrow_mut().set_reading_direction(direction);
+        Ok(())
+    }
+
+    /// Calls [`Handle::set_neighbour`](sdk::Handle::set_neighbour). `action`
+    /// is a built-in action's name, and `neighbour` a handle's ID, or
+    /// `undefined` to remove the one named. An ID rather than a handle, since a
+    /// handle passed by value would no longer be usable from JavaScript.
+    /// Throws if `action` isn't one that moves focus.
+    #[wasm_bindgen(js_name = setNeighbour)]
+    pub fn set_neighbour(
+        &mut self,
+        handle: &Handle,
+        action: &str,
+        neighbour: Option<f64>,
+    ) -> Result<(), JsValue> {
+        let action = dto::action_from_name(action)
+            .filter(|a| a.moves_focus())
+            .ok_or_else(|| {
+                crate::js_error(&format!("{action:?} isn't an action that moves focus"))
+            })?;
+        handle
+            .0
+            .set_neighbour(
+                &mut self.0.borrow_mut(),
+                action,
+                neighbour.map(|id| Handle::from_id(id).0),
+            )
+            .map_err(handle_err)
+    }
+
     /// Calls [`Proteus::input_mode`](sdk::Proteus::input_mode):
     /// `"pointing"` or `"navigating"`.
     #[wasm_bindgen(js_name = inputMode)]

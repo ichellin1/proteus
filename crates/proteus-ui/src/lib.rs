@@ -35,6 +35,7 @@ mod instance_cache;
 pub mod interaction;
 pub mod keyboard;
 pub mod keymap;
+pub mod navigation;
 pub mod schedule;
 pub mod spawn_order;
 pub mod text;
@@ -78,6 +79,7 @@ pub use interaction::{
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};
 pub use keymap::{Action, AppAction, BoundKey, KeyBinding, KeyMap, NavigationRequests, TabWraps};
+pub use navigation::{navigation_system, Neighbours, ReadingDirection, Rect, ViewportSize};
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{BakedText, Text};
