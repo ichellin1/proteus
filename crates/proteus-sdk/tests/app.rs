@@ -3661,3 +3661,64 @@ fn a_member_off_screen_of_the_group_focus_is_in_can_take_focus() {
     nav(&mut app, NamedKey::ArrowRight, false);
     assert_eq!(app.focused(), Some(tiles[2]));
 }
+
+// ---------------------------------------------------------------------------
+// Tab leaving the app
+// ---------------------------------------------------------------------------
+
+// A web host asks this when Tab is pressed, and leaves Tab to the browser
+// only where it's true, so focus can leave the canvas at either end and
+// nowhere else.
+#[test]
+fn tab_leaves_the_app_only_past_either_end() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    app.set_tab_wraps(false);
+    navigating_from(&mut app, t[8]);
+    assert!(app.tab_leaves_app(true), "Next past the last");
+    assert!(!app.tab_leaves_app(false));
+
+    t[4].focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert!(!app.tab_leaves_app(true));
+    assert!(!app.tab_leaves_app(false));
+
+    t[0].focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert!(app.tab_leaves_app(false), "Previous before the first");
+
+    app.set_tab_wraps(true);
+    assert!(!app.tab_leaves_app(false), "never while Tab wraps");
+}
+
+#[test]
+fn tab_stays_in_a_dialog_that_wraps_it() {
+    let mut app = Proteus::new();
+    let dialog = FocusGroup::new().wrap(&[Action::Next, Action::Previous]);
+    let (_, buttons) = row(&mut app, 0.0, 2, Some(dialog));
+    app.set_tab_wraps(false);
+    navigating_from(&mut app, buttons[1]);
+    assert!(!app.tab_leaves_app(true));
+}
+
+// The first Tab after a click only shows focus, so it stays in the app even
+// on the last component.
+#[test]
+fn the_first_tab_after_pointing_stays_in_the_app() {
+    let mut app = Proteus::new();
+    let t = grid(&mut app);
+    app.set_tab_wraps(false);
+    t[8].focus(&mut app).unwrap();
+    app.tick(0.016);
+    assert_eq!(app.input_mode(), InputMode::Pointing);
+    assert!(!app.tab_leaves_app(true));
+}
+
+#[test]
+fn tab_leaves_an_app_with_nothing_to_focus() {
+    let mut app = Proteus::new();
+    app.set_tab_wraps(false);
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(0.016);
+    assert!(app.tab_leaves_app(true));
+}

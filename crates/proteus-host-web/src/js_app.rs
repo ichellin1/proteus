@@ -160,4 +160,9 @@ impl FrameDriver for JsDriver {
     fn key_map(&self) -> KeyMap {
         self.proteus.borrow().key_map().clone()
     }
+
+    fn tab_leaves_app(&self, forward: bool) -> Option<bool> {
+        let proteus = self.proteus.try_borrow().ok()?;
+        Some(proteus.tab_leaves_app(forward))
+    }
 }

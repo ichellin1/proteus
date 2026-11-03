@@ -340,9 +340,9 @@ the web canvas only at the ends.
   reading order.
 - [x] Focus groups on subtrees: leave, stop or wrap for each action; entry by the nearest
   member, the last focused or the default; nesting; and members off screen within the group.
-- [ ] On the web, Tab and Shift+Tab leave the canvas only at the ends, unless the app keeps them
+- [x] On the web, Tab and Shift+Tab leave the canvas only at the ends, unless the app keeps them
   or a focus group wraps them.
-- [ ] Tests for each of these, and the release notes updated.
+- [x] Tests for each of these, and the release notes updated.
 
 ### Step 5 — Interaction styles for glow and border
 

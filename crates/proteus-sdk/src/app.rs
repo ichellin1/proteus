@@ -555,6 +555,15 @@ impl Proteus {
         self.world.world.resource_mut::<TabWraps>().0 = wraps;
     }
 
+    /// Whether [`Action::Next`], if `forward`, or else [`Action::Previous`],
+    /// would take focus out of the app, past its last or before its first
+    /// component, when Tab doesn't wrap. A web host asks when Tab is pressed,
+    /// to leave it to the browser then, so focus can leave the canvas. It
+    /// works out the whole move, so ask when it's needed, not every frame.
+    pub fn tab_leaves_app(&self, forward: bool) -> bool {
+        proteus_ui::navigation::tab_leaves_app(&self.world.world, forward)
+    }
+
     /// Whether [`Action::Next`] and [`Action::Previous`] wrap round.
     pub fn tab_wraps(&self) -> bool {
         self.world.world.resource::<TabWraps>().0

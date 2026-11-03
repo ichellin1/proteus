@@ -119,4 +119,8 @@ impl<A: App, S: HostServices> FrameDriver for RustDriver<A, S> {
     fn key_map(&self) -> KeyMap {
         self.engine.proteus().key_map().clone()
     }
+
+    fn tab_leaves_app(&self, forward: bool) -> Option<bool> {
+        Some(self.engine.proteus().tab_leaves_app(forward))
+    }
 }
