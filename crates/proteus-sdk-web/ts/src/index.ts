@@ -23,6 +23,7 @@ import type {
   ImageCrop,
   ImageSpec,
   FocusBlocked,
+  FocusGroup,
   InputDevice,
   KeyBinding,
   KeyEvent,
@@ -533,6 +534,18 @@ export class Handle {
   /** Whether this component has focus. */
   isFocused(): boolean {
     return this.app.wasmApp.isFocused(this.wasmHandle);
+  }
+
+  /**
+   * Makes the components under this one a focus group, as
+   * {@link ComponentSpec.focusGroup} does at creation, or stops them being one
+   * with `undefined`. A new group starts with no member focused last.
+   *
+   * @throws If `group` names an action that doesn't move focus, or an unknown
+   * entry.
+   */
+  setFocusGroup(group: FocusGroup | undefined): void {
+    this.app.wasmApp.setFocusGroup(this.wasmHandle, group);
   }
 
   /**

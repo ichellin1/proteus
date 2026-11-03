@@ -12,7 +12,7 @@ use glam::Vec2;
 use proteus_render::{TextureId, TextureKind};
 use proteus_ui::{
     AcceptsDevices, Action, Baked, BakedComposite, BakedImage, BakedText, ChannelRegistry,
-    CompositeTextureRef, DefaultFocus, Disabled, FocusBlocked, FocusState, GroupSource,
+    CompositeTextureRef, DefaultFocus, Disabled, FocusBlocked, FocusGroup, FocusState, GroupSource,
     GroupTarget, Image, ImageCrop, ImageTextureRef, InputDevices, Interactable, InteractionDef,
     KeyEvent, MergeLayout, NToOneRequest, Neighbours, OneToNRequest, Opacity, QuadState,
     SplitStrategy, Text, TextTextureRef, TransitionChannelId, TransitionConfig,
@@ -659,6 +659,27 @@ impl Handle {
         if !neighbours.0.is_empty() {
             entity.insert(neighbours);
         }
+        Ok(())
+    }
+
+    /// Makes the components under this one a focus group, as
+    /// [`ComponentSpec::focus_group`](crate::ComponentSpec::focus_group) does
+    /// at creation, or stops them being one with `None`. A new group starts
+    /// with no member focused last.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    pub fn set_focus_group(
+        &self,
+        app: &mut Proteus,
+        group: Option<FocusGroup>,
+    ) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_focus_group")?;
+        match group {
+            Some(group) => entity.insert(group),
+            None => entity.remove::<FocusGroup>(),
+        };
         Ok(())
     }
 

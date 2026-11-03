@@ -338,7 +338,7 @@ the web canvas only at the ends.
   screen, skipping transitioning ones unless they allow navigation, and starting, with nothing
   focused, from where focus was lost, the hovered component, the default focus, or the first in
   reading order.
-- [ ] Focus groups on subtrees: leave, stop or wrap for each action; entry by the nearest
+- [x] Focus groups on subtrees: leave, stop or wrap for each action; entry by the nearest
   member, the last focused or the default; nesting; and members off screen within the group.
 - [ ] On the web, Tab and Shift+Tab leave the canvas only at the ends, unless the app keeps them
   or a focus group wraps them.

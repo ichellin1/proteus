@@ -8,10 +8,10 @@ use std::rc::Rc;
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_sdk::{
-    Action, Code, ComponentSpec, FocusBlocked, FocusLost, HandleError, ImageCrop, InputDevices,
-    InputMode, Key, KeyBinding, KeyEvent, KeyResult, KeyState, MergeLayout, Modifiers, NamedKey,
-    Proteus, QuadState, ReadingDirection, SplitStrategy, StyleOverride, Text, TransitionConfig,
-    TransitionInteractionConfig,
+    Action, Code, ComponentSpec, FocusBlocked, FocusEntry, FocusGroup, FocusLost, HandleError,
+    ImageCrop, InputDevices, InputMode, Key, KeyBinding, KeyEvent, KeyResult, KeyState,
+    MergeLayout, Modifiers, NamedKey, Proteus, QuadState, ReadingDirection, SplitStrategy,
+    StyleOverride, Text, TransitionConfig, TransitionInteractionConfig,
 };
 use proteus_ui::{FocusState, KeyInput, NavigationRequests};
 
@@ -3472,4 +3472,192 @@ fn with_nothing_focused_navigation_starts_at_the_default_focus_or_the_first() {
     app.tick(0.016);
     nav(&mut app, NamedKey::ArrowDown, false);
     assert_eq!(app.focused(), Some(t[5]));
+}
+
+// ---------------------------------------------------------------------------
+// focus groups
+// ---------------------------------------------------------------------------
+
+// A row of `n` 100 × 60 tiles at height `y`, 150 apart from x = -150, under a
+// non-interactive parent with `group`.
+fn row(
+    app: &mut Proteus,
+    y: f32,
+    n: usize,
+    group: Option<FocusGroup>,
+) -> (proteus_sdk::Handle, Vec<proteus_sdk::Handle>) {
+    let tiles: Vec<_> = (0..n)
+        .map(|i| {
+            let mut q = quad_at(i as f32 * 150.0 - 150.0, 0.0);
+            q.size = Vec2::new(100.0, 60.0);
+            app.component(ComponentSpec::new(q))
+        })
+        .collect();
+    let mut q = quad_at(0.0, y);
+    q.size = Vec2::new(n as f32 * 150.0, 80.0);
+    let mut spec = ComponentSpec::new(q).non_interactive();
+    for t in &tiles {
+        spec = spec.child(*t);
+    }
+    if let Some(group) = group {
+        spec = spec.focus_group(group);
+    }
+    (app.component(spec), tiles)
+}
+
+fn tv_row() -> FocusGroup {
+    FocusGroup::new()
+        .stop(&[Action::Left, Action::Right])
+        .entry(FocusEntry::LastFocused)
+}
+
+#[test]
+fn a_group_keeps_the_arrows_it_stops_and_lets_the_others_leave() {
+    let mut app = Proteus::new();
+    let (_, top) = row(&mut app, 100.0, 3, Some(tv_row()));
+    let (_, bottom) = row(&mut app, -100.0, 3, Some(tv_row()));
+    navigating_from(&mut app, top[2]);
+
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(top[2]), "Right stops at the row's end");
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(bottom[2]), "Down leaves the row");
+}
+
+// Coming back to a row lands where the user was, as on a TV home page, not
+// on the tile nearest the way in.
+#[test]
+fn a_group_can_take_focus_back_to_the_member_focused_last() {
+    let mut app = Proteus::new();
+    let (_, top) = row(&mut app, 100.0, 3, Some(tv_row()));
+    let (_, bottom) = row(&mut app, -100.0, 3, Some(tv_row()));
+    navigating_from(&mut app, top[0]);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(top[1]));
+
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(bottom[1]));
+    nav(&mut app, NamedKey::ArrowRight, false);
+    nav(&mut app, NamedKey::ArrowUp, false);
+    assert_eq!(
+        app.focused(),
+        Some(top[1]),
+        "back where it was in the top row"
+    );
+}
+
+#[test]
+fn a_group_can_take_focus_to_its_default_member() {
+    let mut app = Proteus::new();
+    let (_, top) = row(&mut app, 100.0, 3, None);
+    let (_, bottom) = row(
+        &mut app,
+        -100.0,
+        3,
+        Some(FocusGroup::new().entry(FocusEntry::Default)),
+    );
+    bottom[2].set_default_focus(&mut app, true).unwrap();
+    navigating_from(&mut app, top[0]);
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(bottom[2]));
+}
+
+#[test]
+fn a_group_can_wrap_an_arrow_round() {
+    let mut app = Proteus::new();
+    let (_, tiles) = row(
+        &mut app,
+        0.0,
+        3,
+        Some(FocusGroup::new().wrap(&[Action::Left, Action::Right])),
+    );
+    navigating_from(&mut app, tiles[2]);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(tiles[0]));
+    nav(&mut app, NamedKey::ArrowLeft, false);
+    assert_eq!(app.focused(), Some(tiles[2]));
+}
+
+// A dialog keeps Tab, even where Tab would otherwise leave the app.
+#[test]
+fn a_dialog_wraps_tab_round_and_stops_the_arrows() {
+    let mut app = Proteus::new();
+    let (_, outside) = row(&mut app, 200.0, 3, None);
+    let dialog = FocusGroup::new()
+        .stop(&[Action::Up, Action::Down, Action::Left, Action::Right])
+        .wrap(&[Action::Next, Action::Previous]);
+    let (_, buttons) = row(&mut app, 0.0, 2, Some(dialog));
+    app.set_tab_wraps(false);
+    navigating_from(&mut app, buttons[1]);
+
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(buttons[0]));
+    nav(&mut app, NamedKey::ArrowUp, false);
+    assert_eq!(
+        app.focused(),
+        Some(buttons[0]),
+        "Up doesn't leave the dialog"
+    );
+    assert!(!outside.iter().any(|t| app.focused() == Some(*t)));
+}
+
+// Tab goes through a group's members before anything beside it, though they
+// are in different rows on screen.
+#[test]
+fn a_groups_members_come_together_in_tab_order() {
+    let mut app = Proteus::new();
+    let column: Vec<_> = [50.0, -50.0]
+        .into_iter()
+        .map(|y| {
+            let mut q = quad_at(0.0, y);
+            q.size = Vec2::new(100.0, 60.0);
+            app.component(ComponentSpec::new(q))
+        })
+        .collect();
+    let mut q = quad_at(-200.0, 0.0);
+    q.size = Vec2::new(120.0, 180.0);
+    let _group = app.component(
+        ComponentSpec::new(q)
+            .non_interactive()
+            .child(column[0])
+            .child(column[1])
+            .focus_group(FocusGroup::new()),
+    );
+    let beside = app.component(ComponentSpec::new(quad_at(200.0, 50.0)));
+    navigating_from(&mut app, column[0]);
+
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(column[1]));
+    nav(&mut app, NamedKey::Tab, false);
+    assert_eq!(app.focused(), Some(beside));
+}
+
+#[test]
+fn an_outer_group_applies_once_an_inner_one_lets_focus_leave() {
+    let mut app = Proteus::new();
+    let (inner, tiles) = row(&mut app, 0.0, 2, Some(FocusGroup::new()));
+    let mut q = quad_at(0.0, 0.0);
+    q.size = Vec2::new(400.0, 300.0);
+    let _outer = app.component(
+        ComponentSpec::new(q)
+            .non_interactive()
+            .child(inner)
+            .focus_group(FocusGroup::new().stop(&[Action::Down])),
+    );
+    let _below = app.component(ComponentSpec::new(quad_at(0.0, -300.0)));
+    navigating_from(&mut app, tiles[0]);
+    nav(&mut app, NamedKey::ArrowDown, false);
+    assert_eq!(app.focused(), Some(tiles[0]), "the outer group stops Down");
+}
+
+// A scrolling row's next tile is off screen; it must still take focus, so the
+// app can scroll it into view.
+#[test]
+fn a_member_off_screen_of_the_group_focus_is_in_can_take_focus() {
+    let mut app = Proteus::new();
+    let (_, tiles) = row(&mut app, 0.0, 3, Some(tv_row()));
+    app.set_viewport_size(Vec2::new(250.0, 600.0));
+    navigating_from(&mut app, tiles[1]);
+    nav(&mut app, NamedKey::ArrowRight, false);
+    assert_eq!(app.focused(), Some(tiles[2]));
 }
