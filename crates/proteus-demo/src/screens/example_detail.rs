@@ -12,17 +12,12 @@
 //!
 //! ## Standalone content, not `ChildOf` the panel
 //!
-//! The obvious shape — parent each category's rows `ChildOf(panel)` — forces
-//! a reparenting dance: only the *active* category can be attached when a
-//! merge starts, because the merge's bake step walks the panel's subtree
-//! ignoring `Visibility`, so any other category's rows would leak into the
-//! crossfade snapshot. Nothing here needs that workaround: content is
-//! spawned as ordinary standalone entities, positioned once in *absolute*
-//! world coordinates from the panel's known target rect (the panel's own
-//! `QuadState` never changes once a merge starts — it's the fixed
-//! destination the sources converge onto), and simply hidden/revealed by
-//! `Demo`'s own timer-based reveal (mirrors `screens::home`'s labels) —
-//! no reparenting, no risk of a bake ever seeing the wrong category.
+//! Content is spawned as ordinary standalone entities, positioned once in
+//! *absolute* world coordinates from the panel's known target rect (the
+//! panel's own `QuadState` never changes once a merge starts — it's the
+//! fixed destination the sources converge onto), and simply hidden/revealed
+//! by `Demo`'s own timer-based reveal (mirrors `screens::home`'s labels), so
+//! the merge's bake of the panel never includes any category's rows.
 
 use glam::{Vec2, Vec3, Vec4};
 

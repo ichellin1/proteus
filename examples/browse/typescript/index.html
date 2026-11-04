@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browse</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #14131c;
+      }
+      /* The canvas is the desktop window's size, 1100 by 720, centered. */
+      body {
+        display: flex;
+        min-height: 100vh;
+      }
+      #app {
+        display: block;
+        width: 1100px;
+        height: 720px;
+        margin: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

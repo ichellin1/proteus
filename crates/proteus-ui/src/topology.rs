@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 
-use bevy_ecs::hierarchy::Children;
+use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::prelude::*;
 use glam::Vec4;
 
@@ -36,7 +36,10 @@ use crate::collect::{quad_state_to_instance, BakedTexture};
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Virtual, Visibility};
 use crate::effects::{Border, DropShadow, Glow};
 use crate::focus::{DefaultFocus, FocusMover};
-use crate::hierarchy::{compose_with_parent, EffectiveOpacity, Opacity};
+use crate::hierarchy::{
+    compose_with_parent, resolve_world_position_query, world_to_local_query, EffectiveOpacity,
+    Opacity,
+};
 use crate::image::BakedImage;
 use crate::text::{BakedText, Text};
 use crate::transition::{ActiveTransition, TransitionConfig};
@@ -429,6 +432,7 @@ pub(crate) type BakeVisualsQuery<'w, 's> = Query<
         Option<&'static BakedImage>,
         Option<&'static EffectiveOpacity>,
         Option<&'static Opacity>,
+        Option<&'static Visibility>,
     ),
 >;
 
@@ -437,7 +441,9 @@ pub(crate) type BakeVisualsQuery<'w, 's> = Query<
 /// child placed in the world by [`compose_with_parent`].
 ///
 /// Baking a component therefore includes its children, such as a button's
-/// text label. Also used by `bake::bake_system`, which bakes permanently.
+/// text label, but not a hidden child, nor its children: they aren't drawn.
+/// `entity` itself is always included, hidden or not. Also used by
+/// `bake::bake_system`, which bakes permanently.
 pub(crate) fn gather_bake_instances(
     visuals: &BakeVisualsQuery,
     children_q: &Query<&Children>,
@@ -445,7 +451,7 @@ pub(crate) fn gather_bake_instances(
     entity: Entity,
     qs: &QuadState,
 ) -> Vec<QuadInstance> {
-    let Ok((border, glow, shadow, baked_text, text, baked_image, effective_opacity, opacity)) =
+    let Ok((border, glow, shadow, baked_text, text, baked_image, effective_opacity, opacity, _)) =
         visuals.get(entity)
     else {
         return vec![quad_state_to_instance(qs, None, None, None, None)];
@@ -480,9 +486,16 @@ pub(crate) fn gather_bake_instances(
         out.push(text_inst);
     }
 
-    // Every descendant, not only direct children, as in collect_instances.
+    // Every descendant, not only direct children, as in collect_instances,
+    // except one that's hidden, with its own: it isn't drawn.
     if let Ok(children) = children_q.get(entity) {
         for child in children.iter() {
+            let hidden = visuals
+                .get(child)
+                .is_ok_and(|(.., visibility)| visibility.is_some_and(|v| !v.visible));
+            if hidden {
+                continue;
+            }
             let child_local = quad_states.get(child).cloned().unwrap_or_default();
             let child_world = compose_with_parent(qs, &child_local);
             out.extend(gather_bake_instances(
@@ -628,6 +641,7 @@ pub fn one_to_n_setup_system(
     visuals: BakeVisualsQuery,
     children_q: Query<&Children>,
     quad_states: Query<&QuadState>,
+    parents: Query<&ChildOf>,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
     atlas_size: Res<TransitionAtlasSize>,
@@ -679,9 +693,22 @@ pub fn one_to_n_setup_system(
                         .and_then(|c| c.get(i).copied())
                         .unwrap_or(request.default_config);
 
+                    // From where the source is on screen, in the target's own
+                    // parent's terms.
+                    let source_world = resolve_world_position_query(
+                        source_entity,
+                        source_state,
+                        &quad_states,
+                        &parents,
+                    );
                     commands.entity(target.entity).insert(TransitionRequest {
                         to: target.state.clone(),
-                        from_state: Some(source_state.clone()),
+                        from_state: Some(world_to_local_query(
+                            target.entity,
+                            &source_world,
+                            &quad_states,
+                            &parents,
+                        )),
                         config: cfg,
                     });
                 }
@@ -751,17 +778,32 @@ pub fn one_to_n_setup_system(
                 let src_glow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, g, _, _, _, _, _, _)| g.cloned());
+                    .and_then(|(_, g, ..)| g.cloned());
                 let src_shadow = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, s, _, _, _, _, _)| s.cloned());
+                    .and_then(|(_, _, s, ..)| s.cloned());
                 let src_baked = visuals
                     .get(source_entity)
                     .ok()
-                    .and_then(|(_, _, _, b, _, _, _, _)| b.cloned());
+                    .and_then(|(_, _, _, b, ..)| b.cloned());
 
-                let slices = grid_slices(source_state, cols, rows);
+                // The pieces are drawn at the top level, so they go from where
+                // the source is on screen to where each target is.
+                let source_world = resolve_world_position_query(
+                    source_entity,
+                    source_state,
+                    &quad_states,
+                    &parents,
+                );
+                let target_worlds: Vec<QuadState> = request
+                    .targets
+                    .iter()
+                    .map(|t| {
+                        resolve_world_position_query(t.entity, &t.state, &quad_states, &parents)
+                    })
+                    .collect();
+                let slices = grid_slices(&source_world, cols, rows);
                 let source_square = bakes_square(&visuals, source_entity);
 
                 // One virtual piece per target.
@@ -792,7 +834,7 @@ pub fn one_to_n_setup_system(
                             };
                             let to_state = QuadState {
                                 color: Vec4::ONE,
-                                ..target.state.clone()
+                                ..target_worlds[i].clone()
                             };
                             let baked_texture = BakedTexture {
                                 from_uv_offset: from_off,
@@ -803,7 +845,7 @@ pub fn one_to_n_setup_system(
                             };
                             (from_state, to_state, Some(baked_texture))
                         }
-                        _ => (slice_state.clone(), target.state.clone(), None),
+                        _ => (slice_state.clone(), target_worlds[i].clone(), None),
                     };
 
                     let active = ActiveTransition::new(from_state.clone(), to_state, cfg);
@@ -883,6 +925,7 @@ pub fn n_to_one_setup_system(
     visuals: BakeVisualsQuery,
     children_q: Query<&Children>,
     quad_states: Query<&QuadState>,
+    parents: Query<&ChildOf>,
     gpu: Option<Res<GpuContext>>,
     mut pipeline: Option<ResMut<QuadPipeline>>,
     atlas_size: Res<TransitionAtlasSize>,
@@ -924,7 +967,16 @@ pub fn n_to_one_setup_system(
         }
 
         // The part of the destination each source moves to.
-        let target_slices = grid_slices(dest_state, cols, rows);
+        // The pieces are drawn at the top level, so they go from where each
+        // source is on screen to its part of where the destination is.
+        let dest_world =
+            resolve_world_position_query(dest_entity, dest_state, &quad_states, &parents);
+        let source_worlds: Vec<QuadState> = request
+            .sources
+            .iter()
+            .map(|s| resolve_world_position_query(s.entity, &s.state, &quad_states, &parents))
+            .collect();
+        let target_slices = grid_slices(&dest_world, cols, rows);
         let dest_square = bakes_square(&visuals, dest_entity);
 
         // Bake the destination once, shared by every piece, and each source
@@ -992,7 +1044,7 @@ pub fn n_to_one_setup_system(
                     // added below, not from these states' radius.
                     let from_state = QuadState {
                         color: Vec4::ONE,
-                        ..source.state.clone()
+                        ..source_worlds[i].clone()
                     };
                     let to_state = QuadState {
                         color: Vec4::ONE,
@@ -1008,7 +1060,7 @@ pub fn n_to_one_setup_system(
                     };
                     (from_state, to_state, Some(baked_texture))
                 }
-                _ => (source.state.clone(), target_slice.clone(), None),
+                _ => (source_worlds[i].clone(), target_slice.clone(), None),
             };
 
             let active = ActiveTransition::new(from_state.clone(), to_state, cfg);
@@ -1036,7 +1088,7 @@ pub fn n_to_one_setup_system(
                         to,
                     },
                 ));
-            } else if let Ok((_, glow, shadow, baked, _, _, _, _)) = visuals.get(source.entity) {
+            } else if let Ok((_, glow, shadow, baked, ..)) = visuals.get(source.entity) {
                 // Not baked: carry the source's own visual components.
                 if let Some(s) = shadow {
                     entity_cmd.insert(*s);
@@ -1311,6 +1363,32 @@ mod tests {
 
     // Baking must include every descendant, such as a button's label. Three
     // levels deep, to show it isn't limited to direct children.
+    // A hidden child, such as a mark shown only sometimes, isn't drawn, so it
+    // mustn't be baked into the pieces of a split or merge either, nor any
+    // child of its. The component itself is baked hidden or not: a split's
+    // targets are hidden while they're baked.
+    #[test]
+    fn gather_bake_instances_leaves_out_hidden_children() {
+        use bevy_ecs::hierarchy::ChildOf;
+        use bevy_ecs::system::SystemState;
+
+        let mut world = World::new();
+        let root = world.spawn((source(), Visibility::HIDDEN)).id();
+        let shown = world.spawn((QuadState::default(), ChildOf(root))).id();
+        let hidden = world
+            .spawn((QuadState::default(), Visibility::HIDDEN, ChildOf(root)))
+            .id();
+        world.spawn((QuadState::default(), ChildOf(hidden)));
+        world.spawn((QuadState::default(), ChildOf(shown)));
+
+        let mut state: SystemState<(BakeVisualsQuery, Query<&Children>, Query<&QuadState>)> =
+            SystemState::new(&mut world);
+        let (visuals, children_q, quad_states) = state.get(&world);
+        let instances = gather_bake_instances(&visuals, &children_q, &quad_states, root, &source());
+        // The root, the shown child and its child.
+        assert_eq!(instances.len(), 3);
+    }
+
     #[test]
     fn gather_bake_instances_walks_every_descendant() {
         use bevy_ecs::hierarchy::ChildOf;

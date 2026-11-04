@@ -432,6 +432,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "browse"
+version = "0.2.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "proteus-host-web",
+ "proteus-host-winit",
+ "proteus-runtime",
+ "proteus-sdk",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

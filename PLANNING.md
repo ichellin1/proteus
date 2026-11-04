@@ -379,6 +379,23 @@ hover needs, and each component can time its own style changes.
 
 A new example, in Rust and TypeScript, that's used with the keyboard.
 
+- **Decided (2026-11-03): the example is `browse`, a TV-style browse screen,** named for what the
+  app is, as the other examples are. It shows each case of the input features once, since
+  trying them by hand in an example finds problems the tests miss, and shows outside developers
+  each case: a genre bar that's a focus group whose entry is the chosen genre, its default
+  focus, with wrapping arrows, and whose buttons take focus while they transition; rows of
+  tiles that are groups keeping Left and Right, letting Up and Down leave, with nearest entry,
+  and scrolling to a tile off screen; focused and hover styles with effects; every tile merging
+  into a title's page, which keeps the arrows and wraps Tab, while the genre buttons are
+  disabled, and splitting back on Back or Close; the page turning into a video through a
+  channel, as the bar fades out; focus set from code as each change ends; a long press that
+  favourites a tile; and a hint that follows the input mode. On the web it sets `autofocus`
+  and `keep_tab`, as a full-screen app would.
+- [x] `examples/browse`, in Rust and TypeScript, the same app, with each of the cases above.
+- [x] It runs natively and in a browser, from both languages, with the README's commands.
+- [ ] It's wired into the workspace, CI, the Makefile, the pre-push hook and the examples
+  table, and CI passes.
+
 ### Step 7 — The demo's new home page
 
 The home page's grid, header, tagline and About tile, and the Layout tile as a preview of
