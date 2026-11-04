@@ -22,12 +22,14 @@
 //!
 //! Every request that can't run is recorded in [`DroppedRequests`].
 
+use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::prelude::*;
 use bevy_ecs::world::World;
 use slotmap::{new_key_type, SlotMap};
 
 use crate::component::{Lifecycle, QuadState, TransitionRequest, Visibility};
 use crate::focus::FocusMover;
+use crate::hierarchy::{resolve_world_position_query, world_to_local_query};
 use crate::transition::TransitionConfig;
 
 new_key_type! {
@@ -260,6 +262,7 @@ pub fn channel_dispatch_system(
     lifecycles: Query<&Lifecycle>,
     quad_states: Query<&QuadState>,
     visibilities: Query<Option<&Visibility>>,
+    parents: Query<&ChildOf>,
     mut focus: FocusMover,
 ) {
     dropped.entries.clear();
@@ -305,10 +308,19 @@ pub fn channel_dispatch_system(
             drop_with!(DropReason::AlreadyTransitioning);
         }
 
+        // From where `from` is on screen, in `to`'s own parent's terms, since
+        // the two can have different parents.
         let from_state_override = if already_transitioning {
             None
         } else {
-            Some(from_state.clone())
+            let from_world =
+                resolve_world_position_query(req.from, from_state, &quad_states, &parents);
+            Some(world_to_local_query(
+                req.to,
+                &from_world,
+                &quad_states,
+                &parents,
+            ))
         };
 
         commands.entity(req.to).insert(TransitionRequest {

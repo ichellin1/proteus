@@ -3873,3 +3873,112 @@ fn a_style_changes_nothing_on_a_component_without_the_effect() {
         "the rest applies"
     );
 }
+
+// ---------------------------------------------------------------------------
+// splits, merges and channels between components with different parents
+// ---------------------------------------------------------------------------
+
+// A parent at (300, 100), not the origin, with `n` children 120 apart.
+fn offset_children(app: &mut Proteus, n: usize) -> Vec<proteus_sdk::Handle> {
+    let children: Vec<_> = (0..n)
+        .map(|i| app.component(ComponentSpec::new(quad_at(i as f32 * 120.0, 0.0)).visible(false)))
+        .collect();
+    let mut spec = ComponentSpec::new(quad_at(300.0, 100.0)).non_interactive();
+    for c in &children {
+        spec = spec.child(*c);
+    }
+    app.component(spec);
+    children
+}
+
+// The pieces of a split or merge are drawn on their own, at the top level, so
+// they must start and end where their components are on screen, not at a
+// child's position relative to its parent.
+fn piece_ends(app: &mut Proteus) -> Vec<(Vec3, Vec3)> {
+    let mut query = app
+        .world_mut()
+        .query_filtered::<&proteus_ui::ActiveTransition, bevy_ecs::prelude::With<proteus_ui::Virtual>>();
+    let mut ends: Vec<_> = query
+        .iter(app.world())
+        .map(|t| (t.from.position, t.to.position))
+        .collect();
+    ends.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
+    ends
+}
+
+#[test]
+fn a_split_into_children_ends_where_they_are_on_screen() {
+    let mut app = Proteus::new();
+    let targets = offset_children(&mut app, 2);
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    source
+        .split_to(&mut app, &targets, cfg(1.0), SplitStrategy::Row)
+        .unwrap();
+    app.tick(0.016);
+    let ends: Vec<Vec3> = piece_ends(&mut app).into_iter().map(|e| e.1).collect();
+    assert_eq!(
+        ends,
+        vec![Vec3::new(300.0, 100.0, 0.0), Vec3::new(420.0, 100.0, 0.0)]
+    );
+}
+
+#[test]
+fn a_merge_from_children_starts_where_they_are_on_screen() {
+    let mut app = Proteus::new();
+    let sources = offset_children(&mut app, 2);
+    for s in &sources {
+        s.set_visible(&mut app, true).unwrap();
+    }
+    let dest = app.component(ComponentSpec::new(quad_at(0.0, -200.0)).visible(false));
+    app.tick(0.016);
+    dest.merge_from(&mut app, &sources, cfg(1.0), MergeLayout::Row)
+        .unwrap();
+    app.tick(0.016);
+    let mut starts: Vec<Vec3> = piece_ends(&mut app).into_iter().map(|e| e.0).collect();
+    starts.sort_by(|a, b| a.x.total_cmp(&b.x));
+    assert_eq!(
+        starts,
+        vec![Vec3::new(300.0, 100.0, 0.0), Vec3::new(420.0, 100.0, 0.0)]
+    );
+}
+
+// Each target of a split into separate transitions starts where the source is
+// on screen, in its own parent's terms.
+#[test]
+fn a_per_target_split_into_a_child_starts_where_the_source_is() {
+    let mut app = Proteus::new();
+    let targets = offset_children(&mut app, 1);
+    let source = app.component(ComponentSpec::new(quad_at(0.0, 0.0)));
+    source
+        .split_to(&mut app, &targets, cfg(10.0), SplitStrategy::PerTarget)
+        .unwrap();
+    // The split asks for each target's transition, which starts a tick later.
+    app.tick(0.016);
+    app.tick(0.016);
+    let start = app
+        .world()
+        .get::<proteus_ui::ActiveTransition>(targets[0].id())
+        .unwrap()
+        .from
+        .position;
+    assert_eq!(start, Vec3::new(-300.0, -100.0, 0.0));
+}
+
+#[test]
+fn a_channel_from_a_child_starts_where_it_is_on_screen() {
+    let mut app = Proteus::new();
+    let from = offset_children(&mut app, 1)[0];
+    from.set_visible(&mut app, true).unwrap();
+    let to = app.component(ComponentSpec::new(quad_at(0.0, -200.0)).visible(false));
+    let channel = app.transition_channel(None);
+    app.tick(0.016);
+    channel.set(&mut app, to, from, cfg(10.0), false);
+    app.tick(0.016);
+    let start = app
+        .world()
+        .get::<proteus_ui::ActiveTransition>(to.id())
+        .unwrap()
+        .from
+        .position;
+    assert_eq!(start, Vec3::new(300.0, 100.0, 0.0));
+}

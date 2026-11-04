@@ -100,6 +100,49 @@ pub(crate) fn compose_with_parent(parent_world: &QuadState, local: &QuadState) -
     }
 }
 
+/// The reverse of [`compose_with_parent`]: `world`, a state in world units,
+/// in the terms of a child of a parent at `parent_world`.
+pub(crate) fn local_in_parent(parent_world: &QuadState, world: &QuadState) -> QuadState {
+    let offset = world.position.truncate() - parent_world.position.truncate();
+    let scale = if parent_world.scale != 0.0 {
+        parent_world.scale
+    } else {
+        1.0
+    };
+    let local_offset = Vec2::from_angle(-parent_world.rotation).rotate(offset) / scale;
+    QuadState {
+        position: glam::Vec3::new(
+            local_offset.x,
+            local_offset.y,
+            world.position.z - parent_world.position.z,
+        ),
+        rotation: world.rotation - parent_world.rotation,
+        scale: world.scale / scale,
+        ..world.clone()
+    }
+}
+
+/// `world`, a state in world units, in the terms of `entity`'s parent: what
+/// `entity`'s own state must be to be drawn there. `world` itself for a
+/// top-level entity.
+pub fn world_to_local_query(
+    entity: Entity,
+    world: &QuadState,
+    quad_states: &Query<&QuadState>,
+    parents: &Query<&ChildOf>,
+) -> QuadState {
+    match parents.get(entity) {
+        Ok(child_of) => {
+            let parent = child_of.parent();
+            let parent_local = quad_states.get(parent).cloned().unwrap_or_default();
+            let parent_world =
+                resolve_world_position_query(parent, &parent_local, quad_states, parents);
+            local_in_parent(&parent_world, world)
+        }
+        Err(_) => world.clone(),
+    }
+}
+
 /// Resolves `entity`'s world-space [`QuadState`] given its already-known local
 /// state `local`, recursively composing through any `ChildOf` ancestor chain.
 ///
