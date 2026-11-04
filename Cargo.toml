@@ -18,6 +18,7 @@ members = [
     "examples/video/rust",
     "examples/stepper/rust",
     "examples/menu/rust",
+    "examples/browse/rust",
     "benches/native",
     "benches/browser/rust",
     "checks/corners",
@@ -42,6 +43,7 @@ default-members = [
     "examples/video/rust",
     "examples/stepper/rust",
     "examples/menu/rust",
+    "examples/browse/rust",
     "benches/native",
     "checks/corners",
 ]

@@ -5,6 +5,7 @@ languages, the two versions are the same app: Rust in `rust/`, TypeScript in `ty
 
 | Example | Rust | TypeScript | Shows |
 |---|---|---|---|
+| [Browse](./browse) | ✓ | ✓ | A TV-style browse screen, used with the arrow keys, Tab and Enter or the pointer: focus groups, focused and hover styles, a tile that splits into a dialog, and a long press. |
 | [Gallery](./gallery) | ✓ | ✓ | A grid of downloaded photos; a photo opens into a large view (1→1), which splits back into a new grid (1→N). |
 | [Menu](./menu) | ✓ | ✓ | A button that splits into a menu (1→N), and the menu merging back into the button (N→1). Hover, pressed and disabled styles. |
 | [Stepper](./stepper) | ✓ | ✓ | An onboarding flow whose steps transform into one another through one transition channel (1→1). |
