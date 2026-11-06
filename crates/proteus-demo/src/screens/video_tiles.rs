@@ -1,4 +1,4 @@
-//! `VideoTiles` — reached from `Home`'s first nav button ("Videos"). Three
+//! `VideoTiles` — reached from `Home`'s first tile ("Video Demo"). Three
 //! tiles with box-cover art (falling back to a solid placeholder color if
 //! the image never loads) laid out in a fixed centered row. Clicking a tile
 //! grows it into `VideoScreen`, which plays the tile's video. `Demo` requests

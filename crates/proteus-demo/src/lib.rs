@@ -6,10 +6,10 @@
 //!
 //! - `Splash`: the animated logo, wordmark and intro fade (see
 //!   `screens::splash`).
-//! - `Home`: the three nav buttons that lead to the other screens.
-//! - `ExamplesHome` and `ExampleDetail`: the Effects, Text, Transforms &
-//!   Animation and Stress Tests examples (see `screens::example_detail` for
-//!   what isn't built yet).
+//! - `Home`: "See what Proteus can do", over a grid of eight tiles that lead
+//!   to the other screens (see `screens::home`).
+//! - `ExampleDetail`: the Effects, Text, Transformations, Layout,
+//!   Keyboard & Focus and About panels (see `screens::example_detail`).
 //! - `VideoTiles` and `VideoScreen`: box-cover tiles that grow into video
 //!   playback (see `screens::video_tiles`).
 //! - `Loading`, `Gallery` and `GalleryImage`: twelve fetched photos, and a
@@ -53,19 +53,18 @@ pub mod video;
 
 pub use app::DemoApp;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{Vec2, Vec4};
 
 use proteus_sdk::{
-    Border, ComponentSpec, Easing, Glow, Handle, Image, ImageCrop, MergeLayout, Proteus, QuadState,
-    SplitStrategy, Text, TextureHandle, TransitionConfig, VideoHandle,
+    Action, Border, Code, Easing, Glow, Handle, Image, ImageCrop, KeyResult, KeyState, MergeLayout,
+    Proteus, QuadState, SplitStrategy, Text, TextureHandle, TransitionConfig, VideoHandle,
 };
 
 use screens::{
-    background, example_detail, examples_home, gallery, home, loading, nav, splash, theme,
-    video_tiles,
+    background, example_detail, gallery, home, loading, nav, splash, theme, video_tiles,
 };
 
 /// Initial background/viewport size in logical pixels, used only until the
@@ -191,6 +190,19 @@ fn gallery_group_transition_config() -> TransitionConfig {
     }
 }
 
+/// How a single component splits into Home's 4 by 2 grid, each tile from its
+/// own part of it.
+const HOME_GRID_SPLIT: SplitStrategy = SplitStrategy::Grid {
+    cols: home::COLS,
+    rows: home::ROWS,
+};
+/// How Home's 4 by 2 grid merges into a single component, the reverse of
+/// [`HOME_GRID_SPLIT`].
+const HOME_GRID_MERGE: MergeLayout = MergeLayout::Grid {
+    cols: home::COLS,
+    rows: home::ROWS,
+};
+
 /// Overall fetch timeout, past which `Loading` gives up and shows
 /// `loading::ERROR_TEXT` instead of proceeding to `Gallery`.
 const GALLERY_FETCH_TIMEOUT_SECS: f32 = 10.0;
@@ -200,17 +212,12 @@ const GALLERY_FETCH_TIMEOUT_SECS: f32 = 10.0;
 /// `Demo::advance_gallery_hires_overlay`'s doc.
 const GALLERY_HIRES_CROSSFADE_DURATION_SECS: f32 = 0.25;
 
-/// Above this average FPS, a Stress Tests result is annotated as vsync-capped
-/// rather than left looking like the demo tops out there on its own. The
-/// default `ProteusConfig` presents with `PresentMode::AutoVsync`, which caps
-/// the frame rate at the display's refresh rate.
-const VSYNC_FPS_CAP_THRESHOLD: f32 = 55.0;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppState {
     Splash,
     Home,
-    ExamplesHome,
+    /// One of `example_detail`'s panels, by its index in
+    /// `example_detail::CATEGORY_TITLES`.
     ExampleDetail(usize),
     VideoTiles,
     VideoScreen(usize),
@@ -221,14 +228,14 @@ enum AppState {
     /// `loading.error_text` after `GALLERY_FETCH_TIMEOUT_SECS` if they
     /// don't all arrive in time — see `Demo::advance_gallery_fetch`.
     Loading,
-    /// The fetched grid is visible — click home to converge back to the
-    /// nav buttons (three column-grouped merges), click "Fetch New Images"
+    /// The fetched grid is visible — click home to converge back to Home's
+    /// grid (column by column), click "Fetch New Images"
     /// to refetch (back through `Loading`), or click a tile to enlarge it
     /// (`GalleryImage`).
     Gallery,
     /// `gallery.enlarged` showing photo `.0`'s full frame — click it (or
     /// `nav::Nav::back`) to converge back to the grid, click home to
-    /// converge straight to the nav buttons. Entering this state also
+    /// converge straight to Home's grid. Entering this state also
     /// queues a hires fetch (`Demo::take_pending_gallery_hires_fetch`) that
     /// swaps in once it arrives (`Demo::set_gallery_hires_image`) — see
     /// `Demo::start_gallery_to_image`'s doc.
@@ -240,11 +247,9 @@ enum AppState {
 /// directly from inside a callback.
 #[derive(Debug, Clone, Copy)]
 enum NavClick {
-    /// Home's "Examples" nav button.
-    OpenExamplesHome,
-    /// Home's "Videos" nav button.
+    /// Home's Video Demo tile.
     OpenVideoTiles,
-    /// Home's "Gallery" nav button.
+    /// Home's Photo Gallery tile.
     OpenGallery,
     /// `gallery.fetch_button` — only meaningful from `Gallery`.
     RefetchGallery,
@@ -254,24 +259,22 @@ enum NavClick {
     /// it was clicked from (`advance_nav_click` picks the right topology
     /// from `self.state` at the time it's processed).
     GoHome,
-    /// One of `examples_home`'s category buttons (0–3 only — see
-    /// `screens::examples_home`'s doc).
+    /// One of Home's example tiles, by its index in
+    /// `example_detail::CATEGORY_TITLES`.
     OpenExampleDetail(usize),
     /// One of `video_tiles`' 3 tiles.
     OpenVideoScreen(usize),
-    /// `nav::Nav::back` — meaningful from `ExampleDetail` (back to
-    /// `ExamplesHome`), `VideoScreen` (back to `VideoTiles`), or
-    /// `GalleryImage` (back to `Gallery`, also fired by clicking
-    /// `gallery.enlarged` itself — see `Demo::advance_nav_click`'s match
-    /// arm); `advance_nav_click` picks the right topology from
+    /// `nav::Nav::back`, or the Back action (Escape or Backspace) —
+    /// meaningful from `ExampleDetail` (back to `Home`), `VideoScreen` (back
+    /// to `VideoTiles`), or `GalleryImage` (back to `Gallery`, also fired by
+    /// clicking `gallery.enlarged` itself — see `Demo::advance_nav_click`'s
+    /// match arm); on the screens Home leads to directly, the Back action
+    /// goes Home. `advance_nav_click` picks the right topology from
     /// `self.state`, same as `GoHome`.
     Back,
-    /// `example_detail.stress.buttons[0]` — only meaningful from
-    /// `ExampleDetail(3)`.
-    RunBurstSpawn,
-    /// `example_detail.stress.buttons[1]` — only meaningful from
-    /// `ExampleDetail(3)`.
-    RunTextureChurn,
+    /// One of the Keyboard & Focus panel's keycaps, chosen with a click or
+    /// Enter, which flashes it.
+    FlashKey(usize),
     /// `theme.sun`/`theme.moon` — sets `dark_target` directly (`false`/
     /// `true`), unconditional on `self.state` (a theme switch is orthogonal
     /// to navigation, unlike all the other `NavClick` variants).
@@ -282,8 +285,8 @@ enum NavClick {
 /// duration has elapsed. `reveal_on_complete` (built into
 /// `split_to`/`merge_from`) only knows about the literal target/source
 /// entities it was given, not their descendants or associated standalone
-/// content. Used for `screens::home`'s nav labels, `screens::examples_home`'s
-/// labels and each `ExampleDetail` category's content.
+/// content. Used for `screens::home`'s labels and each `ExampleDetail`
+/// category's content.
 struct PendingReveal {
     elapsed: f32,
     duration: f32,
@@ -331,39 +334,17 @@ struct HoverEntry {
     progress: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StressKind {
-    BurstSpawn,
-    TextureChurn,
+/// A key the key map doesn't bind, pressed, as the app's key handler saw
+/// it: queued for `Demo::advance_keyboard`, since the handler only gets
+/// `&mut Proteus`. Matched to a keycap by where it is, its `code`. Caps Lock
+/// arrives as a press and a release at each tap, on every host.
+struct UnboundKey {
+    code: Code,
 }
 
-/// An in-progress Stress Tests run — either kind despawns `entities` in
-/// bulk once `elapsed` reaches `example_detail::STRESS_TEST_DURATION`
-/// (`Demo::finalize_stress_test`) or immediately if the user navigates away
-/// first (`Demo::cancel_stress_test`); neither ever despawns them one at a
-/// time. `churn_iterations` only means anything for `TextureChurn`.
-struct StressRun {
-    kind: StressKind,
-    elapsed: f32,
-    /// Ticks elapsed during the run — `Demo::finalize_stress_test` divides
-    /// this by `elapsed` for the result message's average-FPS figure.
-    frame_count: u32,
-    entities: Vec<Handle>,
-    churn_iterations: u32,
-}
-
-/// One Texture Churn slot's fresh synthetic texture, computed by `Demo`
-/// (pure data — a solid-color RGBA buffer, no GPU needed to generate it)
-/// but not yet registered anywhere. `Demo::take_pending_texture_churn`
-/// drains these each tick, and `DemoApp` bakes each one with
-/// `Frame::bake_texture` and applies it with `Handle::set_texture`. See the
-/// crate doc for why `Demo` leaves GPU work to `DemoApp`.
-pub struct TextureChurnUpdate {
-    pub handle: Handle,
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
+/// The video tiles' merges from Home's grid, by column: each video tile is
+/// `(first column, columns)` of the grid, the second taking the middle two.
+const VIDEO_TILE_COLUMNS: [(usize, usize); 3] = [(0, 1), (1, 2), (3, 1)];
 
 /// A fresh gallery fetch to kick off — drained by `DemoApp` via
 /// [`Demo::take_pending_gallery_fetch`], which owns starting
@@ -457,16 +438,21 @@ pub struct Demo {
     /// no `proteus-ui` dependency needed to define one.
     nav_click: Rc<Cell<Option<NavClick>>>,
     active_example_category: Option<usize>,
-    /// Tiny xorshift32 PRNG state, seeded nonzero (xorshift's one hard
-    /// requirement) — Burst Spawn's random targets and Texture Churn's
-    /// random size/hue don't need cryptographic-quality randomness, just
-    /// enough jitter to look lively, so this crate has no `rand`/`fastrand`
-    /// dependency.
-    stress_rng: u32,
-    stress_run: Option<StressRun>,
-    /// This tick's Texture Churn texture updates, drained by `DemoApp` via
-    /// [`Demo::take_pending_texture_churn`] — see that type's doc.
-    pending_texture_churn: Vec<TextureChurnUpdate>,
+    /// Keys the key map doesn't bind, queued by the app's key handler for
+    /// `Demo::advance_keyboard`.
+    unbound_keys: Rc<RefCell<Vec<UnboundKey>>>,
+    /// Each virtual keycap's flash, from 1 as it's pressed fading to 0 over
+    /// `keyboard::FLASH_SECS`.
+    key_flash: Vec<f32>,
+    /// Whether the virtual keyboard shows its shifted values, toggled by
+    /// Caps Lock.
+    keyboard_shifted: bool,
+    /// Whether the space bar is still to take focus, as the Keyboard & Focus
+    /// panel opens.
+    focus_space: bool,
+    /// Fade progress (0..1) for Home's heading and tagline: up while Home is
+    /// the current or (mid-transition) destination state.
+    home_title_fade: f32,
     /// Set to `Some(tile_idx)` when a tile should start playing video —
     /// drained by `DemoApp` via [`Demo::take_pending_video_start`], which
     /// starts that tile's player (see the crate doc). The entity itself
@@ -640,7 +626,6 @@ pub struct Demo {
     nav_home_selected_fade: f32,
     splash: splash::Splash,
     home: home::Home,
-    examples_home: examples_home::ExamplesHome,
     example_detail: example_detail::ExampleDetail,
     nav: nav::Nav,
     video_tiles: video_tiles::VideoTiles,
@@ -654,7 +639,6 @@ impl Demo {
         let background = background::spawn(proteus, DEFAULT_VIEWPORT_SIZE);
         let splash = splash::spawn(proteus);
         let home = home::spawn(proteus);
-        let examples_home = examples_home::spawn(proteus);
         let example_detail = example_detail::spawn(proteus);
         let nav = nav::spawn(proteus);
         let video_tiles = video_tiles::spawn(proteus);
@@ -676,10 +660,9 @@ impl Demo {
                 let _ = h.set_visible(app, false);
             }
         };
-        hide(proteus, &home.nav_buttons);
-        hide(proteus, &home.nav_labels);
-        hide(proteus, &examples_home.buttons);
-        hide(proteus, &examples_home.labels);
+        hide(proteus, &home.tiles);
+        hide(proteus, &home.labels);
+        hide(proteus, &[home.heading, home.tagline]);
         hide(
             proteus,
             &[example_detail.panel, nav.home, nav.back, nav.lockup],
@@ -688,7 +671,6 @@ impl Demo {
             let content = example_detail.content_handles(idx);
             hide(proteus, &content);
         }
-        hide(proteus, &[example_detail.stress.warning_text]);
         hide(proteus, &video_tiles.tiles);
         hide(proteus, &[video_tiles.backdrop, video_tiles.error_text]);
         hide(proteus, &video_tiles.loading_dots);
@@ -707,22 +689,15 @@ impl Demo {
         hide(proteus, &[theme.sun, theme.moon]);
 
         let nav_click: Rc<Cell<Option<NavClick>>> = Rc::new(Cell::new(None));
-        {
+        for (i, &tile) in home.tiles.iter().enumerate() {
+            let click = match i {
+                0 => NavClick::OpenVideoTiles,
+                1 => NavClick::OpenGallery,
+                _ => NavClick::OpenExampleDetail(i - home::FIRST_EXAMPLE),
+            };
             let flag = nav_click.clone();
-            home.nav_buttons[0]
-                .on_click(proteus, move |_| flag.set(Some(NavClick::OpenVideoTiles)));
-        }
-        {
-            let flag = nav_click.clone();
-            home.nav_buttons[1].on_click(proteus, move |_| flag.set(Some(NavClick::OpenGallery)));
-        }
-        {
-            let flag = nav_click.clone();
-            home.nav_buttons[2]
-                .on_click(proteus, move |_| flag.set(Some(NavClick::OpenExamplesHome)));
-        }
-        for &button in &home.nav_buttons {
-            register_hover(proteus, &mut hovers, button);
+            tile.on_click(proteus, move |_| flag.set(Some(click)));
+            register_hover(proteus, &mut hovers, tile);
         }
         {
             let flag = nav_click.clone();
@@ -736,27 +711,11 @@ impl Demo {
         }
         register_hover(proteus, &mut hovers, nav.home);
         register_hover(proteus, &mut hovers, nav.back);
-        for idx in 0..6 {
+        // The virtual keycaps' glow and growth are interaction styles, not
+        // `register_hover`'s: see `screens::keyboard`.
+        for (i, &key) in example_detail.keys.keyboard.keys.iter().enumerate() {
             let flag = nav_click.clone();
-            examples_home.buttons[idx].on_click(proteus, move |_| {
-                flag.set(Some(NavClick::OpenExampleDetail(idx)))
-            });
-        }
-        for &button in &examples_home.buttons {
-            register_hover(proteus, &mut hovers, button);
-        }
-        {
-            let flag = nav_click.clone();
-            example_detail.stress.buttons[0]
-                .on_click(proteus, move |_| flag.set(Some(NavClick::RunBurstSpawn)));
-        }
-        {
-            let flag = nav_click.clone();
-            example_detail.stress.buttons[1]
-                .on_click(proteus, move |_| flag.set(Some(NavClick::RunTextureChurn)));
-        }
-        for &button in &example_detail.stress.buttons {
-            register_hover(proteus, &mut hovers, button);
+            key.on_click(proteus, move |_| flag.set(Some(NavClick::FlashKey(i))));
         }
         for idx in 0..3 {
             let flag = nav_click.clone();
@@ -811,6 +770,27 @@ impl Demo {
         register_hover(proteus, &mut hovers, theme.sun);
         register_hover(proteus, &mut hovers, theme.moon);
 
+        // The app's key handler, which sees the keys no component handled:
+        // Back goes back a screen, and the keys the key map doesn't bind are
+        // queued for the Keyboard & Focus panel's keyboard.
+        let unbound_keys: Rc<RefCell<Vec<UnboundKey>>> = Rc::new(RefCell::new(Vec::new()));
+        {
+            let flag = nav_click.clone();
+            let keys = unbound_keys.clone();
+            proteus.on_key(move |_, event| {
+                if event.action == Some(Action::Back) && event.state == KeyState::Pressed {
+                    flag.set(Some(NavClick::Back));
+                    return KeyResult::Handled;
+                }
+                if event.action.is_none() && event.state == KeyState::Pressed {
+                    keys.borrow_mut().push(UnboundKey {
+                        code: event.code.clone(),
+                    });
+                }
+                KeyResult::Ignored
+            });
+        }
+
         Self {
             state: AppState::Splash,
             viewport_size: DEFAULT_VIEWPORT_SIZE,
@@ -826,9 +806,11 @@ impl Demo {
             background,
             nav_click,
             active_example_category: None,
-            stress_rng: 0x9E3779B9,
-            stress_run: None,
-            pending_texture_churn: Vec::new(),
+            unbound_keys,
+            key_flash: vec![0.0; example_detail.keys.keyboard.keys.len()],
+            keyboard_shifted: false,
+            focus_space: false,
+            home_title_fade: 0.0,
             pending_video_start: None,
             video: None,
             pending_video_stop: false,
@@ -862,7 +844,6 @@ impl Demo {
             nav_home_selected_fade: 0.0,
             splash,
             home,
-            examples_home,
             example_detail,
             nav,
             video_tiles,
@@ -1090,8 +1071,8 @@ impl Demo {
     }
 
     /// Resizes/repositions everything that depends on the viewport size but
-    /// isn't already re-derived from it every tick — the background and
-    /// `gallery`'s grid. (`nav`'s icons and `theme`'s sun/moon toggle read
+    /// isn't already re-derived from it every tick — the background,
+    /// `gallery`'s grid and Home's. (`nav`'s icons and `theme`'s sun/moon toggle read
     /// `self.viewport_size` fresh every tick, in `advance_nav_icons`/
     /// `advance_theme`, so they don't need a resize-time call here — see
     /// those methods' own doc.) Call on every resize (and once up front with
@@ -1118,6 +1099,7 @@ impl Demo {
             let state = self.themed(state, gallery::CORNER_RADIUS, gallery::CORNER_RADIUS_DARK);
             let _ = tile.set_declared_geometry(proteus, state);
         }
+        self.layout_home(proteus);
     }
 
     /// Injects Splash's animated logo mark's pre-baked frames. `DemoApp`
@@ -1165,11 +1147,11 @@ impl Demo {
         self.advance_gallery_button_fade(proteus, dt);
         self.advance_gallery_hires_overlay(proteus, dt);
         self.advance_example_animation(proteus, dt);
-        self.advance_stress_test(proteus, dt);
-        self.advance_stress_warning_visibility(proteus);
+        self.advance_keyboard(proteus, dt);
         self.advance_hovers(proteus, dt);
         self.advance_gallery_enlarged_hover_scale(proteus);
         self.advance_nav_icons(proteus, dt);
+        self.advance_home_titles(proteus, dt);
         self.advance_tile_hover(proteus);
         self.advance_video_crossfade(proteus);
         self.advance_video_loading(proteus, dt);
@@ -1177,9 +1159,6 @@ impl Demo {
         // Must run after advance_theme — see this fn's own doc for why.
         self.advance_gallery_error_fade(proteus, dt);
         splash::recenter(proteus, &self.splash, self.intro_slide_offset);
-        if self.state == AppState::Home {
-            self.apply_examples_home_layout(proteus);
-        }
         self.apply_example_detail_layout(proteus);
         self.apply_gallery_fetch_button_layout(proteus);
     }
@@ -1232,27 +1211,20 @@ impl Demo {
             return;
         }
 
-        // Compute the real target geometry immediately before the split
-        // starts, once, as `start_examples_to_detail` does for its merge target.
-        // Computing it at some earlier recurring point instead would leave the
-        // buttons at their spawn-time placeholder geometry whenever that point
-        // never ran — see `home::layout`'s doc.
-        let states = home::layout(proteus, &self.home);
-        for (button, state) in self.home.nav_buttons.into_iter().zip(states) {
-            let state = self.themed(state, home::CORNER_RADIUS, home::CORNER_RADIUS_DARK);
-            let _ = button.set_declared_geometry(proteus, state);
-        }
-
+        // The splash logo splits into Home's grid, each tile from its own
+        // part of the logo. The tiles' geometry follows the viewport: see
+        // `Demo::layout_home`.
+        self.layout_home(proteus);
         let button = self.splash.button;
-        let targets = self.home.nav_buttons;
+        let targets = self.home.tiles;
         let _ = button.split_to(
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Row,
+            HOME_GRID_SPLIT,
         );
         self.queue_reveal(
-            self.home.nav_labels.to_vec(),
+            self.home.labels.to_vec(),
             group_transition_config().duration,
         );
         self.state = AppState::Home;
@@ -1270,9 +1242,6 @@ impl Demo {
             return;
         };
         match click {
-            NavClick::OpenExamplesHome if self.state == AppState::Home => {
-                self.start_home_to_examples(proteus);
-            }
             NavClick::OpenVideoTiles if self.state == AppState::Home => {
                 self.start_home_to_tiles(proteus);
             }
@@ -1286,7 +1255,6 @@ impl Demo {
                 self.start_gallery_to_image(proteus, idx);
             }
             NavClick::GoHome => match self.state {
-                AppState::ExamplesHome => self.start_examples_to_home(proteus),
                 AppState::ExampleDetail(_) => self.start_detail_to_home(proteus),
                 AppState::VideoTiles => self.start_tiles_to_home(proteus),
                 AppState::VideoScreen(idx) => self.start_screen_to_home(proteus, idx),
@@ -1295,23 +1263,25 @@ impl Demo {
                 AppState::GalleryImage(_) => self.start_image_to_home(proteus),
                 _ => {}
             },
-            NavClick::OpenExampleDetail(idx) if self.state == AppState::ExamplesHome => {
-                self.start_examples_to_detail(proteus, idx);
+            NavClick::OpenExampleDetail(idx) if self.state == AppState::Home => {
+                self.start_home_to_detail(proteus, idx);
             }
             NavClick::OpenVideoScreen(idx) if self.state == AppState::VideoTiles => {
                 self.start_tiles_to_screen(proteus, idx);
             }
             NavClick::Back => match self.state {
-                AppState::ExampleDetail(_) => self.start_detail_to_examples(proteus),
+                AppState::ExampleDetail(_) => self.start_detail_to_home(proteus),
                 AppState::VideoScreen(idx) => self.start_screen_to_tiles(proteus, idx),
                 AppState::GalleryImage(_) => self.start_image_to_gallery(proteus),
+                AppState::VideoTiles => self.start_tiles_to_home(proteus),
+                AppState::Loading => self.start_loading_to_home(proteus),
+                AppState::Gallery => self.start_gallery_to_home(proteus),
                 _ => {}
             },
-            NavClick::RunBurstSpawn if self.state == AppState::ExampleDetail(3) => {
-                self.run_burst_spawn(proteus);
-            }
-            NavClick::RunTextureChurn if self.state == AppState::ExampleDetail(3) => {
-                self.run_texture_churn(proteus);
+            NavClick::FlashKey(i)
+                if self.state == AppState::ExampleDetail(example_detail::KEYS) =>
+            {
+                self.key_flash[i] = 1.0;
             }
             NavClick::SetTheme(dark) => {
                 self.dark_target = dark;
@@ -1320,86 +1290,53 @@ impl Demo {
         }
     }
 
-    /// 3 simultaneous 1→2 `Grid` splits, one per nav button — the
-    /// reverse of `start_examples_to_home`.
-    fn start_home_to_examples(&mut self, proteus: &mut Proteus) {
-        for col in 0..3 {
-            let source = self.home.nav_buttons[col];
-            let targets = [
-                self.examples_home.buttons[col * 2],
-                self.examples_home.buttons[col * 2 + 1],
-            ];
-            let _ = source.split_to(
-                proteus,
-                &targets,
-                group_transition_config(),
-                SplitStrategy::Grid { cols: 1, rows: 2 },
-            );
-        }
-        self.queue_reveal(
-            self.examples_home.labels.to_vec(),
-            group_transition_config().duration,
-        );
-        self.state = AppState::ExamplesHome;
-    }
-
-    /// 3 simultaneous 2→1 `Grid` merges, one per nav button — the reverse
-    /// of `start_home_to_examples`.
-    fn start_examples_to_home(&mut self, proteus: &mut Proteus) {
-        for col in 0..3 {
-            let dest = self.home.nav_buttons[col];
-            let sources = [
-                self.examples_home.buttons[col * 2],
-                self.examples_home.buttons[col * 2 + 1],
-            ];
-            let _ = dest.merge_from(
+    /// Merges Home's grid into the three video tiles, by columns: the first
+    /// column into the first tile, the middle two into the second, and the
+    /// last into the third (see [`VIDEO_TILE_COLUMNS`]), so each tile grows
+    /// from the part of the grid nearest it.
+    ///
+    /// Each video tile's resting state is set first, from
+    /// `video_tiles::tile_target_state`: a tile's own declared geometry
+    /// isn't guaranteed to carry its "white if real box art is baked"
+    /// override, and a merge ends at its destination's declared geometry.
+    fn start_home_to_tiles(&mut self, proteus: &mut Proteus) {
+        for (i, &(start_col, width)) in VIDEO_TILE_COLUMNS.iter().enumerate() {
+            let tile = self.video_tiles.tiles[i];
+            let state = video_tiles::tile_target_state(proteus, tile, i, self.theme_progress);
+            let _ = tile.set_declared_geometry(proteus, state);
+            let sources: Vec<Handle> = home::column_group(start_col, width)
+                .into_iter()
+                .map(|idx| self.home.tiles[idx])
+                .collect();
+            let _ = tile.merge_from(
                 proteus,
                 &sources,
                 group_transition_config(),
-                MergeLayout::Grid { cols: 1, rows: 2 },
-            );
-        }
-        self.state = AppState::Home;
-    }
-
-    /// 3 independent single-target `Row` splits, one per nav button — a
-    /// degenerate 1→1 crossfade dressed up as a trivial split (button `i`
-    /// goes straight to tile `i`, not a fan-out). The only edge out of
-    /// `Home`'s "Videos" button.
-    ///
-    /// Uses `split_to_with_states` (each target's state built explicitly via
-    /// `video_tiles::tile_target_state`), not plain `split_to` — a tile's
-    /// *own* `declared_geometry` isn't guaranteed to already carry the
-    /// "white if real box art is baked" override `tile_target_state`
-    /// applies, so relying on it silently drops that override on whatever
-    /// bake this crossfade produces.
-    fn start_home_to_tiles(&mut self, proteus: &mut Proteus) {
-        for i in 0..3 {
-            let source = self.home.nav_buttons[i];
-            let target = self.video_tiles.tiles[i];
-            let state = video_tiles::tile_target_state(proteus, target, i, self.theme_progress);
-            let _ = source.split_to_with_states(
-                proteus,
-                &[(target, state)],
-                group_transition_config(),
-                SplitStrategy::Row,
+                MergeLayout::Grid {
+                    cols: width,
+                    rows: home::ROWS,
+                },
             );
         }
         self.state = AppState::VideoTiles;
     }
 
-    /// The exact mirror of `start_home_to_tiles` — since each transition is
-    /// already a degenerate 1→1 crossfade in *either* direction, going back
-    /// is just `split_to` again with source/target swapped, not a merge.
+    /// The reverse of `start_home_to_tiles`: each video tile splits back
+    /// into its columns of Home's grid.
     fn start_tiles_to_home(&mut self, proteus: &mut Proteus) {
-        for i in 0..3 {
-            let source = self.video_tiles.tiles[i];
-            let target = self.home.nav_buttons[i];
-            let _ = source.split_to(
+        for (i, &(start_col, width)) in VIDEO_TILE_COLUMNS.iter().enumerate() {
+            let targets: Vec<Handle> = home::column_group(start_col, width)
+                .into_iter()
+                .map(|idx| self.home.tiles[idx])
+                .collect();
+            let _ = self.video_tiles.tiles[i].split_to(
                 proteus,
-                &[target],
+                &targets,
                 group_transition_config(),
-                SplitStrategy::Row,
+                SplitStrategy::Grid {
+                    cols: width,
+                    rows: home::ROWS,
+                },
             );
         }
         self.state = AppState::Home;
@@ -1486,9 +1423,9 @@ impl Demo {
         self.state = AppState::VideoTiles;
     }
 
-    /// One 1→3 `Row` split straight to the nav buttons, skipping
-    /// `VideoTiles`' grid entirely — the `VideoScreen`-to-`Home` escape
-    /// hatch, same shape as `start_detail_to_home`. The other two tiles
+    /// One 1→8 `Grid` split straight to Home's grid, skipping `VideoTiles`
+    /// entirely — the `VideoScreen`-to-`Home` escape hatch, same shape as
+    /// `start_detail_to_home`. The other two tiles
     /// never participate in this split (only the playing one does), so —
     /// unlike `start_screen_to_tiles`, where all 3 tiles are targets and
     /// get revealed by the split itself — they're hidden explicitly here;
@@ -1519,14 +1456,14 @@ impl Demo {
         }
         self.stop_tile_video(proteus, tile);
         self.restore_idle_tiles_opacity(proteus, idx);
-        let targets = self.home.nav_buttons;
+        let targets = self.home.tiles;
         let _ = tile.split_to(
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Row,
+            HOME_GRID_SPLIT,
         );
-        // `tile` isn't a target of *this* split (only `home.nav_buttons`
+        // `tile` isn't a target of *this* split (only `home.tiles`
         // are), so nothing reveals it here to expose its still-screen-sized
         // live geometry right now — but leaving it un-reset would resurface
         // the exact same staleness the next time `start_home_to_tiles` uses
@@ -1585,30 +1522,30 @@ impl Demo {
         }
     }
 
-    /// One 3→1 `Horizontal` merge — all 3 nav buttons converge onto
+    /// One 8→1 `Grid` merge — Home's whole grid converges onto
     /// `loading.logo`, then a fresh fetch begins.
     fn start_home_to_loading(&mut self, proteus: &mut Proteus) {
         self.begin_gallery_fetch(proteus);
-        let sources = self.home.nav_buttons;
+        let sources = self.home.tiles;
         let _ = self.loading.logo.merge_from(
             proteus,
             &sources,
             group_transition_config(),
-            MergeLayout::Row,
+            HOME_GRID_MERGE,
         );
         self.state = AppState::Loading;
     }
 
-    /// One 1→3 `Row` split back to the nav buttons — the error escape
-    /// hatch (clicking home while `Loading`, fetching or erroring) as well
-    /// as the ordinary "Loading" → "Home" back-navigation.
+    /// One 1→8 `Grid` split back to Home's grid — the error escape hatch
+    /// (going home while `Loading`, fetching or erroring) as well as the
+    /// ordinary "Loading" → "Home" back-navigation.
     fn start_loading_to_home(&mut self, proteus: &mut Proteus) {
-        let targets = self.home.nav_buttons;
+        let targets = self.home.tiles;
         let _ = self.loading.logo.split_to(
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Row,
+            HOME_GRID_SPLIT,
         );
         let _ = self.loading.error_text.set_visible(proteus, false);
         self.state = AppState::Home;
@@ -1661,28 +1598,23 @@ impl Demo {
         self.state = AppState::Loading;
     }
 
-    /// Three simultaneous `N`→1 `Grid` merges, one per nav button — the
-    /// grid's 4 columns split 1+2+1 across the 3 buttons (column 0 alone →
-    /// button 0, columns 1–2 → button 1, column 3 alone → button 2, each
-    /// group's own tiles arranged as their own sub-grid) rather than one
-    /// 12→1 merge, so each tile converges toward whichever button sits
-    /// closest to its own column instead of every tile converging on one
-    /// shared target. See `gallery::column_group_tiles`'s doc.
+    /// The gallery's 4 by 3 grid becomes Home's 4 by 2, column by column: in
+    /// each, the top photo becomes the top tile, and the other two merge
+    /// into the bottom one, so every photo heads for the tile nearest it.
     fn start_gallery_to_home(&mut self, proteus: &mut Proteus) {
-        const GROUPS: [(usize, usize); 3] = [(0, 1), (1, 2), (3, 1)];
-        for (dest, &(start_col, width)) in self.home.nav_buttons.into_iter().zip(GROUPS.iter()) {
-            let sources: Vec<Handle> = gallery::column_group_tiles(start_col, width)
-                .into_iter()
-                .map(|idx| self.gallery.tiles[idx])
-                .collect();
-            let _ = dest.merge_from(
+        for col in 0..home::COLS {
+            let photo = |row: usize| self.gallery.tiles[row * gallery::COLS + col];
+            let _ = photo(0).split_to(
                 proteus,
-                &sources,
+                &[self.home.tiles[col]],
                 gallery_group_transition_config(),
-                MergeLayout::Grid {
-                    cols: width,
-                    rows: gallery::ROWS,
-                },
+                SplitStrategy::Row,
+            );
+            let _ = self.home.tiles[home::COLS + col].merge_from(
+                proteus,
+                &[photo(1), photo(2)],
+                gallery_group_transition_config(),
+                MergeLayout::Grid { cols: 1, rows: 2 },
             );
         }
         // `fetch_button`/`.fetch_button_label` fade out on their own
@@ -1819,7 +1751,7 @@ impl Demo {
         self.state = AppState::Gallery;
     }
 
-    /// One 1→3 `Row` split straight to the nav buttons — the
+    /// One 1→8 `Grid` split straight to Home's grid — the
     /// `GalleryImage`-to-`Home` escape hatch, skipping `Gallery`'s grid
     /// entirely, same shape as `start_detail_to_home`/`start_screen_to_home`.
     /// The 12 real tiles were never revealed in the first place (they're
@@ -1830,22 +1762,22 @@ impl Demo {
         self.pending_gallery_hires_cancel = true;
         self.pending_gallery_hires_fetch = None;
         let _ = self.gallery.hires_overlay.set_visible(proteus, false);
-        let targets = self.home.nav_buttons;
+        let targets = self.home.tiles;
         let _ = self.gallery.enlarged.split_to(
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Row,
+            HOME_GRID_SPLIT,
         );
         self.state = AppState::Home;
     }
 
-    /// One 6→1 `Grid` merge — all 6 category buttons converge onto the
-    /// shared `example_detail.panel`. The panel's target geometry is fixed
+    /// One 8→1 `Grid` merge — Home's whole grid converges onto the shared
+    /// `example_detail.panel`. The panel's target geometry is fixed
     /// *before* the merge starts — the real final resting state goes in up
-    /// front, so the transition animates straight to the correct spot instead of
-    /// snapping after.
-    fn start_examples_to_detail(&mut self, proteus: &mut Proteus, idx: usize) {
+    /// front, so the transition animates straight to the correct spot
+    /// instead of snapping after.
+    fn start_home_to_detail(&mut self, proteus: &mut Proteus, idx: usize) {
         let target = self.themed(
             example_detail::panel_target(idx, self.viewport_size),
             example_detail::CORNER_RADIUS,
@@ -1855,19 +1787,12 @@ impl Demo {
             .example_detail
             .panel
             .set_declared_geometry(proteus, target);
-
-        // Row-major order, to match `MergeLayout::Grid`'s expectation —
-        // `examples_home.buttons` is itself column-major (`buttons[col*2]`
-        // = top, `[col*2+1]` = bottom).
-        let buttons = self.examples_home.buttons;
-        let sources: Vec<Handle> = (0..2)
-            .flat_map(|row| (0..3).map(move |col| buttons[col * 2 + row]))
-            .collect();
+        let sources = self.home.tiles;
         let _ = self.example_detail.panel.merge_from(
             proteus,
             &sources,
             group_transition_config(),
-            MergeLayout::Grid { cols: 3, rows: 2 },
+            HOME_GRID_MERGE,
         );
 
         self.queue_reveal(
@@ -1875,49 +1800,33 @@ impl Demo {
             group_transition_config().duration,
         );
         self.active_example_category = Some(idx);
+        self.focus_space = idx == example_detail::KEYS;
         self.state = AppState::ExampleDetail(idx);
     }
 
-    /// One 1→6 `Grid` split — the reverse of `start_examples_to_detail`.
-    fn start_detail_to_examples(&mut self, proteus: &mut Proteus) {
-        let buttons = self.examples_home.buttons;
-        let targets: Vec<Handle> = (0..2)
-            .flat_map(|row| (0..3).map(move |col| buttons[col * 2 + row]))
-            .collect();
-        let _ = self.example_detail.panel.split_to(
-            proteus,
-            &targets,
-            group_transition_config(),
-            SplitStrategy::Grid { cols: 3, rows: 2 },
-        );
-        self.cancel_stress_test(proteus);
-        self.hide_active_example_content(proteus);
-        self.state = AppState::ExamplesHome;
-    }
-
-    /// One 1→3 `Row` split straight to the nav buttons — the
-    /// `ExampleDetail`-to-`Home` escape hatch, skipping `ExamplesHome`'s
-    /// grid entirely.
+    /// One 1→8 `Grid` split — the reverse of `start_home_to_detail`, by Back
+    /// or Home alike.
     fn start_detail_to_home(&mut self, proteus: &mut Proteus) {
-        let targets = self.home.nav_buttons;
+        let targets = self.home.tiles;
         let _ = self.example_detail.panel.split_to(
             proteus,
             &targets,
             group_transition_config(),
-            SplitStrategy::Row,
+            HOME_GRID_SPLIT,
         );
-        self.cancel_stress_test(proteus);
         self.hide_active_example_content(proteus);
         self.state = AppState::Home;
     }
 
     /// Hides whichever category is currently showing and clears
     /// `active_example_category` — called on the way out of
-    /// `ExampleDetail`, since (unlike `screens::home`'s labels or
-    /// `screens::examples_home`'s labels) this content is standalone, not a
+    /// `ExampleDetail`, since (unlike `screens::home`'s labels) this
+    /// content is standalone, not a
     /// child of anything the transition system itself hides/reveals — see
     /// `screens::example_detail`'s module doc.
     fn hide_active_example_content(&mut self, proteus: &mut Proteus) {
+        self.set_keyboard_shifted(proteus, false);
+        self.key_flash.fill(0.0);
         if let Some(idx) = self.active_example_category.take() {
             for handle in self.example_detail.content_handles(idx) {
                 let _ = handle.set_visible(proteus, false);
@@ -1990,23 +1899,109 @@ impl Demo {
         }
     }
 
-    /// Finalizes `examples_home`'s 6 category buttons' grid layout once
-    /// their labels have baked — see `screens::examples_home::layout`'s
-    /// doc. Only safe to call while `state == Home`: once past that, the
-    /// buttons can be mid-merge (their live `QuadState` driven by the
-    /// transition system itself), and overwriting it here would fight that
-    /// animation — gated by the one call site in `tick`, not here, so the
-    /// safety condition stays visible at the call site.
-    fn apply_examples_home_layout(&mut self, proteus: &mut Proteus) {
-        if let Some(states) = examples_home::layout(proteus, &self.examples_home) {
-            let buttons = self.examples_home.buttons;
-            for (button, state) in buttons.into_iter().zip(states) {
-                let state = self.themed(
-                    state,
-                    examples_home::CORNER_RADIUS,
-                    examples_home::CORNER_RADIUS_DARK,
-                );
-                let _ = button.set_declared_geometry(proteus, state);
+    /// Lays Home's grid out for the current viewport: where each tile rests
+    /// (see `home::layout`). Called as the splash logo splits into the grid,
+    /// and on every resize. A tile on Home moves to its new place at once;
+    /// one away from Home, or still coming back, is hidden, and its next
+    /// transition ends there.
+    fn layout_home(&mut self, proteus: &mut Proteus) {
+        for (tile, state) in self
+            .home
+            .tiles
+            .into_iter()
+            .zip(home::layout(self.viewport_size))
+        {
+            let state = self.themed(state, home::CORNER_RADIUS, home::CORNER_RADIUS_DARK);
+            let _ = tile.set_declared_geometry(proteus, state);
+        }
+    }
+
+    /// Fades Home's heading and tagline in while Home is the current or
+    /// (mid-transition) destination state, and out otherwise, so they come
+    /// and go with the grid. Runs every tick, like `advance_nav_icons`.
+    fn advance_home_titles(&mut self, proteus: &mut Proteus, dt: f32) {
+        let target = if self.state == AppState::Home {
+            1.0
+        } else {
+            0.0
+        };
+        let step = dt / home::TITLE_FADE_SECS;
+        if self.home_title_fade < target {
+            self.home_title_fade = (self.home_title_fade + step).min(target);
+        } else if self.home_title_fade > target {
+            self.home_title_fade = (self.home_title_fade - step).max(target);
+        }
+        let (heading_y, tagline_y) = home::title_positions();
+        for (handle, y) in [
+            (self.home.heading, heading_y),
+            (self.home.tagline, tagline_y),
+        ] {
+            let _ = handle.set_visible(proteus, self.home_title_fade > 0.0);
+            let _ = handle.set_opacity(proteus, self.home_title_fade);
+            if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(handle.id()) {
+                qs.position.y = y;
+            }
+        }
+    }
+
+    /// Drives the Keyboard & Focus panel's virtual keyboard: a key the key
+    /// map doesn't bind flashes its keycap, matched by where the key is, and
+    /// Caps Lock toggles the keycaps' shifted values. Each flash fades over
+    /// `keyboard::FLASH_SECS`, eased in and out, and the Caps Lock keycap
+    /// stays tinted while the keyboard is shifted. Focus starts on the space
+    /// bar once the panel shows. Keys pressed on any other screen are
+    /// dropped.
+    fn advance_keyboard(&mut self, proteus: &mut Proteus, dt: f32) {
+        let keys = std::mem::take(&mut *self.unbound_keys.borrow_mut());
+        if self.state == AppState::ExampleDetail(example_detail::KEYS) {
+            for key in keys {
+                let keyboard = &self.example_detail.keys.keyboard;
+                let Some(i) = keyboard.index_of(&key.code) else {
+                    continue;
+                };
+                self.key_flash[i] = 1.0;
+                if keyboard.is_caps_lock(i) {
+                    self.set_keyboard_shifted(proteus, !self.keyboard_shifted);
+                }
+            }
+            // A hidden component can't take focus, so the space bar takes it
+            // once the keyboard shows, after the panel's merge.
+            let keyboard = &self.example_detail.keys.keyboard;
+            let shown = proteus.get(keyboard.board).is_some_and(|d| d.visible);
+            if self.focus_space && shown {
+                let space = keyboard.space();
+                let _ = space.focus(proteus);
+                if proteus.focused() == Some(space) {
+                    self.focus_space = false;
+                }
+            }
+        } else {
+            self.focus_space = false;
+        }
+        let keyboard = &self.example_detail.keys.keyboard;
+        for (i, &key) in keyboard.keys.iter().enumerate() {
+            let flash = &mut self.key_flash[i];
+            *flash = (*flash - dt / screens::keyboard::FLASH_SECS).max(0.0);
+            let tinted = self.keyboard_shifted && keyboard.is_caps_lock(i);
+            let fill = screens::keyboard::key_fill(Easing::EaseInOutQuad.apply(*flash), tinted);
+            if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(key.id()) {
+                qs.color = fill;
+            }
+        }
+    }
+
+    /// Shows the virtual keycaps' shifted values, or their own, by changing
+    /// the labels of the keycaps whose labels differ.
+    fn set_keyboard_shifted(&mut self, proteus: &mut Proteus, shifted: bool) {
+        if self.keyboard_shifted == shifted {
+            return;
+        }
+        self.keyboard_shifted = shifted;
+        let keyboard = &self.example_detail.keys.keyboard;
+        for (i, &key) in keyboard.keys.iter().enumerate() {
+            if keyboard.shifts(i) {
+                let text = screens::keyboard::label_text(keyboard.label(i, shifted));
+                let _ = key.set_text(proteus, text);
             }
         }
     }
@@ -2015,7 +2010,7 @@ impl Demo {
     /// idempotent (see `example_detail::layout_content`'s doc), safe
     /// unconditionally: the panel's own `QuadState` never changes once
     /// `start_examples_to_detail` sets it, so there's no live transition
-    /// here to fight, unlike `apply_examples_home_layout`.
+    /// here to fight.
     fn apply_example_detail_layout(&mut self, proteus: &mut Proteus) {
         let Some(idx) = self.active_example_category else {
             return;
@@ -2274,8 +2269,7 @@ impl Demo {
 
     /// Finalizes `gallery.fetch_button`'s geometry once its label has
     /// baked — see `screens::gallery::fetch_button_quad`'s doc. Safe
-    /// unconditionally, every tick: unlike `apply_examples_home_layout`,
-    /// the button is never itself a group-transition target (only the 12
+    /// unconditionally, every tick: the button is never itself a group-transition target (only the 12
     /// tiles are — see `start_loading_to_gallery`'s doc), so there's no
     /// live transition on this entity to fight.
     fn apply_gallery_fetch_button_layout(&mut self, proteus: &mut Proteus) {
@@ -2295,7 +2289,7 @@ impl Demo {
     /// `ExampleDetail(2)` is active — paused (not reset) otherwise, so it
     /// resumes from wherever it left off rather than restarting each time.
     fn advance_example_animation(&mut self, proteus: &mut Proteus, dt: f32) {
-        if self.state != AppState::ExampleDetail(2) {
+        if self.state != AppState::ExampleDetail(example_detail::TRANSFORMS) {
             return;
         }
         self.transforms_anim_elapsed += dt;
@@ -2304,217 +2298,6 @@ impl Demo {
             &self.example_detail,
             self.transforms_anim_elapsed,
         );
-    }
-
-    fn next_random_u32(&mut self) -> u32 {
-        let mut x = self.stress_rng;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.stress_rng = x;
-        x
-    }
-
-    fn random_unit_f32(&mut self) -> f32 {
-        (self.next_random_u32() as f32) / (u32::MAX as f32)
-    }
-
-    /// A fresh random target for one Burst Spawn particle — uniform within
-    /// `panel`'s bounds (minus padding and half the item size), excluding a
-    /// `RESULT_TEXT_RESERVED_HEIGHT_PX` strip at the panel's bottom so
-    /// particles never sit under the result text. Scale 0.6–1.4×, a random
-    /// hue.
-    fn random_burst_target(&mut self, panel: &QuadState) -> QuadState {
-        let half_size = example_detail::BURST_ITEM_SIZE / 2.0;
-        let half_w = (panel.size.x / 2.0 - example_detail::PANEL_PADDING_PX - half_size).max(0.0);
-        let x = panel.position.x + (self.random_unit_f32() * 2.0 - 1.0) * half_w;
-
-        let half_h = (panel.size.y / 2.0 - example_detail::PANEL_PADDING_PX - half_size).max(0.0);
-        let y_min = panel.position.y - half_h + example_detail::RESULT_TEXT_RESERVED_HEIGHT_PX;
-        let y_max = panel.position.y + half_h;
-        let y = y_min + self.random_unit_f32() * (y_max - y_min).max(0.0);
-
-        let scale = 0.6 + self.random_unit_f32() * 0.8;
-        let rgb = example_detail::hsv_to_rgb(self.random_unit_f32() * 360.0);
-
-        QuadState {
-            position: Vec3::new(x, y, example_detail::CONTENT_Z),
-            size: Vec2::splat(example_detail::BURST_ITEM_SIZE),
-            rotation: 0.0,
-            scale,
-            anchor: Vec2::new(0.5, 0.5),
-            color: Vec4::new(rgb.x, rgb.y, rgb.z, 1.0),
-            corner_radius: 4.0,
-        }
-    }
-
-    /// One Texture Churn slot's rest position — a fixed
-    /// `example_detail::TEXTURE_CHURN_COLS`-column grid centered on `panel`.
-    fn texture_churn_slot_quad(i: usize, panel: &QuadState) -> QuadState {
-        let cols = example_detail::TEXTURE_CHURN_COLS;
-        let rows = example_detail::TEXTURE_CHURN_SLOTS.div_ceil(cols);
-        let size = example_detail::TEXTURE_CHURN_SLOT_SIZE;
-        let gap = example_detail::TEXTURE_CHURN_GAP_PX;
-        let total_w = cols as f32 * size + (cols as f32 - 1.0) * gap;
-        let total_h = rows as f32 * size + (rows as f32 - 1.0) * gap;
-        let col = (i % cols) as f32;
-        let row = (i / cols) as f32;
-        let x = panel.position.x - total_w / 2.0 + size / 2.0 + col * (size + gap);
-        let y = panel.position.y + total_h / 2.0 - size / 2.0 - row * (size + gap);
-        QuadState {
-            position: Vec3::new(x, y, example_detail::CONTENT_Z),
-            size: Vec2::splat(size),
-            rotation: 0.0,
-            scale: 1.0,
-            anchor: Vec2::new(0.5, 0.5),
-            color: Vec4::ONE,
-            corner_radius: 8.0,
-        }
-    }
-
-    /// Spawns `example_detail::BURST_SPAWN_COUNT` particles and starts a
-    /// `STRESS_TEST_DURATION`-second run — no-op if one's already in
-    /// progress.
-    fn run_burst_spawn(&mut self, proteus: &mut Proteus) {
-        if self.stress_run.is_some() {
-            return;
-        }
-        let Some(panel) = proteus.get(self.example_detail.panel) else {
-            return;
-        };
-        let panel = panel.geometry;
-        let entities: Vec<Handle> = (0..example_detail::BURST_SPAWN_COUNT)
-            .map(|_| {
-                let target = self.random_burst_target(&panel);
-                proteus.component(ComponentSpec::new(target).non_interactive())
-            })
-            .collect();
-        self.stress_run = Some(StressRun {
-            kind: StressKind::BurstSpawn,
-            elapsed: 0.0,
-            frame_count: 0,
-            entities,
-            churn_iterations: 0,
-        });
-    }
-
-    /// Spawns `example_detail::TEXTURE_CHURN_SLOTS` fixed slots (flat white
-    /// until `advance_texture_churn_entities` gives each its first texture
-    /// next tick) and starts a run — no-op if one's already in progress.
-    fn run_texture_churn(&mut self, proteus: &mut Proteus) {
-        if self.stress_run.is_some() {
-            return;
-        }
-        let Some(panel) = proteus.get(self.example_detail.panel) else {
-            return;
-        };
-        let panel = panel.geometry;
-        let entities: Vec<Handle> = (0..example_detail::TEXTURE_CHURN_SLOTS)
-            .map(|i| {
-                let qs = Self::texture_churn_slot_quad(i, &panel);
-                proteus.component(ComponentSpec::new(qs).non_interactive())
-            })
-            .collect();
-        self.stress_run = Some(StressRun {
-            kind: StressKind::TextureChurn,
-            elapsed: 0.0,
-            frame_count: 0,
-            entities,
-            churn_iterations: 0,
-        });
-    }
-
-    /// The top-level Stress Tests driver — advances `elapsed`, finalizes
-    /// once `STRESS_TEST_DURATION` is reached, otherwise dispatches to
-    /// whichever kind is running.
-    fn advance_stress_test(&mut self, proteus: &mut Proteus, dt: f32) {
-        let Some(run) = &mut self.stress_run else {
-            return;
-        };
-        run.elapsed += dt;
-        run.frame_count += 1;
-        if run.elapsed >= example_detail::STRESS_TEST_DURATION {
-            self.finalize_stress_test(proteus);
-            return;
-        }
-        match run.kind {
-            StressKind::BurstSpawn => self.advance_burst_spawn_entities(proteus),
-            StressKind::TextureChurn => self.advance_texture_churn_entities(),
-        }
-    }
-
-    /// Re-targets every *idle* particle (its prior `animate_to` has
-    /// settled) to a fresh random position — a sustained sweep across the
-    /// whole run rather than a one-shot spawn, since each particle
-    /// retriggers roughly every `BURST_SPAWN_ITEM_DURATION` seconds.
-    fn advance_burst_spawn_entities(&mut self, proteus: &mut Proteus) {
-        let Some(run) = &self.stress_run else { return };
-        if run.kind != StressKind::BurstSpawn {
-            return;
-        }
-        let entities = run.entities.clone();
-        let Some(panel) = proteus.get(self.example_detail.panel) else {
-            return;
-        };
-        let panel = panel.geometry;
-        let config = TransitionConfig {
-            duration: example_detail::BURST_SPAWN_ITEM_DURATION,
-            delay: 0.0,
-            easing: Easing::EaseInOutQuad,
-        };
-        for entity in entities {
-            let idle = proteus.get(entity).is_some_and(|d| d.transition.is_none());
-            if idle {
-                let target = self.random_burst_target(&panel);
-                let _ = entity.animate_to(proteus, target, config);
-            }
-        }
-    }
-
-    /// Churns every slot's texture *every* tick (unlike Burst Spawn's
-    /// idle-gated retrigger — a texture swap is instantaneous, so there's
-    /// no animation to wait out between cycles) — computes each slot's
-    /// fresh synthetic RGBA buffer and queues it via
-    /// `pending_texture_churn` for `DemoApp` to actually register.
-    fn advance_texture_churn_entities(&mut self) {
-        let Some(run) = &self.stress_run else { return };
-        if run.kind != StressKind::TextureChurn {
-            return;
-        }
-        let entities = run.entities.clone();
-        for &handle in &entities {
-            let width = (example_detail::TEXTURE_CHURN_SIZE_MIN
-                + self.random_unit_f32() * example_detail::TEXTURE_CHURN_SIZE_SPREAD)
-                as u32;
-            let height = (example_detail::TEXTURE_CHURN_SIZE_MIN
-                + self.random_unit_f32() * example_detail::TEXTURE_CHURN_SIZE_SPREAD)
-                as u32;
-            let rgb = example_detail::hsv_to_rgb(self.random_unit_f32() * 360.0);
-            let pixel = [
-                (rgb.x * 255.0) as u8,
-                (rgb.y * 255.0) as u8,
-                (rgb.z * 255.0) as u8,
-                255,
-            ];
-            let rgba = pixel.repeat((width * height) as usize);
-            self.pending_texture_churn.push(TextureChurnUpdate {
-                handle,
-                width,
-                height,
-                rgba,
-            });
-        }
-        if let Some(run) = &mut self.stress_run {
-            run.churn_iterations += entities.len() as u32;
-        }
-    }
-
-    /// Drains this tick's Texture Churn updates to register — see
-    /// [`TextureChurnUpdate`]'s doc. Call once per tick, after
-    /// [`Demo::advance`], from somewhere with GPU access: that is
-    /// [`DemoApp`]'s `App::update`, which has a `Frame`.
-    pub fn take_pending_texture_churn(&mut self) -> Vec<TextureChurnUpdate> {
-        std::mem::take(&mut self.pending_texture_churn)
     }
 
     /// Drains this tick's pending gallery fetch request, if any — see
@@ -2593,93 +2376,6 @@ impl Demo {
     /// decode has nothing to abort; the web shell's HLS fetch does).
     pub fn take_pending_video_cancel(&mut self) -> bool {
         std::mem::take(&mut self.pending_video_cancel)
-    }
-
-    /// Ends the current run naturally: despawns every entity in bulk and
-    /// reports the result via `stress.result_text`. `Text` doesn't support
-    /// in-place content changes (see `StressContent::result_text`'s doc),
-    /// so updating `.content` alone wouldn't re-render — freeing the
-    /// current `BakedText` makes the renderer's next bake pass pick it
-    /// back up.
-    fn finalize_stress_test(&mut self, proteus: &mut Proteus) {
-        let Some(run) = self.stress_run.take() else {
-            return;
-        };
-        for &entity in &run.entities {
-            let _ = entity.destroy(proteus);
-        }
-        let avg_fps = run.frame_count as f32 / run.elapsed;
-        // A real, deliberate cap (both hosts use `PresentMode::AutoVsync`),
-        // not a stress-test bottleneck — a result that bumped up against it
-        // deserves a callout rather than reading like this demo can't push
-        // past ~60 FPS on its own.
-        let vsync_note = if avg_fps >= VSYNC_FPS_CAP_THRESHOLD {
-            " (FPS capped at 60 by vsync)"
-        } else {
-            ""
-        };
-        let result = match run.kind {
-            StressKind::BurstSpawn => format!(
-                "Burst Spawn: {} entities, avg {avg_fps:.1} FPS over {:.1}s{vsync_note}",
-                run.entities.len(),
-                example_detail::STRESS_TEST_DURATION
-            ),
-            StressKind::TextureChurn => format!(
-                "Texture Churn: {} register/evict cycles, avg {avg_fps:.1} FPS over {:.1}s{vsync_note}",
-                run.churn_iterations,
-                example_detail::STRESS_TEST_DURATION
-            ),
-        };
-        // The same style `example_detail::spawn` gives it.
-        let _ = self
-            .example_detail
-            .stress
-            .result_text
-            .set_text(proteus, Text::new(result, 16.0).with_color(violet()));
-    }
-
-    /// Ends the current run early, if any — despawns its entities without
-    /// reporting a result (distinct from `finalize_stress_test`, the
-    /// natural-completion path). Called whenever the user navigates away
-    /// from `ExampleDetail(3)` mid-run: this content is standalone (see
-    /// `screens::example_detail`'s module doc), so without this it would
-    /// keep existing and rendering over whatever comes next.
-    fn cancel_stress_test(&mut self, proteus: &mut Proteus) {
-        if let Some(run) = self.stress_run.take() {
-            for entity in run.entities {
-                let _ = entity.destroy(proteus);
-            }
-        }
-    }
-
-    /// Shows the photosensitivity warning only once *settled* and idle on
-    /// `ExampleDetail(3)` with no test running — hidden the instant either
-    /// button starts a run, reappears once it ends. Called every tick,
-    /// unconditionally, so it also self-corrects on the way out of
-    /// `ExampleDetail(3)` (no separate exit hook needed) — see
-    /// `ExampleDetail::content_handles`'s doc for why this entity is
-    /// managed separately from the rest of the category's content.
-    ///
-    /// "Settled" is read from `panel`'s own `Visibility`, since this state
-    /// machine has no crate-wide "transitioning" flag. `self.state` flips to
-    /// `ExampleDetail(3)` the instant the merge *starts*, but an N→1 merge
-    /// hides its *destination* (`panel`) for the whole transition and reveals
-    /// it only once every virtual has completed. The N *sources* are what
-    /// animate, as virtual clones, so `panel` never has an `ActiveTransition`
-    /// of its own to check. Without this gate, the warning would pop in
-    /// mid-transition.
-    fn advance_stress_warning_visibility(&mut self, proteus: &mut Proteus) {
-        let panel_visible = proteus
-            .get(self.example_detail.panel)
-            .map(|d| d.visible)
-            .unwrap_or(false);
-        let visible =
-            panel_visible && self.state == AppState::ExampleDetail(3) && self.stress_run.is_none();
-        let _ = self
-            .example_detail
-            .stress
-            .warning_text
-            .set_visible(proteus, visible);
     }
 
     /// Ramps every registered [`HoverEntry`]'s progress toward 1 while
@@ -3131,21 +2827,23 @@ impl Demo {
             qs.color.w = self.theme_icon_fade[1];
         }
 
-        // `home`'s nav buttons — corner radius, twice as round in the dark
-        // theme, and Border/Glow/label RGB.
-        for &button in &self.home.nav_buttons {
+        // `home`'s tiles — corner radius, twice as round in the dark theme,
+        // and Border/Glow/label RGB — and its heading and tagline.
+        for &tile in &self.home.tiles {
             blend_corner_radius(
                 proteus,
-                button,
+                tile,
                 home::CORNER_RADIUS,
                 home::CORNER_RADIUS_DARK,
                 p,
             );
-            blend_primary_color(proteus, button, p);
+            blend_primary_color(proteus, tile, p);
         }
-        for &label in &self.home.nav_labels {
+        for &label in &self.home.labels {
             blend_primary_color(proteus, label, p);
         }
+        blend_primary_color(proteus, self.home.heading, p);
+        blend_primary_color(proteus, self.home.tagline, p);
 
         // `nav.home`/`nav.back` — Glow only (border+glyph are baked into
         // the PNG art itself, and neither has a `Text` label), and both
@@ -3178,22 +2876,6 @@ impl Demo {
             qs.color.w = self.nav_home_selected_fade * dark_w;
         }
 
-        // `examples_home`'s 6 category buttons — same corner-radius/
-        // Border/Glow/label treatment as `home`'s nav buttons above.
-        for &button in &self.examples_home.buttons {
-            blend_corner_radius(
-                proteus,
-                button,
-                examples_home::CORNER_RADIUS,
-                examples_home::CORNER_RADIUS_DARK,
-                p,
-            );
-            blend_primary_color(proteus, button, p);
-        }
-        for &label in &self.examples_home.labels {
-            blend_primary_color(proteus, label, p);
-        }
-
         // `example_detail.panel` — corner radius is a *real* light/dark
         // difference here (12→18, unlike every button family above), Border
         // only (no `Glow`/`Text` on the panel itself — see its own spawn
@@ -3207,22 +2889,12 @@ impl Demo {
         );
         blend_primary_color(proteus, self.example_detail.panel, p);
 
-        // The 4 category titles — Text only. Deliberately narrower scope
+        // The 6 category titles — Text only. Deliberately narrower scope
         // than `content_handles` (each category's own row labels/content
         // boxes stay a fixed light-treatment violet, never blended) —
         // deliberate, not an oversight.
         for &heading in &self.example_detail.headings {
             blend_primary_color(proteus, heading, p);
-        }
-
-        // Stress Tests' 2 buttons + labels — same treatment as `home`'s nav
-        // buttons; unlike the content of all the other categories, these get
-        // the live theme lerp (see `ExampleDetail::headings`' doc).
-        for &button in &self.example_detail.stress.buttons {
-            blend_primary_color(proteus, button, p);
-        }
-        for &label in &self.example_detail.stress.button_labels {
-            blend_primary_color(proteus, label, p);
         }
 
         // `video_tiles.tiles` — corner radius blends between the tile pair
@@ -3453,6 +3125,7 @@ impl Demo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proteus_sdk::Key;
 
     // Test harness: owns the `Proteus` that `Demo` is given, and runs the
     // full frame sequence each `tick` (`Proteus::tick` → `Demo::advance` →
@@ -3503,8 +3176,6 @@ mod tests {
     }
 
     harness_forward! {
-        fn start_home_to_examples();
-        fn start_examples_to_home();
         fn start_home_to_tiles();
         fn start_tiles_to_home();
         fn start_tiles_to_screen(idx: usize);
@@ -3518,11 +3189,8 @@ mod tests {
         fn start_gallery_to_image(idx: usize);
         fn start_image_to_gallery();
         fn start_image_to_home();
-        fn start_examples_to_detail(idx: usize);
-        fn start_detail_to_examples();
+        fn start_home_to_detail(idx: usize);
         fn start_detail_to_home();
-        fn run_burst_spawn();
-        fn run_texture_churn();
         fn set_gallery_hires_image(idx: usize, bytes: Vec<u8>);
         fn set_gallery_tile_image(idx: usize, bytes: Vec<u8>, aspect: Vec2);
         fn pointer_moved(pos: Option<Vec2>);
@@ -3583,11 +3251,13 @@ mod tests {
             t += 0.05;
         }
         assert_eq!(demo.state, AppState::Home);
-        for &button in &demo.home.nav_buttons {
-            assert_above(&demo, button, "home.nav_buttons");
+        for &tile in &demo.home.tiles {
+            assert_above(&demo, tile, "home.tiles");
         }
+        assert_above(&demo, demo.home.heading, "home.heading");
+        assert_above(&demo, demo.home.tagline, "home.tagline");
 
-        // VideoTiles, then back to Home before continuing on to ExamplesHome.
+        // VideoTiles, then back to Home before continuing on to ExampleDetail.
         demo.start_home_to_tiles();
         demo.tick(1.0);
         assert_eq!(demo.state, AppState::VideoTiles);
@@ -3599,17 +3269,8 @@ mod tests {
         demo.tick(1.0);
         assert_eq!(demo.state, AppState::Home);
 
-        // ExamplesHome.
-        demo.start_home_to_examples();
-        demo.tick(1.0);
-        assert_eq!(demo.state, AppState::ExamplesHome);
-        for &button in &demo.examples_home.buttons {
-            assert_above(&demo, button, "examples_home.buttons");
-        }
-        assert_above(&demo, demo.nav.home, "nav.home");
-
         // ExampleDetail(0).
-        demo.start_examples_to_detail(0);
+        demo.start_home_to_detail(0);
         demo.tick(1.0);
         assert_eq!(demo.state, AppState::ExampleDetail(0));
         assert_above(&demo, demo.example_detail.panel, "example_detail.panel");
@@ -3680,238 +3341,366 @@ mod tests {
         assert_eq!(demo.state, AppState::Home);
     }
 
-    fn advance_to_stress_tests() -> Harness {
-        let mut demo = Harness::new();
-        let mut t = 0.0;
-        while t < past_splash_secs() {
-            demo.tick(0.05);
-            t += 0.05;
-        }
-        demo.start_home_to_examples();
-        demo.tick(1.0);
-        demo.start_examples_to_detail(3);
-        demo.tick(1.0);
-        assert_eq!(demo.state, AppState::ExampleDetail(3));
-        demo
-    }
-
+    // Clicks each example tile with the pointer, rather than calling
+    // `start_home_to_detail` directly, so a tile left out of `Demo::new`'s
+    // click wiring is caught. A fresh `Demo` each: see
+    // `going_home_and_back_again_reopens_a_panel` for a round trip.
     #[test]
-    fn burst_spawn_runs_then_despawns_and_reports_a_result() {
-        let mut demo = advance_to_stress_tests();
-
-        demo.run_burst_spawn();
-        let run = demo.stress_run.as_ref().expect("run should have started");
-        assert_eq!(run.entities.len(), example_detail::BURST_SPAWN_COUNT);
-        let sample = run.entities[0];
-
-        // A second trigger while one's already running must no-op, not
-        // spawn a duplicate batch.
-        demo.run_burst_spawn();
-        assert_eq!(
-            demo.stress_run.as_ref().unwrap().entities.len(),
-            example_detail::BURST_SPAWN_COUNT
-        );
-
-        let mut t = 0.0;
-        while t < example_detail::STRESS_TEST_DURATION + 0.5 {
-            demo.tick(0.1);
-            t += 0.1;
-        }
-        assert!(demo.stress_run.is_none(), "run should have finalized");
-        assert!(
-            demo.app.get(sample).is_none(),
-            "particles must be despawned once the run finalizes"
-        );
-        let result = demo
-            .app
-            .world()
-            .get::<Text>(demo.example_detail.stress.result_text.id())
-            .unwrap();
-        assert!(
-            result.content.contains("Burst Spawn"),
-            "result text should report what ran, got {:?}",
-            result.content
-        );
-        // The message must include the average-FPS figure, as the demo's
-        // result text does.
-        assert!(
-            result.content.contains("avg") && result.content.contains("FPS"),
-            "result text should report the run's average FPS, got {:?}",
-            result.content
-        );
-    }
-
-    #[test]
-    fn texture_churn_queues_updates_and_counts_iterations() {
-        let mut demo = advance_to_stress_tests();
-
-        demo.run_texture_churn();
-        assert_eq!(
-            demo.stress_run.as_ref().unwrap().entities.len(),
-            example_detail::TEXTURE_CHURN_SLOTS
-        );
-
-        demo.tick(0.1);
-        let updates = demo.take_pending_texture_churn();
-        assert_eq!(
-            updates.len(),
-            example_detail::TEXTURE_CHURN_SLOTS,
-            "every slot should churn every tick"
-        );
-        for u in &updates {
-            assert_eq!(u.rgba.len(), (u.width * u.height * 4) as usize);
-        }
-
-        let mut t = 0.0;
-        while t < example_detail::STRESS_TEST_DURATION + 0.5 {
-            demo.tick(0.1);
-            t += 0.1;
-        }
-        assert!(demo.stress_run.is_none());
-        let result = demo
-            .app
-            .world()
-            .get::<Text>(demo.example_detail.stress.result_text.id())
-            .unwrap();
-        assert!(result.content.contains("Texture Churn"));
-    }
-
-    #[test]
-    fn navigating_away_mid_run_cancels_it_without_a_result() {
-        let mut demo = advance_to_stress_tests();
-
-        demo.run_burst_spawn();
-        let sample = demo.stress_run.as_ref().unwrap().entities[0];
-        demo.tick(0.1);
-
-        demo.start_detail_to_examples();
-
-        assert!(demo.stress_run.is_none());
-        assert!(
-            demo.app.get(sample).is_none(),
-            "particles must be despawned when navigating away mid-run"
-        );
-        let result = demo
-            .app
-            .world()
-            .get::<Text>(demo.example_detail.stress.result_text.id())
-            .unwrap();
-        assert_eq!(
-            result.content, "",
-            "cancelling shouldn't report a result — only a natural finish does"
-        );
-    }
-
-    // Simulates a real pointer click on each of the 6 category buttons
-    // rather than calling `start_examples_to_detail` directly — the
-    // earlier z-order test caught geometry mistakes but not a
-    // missing/absent `on_click` registration, which is exactly the bug
-    // this test would have caught (`examples_home.buttons[3]`'s "Stress
-    // Tests" tile was left out of the wiring loop in `Demo::new` when Step
-    // 4 landed; 4/5 — "Layout"/"3D" — the same way, until the "not built
-    // yet" placeholder landed). Each `idx` gets a fresh `Demo` —
-    // deliberately not a single instance round-tripping through all six:
-    // repeatedly re-declaring several `examples_home.buttons`' geometry
-    // (needed headlessly, since `examples_home::layout` never resolves
-    // without real text baking) before a *second* `Grid` split
-    // surfaced a separate, not-yet-root-caused issue where
-    // `reveal_on_complete` never fires for that second split — reproduced
-    // only in the no-GPU fallback path (`one_to_n_setup_system`'s
-    // baked-crossfade branch requires `GpuContext`/`QuadPipeline`, absent
-    // here); the real app always has those, so it's very likely
-    // fallback-path-only, but hasn't been confirmed against a GPU-backed
-    // run. Worth another look if category navigation ever stops responding
-    // after visiting several categories in a row.
-    #[test]
-    fn each_wired_examples_home_category_button_opens_its_own_example_detail() {
-        for idx in 0..6 {
-            let mut demo = Harness::new();
-            let mut t = 0.0;
-            while t < past_splash_secs() {
-                demo.tick(0.05);
-                t += 0.05;
-            }
-            demo.start_home_to_examples();
-            demo.tick(1.0);
-            assert_eq!(demo.state, AppState::ExamplesHome);
-
-            // Isolate this button from its five siblings, which headlessly
-            // all still sit at the same fallback position — safe here
-            // since it's this `Demo`'s first-ever `set_declared_geometry`
-            // call on it (see the doc above for why a *second* one, later,
-            // isn't).
-            let button = demo.examples_home.buttons[idx];
-            let mut geometry = demo.app.get(button).unwrap().geometry;
-            geometry.position = Vec3::new(5000.0, 5000.0, 0.5);
-            let _ = button.set_declared_geometry(&mut demo.app, geometry);
-
-            demo.pointer_moved(Some(Vec2::new(5000.0, 5000.0)));
-            demo.pointer_pressed();
-            demo.tick(1.0);
-
+    fn each_example_tile_opens_its_own_panel() {
+        for idx in 0..example_detail::CATEGORY_TITLES.len() {
+            let mut demo = advance_to_home();
+            let tile = demo.home.tiles[home::FIRST_EXAMPLE + idx];
+            click(&mut demo, tile);
             assert_eq!(
                 demo.state,
                 AppState::ExampleDetail(idx),
-                "clicking category button {idx} should open ExampleDetail({idx})"
+                "clicking example tile {idx} should open ExampleDetail({idx})"
             );
+            for handle in demo.example_detail.content_handles(idx) {
+                assert!(
+                    demo.app.get(handle).unwrap().visible,
+                    "panel {idx}'s content should show once it settles"
+                );
+            }
         }
     }
 
-    // `advance_stress_warning_visibility` must not go by `self.state ==
-    // ExampleDetail(3)` alone: `self.state` flips to that the instant the
-    // merge *starts* (see `Demo::advance_nav_icons`'s doc for the same "flips
-    // synchronously, not once landed" convention), so the warning would pop in
-    // well before the panel had finished transitioning into place.
+    // Home's whole grid merges into the panel, and the panel splits back
+    // into all of it: every tile is hidden while the panel shows, and shown
+    // again once back.
     #[test]
-    fn stress_warning_stays_hidden_until_the_panel_transition_settles() {
+    fn a_panel_comes_from_and_returns_to_the_whole_grid() {
         let mut demo = advance_to_home();
-        demo.start_home_to_examples();
+        demo.start_home_to_detail(5);
         demo.tick(1.0);
-        assert_eq!(demo.state, AppState::ExamplesHome);
+        assert!(demo.app.get(demo.example_detail.panel).unwrap().visible);
+        for &tile in &demo.home.tiles {
+            assert!(!demo.app.get(tile).unwrap().visible);
+        }
 
-        demo.start_examples_to_detail(3);
-        assert_eq!(demo.state, AppState::ExampleDetail(3));
+        demo.start_detail_to_home();
+        assert_eq!(demo.state, AppState::Home);
+        demo.tick(1.0);
+        assert!(!demo.app.get(demo.example_detail.panel).unwrap().visible);
+        for &tile in &demo.home.tiles {
+            assert!(demo.app.get(tile).unwrap().visible);
+        }
+        for handle in demo.example_detail.content_handles(5) {
+            assert!(!demo.app.get(handle).unwrap().visible);
+        }
+    }
 
-        // One small tick: the merge request has been inserted but not yet
-        // processed into an `ActiveTransition` (that happens on the *next*
-        // `Proteus::tick` — see `PendingTileReset`'s doc for the same
-        // one-tick-later convention elsewhere in this crate), and the
-        // panel is nowhere near its resting shape yet either way.
-        demo.tick(0.05);
-        assert!(
-            !demo
-                .app
-                .get(demo.example_detail.stress.warning_text)
-                .unwrap()
-                .visible,
-            "warning must stay hidden while the panel is still mid-transition"
-        );
-
-        // Still mid-transition (well under group_transition_config()'s 0.4s
-        // duration).
-        demo.tick(0.1);
-        assert!(
-            !demo
-                .app
-                .get(demo.example_detail.stress.warning_text)
-                .unwrap()
-                .visible,
-            "warning must stay hidden partway through the transition"
-        );
-
-        // Past the transition's duration — settled.
-        demo.tick(0.5);
-        assert!(
+    // Home's heading and tagline fade out as the grid leaves, and back in
+    // as it returns.
+    #[test]
+    fn the_heading_and_tagline_fade_with_the_grid() {
+        let mut demo = advance_to_home();
+        demo.tick(1.0);
+        let opacity = |demo: &Harness, handle: Handle| {
             demo.app
-                .get(demo.example_detail.stress.warning_text)
-                .unwrap()
-                .visible,
-            "warning should appear once the panel has actually settled"
+                .world()
+                .get::<proteus_ui::Opacity>(handle.id())
+                .map(|o| o.0)
+                .unwrap_or(1.0)
+        };
+        assert_eq!(opacity(&demo, demo.home.heading), 1.0);
+        assert!(demo.app.get(demo.home.tagline).unwrap().visible);
+
+        demo.start_home_to_detail(0);
+        demo.tick(home::TITLE_FADE_SECS / 2.0);
+        let mid = opacity(&demo, demo.home.heading);
+        assert!(mid > 0.0 && mid < 1.0, "should be fading out, got {mid}");
+        demo.tick(1.0);
+        assert!(!demo.app.get(demo.home.heading).unwrap().visible);
+        assert!(!demo.app.get(demo.home.tagline).unwrap().visible);
+
+        demo.start_detail_to_home();
+        demo.tick(1.0);
+        assert_eq!(opacity(&demo, demo.home.tagline), 1.0);
+        assert!(demo.app.get(demo.home.heading).unwrap().visible);
+    }
+
+    // Escape is bound to Back: from a panel it goes Home, as the back icon
+    // does, and from the video tiles, which Home leads to directly, it goes
+    // Home too.
+    #[test]
+    fn escape_goes_back_a_screen() {
+        let mut demo = advance_to_home();
+        demo.start_home_to_detail(1);
+        demo.tick(1.0);
+        press_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::Escape),
+            proteus_sdk::Code::Escape,
+        );
+        assert_eq!(demo.state, AppState::Home);
+
+        demo.tick(1.0);
+        demo.start_home_to_tiles();
+        demo.tick(1.0);
+        press_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::Escape),
+            proteus_sdk::Code::Escape,
+        );
+        assert_eq!(demo.state, AppState::Home);
+    }
+
+    fn key_event(key: Key, code: proteus_sdk::Code, state: KeyState) -> proteus_sdk::KeyEvent {
+        proteus_sdk::KeyEvent::new(key, code, state, proteus_sdk::Modifiers::default(), None)
+    }
+
+    // Presses and releases `key`, a tick apart.
+    fn press_key(demo: &mut Harness, key: Key, code: proteus_sdk::Code) {
+        demo.app
+            .key_event(key_event(key.clone(), code.clone(), KeyState::Pressed));
+        demo.tick(0.016);
+        demo.app.key_event(key_event(key, code, KeyState::Released));
+        demo.tick(0.016);
+    }
+
+    // Clicks `handle` at its center with the pointer.
+    fn click(demo: &mut Harness, handle: Handle) {
+        let probe = demo.app.get(handle).unwrap().geometry.position;
+        demo.pointer_moved(Some(Vec2::new(probe.x, probe.y)));
+        demo.pointer_pressed();
+        demo.tick(0.016);
+        demo.pointer_released();
+        demo.tick(1.0);
+    }
+
+    fn advance_to_keys_panel() -> Harness {
+        let mut demo = advance_to_home();
+        demo.start_home_to_detail(example_detail::KEYS);
+        demo.tick(1.0);
+        // The space bar takes focus a frame after the keyboard shows: see
+        // `Demo::advance_keyboard`.
+        demo.tick(0.016);
+        demo
+    }
+
+    /// The virtual keycap of the key at `code`.
+    fn keycap(demo: &Harness, code: proteus_sdk::Code) -> Handle {
+        let keyboard = &demo.example_detail.keys.keyboard;
+        keyboard.keys[keyboard.index_of(&code).expect("on the keyboard")]
+    }
+
+    fn fill(demo: &Harness, key: Handle) -> Vec4 {
+        demo.app.get(key).unwrap().geometry.color
+    }
+
+    fn label(demo: &Harness, key: Handle) -> String {
+        demo.app
+            .world()
+            .get::<Text>(key.id())
+            .unwrap()
+            .content
+            .clone()
+    }
+
+    /// Presses the key at `code`, holds it `hold` seconds, and releases it.
+    fn hold_key(demo: &mut Harness, key: Key, code: proteus_sdk::Code, hold: f32) {
+        demo.app
+            .key_event(key_event(key.clone(), code.clone(), KeyState::Pressed));
+        let mut held = 0.0;
+        while held < hold {
+            demo.tick(0.05);
+            held += 0.05;
+        }
+        demo.app.key_event(key_event(key, code, KeyState::Released));
+        demo.tick(0.016);
+    }
+
+    // A key pressed on the real keyboard flashes its keycap, matched by
+    // where it is, and the flash fades back to white.
+    #[test]
+    fn a_key_pressed_flashes_its_keycap_then_fades() {
+        let mut demo = advance_to_keys_panel();
+        let a = keycap(&demo, proteus_sdk::Code::KeyA);
+        assert_eq!(fill(&demo, a), Vec4::ONE);
+
+        // Shift+A types "A", but it's the same key, so the same keycap.
+        demo.app.key_event(key_event(
+            Key::Character("A".to_string()),
+            proteus_sdk::Code::KeyA,
+            KeyState::Pressed,
+        ));
+        demo.tick(0.016);
+        assert_ne!(fill(&demo, a), Vec4::ONE, "the keycap flashes");
+        assert_eq!(
+            fill(&demo, keycap(&demo, proteus_sdk::Code::KeyS)),
+            Vec4::ONE,
+            "and no other"
+        );
+        demo.tick(screens::keyboard::FLASH_SECS);
+        assert_eq!(fill(&demo, a), Vec4::ONE, "then fades back");
+    }
+
+    // Caps Lock, a press and a release at each tap on every host, switches
+    // the keycaps to their shifted values and tints its own keycap, and
+    // switches them back at the next tap. A long press of Shift does nothing
+    // more than flash it.
+    #[test]
+    fn caps_lock_toggles_the_shifted_values() {
+        let mut demo = advance_to_keys_panel();
+        let caps = || Key::Named(proteus_sdk::NamedKey::CapsLock);
+        let q = keycap(&demo, proteus_sdk::Code::KeyQ);
+        let one = keycap(&demo, proteus_sdk::Code::Digit1);
+        let caps_key = keycap(&demo, proteus_sdk::Code::CapsLock);
+
+        hold_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::Shift),
+            proteus_sdk::Code::ShiftLeft,
+            0.7,
+        );
+        assert!(!demo.keyboard_shifted, "Shift doesn't toggle");
+
+        hold_key(&mut demo, caps(), proteus_sdk::Code::CapsLock, 0.1);
+        assert!(demo.keyboard_shifted);
+        assert_eq!(label(&demo, q), "Q");
+        assert_eq!(label(&demo, one), "!");
+        demo.tick(1.0);
+        assert_ne!(fill(&demo, caps_key), Vec4::ONE, "Caps Lock stays tinted");
+        assert_eq!(fill(&demo, q), Vec4::ONE);
+
+        hold_key(&mut demo, caps(), proteus_sdk::Code::CapsLock, 0.1);
+        assert!(!demo.keyboard_shifted);
+        assert_eq!(label(&demo, one), "1");
+        demo.tick(1.0);
+        assert_eq!(fill(&demo, caps_key), Vec4::ONE);
+    }
+
+    // Leaving the panel unshifts the keyboard, so it comes back with its own
+    // values.
+    #[test]
+    fn leaving_the_keys_panel_unshifts_the_keyboard() {
+        let mut demo = advance_to_keys_panel();
+        hold_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::CapsLock),
+            proteus_sdk::Code::CapsLock,
+            0.1,
+        );
+        assert!(demo.keyboard_shifted);
+        demo.start_detail_to_home();
+        assert!(!demo.keyboard_shifted);
+        let q = keycap(&demo, proteus_sdk::Code::KeyQ);
+        assert_eq!(label(&demo, q), "q");
+    }
+
+    // Focus starts on the space bar each time the panel opens, once the
+    // keyboard shows.
+    #[test]
+    fn focus_starts_on_the_space_bar() {
+        let mut demo = advance_to_keys_panel();
+        let space = keycap(&demo, proteus_sdk::Code::Space);
+        assert_eq!(demo.app.focused(), Some(space));
+
+        let _ = keycap(&demo, proteus_sdk::Code::KeyQ).focus(&mut demo.app);
+        demo.start_detail_to_home();
+        demo.tick(1.0);
+        demo.start_home_to_detail(example_detail::KEYS);
+        demo.tick(1.0);
+        demo.tick(0.016);
+        assert_eq!(
+            demo.app.focused(),
+            Some(space),
+            "and again on a second visit"
         );
     }
 
+    // A key that isn't on the virtual keyboard, such as F1, flashes nothing,
+    // and nor does a key pressed on another screen.
     #[test]
-    fn clicking_videos_nav_button_opens_video_tiles_and_back_returns_home() {
+    fn keys_not_on_the_keyboard_or_pressed_elsewhere_flash_nothing() {
+        let mut demo = advance_to_home();
+        press_key(
+            &mut demo,
+            Key::Character("z".to_string()),
+            proteus_sdk::Code::KeyZ,
+        );
+        demo.start_home_to_detail(example_detail::KEYS);
+        demo.tick(0.016);
+        press_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::F1),
+            proteus_sdk::Code::F1,
+        );
+        for &key in &demo.example_detail.keys.keyboard.keys {
+            assert_eq!(fill(&demo, key), Vec4::ONE);
+        }
+    }
+
+    // The arrows and Tab move between keycaps, and Enter or a click flashes
+    // the keycap chosen.
+    #[test]
+    fn the_arrows_and_tab_move_between_keycaps_and_enter_flashes_one() {
+        let mut demo = advance_to_keys_panel();
+        let q = keycap(&demo, proteus_sdk::Code::KeyQ);
+        let w = keycap(&demo, proteus_sdk::Code::KeyW);
+        let e = keycap(&demo, proteus_sdk::Code::KeyE);
+        let _ = q.focus(&mut demo.app);
+        demo.tick(0.016);
+        let right = || Key::Named(proteus_sdk::NamedKey::ArrowRight);
+        // The first arrow after the pointer only shows where focus is.
+        press_key(&mut demo, right(), proteus_sdk::Code::ArrowRight);
+        assert_eq!(demo.app.focused(), Some(q));
+        press_key(&mut demo, right(), proteus_sdk::Code::ArrowRight);
+        assert_eq!(
+            demo.app.focused(),
+            Some(w),
+            "Right moves to the next keycap"
+        );
+        press_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::Tab),
+            proteus_sdk::Code::Tab,
+        );
+        assert_eq!(demo.app.focused(), Some(e), "and so does Tab");
+
+        press_key(
+            &mut demo,
+            Key::Named(proteus_sdk::NamedKey::Enter),
+            proteus_sdk::Code::Enter,
+        );
+        assert_ne!(
+            fill(&demo, e),
+            Vec4::ONE,
+            "Enter flashes the focused keycap"
+        );
+
+        // The keycaps are placed in the keyboard, so the click goes where
+        // the keyboard puts `w`.
+        let board = demo
+            .app
+            .get(demo.example_detail.keys.keyboard.board)
+            .unwrap()
+            .geometry
+            .position;
+        let local = demo.app.get(w).unwrap().geometry.position;
+        demo.pointer_moved(Some(Vec2::new(board.x + local.x, board.y + local.y)));
+        demo.pointer_pressed();
+        demo.tick(0.016);
+        demo.pointer_released();
+        demo.tick(0.016);
+        assert_ne!(fill(&demo, w), Vec4::ONE, "a click flashes a keycap too");
+    }
+
+    // Each video tile merges from its own columns of Home's grid, and
+    // together they take every tile exactly once.
+    #[test]
+    fn the_video_tiles_columns_take_every_home_tile_once() {
+        let mut covered: Vec<usize> = VIDEO_TILE_COLUMNS
+            .into_iter()
+            .flat_map(|(start_col, width)| home::column_group(start_col, width))
+            .collect();
+        covered.sort_unstable();
+        assert_eq!(covered, (0..home::TILE_COUNT).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn clicking_the_video_tile_opens_video_tiles_and_home_returns_home() {
         let mut demo = Harness::new();
         let mut t = 0.0;
         while t < past_splash_secs() {
@@ -3920,12 +3709,7 @@ mod tests {
         }
         assert_eq!(demo.state, AppState::Home);
 
-        // `home::layout` spreads the 3 buttons out even without real text
-        // baking (flat `FALLBACK_SIZE` for every label — see that
-        // function's doc), so reading the real, distinct position here
-        // needs no manual isolation, unlike `examples_home`'s buttons
-        // (which still rely on real baking for their own grid sizing).
-        let button = demo.home.nav_buttons[0];
+        let button = demo.home.tiles[0];
         let probe = demo.app.get(button).unwrap().geometry.position;
         demo.pointer_moved(Some(Vec2::new(probe.x, probe.y)));
         demo.pointer_pressed();
@@ -4745,8 +4529,8 @@ mod tests {
                 "tile {i} must not be visible on Home"
             );
         }
-        for &button in &demo.home.nav_buttons {
-            assert!(demo.app.get(button).unwrap().visible);
+        for &tile in &demo.home.tiles {
+            assert!(demo.app.get(tile).unwrap().visible);
         }
     }
 
@@ -4762,13 +4546,10 @@ mod tests {
     }
 
     #[test]
-    fn clicking_gallery_nav_button_opens_loading_and_back_via_home_icon_returns_home() {
+    fn clicking_the_gallery_tile_opens_loading_and_the_home_icon_returns_home() {
         let mut demo = advance_to_home();
 
-        // `home::layout` spreads the 3 buttons out even without real text
-        // baking — see the identical note on
-        // `clicking_videos_nav_button_opens_video_tiles_and_back_returns_home`.
-        let button = demo.home.nav_buttons[1];
+        let button = demo.home.tiles[1];
         let probe = demo.app.get(button).unwrap().geometry.position;
         demo.pointer_moved(Some(Vec2::new(probe.x, probe.y)));
         demo.pointer_pressed();
@@ -4785,7 +4566,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_loading_queues_a_fetch_request_and_hides_the_nav_buttons() {
+    fn opening_loading_queues_a_fetch_request_and_hides_the_home_tiles() {
         let mut demo = advance_to_home();
         demo.start_home_to_loading();
         assert_eq!(demo.state, AppState::Loading);
@@ -4797,10 +4578,10 @@ mod tests {
         assert!(demo.take_pending_gallery_fetch().is_none());
 
         demo.tick(1.0);
-        for &button in &demo.home.nav_buttons {
+        for &tile in &demo.home.tiles {
             assert!(
-                !demo.app.get(button).unwrap().visible,
-                "nav buttons should be hidden once merged into the loading logo"
+                !demo.app.get(tile).unwrap().visible,
+                "Home's tiles should be hidden once merged into the loading logo"
             );
         }
         assert!(demo.app.get(demo.loading.logo).unwrap().visible);
@@ -5018,8 +4799,11 @@ mod tests {
         demo.start_gallery_to_home();
         assert_eq!(demo.state, AppState::Home);
         demo.tick(1.0);
-        for &button in &demo.home.nav_buttons {
-            assert!(demo.app.get(button).unwrap().visible);
+        for &tile in &demo.home.tiles {
+            assert!(demo.app.get(tile).unwrap().visible);
+        }
+        for &photo in &demo.gallery.tiles {
+            assert!(!demo.app.get(photo).unwrap().visible);
         }
         assert!(!demo.app.get(demo.gallery.fetch_button).unwrap().visible);
         assert!(
@@ -5170,8 +4954,8 @@ mod tests {
         assert!(demo.take_pending_gallery_hires_cancel());
 
         demo.tick(1.0);
-        for &button in &demo.home.nav_buttons {
-            assert!(demo.app.get(button).unwrap().visible);
+        for &tile in &demo.home.tiles {
+            assert!(demo.app.get(tile).unwrap().visible);
         }
         assert!(!demo.app.get(demo.gallery.enlarged).unwrap().visible);
         for &tile in &demo.gallery.tiles {
@@ -5288,125 +5072,17 @@ mod tests {
     }
 
     #[test]
-    fn home_layout_arranges_all_3_buttons_in_one_horizontal_row() {
-        use proteus_ui::BakedText;
-
-        let mut demo = Harness::new();
-        // Simulate the renderer's text-baking pass landing on all 3 labels —
-        // real baking needs a font atlas/GPU, unavailable in this headless
-        // test world.
-        let nav_labels = demo.home.nav_labels;
-        for &label in &nav_labels {
-            demo.app
-                .world_mut()
-                .entity_mut(label.id())
-                .insert(BakedText {
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    page: 0,
-                    pixel_size: [100.0, 20.0],
-                });
+    fn reaching_home_from_splash_lays_the_tiles_out_in_a_grid() {
+        // Reaches `Home` the normal way (ticking through `Splash`, no manual
+        // geometry pokes), as the real app is driven, and confirms the tiles
+        // end up where `home::layout` puts them.
+        let mut demo = advance_to_home();
+        demo.tick(1.0);
+        let expected = home::layout(demo.viewport_size);
+        for (i, &tile) in demo.home.tiles.iter().enumerate() {
+            let position = demo.app.get(tile).unwrap().geometry.position;
+            assert_eq!(position, expected[i].position, "tile {i}");
         }
-
-        let states = home::layout(&demo.app, &demo.home);
-        assert_eq!(
-            states[0].position.y, states[1].position.y,
-            "all 3 must share one row, not be stacked vertically"
-        );
-        assert_eq!(states[1].position.y, states[2].position.y);
-        assert!(
-            states[0].position.x < states[1].position.x
-                && states[1].position.x < states[2].position.x,
-            "must be laid out left-to-right, in title order: {states:?}"
-        );
-    }
-
-    #[test]
-    fn home_layout_spreads_buttons_out_even_when_no_label_has_baked_yet() {
-        // No baking simulated at all — every label falls back to
-        // FALLBACK_SIZE. `home::layout` must always produce a spread-out row,
-        // fallback or not. If it waited until *every* label had baked, in a
-        // headless world (or any world where baking is merely slow) it would
-        // never run, and the buttons would stay at their identical spawn-time
-        // placeholder position.
-        let demo = Harness::new();
-        let states = home::layout(&demo.app, &demo.home);
-        assert_eq!(states[0].position.y, states[1].position.y);
-        assert_eq!(states[1].position.y, states[2].position.y);
-        assert!(
-            states[0].position.x < states[1].position.x
-                && states[1].position.x < states[2].position.x,
-            "must spread left-to-right even using the flat fallback size for every button: \
-             {states:?}"
-        );
-    }
-
-    // `examples_home`'s grid `layout()` must size each button to its
-    // column's shared width (the wider of its top/bottom pair), not to its
-    // own label width. Uses 6 visibly different label widths so any
-    // per-button (rather than per-column) sizing shows up immediately.
-    #[test]
-    fn examples_home_layout_shares_each_columns_width_across_its_top_and_bottom_button() {
-        use proteus_ui::BakedText;
-
-        let mut demo = Harness::new();
-        let widths = [40.0, 220.0, 90.0, 150.0, 260.0, 20.0];
-        let eh_labels = demo.examples_home.labels;
-        for (&label, &w) in eh_labels.iter().zip(widths.iter()) {
-            demo.app
-                .world_mut()
-                .entity_mut(label.id())
-                .insert(BakedText {
-                    uv_offset: [0.0, 0.0],
-                    uv_scale: [1.0, 1.0],
-                    page: 0,
-                    pixel_size: [w, 20.0],
-                });
-        }
-
-        let states =
-            examples_home::layout(&demo.app, &demo.examples_home).expect("every label baked");
-        for col in 0..3 {
-            assert_eq!(
-                states[col * 2].size.x,
-                states[col * 2 + 1].size.x,
-                "column {col}'s top/bottom buttons must share one width: {states:?}"
-            );
-        }
-        // And it's the *wider* of the pair, not (say) always the top's:
-        // column 0 is [40.0, 220.0], so its shared width must come from
-        // the bottom button's 220px label, not the top's 40px one.
-        assert!(
-            (states[0].size.x - (220.0 + 2.0 * 15.0)).abs() < 0.01,
-            "column 0's shared width should be driven by its wider (bottom) label, got {:?}",
-            states[0].size.x
-        );
-    }
-
-    #[test]
-    fn reaching_home_from_splash_spreads_the_3_nav_buttons_out_horizontally() {
-        // The end-to-end counterpart of
-        // `home_layout_spreads_buttons_out_even_when_no_label_has_baked_yet`:
-        // reaches `Home` the normal way (ticking through `Splash`, no manual
-        // geometry pokes), as the real app is driven, and confirms the 3
-        // buttons end up distinct once there.
-        let mut demo = Harness::new();
-        let mut t = 0.0;
-        while t < past_splash_secs() {
-            demo.tick(0.05);
-            t += 0.05;
-        }
-        assert_eq!(demo.state, AppState::Home);
-        let positions: Vec<f32> = demo
-            .home
-            .nav_buttons
-            .iter()
-            .map(|&b| demo.app.get(b).unwrap().geometry.position.x)
-            .collect();
-        assert!(
-            positions[0] < positions[1] && positions[1] < positions[2],
-            "buttons must be spread left to right, not stacked on top of each other: {positions:?}"
-        );
     }
 
     #[test]
@@ -5463,48 +5139,16 @@ mod tests {
         );
     }
 
-    // `examples_home`'s "Layout"/"3D" category buttons (4/5) must open a
-    // dedicated "not built yet" message, wired the same way as 0–3, rather
-    // than doing nothing or showing a blank card, which reads as a bug.
+    // Layout's panel says when the layout system is coming.
     #[test]
-    fn clicking_layout_or_3d_shows_the_not_built_yet_placeholder() {
-        use proteus_ui::Text;
-
-        for idx in [4, 5] {
-            let mut demo = Harness::new();
-            let mut t = 0.0;
-            while t < past_splash_secs() {
-                demo.tick(0.05);
-                t += 0.05;
-            }
-            demo.start_home_to_examples();
-            demo.tick(1.0);
-            let button = demo.examples_home.buttons[idx];
-            let mut geometry = demo.app.get(button).unwrap().geometry;
-            geometry.position = Vec3::new(5000.0, 5000.0, 0.5);
-            let _ = button.set_declared_geometry(&mut demo.app, geometry);
-            demo.pointer_moved(Some(Vec2::new(5000.0, 5000.0)));
-            demo.pointer_pressed();
-            demo.tick(1.0);
-            assert_eq!(demo.state, AppState::ExampleDetail(idx));
-
-            let content = demo.example_detail.content_handles(idx);
-            assert!(
-                content.contains(&demo.example_detail.placeholder_message),
-                "category {idx} should show the shared placeholder message"
-            );
-            let text = demo
-                .app
-                .world()
-                .get::<Text>(demo.example_detail.placeholder_message.id())
-                .unwrap();
-            assert!(
-                text.content.to_lowercase().contains("not built yet")
-                    || text.content.to_lowercase().contains("isn't built yet"),
-                "message should say the feature isn't built yet, got {:?}",
-                text.content
-            );
-        }
+    fn the_layout_panel_says_its_coming_in_v0_6_0() {
+        let mut demo = advance_to_home();
+        demo.start_home_to_detail(3);
+        demo.tick(1.0);
+        let message = demo.example_detail.layout_message;
+        assert!(demo.app.get(message).unwrap().visible);
+        let text = demo.app.world().get::<Text>(message.id()).unwrap();
+        assert!(text.content.contains("v0.6.0"), "got {:?}", text.content);
     }
 
     // `nav.lockup` must be `.non_interactive()`. Its bounding box (the whole
@@ -5613,7 +5257,7 @@ mod tests {
         // a tile mid-transition if it ran every frame.
         let tile = demo_app.demo_mut().expect("demo").gallery.tiles[0];
         let marker = QuadState {
-            position: Vec3::new(1.0, 2.0, 3.0),
+            position: glam::Vec3::new(1.0, 2.0, 3.0),
             ..Default::default()
         };
         let _ = tile.set_declared_geometry(&mut app, marker.clone());

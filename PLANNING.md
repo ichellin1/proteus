@@ -393,13 +393,44 @@ A new example, in Rust and TypeScript, that's used with the keyboard.
   and `keep_tab`, as a full-screen app would.
 - [x] `examples/browse`, in Rust and TypeScript, the same app, with each of the cases above.
 - [x] It runs natively and in a browser, from both languages, with the README's commands.
-- [ ] It's wired into the workspace, CI, the Makefile, the pre-push hook and the examples
+- [x] It's wired into the workspace, CI, the Makefile, the pre-push hook and the examples
   table, and CI passes.
 
 ### Step 7 — The demo's new home page
 
 The home page's grid, header, tagline and About tile, and the Layout tile as a preview of
 v0.6.0, with the stress tests, the 3D placeholder and the Examples screen removed.
+
+- **Decided (2026-11-04): the home page is one 4 by 2 grid of eight tiles,** under "See what
+  Proteus can do" and a one-line tagline: Video Demo, Photo Gallery, Effects, Text,
+  Transformations, Layout, Keyboard & Focus and About. Every tile takes part in each transition, so
+  nothing appears or disappears: the eight merge into a detail screen's panel and split back
+  from it, and Back from a detail screen goes Home; they merge into the gallery's loading logo
+  and split back from it; the gallery, 4 by 3, comes back with each column's top photo becoming
+  the top tile and the other two merging into the bottom one; and the eight merge, by columns
+  (the first, the second and third, the fourth), into the three video tiles, and split back.
+- **Decided (2026-11-06): the Keyboard & Focus panel is a virtual keyboard.** A generic US
+  layout of rounded keycaps, without the function keys, Esc, Tab or the arrows, centred, with
+  what the keys do below it. The keycaps are a focus group: the arrows and Tab move round it and
+  don't leave it; focus starts on the space bar as the panel opens, and coming back lands on
+  the keycap focused last. Focus shows as a glow, without growing, so keycaps don't overlap and
+  the nearest keycap is the one drawn nearest. A key the key map doesn't bind flashes its
+  keycap, matched by where the key is; Enter or Space, or a click, flashes the focused or
+  clicked keycap; and Backspace still goes back. Caps Lock toggles the keycaps to their shifted
+  values, with its keycap tinted meanwhile. The keyboard keeps the light theme's colors in both
+  themes.
+- **Decided (2026-11-06): Caps Lock arrives as a press and a release at each tap, on every
+  host.** Platforms differ: a browser on a Mac reports it as held while it's on, and winit on a
+  Mac doesn't report it at all. The web host taps whenever `getModifierState` says it changed,
+  and the native host on a Mac reads it from macOS each frame the window has focus, through the
+  runtime's `CapsLockTaps`.
+- **Decided (2026-11-04): About says what Proteus is for a visitor,** from the README's opening,
+  and Layout says the layout system is coming in v0.6.0.
+- [x] The home page's grid, heading and tagline, with each screen's transitions to and from it.
+- [x] The Stress Tests, the 3D placeholder and the Examples screen are removed.
+- [x] The About, Layout and Keyboard & Focus panels.
+- [x] Tests for each transition to and from the grid, and for the pressed-key display, and the
+  demo's docs updated.
 
 ### Step 8 — The demo on the keyboard
 
