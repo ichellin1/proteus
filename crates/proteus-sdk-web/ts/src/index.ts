@@ -387,7 +387,9 @@ export class Handle {
    * Use this when a component's layout can only be worked out after it is
    * created, such as a cell sized to fit its text
    * ({@link Handle.bakedTextSize}). Transitions into the component, and its
-   * interaction styles, use the new geometry.
+   * interaction styles, use the new geometry. A style shown, such as hover,
+   * is shown on top of the new geometry at once, and a style's change still
+   * under way ends there.
    */
   setDeclaredGeometry(state: Geometry): void {
     this.app.wasmApp.setDeclaredGeometry(this.wasmHandle, state);
