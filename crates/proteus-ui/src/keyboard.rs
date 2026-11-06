@@ -243,6 +243,10 @@ impl Default for KeyRepeat {
 }
 
 /// A key being pressed, repeated, long-pressed or released.
+///
+/// Caps Lock arrives as a press and a release at each tap, on every host,
+/// although platforms report it differently: a browser on a Mac as held
+/// while it's on, and winit on a Mac not at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyEvent {
     /// What the key means.

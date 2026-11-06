@@ -21,6 +21,8 @@
 #![warn(missing_docs)]
 
 mod keys;
+#[cfg(target_os = "macos")]
+mod mac;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -259,6 +261,10 @@ struct Running {
     presented: bool,
     /// The modifiers held, which winit reports apart from the keys.
     modifiers: Modifiers,
+    /// Caps Lock, which winit doesn't report on a Mac, so the host reads it
+    /// from macOS each frame: see [`Running::poll_caps_lock`].
+    #[cfg(target_os = "macos")]
+    caps_lock: proteus_runtime::CapsLockTaps,
 }
 
 impl Running {
@@ -284,7 +290,26 @@ impl Running {
         self.last_frame + Duration::from_secs_f64(1000.0 / f64::from(millihertz))
     }
 
+    /// Sends the app a press and a release of Caps Lock whenever it turns on
+    /// or off, as every host reports it. winit on a Mac reports nothing for
+    /// Caps Lock, so the host reads it from macOS each frame the window has
+    /// focus. A change made while another app had focus is noted as the
+    /// window gains it, without a tap.
+    #[cfg(target_os = "macos")]
+    fn poll_caps_lock(&mut self) {
+        if !self.window.has_focus() {
+            return;
+        }
+        if let Some(tap) = self.caps_lock.poll(mac::caps_lock_on(), self.modifiers) {
+            for event in tap {
+                self.engine.key_event(event);
+            }
+        }
+    }
+
     fn render(&mut self, app: &mut dyn App) {
+        #[cfg(target_os = "macos")]
+        self.poll_caps_lock();
         // `Engine::frame` clamps this; the host only measures it.
         let dt = self.last_frame.elapsed().as_secs_f32();
         self.last_frame = Instant::now();
@@ -373,6 +398,8 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
             must_draw: true,
             presented: false,
             modifiers: Modifiers::default(),
+            #[cfg(target_os = "macos")]
+            caps_lock: proteus_runtime::CapsLockTaps::default(),
         };
         running.window.request_redraw();
         self.running = Some(running);
@@ -446,6 +473,8 @@ impl<A: App> ApplicationHandler for WinitHostApp<A> {
                 .engine
                 .key_event(keys::key_event(&event, running.modifiers)),
             WindowEvent::Focused(false) => running.engine.release_keys(),
+            #[cfg(target_os = "macos")]
+            WindowEvent::Focused(true) => running.caps_lock.note(mac::caps_lock_on()),
             WindowEvent::RedrawRequested => running.render(&mut self.app),
             _ => {}
         }
