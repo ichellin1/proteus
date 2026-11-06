@@ -10,5 +10,6 @@ pub mod keyboard;
 pub mod loading;
 pub mod nav;
 pub mod splash;
+pub mod styles;
 pub mod theme;
 pub mod video_tiles;

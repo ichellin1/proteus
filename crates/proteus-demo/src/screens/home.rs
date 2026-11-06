@@ -89,7 +89,7 @@ pub fn spawn(app: &mut Proteus) -> Home {
     let mut labels = Vec::with_capacity(TILE_COUNT);
 
     for title in TITLES {
-        let tile = app.component(
+        let tile = app.component(super::styles::lit(
             ComponentSpec::new(QuadState {
                 // z=0.5, not 0.0 — `collect_instances` draws roots in
                 // ascending z order and breaks ties by spawn order. Tied
@@ -111,7 +111,7 @@ pub fn spawn(app: &mut Proteus) -> Home {
                 color: violet(),
                 intensity: 1.0,
             }),
-        );
+        ));
 
         let label = app.component(
             ComponentSpec::new(QuadState {

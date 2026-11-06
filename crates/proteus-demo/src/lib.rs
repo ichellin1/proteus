@@ -59,8 +59,9 @@ use std::rc::Rc;
 use glam::{Vec2, Vec4};
 
 use proteus_sdk::{
-    Action, Border, Code, Easing, Glow, Handle, Image, ImageCrop, KeyResult, KeyState, MergeLayout,
-    Proteus, QuadState, SplitStrategy, Text, TextureHandle, TransitionConfig, VideoHandle,
+    Action, Border, Code, Easing, Glow, Handle, Image, ImageCrop, InputMode, KeyResult, KeyState,
+    MergeLayout, Proteus, QuadState, SplitStrategy, Text, TextureHandle, TransitionConfig,
+    VideoHandle,
 };
 
 use screens::{
@@ -72,12 +73,6 @@ use screens::{
 /// Matches `proteus-shell-native`'s window size, so the placeholder is never
 /// actually shown.
 const DEFAULT_VIEWPORT_SIZE: Vec2 = Vec2::new(1280.0, 800.0);
-
-/// Hover constants, shared by all the interactive surfaces through
-/// [`Demo::advance_hovers`]; see [`HoverEntry`]'s doc for the mechanism.
-const HOVER_GLOW_DURATION_SECS: f32 = 0.25;
-const HOVER_GLOW_MAX_RADIUS_PX: f32 = 15.0;
-const HOVER_SCALE_BOOST: f32 = 0.07;
 
 /// How long `theme_progress` takes to ramp fully from one theme to the
 /// other — a touch slower than a group transition's own 0.4–0.6s; the
@@ -147,25 +142,44 @@ fn blend_primary_color(app: &mut Proteus, handle: Handle, p: f32) {
     }
 }
 
-/// Registers `handle` for the shared hover glow and scale —
-/// see [`HoverEntry`]'s doc for the mechanism and `Demo::advance_hovers`
-/// for the per-tick ramp. Call once per interactive surface, during
-/// `Demo::new()`, right alongside that surface's `on_click` wiring.
-fn register_hover(app: &mut Proteus, hovers: &mut Vec<HoverEntry>, handle: Handle) {
-    let is_hovering = Rc::new(Cell::new(false));
-    {
-        let flag = is_hovering.clone();
-        handle.on_hover_enter(app, move |_| flag.set(true));
+/// A video tile's hover and focus, set by its callbacks, which only get
+/// `&mut Proteus`, and the ramp of its overlay and title that follows them:
+/// see `Demo::advance_tile_hover`.
+struct TileLight {
+    hovered: Rc<Cell<bool>>,
+    focused: Rc<Cell<bool>>,
+    /// 0 (rest) → 1 (overlay and title fully shown), over
+    /// `screens::styles::SECS`, as the tile's glow is.
+    progress: f32,
+}
+
+impl TileLight {
+    /// Wires `tile`'s hover and focus callbacks to a new `TileLight`.
+    fn wire(app: &mut Proteus, tile: Handle) -> Self {
+        let hovered = Rc::new(Cell::new(false));
+        let focused = Rc::new(Cell::new(false));
+        {
+            let flag = hovered.clone();
+            tile.on_hover_enter(app, move |_| flag.set(true));
+        }
+        {
+            let flag = hovered.clone();
+            tile.on_hover_exit(app, move |_| flag.set(false));
+        }
+        {
+            let flag = focused.clone();
+            tile.on_focus(app, move |_| flag.set(true));
+        }
+        {
+            let flag = focused.clone();
+            tile.on_blur(app, move |_| flag.set(false));
+        }
+        Self {
+            hovered,
+            focused,
+            progress: 0.0,
+        }
     }
-    {
-        let flag = is_hovering.clone();
-        handle.on_hover_exit(app, move |_| flag.set(false));
-    }
-    hovers.push(HoverEntry {
-        handle,
-        is_hovering,
-        progress: 0.0,
-    });
 }
 
 /// The config for group transitions, except those touching `gallery`'s grid
@@ -316,22 +330,11 @@ struct PendingTileReset {
     tile: Handle,
 }
 
-/// One entity registered for the shared hover glow and scale — see
-/// `Demo::register_hover`'s doc for how it's wired up, and
-/// `Demo::advance_hovers`' for the per-tick ramp. Every interactive surface
-/// gets the same behavior: a 0.25 s linear ramp to a 15 px glow and a 7%
-/// scale, suppressed while the entity is transitioning.
-struct HoverEntry {
-    handle: Handle,
-    /// Flipped by the `on_hover_enter`/`on_hover_exit` callbacks
-    /// `register_hover` attaches — callbacks only get `&mut Proteus`, not
-    /// `&mut Demo`, so this `Rc<Cell<_>>` is how the event reaches
-    /// `advance_hovers` later, same pattern `nav_click` already uses for
-    /// clicks (see that field's doc), just one flag per entity instead of
-    /// one shared `Option<NavClick>`.
-    is_hovering: Rc<Cell<bool>>,
-    /// 0 (rest) → 1 (fully hovered), ramped at `dt / HOVER_GLOW_DURATION_SECS`.
-    progress: f32,
+/// Where focus goes once a transition ends: see `Demo::land_focus`.
+struct PendingFocus {
+    target: Handle,
+    /// Seconds until the transition ends.
+    wait: f32,
 }
 
 /// A key the key map doesn't bind, pressed, as the app's key handler saw
@@ -447,9 +450,12 @@ pub struct Demo {
     /// Whether the virtual keyboard shows its shifted values, toggled by
     /// Caps Lock.
     keyboard_shifted: bool,
-    /// Whether the space bar is still to take focus, as the Keyboard & Focus
-    /// panel opens.
-    focus_space: bool,
+    /// Where focus goes once the transition under way ends: see
+    /// `Demo::land_focus`.
+    pending_focus: Option<PendingFocus>,
+    /// Seconds until the change of screen under way ends, 0 when none is.
+    /// Input that changes screens waits for it: see `Demo::advance_nav_click`.
+    screen_change_left: f32,
     /// Fade progress (0..1) for Home's heading and tagline: up while Home is
     /// the current or (mid-transition) destination state.
     home_title_fade: f32,
@@ -594,11 +600,8 @@ pub struct Demo {
     /// `.fetch_button_label` — see `Demo::advance_gallery_button_fade`'s
     /// doc.
     gallery_button_fade: f32,
-    /// Every entity registered for the shared hover glow and scale — see
-    /// [`HoverEntry`]'s doc. Populated by `Demo::register_hover` calls
-    /// during `Demo::new()`, one per interactive surface; drained/ramped
-    /// every tick by `Demo::advance_hovers`.
-    hovers: Vec<HoverEntry>,
+    /// Each video tile's hover and focus, which its overlay and title follow.
+    tile_lights: [TileLight; 3],
     /// `true` once the user has clicked toward dark — flips instantly on
     /// click; `theme_progress` is what actually ramps toward it.
     dark_target: bool,
@@ -645,10 +648,6 @@ impl Demo {
         let loading = loading::spawn(proteus);
         let gallery = gallery::spawn(proteus, DEFAULT_VIEWPORT_SIZE);
         let theme = theme::spawn(proteus);
-
-        // Populated below, per interactive surface, via `register_hover` —
-        // see [`HoverEntry`]'s doc.
-        let mut hovers: Vec<HoverEntry> = Vec::new();
 
         // Every transition target / standalone-content entity starts
         // hidden. Done here rather than with `ComponentSpec::visible(false)`
@@ -697,7 +696,6 @@ impl Demo {
             };
             let flag = nav_click.clone();
             tile.on_click(proteus, move |_| flag.set(Some(click)));
-            register_hover(proteus, &mut hovers, tile);
         }
         {
             let flag = nav_click.clone();
@@ -709,10 +707,9 @@ impl Demo {
             nav.back
                 .on_click(proteus, move |_| flag.set(Some(NavClick::Back)));
         }
-        register_hover(proteus, &mut hovers, nav.home);
-        register_hover(proteus, &mut hovers, nav.back);
-        // The virtual keycaps' glow and growth are interaction styles, not
-        // `register_hover`'s: see `screens::keyboard`.
+        // Every surface's glow and growth on hover or focus are interaction
+        // styles: see `screens::styles`, and `screens::keyboard` for the
+        // keycaps'.
         for (i, &key) in example_detail.keys.keyboard.keys.iter().enumerate() {
             let flag = nav_click.clone();
             key.on_click(proteus, move |_| flag.set(Some(NavClick::FlashKey(i))));
@@ -723,24 +720,18 @@ impl Demo {
                 flag.set(Some(NavClick::OpenVideoScreen(idx)))
             });
         }
-        for &tile in &video_tiles.tiles {
-            register_hover(proteus, &mut hovers, tile);
-        }
+        let tile_lights = video_tiles.tiles.map(|tile| TileLight::wire(proteus, tile));
         {
             let flag = nav_click.clone();
             gallery
                 .fetch_button
                 .on_click(proteus, move |_| flag.set(Some(NavClick::RefetchGallery)));
         }
-        register_hover(proteus, &mut hovers, gallery.fetch_button);
         for idx in 0..gallery::TILE_COUNT {
             let flag = nav_click.clone();
             gallery.tiles[idx].on_click(proteus, move |_| {
                 flag.set(Some(NavClick::OpenGalleryImage(idx)))
             });
-        }
-        for &tile in &gallery.tiles {
-            register_hover(proteus, &mut hovers, tile);
         }
         {
             // Clicking the enlarged image itself is a same-effect
@@ -751,10 +742,6 @@ impl Demo {
                 .enlarged
                 .on_click(proteus, move |_| flag.set(Some(NavClick::Back)));
         }
-        // Glow only, no scale-boost — see `Demo::advance_gallery_enlarged_
-        // hover_scale`'s doc for why this one entity's hover reaction is
-        // deliberately incomplete relative to the shared engine.
-        register_hover(proteus, &mut hovers, gallery.enlarged);
         {
             let flag = nav_click.clone();
             theme
@@ -767,8 +754,6 @@ impl Demo {
                 .moon
                 .on_click(proteus, move |_| flag.set(Some(NavClick::SetTheme(true))));
         }
-        register_hover(proteus, &mut hovers, theme.sun);
-        register_hover(proteus, &mut hovers, theme.moon);
 
         // The app's key handler, which sees the keys no component handled:
         // Back goes back a screen, and the keys the key map doesn't bind are
@@ -809,7 +794,8 @@ impl Demo {
             unbound_keys,
             key_flash: vec![0.0; example_detail.keys.keyboard.keys.len()],
             keyboard_shifted: false,
-            focus_space: false,
+            pending_focus: None,
+            screen_change_left: 0.0,
             home_title_fade: 0.0,
             pending_video_start: None,
             video: None,
@@ -835,7 +821,7 @@ impl Demo {
             pending_gallery_hires_cancel: false,
             gallery_hires_fade: 0.0,
             gallery_button_fade: 0.0,
-            hovers,
+            tile_lights,
             dark_target: false,
             theme_progress: 0.0,
             theme_icon_fade: [0.0; 2],
@@ -1135,10 +1121,12 @@ impl Demo {
     /// before `Proteus::refresh_cascades` + render (the engine owns both of
     /// those now — this method does neither).
     pub fn advance(&mut self, proteus: &mut Proteus, dt: f32) {
+        self.screen_change_left = (self.screen_change_left - dt).max(0.0);
         self.advance_intro(proteus, dt);
         self.advance_state(proteus, dt);
         self.advance_nav_click(proteus);
         self.advance_pending_reveals(proteus, dt);
+        self.advance_pending_focus(proteus, dt);
         self.advance_pending_tile_reset(proteus);
         self.advance_logo_animation(proteus, dt);
         self.advance_loading_logo_animation(proteus, dt);
@@ -1148,11 +1136,9 @@ impl Demo {
         self.advance_gallery_hires_overlay(proteus, dt);
         self.advance_example_animation(proteus, dt);
         self.advance_keyboard(proteus, dt);
-        self.advance_hovers(proteus, dt);
-        self.advance_gallery_enlarged_hover_scale(proteus);
         self.advance_nav_icons(proteus, dt);
         self.advance_home_titles(proteus, dt);
-        self.advance_tile_hover(proteus);
+        self.advance_tile_hover(proteus, dt);
         self.advance_video_crossfade(proteus);
         self.advance_video_loading(proteus, dt);
         self.advance_theme(proteus, dt);
@@ -1227,20 +1213,34 @@ impl Demo {
             self.home.labels.to_vec(),
             group_transition_config().duration,
         );
+        self.land_focus(
+            proteus,
+            Some(self.home.tiles[0]),
+            group_transition_config().duration,
+        );
         self.state = AppState::Home;
     }
 
     /// Processes whichever `NavClick` fired this tick (see `nav_click`'s
     /// doc) and drives the corresponding transition. The guard on each arm
-    /// re-checks `self.state` at processing time (not just at the moment
-    /// the click happened) — since `self.state` flips the instant a
-    /// transition starts, this also doubles as "ignore a click that arrived
-    /// while a transition triggered by an earlier click this same tick is
-    /// already underway."
+    /// re-checks `self.state` at processing time, not just at the moment the
+    /// click happened. `self.state` flips the instant a transition starts,
+    /// so that alone would act on input that arrives while the transition
+    /// is still under way, as though it had ended; input that changes
+    /// screens is dropped until it has, by `screen_change_left`.
     fn advance_nav_click(&mut self, proteus: &mut Proteus) {
         let Some(click) = self.nav_click.take() else {
             return;
         };
+        // A click or key that changes screens waits for the change under way
+        // to end: `self.state` is already the screen it's going to, so acting
+        // on it would start another change from components still moving,
+        // such as the video tiles merging to Home mid-split. The theme and
+        // the keyboard's flashes don't change screens.
+        let changes_screen = !matches!(click, NavClick::SetTheme(_) | NavClick::FlashKey(_));
+        if changes_screen && self.screen_change_left > 0.0 {
+            return;
+        }
         match click {
             NavClick::OpenVideoTiles if self.state == AppState::Home => {
                 self.start_home_to_tiles(proteus);
@@ -1285,6 +1285,16 @@ impl Demo {
             }
             NavClick::SetTheme(dark) => {
                 self.dark_target = dark;
+                // The icon chosen stops taking clicks and focus, as the other
+                // starts: focus moves across, so the keys keep their place.
+                let (from, to) = if dark {
+                    (self.theme.moon, self.theme.sun)
+                } else {
+                    (self.theme.sun, self.theme.moon)
+                };
+                if proteus.focused() == Some(from) {
+                    self.land_focus(proteus, Some(to), 0.0);
+                }
             }
             _ => {}
         }
@@ -1318,6 +1328,11 @@ impl Demo {
                 },
             );
         }
+        self.land_focus(
+            proteus,
+            Some(self.video_tiles.tiles[0]),
+            group_transition_config().duration,
+        );
         self.state = AppState::VideoTiles;
     }
 
@@ -1339,6 +1354,11 @@ impl Demo {
                 },
             );
         }
+        self.land_focus(
+            proteus,
+            Some(self.home.tiles[0]),
+            group_transition_config().duration,
+        );
         self.state = AppState::Home;
     }
 
@@ -1373,6 +1393,11 @@ impl Demo {
         self.video_dots_elapsed = 0.0;
         self.video_load_timed_out = false;
         self.pending_video_cancel = false;
+        self.land_focus(
+            proteus,
+            Some(self.nav.back),
+            group_transition_config().duration,
+        );
         self.state = AppState::VideoScreen(idx);
     }
 
@@ -1420,6 +1445,11 @@ impl Demo {
         // See `PendingTileReset`'s doc for why this can't happen
         // synchronously here.
         self.pending_tile_reset = Some(PendingTileReset { tile });
+        self.land_focus(
+            proteus,
+            Some(self.video_tiles.tiles[idx]),
+            group_transition_config().duration,
+        );
         self.state = AppState::VideoTiles;
     }
 
@@ -1471,6 +1501,11 @@ impl Demo {
         // `Visibility`, never resyncs geometry). See `PendingTileReset`'s
         // doc for why this can't happen synchronously here.
         self.pending_tile_reset = Some(PendingTileReset { tile });
+        self.land_focus(
+            proteus,
+            Some(self.home.tiles[0]),
+            group_transition_config().duration,
+        );
         self.state = AppState::Home;
     }
 
@@ -1533,6 +1568,7 @@ impl Demo {
             group_transition_config(),
             HOME_GRID_MERGE,
         );
+        self.land_focus(proteus, None, group_transition_config().duration);
         self.state = AppState::Loading;
     }
 
@@ -1548,6 +1584,11 @@ impl Demo {
             HOME_GRID_SPLIT,
         );
         let _ = self.loading.error_text.set_visible(proteus, false);
+        self.land_focus(
+            proteus,
+            Some(self.home.tiles[1]),
+            group_transition_config().duration,
+        );
         self.state = AppState::Home;
     }
 
@@ -1574,6 +1615,11 @@ impl Demo {
                 rows: gallery::ROWS,
             },
         );
+        self.land_focus(
+            proteus,
+            Some(self.gallery.tiles[0]),
+            gallery_group_transition_config().duration,
+        );
         self.state = AppState::Gallery;
     }
 
@@ -1595,6 +1641,7 @@ impl Demo {
                 rows: gallery::ROWS,
             },
         );
+        self.land_focus(proteus, None, gallery_group_transition_config().duration);
         self.state = AppState::Loading;
     }
 
@@ -1621,6 +1668,11 @@ impl Demo {
         // (`Demo::advance_gallery_button_fade`) rather than hiding
         // immediately here — see `start_gallery_to_loading`'s doc for the
         // same call.
+        self.land_focus(
+            proteus,
+            Some(self.home.tiles[1]),
+            gallery_group_transition_config().duration,
+        );
         self.state = AppState::Home;
     }
 
@@ -1723,6 +1775,11 @@ impl Demo {
             width_px,
             height_px,
         });
+        self.land_focus(
+            proteus,
+            Some(self.gallery.enlarged),
+            gallery_group_transition_config().duration,
+        );
         self.state = AppState::GalleryImage(idx);
     }
 
@@ -1732,6 +1789,10 @@ impl Demo {
     /// (see `pending_gallery_hires_cancel`'s doc), whether or not one had
     /// actually landed yet.
     fn start_image_to_gallery(&mut self, proteus: &mut Proteus) {
+        let enlarged_from = match self.state {
+            AppState::GalleryImage(idx) => Some(idx),
+            _ => None,
+        };
         self.pending_gallery_hires_cancel = true;
         self.pending_gallery_hires_fetch = None;
         let _ = self.gallery.hires_overlay.set_visible(proteus, false);
@@ -1748,6 +1809,11 @@ impl Demo {
         // `fetch_button`/`.fetch_button_label` fade in on their own
         // (`Demo::advance_gallery_button_fade`) — see
         // `start_loading_to_gallery`'s doc for why this isn't queued here.
+        self.land_focus(
+            proteus,
+            enlarged_from.map(|i| self.gallery.tiles[i]),
+            gallery_group_transition_config().duration,
+        );
         self.state = AppState::Gallery;
     }
 
@@ -1768,6 +1834,11 @@ impl Demo {
             &targets,
             group_transition_config(),
             HOME_GRID_SPLIT,
+        );
+        self.land_focus(
+            proteus,
+            Some(self.home.tiles[1]),
+            group_transition_config().duration,
         );
         self.state = AppState::Home;
     }
@@ -1800,13 +1871,22 @@ impl Demo {
             group_transition_config().duration,
         );
         self.active_example_category = Some(idx);
-        self.focus_space = idx == example_detail::KEYS;
+        self.land_focus(
+            proteus,
+            Some(if idx == example_detail::KEYS {
+                self.example_detail.keys.keyboard.space()
+            } else {
+                self.nav.back
+            }),
+            group_transition_config().duration,
+        );
         self.state = AppState::ExampleDetail(idx);
     }
 
     /// One 1→8 `Grid` split — the reverse of `start_home_to_detail`, by Back
     /// or Home alike.
     fn start_detail_to_home(&mut self, proteus: &mut Proteus) {
+        let came_from = self.active_example_category;
         let targets = self.home.tiles;
         let _ = self.example_detail.panel.split_to(
             proteus,
@@ -1815,6 +1895,11 @@ impl Demo {
             HOME_GRID_SPLIT,
         );
         self.hide_active_example_content(proteus);
+        self.land_focus(
+            proteus,
+            came_from.map(|idx| self.home.tiles[home::FIRST_EXAMPLE + idx]),
+            group_transition_config().duration,
+        );
         self.state = AppState::Home;
     }
 
@@ -1836,6 +1921,44 @@ impl Demo {
 
     /// Queues `entities` to become `Visibility::VISIBLE` once `duration`
     /// seconds have elapsed — see `PendingReveal`'s doc.
+    /// Clears focus as a transition starts, and gives it to `target`, if
+    /// any, once the transition ends, `after` seconds from now: see
+    /// `Demo::advance_pending_focus`. Each screen's target is where the keys
+    /// pick up from there — the tile Home was left from, the photo or video
+    /// tile that was open, the back icon on a leaf screen, or nothing while
+    /// loading — so the keys never start from a component that's gone.
+    ///
+    /// Every change of screen calls it as it starts, so it also notes when the
+    /// change ends, which input that changes screens waits for.
+    fn land_focus(&mut self, proteus: &mut Proteus, target: Option<Handle>, after: f32) {
+        self.screen_change_left = after;
+        proteus.clear_focus();
+        self.pending_focus = target.map(|target| PendingFocus {
+            target,
+            wait: after,
+        });
+    }
+
+    /// Gives focus to `pending_focus`'s target once its wait is over and it
+    /// shows: a hidden component can't take focus, and a transition's
+    /// targets show as it ends, so it tries each tick until it holds.
+    fn advance_pending_focus(&mut self, proteus: &mut Proteus, dt: f32) {
+        let Some(pending) = &mut self.pending_focus else {
+            return;
+        };
+        pending.wait -= dt;
+        if pending.wait > 0.0 {
+            return;
+        }
+        let target = pending.target;
+        if proteus.get(target).is_some_and(|d| d.visible) {
+            let _ = target.focus(proteus);
+        }
+        if proteus.focused() == Some(target) {
+            self.pending_focus = None;
+        }
+    }
+
     fn queue_reveal(&mut self, entities: Vec<Handle>, duration: f32) {
         self.pending_reveals.push(PendingReveal {
             elapsed: 0.0,
@@ -1948,9 +2071,9 @@ impl Demo {
     /// map doesn't bind flashes its keycap, matched by where the key is, and
     /// Caps Lock toggles the keycaps' shifted values. Each flash fades over
     /// `keyboard::FLASH_SECS`, eased in and out, and the Caps Lock keycap
-    /// stays tinted while the keyboard is shifted. Focus starts on the space
-    /// bar once the panel shows. Keys pressed on any other screen are
-    /// dropped.
+    /// stays tinted while the keyboard is shifted. Keys pressed on any other
+    /// screen are dropped. Focus starts on the space bar, as
+    /// `Demo::start_home_to_detail` lands it.
     fn advance_keyboard(&mut self, proteus: &mut Proteus, dt: f32) {
         let keys = std::mem::take(&mut *self.unbound_keys.borrow_mut());
         if self.state == AppState::ExampleDetail(example_detail::KEYS) {
@@ -1964,19 +2087,6 @@ impl Demo {
                     self.set_keyboard_shifted(proteus, !self.keyboard_shifted);
                 }
             }
-            // A hidden component can't take focus, so the space bar takes it
-            // once the keyboard shows, after the panel's merge.
-            let keyboard = &self.example_detail.keys.keyboard;
-            let shown = proteus.get(keyboard.board).is_some_and(|d| d.visible);
-            if self.focus_space && shown {
-                let space = keyboard.space();
-                let _ = space.focus(proteus);
-                if proteus.focused() == Some(space) {
-                    self.focus_space = false;
-                }
-            }
-        } else {
-            self.focus_space = false;
         }
         let keyboard = &self.example_detail.keys.keyboard;
         for (i, &key) in keyboard.keys.iter().enumerate() {
@@ -2146,7 +2256,7 @@ impl Demo {
     /// group actually completes (see `Handle::split_to`'s doc), so this
     /// tracks the *real* completion, not a guess that happens to usually
     /// match it. This state machine has no crate-wide "transitioning" flag,
-    /// so this uses a per-entity check instead, as `Demo::advance_hovers`
+    /// so this uses a per-entity check instead, as `Demo::advance_tile_hover`
     /// does.
     fn advance_gallery_button_fade(&mut self, proteus: &mut Proteus, dt: f32) {
         let settled = self.state == AppState::Gallery
@@ -2268,20 +2378,27 @@ impl Demo {
     }
 
     /// Finalizes `gallery.fetch_button`'s geometry once its label has
-    /// baked — see `screens::gallery::fetch_button_quad`'s doc. Safe
-    /// unconditionally, every tick: the button is never itself a group-transition target (only the 12
-    /// tiles are — see `start_loading_to_gallery`'s doc), so there's no
-    /// live transition on this entity to fight.
+    /// baked — see `screens::gallery::fetch_button_quad`'s doc. Checked every
+    /// tick, but set only when it changes: `set_declared_geometry` moves the
+    /// button at once and ends a hover or focus style's change under way, so
+    /// setting it every tick would make the button's style snap rather than
+    /// grow, unlike the photos'. The button is never itself a
+    /// group-transition target (only the 12 tiles are — see
+    /// `start_loading_to_gallery`'s doc), so there's no live transition on
+    /// this entity to fight.
     fn apply_gallery_fetch_button_layout(&mut self, proteus: &mut Proteus) {
         if let Some(qs) = gallery::fetch_button_quad(proteus, &self.gallery, self.viewport_size) {
-            // At the theme's radius: this runs every tick, after the theme
-            // blends it, so at the light radius it would undo the blend.
+            // At the theme's radius: the theme blends it every tick, so at the
+            // light radius this would undo the blend.
             let qs = self.themed(
                 qs,
                 gallery::FETCH_BUTTON_CORNER_RADIUS,
                 gallery::FETCH_BUTTON_CORNER_RADIUS_DARK,
             );
-            let _ = self.gallery.fetch_button.set_declared_geometry(proteus, qs);
+            let button = self.gallery.fetch_button;
+            if button.declared_geometry(proteus).as_ref() != Some(&qs) {
+                let _ = button.set_declared_geometry(proteus, qs);
+            }
         }
     }
 
@@ -2378,79 +2495,19 @@ impl Demo {
         std::mem::take(&mut self.pending_video_cancel)
     }
 
-    /// Ramps every registered [`HoverEntry`]'s progress toward 1 while
-    /// hovered, 0 otherwise, and writes the result onto that entity's
-    /// `Glow.radius`/`QuadState.scale` — see that type's doc for the
-    /// mechanism and the constants this mirrors. Suppressed (ramps toward
-    /// 0 regardless of the hover flag) while `handle` itself has an active
-    /// transition (`ComponentData::transition.is_some()`) — a settled
-    /// per-entity check, not a single crate-wide "is *anything*
-    /// transitioning" flag (this state machine doesn't track one). The two
-    /// are equivalent in practice: any entity worth suppressing hover on
-    /// during a transition is itself one of that transition's own
-    /// sources/targets, so it already has its own active transition at that
-    /// moment. See the crate-root doc's design note for why this is one
-    /// shared function instead of one per screen.
-    fn advance_hovers(&mut self, proteus: &mut Proteus, dt: f32) {
-        for entry in &mut self.hovers {
-            let suppressed = proteus
-                .get(entry.handle)
-                .map(|d| d.transition.is_some())
-                .unwrap_or(true);
-            let target = if !suppressed && entry.is_hovering.get() {
-                1.0
-            } else {
-                0.0
-            };
-            let step = dt / HOVER_GLOW_DURATION_SECS;
-            if entry.progress < target {
-                entry.progress = (entry.progress + step).min(target);
-            } else if entry.progress > target {
-                entry.progress = (entry.progress - step).max(target);
-            }
-            let progress = entry.progress;
-            if let Some(mut glow) = proteus.world_mut().get_mut::<Glow>(entry.handle.id()) {
-                glow.radius = progress * HOVER_GLOW_MAX_RADIUS_PX;
-            }
-            if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(entry.handle.id()) {
-                qs.scale = 1.0 + progress * HOVER_SCALE_BOOST;
-            }
-        }
-    }
-
-    /// `gallery.enlarged`'s hover reaction is glow-only, no scale-boost —
-    /// it's already as big as the grid's own box allows, so growing it
-    /// further on hover would read as an odd wobble rather than an
-    /// affordance, unlike all the other hover-registered surfaces in this
-    /// crate. `Demo::advance_hovers`' shared engine has no per-entity way to
-    /// opt out of the scale half of its ramp, so this forces `enlarged`'s
-    /// scale back to a flat `1.0` immediately after that generic pass runs
-    /// — its own glow (driven by the same `HoverEntry`, registered
-    /// alongside everything else in `Demo::new`) is untouched. The
-    /// "no scale-boost" treatment is deliberate, not an oversight.
-    fn advance_gallery_enlarged_hover_scale(&mut self, proteus: &mut Proteus) {
-        if let Some(mut qs) = proteus
-            .world_mut()
-            .get_mut::<QuadState>(self.gallery.enlarged.id())
-        {
-            qs.scale = 1.0;
-        }
-    }
-
-    /// Drives `video_tiles.tile_overlays`/`tile_labels` — the hover-only
-    /// black tint + title label, plus the screen-scale bump once resting as
-    /// the video screen. Glow/scale on the tile itself are the shared
-    /// `Demo::advance_hovers` engine's job (registered in `Demo::new`); this
-    /// reads each tile's already-ramped progress back out of `self.hovers`
-    /// rather than duplicating that ramp. Also suppresses hover entirely on
-    /// the settled, playing screen tile — clicking/hovering it is a no-op,
-    /// so there's nothing to invite feedback for (same `Handle::
-    /// set_interactive` mutual-exclusion pattern `nav.home` already uses for
-    /// its own resting-suppression). Suppression during a transition comes
-    /// for free from `advance_hovers`' per-entity `ActiveTransition` check:
-    /// `tiles[idx]` genuinely gets one during `start_tiles_to_screen`'s 1:1
-    /// `animate_to`.
-    fn advance_tile_hover(&mut self, proteus: &mut Proteus) {
+    /// Drives `video_tiles.tile_overlays`/`tile_labels` — the black tint
+    /// and title label shown while a tile is hovered with the pointer or
+    /// focused with the keys, whichever the input in use shows, as its
+    /// interaction style does — plus the screen-scale bump once resting as
+    /// the video screen. The tile's own glow and growth are its interaction
+    /// style. Each tile's overlay ramps over `screens::styles::SECS`, and
+    /// stays down while the tile transitions: `tiles[idx]` genuinely has a
+    /// transition during `start_tiles_to_screen`'s 1:1 `animate_to`. Also
+    /// makes the settled, playing screen tile non-interactive — clicking it
+    /// is a no-op, so there's nothing to invite feedback for (same `Handle::
+    /// set_interactive` mutual-exclusion pattern `nav.home` already uses).
+    fn advance_tile_hover(&mut self, proteus: &mut Proteus, dt: f32) {
+        let pointing = proteus.input_mode() == InputMode::Pointing;
         let screen_focus_idx = match self.state {
             AppState::VideoScreen(idx) => Some(idx),
             _ => None,
@@ -2459,12 +2516,21 @@ impl Demo {
             let tile = self.video_tiles.tiles[i];
             let _ = tile.set_interactive(proteus, screen_focus_idx != Some(i));
 
-            let progress = self
-                .hovers
-                .iter()
-                .find(|h| h.handle.id() == tile.id())
-                .map(|h| h.progress)
-                .unwrap_or(0.0);
+            let transitioning = proteus.get(tile).is_none_or(|d| d.transition.is_some());
+            let light = &mut self.tile_lights[i];
+            let lit = if pointing {
+                light.hovered.get()
+            } else {
+                light.focused.get()
+            };
+            let target = if lit && !transitioning { 1.0 } else { 0.0 };
+            let step = dt / screens::styles::SECS;
+            light.progress = if light.progress < target {
+                (light.progress + step).min(target)
+            } else {
+                (light.progress - step).max(target)
+            };
+            let progress = light.progress;
 
             // Recomputed every tick from the tile's own *current* geometry —
             // tile-shaped in grid view, the screen's very different
@@ -2534,9 +2600,9 @@ impl Demo {
     ///   once faded (see that entity's own doc), but only for the *tracked*
     ///   tile's footprint; fading the siblings themselves is still needed
     ///   so they don't just sit there fully visible next to/behind it.
-    ///   `advance_hovers`/`advance_tile_hover` already zero these tiles'
-    ///   hover-only decorations (overlay/label) whenever nothing's actually
-    ///   hovering them, which is always true here (the mouse is over the
+    ///   `advance_tile_hover` already zeroes these tiles' hover-or-focus
+    ///   decorations (overlay/label) whenever they're neither hovered nor
+    ///   focused, which is always true here (the mouse or focus is on the
     ///   *clicked* tile) — this only needs to additionally fade each tile's
     ///   own base appearance.
     ///
@@ -2844,7 +2910,6 @@ impl Demo {
         }
         blend_primary_color(proteus, self.home.heading, p);
         blend_primary_color(proteus, self.home.tagline, p);
-
         // `nav.home`/`nav.back` — Glow only (border+glyph are baked into
         // the PNG art itself, and neither has a `Text` label), and both
         // icons' dark overlays above (unlike this pair) are a plain
@@ -3009,12 +3074,10 @@ impl Demo {
         let targets = [home_target, back_target];
         // No hover reaction while already resting on Home — clicking there
         // would be a no-op, so there's nothing to invite hover feedback for
-        // (mirrors `advance_tile_hover`'s `is_idle_screen` suppression for
-        // the same reason). Toggling `Interactable` off is what actually
-        // suppresses it: `advance_hovers`' generic ramp only reads each
-        // entity's `is_hovering` flag, which `hit_test_system` itself stops
-        // updating (and immediately fires a hover-exit for) once an entity
-        // drops out of the interactable set — same mechanism `advance_theme`
+        // (mirrors `advance_tile_hover`'s suppression on the playing tile,
+        // for the same reason). Toggling `Interactable` off is what actually
+        // suppresses it: a non-interactive component has no hover or focused
+        // style, and can't take focus — same mechanism `advance_theme`
         // already uses for the sun/moon mutual-exclusion toggle. Idempotent
         // every tick, same as that call.
         let _ = self
@@ -3086,10 +3149,9 @@ impl Demo {
                 let _ = icon.set_visible(proteus, false);
             }
 
-            // Position + fade only — hover glow/scale is `advance_hovers`'
-            // job (both icons are already registered via `register_hover`
-            // in `Demo::new`). The opacity fades the glow and the icon's
-            // overlays with it.
+            // Position + fade only — the glow and growth on hover or focus
+            // are the icons' interaction style. The opacity fades the glow
+            // and the icon's overlays with it.
             if let Some(mut qs) = proteus.world_mut().get_mut::<QuadState>(icon.id()) {
                 qs.position.x = xs[i];
                 qs.position.y = y;
@@ -3687,6 +3749,316 @@ mod tests {
         assert_ne!(fill(&demo, w), Vec4::ONE, "a click flashes a keycap too");
     }
 
+    /// Ticks past a transition and the frame after, when focus lands.
+    fn settle(demo: &mut Harness) {
+        demo.tick(1.0);
+        demo.tick(0.016);
+        demo.tick(0.016);
+    }
+
+    fn named(key: proteus_sdk::NamedKey) -> Key {
+        Key::Named(key)
+    }
+
+    // As each transition ends, focus lands where the keys pick up from: the
+    // tile Home was left from, the tile or photo that was open, the back
+    // icon on a leaf screen, and nothing while loading.
+    #[test]
+    fn focus_lands_where_each_screen_picks_up_from() {
+        let mut demo = advance_to_home();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.home.tiles[0]), "Home, first");
+
+        demo.start_home_to_tiles();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.video_tiles.tiles[0]));
+        demo.start_tiles_to_screen(1);
+        demo.take_pending_video_start();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.nav.back), "a video plays");
+        demo.start_screen_to_tiles(1);
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.video_tiles.tiles[1]));
+        demo.start_tiles_to_home();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.home.tiles[0]));
+
+        demo.start_home_to_loading();
+        demo.take_pending_gallery_fetch();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), None, "nothing while loading");
+        demo.start_loading_to_gallery();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.gallery.tiles[0]));
+        demo.start_gallery_to_image(3);
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.gallery.enlarged));
+        demo.start_image_to_gallery();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.gallery.tiles[3]));
+        demo.start_gallery_to_home();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.home.tiles[1]));
+
+        demo.start_home_to_detail(2);
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.nav.back), "a panel");
+        demo.start_detail_to_home();
+        settle(&mut demo);
+        assert_eq!(
+            demo.app.focused(),
+            Some(demo.home.tiles[home::FIRST_EXAMPLE + 2])
+        );
+    }
+
+    // The keys alone go from Home into a screen and back: an arrow moves
+    // between tiles, Enter opens one, and Escape comes back.
+    #[test]
+    fn the_keys_open_a_tile_from_home_and_escape_comes_back() {
+        let mut demo = advance_to_home();
+        settle(&mut demo);
+        let right = || named(proteus_sdk::NamedKey::ArrowRight);
+        // The first arrow after the pointer only shows where focus is.
+        press_key(&mut demo, right(), proteus_sdk::Code::ArrowRight);
+        press_key(&mut demo, right(), proteus_sdk::Code::ArrowRight);
+        assert_eq!(demo.app.focused(), Some(demo.home.tiles[1]));
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::Enter),
+            proteus_sdk::Code::Enter,
+        );
+        assert_eq!(demo.state, AppState::Loading);
+        demo.take_pending_gallery_fetch();
+        // Escape waits for the change of screen under way to end.
+        settle(&mut demo);
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::Escape),
+            proteus_sdk::Code::Escape,
+        );
+        assert_eq!(
+            demo.state,
+            AppState::Home,
+            "Escape leaves the loading screen"
+        );
+    }
+
+    // Escape goes back one screen from each screen it can.
+    #[test]
+    fn escape_goes_back_from_every_screen() {
+        let escape = |demo: &mut Harness| {
+            press_key(
+                demo,
+                named(proteus_sdk::NamedKey::Escape),
+                proteus_sdk::Code::Escape,
+            );
+        };
+        let mut demo = advance_to_video_tiles();
+        demo.start_tiles_to_screen(0);
+        demo.take_pending_video_start();
+        demo.tick(1.0);
+        escape(&mut demo);
+        assert_eq!(
+            demo.state,
+            AppState::VideoTiles,
+            "a video goes back to its tiles"
+        );
+
+        let mut demo = advance_to_gallery_image(2);
+        escape(&mut demo);
+        assert_eq!(
+            demo.state,
+            AppState::Gallery,
+            "a photo goes back to the gallery"
+        );
+        demo.tick(1.0);
+        escape(&mut demo);
+        assert_eq!(demo.state, AppState::Home, "the gallery goes Home");
+    }
+
+    // A video tile's overlay and title show while it's focused, with the
+    // keys in use, as they do while it's hovered with the pointer.
+    #[test]
+    fn a_focused_video_tile_shows_its_overlay_while_navigating() {
+        let mut demo = advance_to_video_tiles();
+        settle(&mut demo);
+        assert_eq!(demo.app.focused(), Some(demo.video_tiles.tiles[0]));
+        let overlay_alpha = |demo: &Harness| {
+            demo.app
+                .get(demo.video_tiles.tile_overlays[0])
+                .unwrap()
+                .geometry
+                .color
+                .w
+        };
+        assert_eq!(overlay_alpha(&demo), 0.0, "not while pointing");
+
+        // An arrow, the first after the pointer, shows where focus is.
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::ArrowRight),
+            proteus_sdk::Code::ArrowRight,
+        );
+        demo.tick(screens::styles::SECS + 0.1);
+        assert!(
+            (overlay_alpha(&demo) - video_tiles::TILE_OVERLAY_MAX_ALPHA).abs() < 0.01,
+            "shown once navigating, got {}",
+            overlay_alpha(&demo)
+        );
+    }
+
+    // A video tile clicked with the pointer, which then rests over the
+    // playing video, and Backspace to back out: the tile becomes clickable
+    // again as the screen, under the pointer, so it's hovered as it splits
+    // back into the tiles. It must still end at its place in the grid, not
+    // back at the screen's size (B-38: `set_declared_geometry` was undone by
+    // the hover style's change under way).
+    #[test]
+    fn backing_out_of_a_video_with_backspace_ends_in_the_grid() {
+        let mut demo = advance_to_video_tiles();
+        let tile = demo.video_tiles.tiles[1];
+        click(&mut demo, tile);
+        assert_eq!(demo.state, AppState::VideoScreen(1));
+        demo.take_pending_video_start();
+        settle(&mut demo);
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::Backspace),
+            proteus_sdk::Code::Backspace,
+        );
+        assert_eq!(demo.state, AppState::VideoTiles);
+        settle(&mut demo);
+        settle(&mut demo);
+        let resting = video_tiles::tile_target_state(&demo.app, tile, 1, demo.theme_progress);
+        let now = demo.app.get(tile).unwrap().geometry;
+        assert_eq!(now.size, resting.size, "the tile ends at its grid size");
+    }
+
+    // Backspace twice, the second before the first's transition ends: the
+    // second is ignored, rather than starting the tiles' merge to Home while
+    // they're still splitting from the video (B-39). Once the transition
+    // ends, Backspace goes back again.
+    #[test]
+    fn input_that_changes_screens_waits_for_the_transition_under_way() {
+        let mut demo = advance_to_video_tiles();
+        let tile = demo.video_tiles.tiles[1];
+        click(&mut demo, tile);
+        demo.take_pending_video_start();
+        settle(&mut demo);
+        let backspace = |demo: &mut Harness| {
+            press_key(
+                demo,
+                named(proteus_sdk::NamedKey::Backspace),
+                proteus_sdk::Code::Backspace,
+            );
+        };
+        backspace(&mut demo);
+        assert_eq!(demo.state, AppState::VideoTiles);
+        backspace(&mut demo);
+        assert_eq!(demo.state, AppState::VideoTiles, "the second is ignored");
+
+        settle(&mut demo);
+        for &tile in &demo.video_tiles.tiles {
+            assert!(demo.app.get(tile).unwrap().visible, "the tiles show");
+        }
+        for &tile in &demo.home.tiles {
+            assert!(!demo.app.get(tile).unwrap().visible);
+        }
+        backspace(&mut demo);
+        assert_eq!(
+            demo.state,
+            AppState::Home,
+            "once it ends, Backspace goes back"
+        );
+    }
+
+    // A Home tile hovered, then Tab twice, which moves focus on and fades
+    // its glow, and the pointer nudged while it fades, as a resting hand on
+    // a trackpad does, which hovers it again mid-fade: its glow must still
+    // go all the way out once it's neither hovered nor focused, even after
+    // another screen and back (B-40).
+    #[test]
+    fn a_tile_hovered_again_mid_fade_doesnt_keep_its_glow() {
+        let mut demo = advance_to_home();
+        settle(&mut demo);
+        let tile = demo.home.tiles[0];
+        let glow = |demo: &Harness| demo.app.world().get::<Glow>(tile.id()).unwrap().radius;
+        let p = demo.app.get(tile).unwrap().geometry.position;
+        demo.pointer_moved(Some(Vec2::new(p.x, p.y)));
+        demo.tick(0.5);
+        assert_eq!(glow(&demo), screens::styles::GLOW_PX, "hovered");
+
+        let tab = || named(proteus_sdk::NamedKey::Tab);
+        press_key(&mut demo, tab(), proteus_sdk::Code::Tab);
+        press_key(&mut demo, tab(), proteus_sdk::Code::Tab);
+        demo.tick(0.05);
+        demo.pointer_moved(Some(Vec2::new(p.x + 1.0, p.y)));
+        demo.tick(0.5);
+        // The first key after the pointer shows focus, on the tile under
+        // it; the next moves focus on.
+        press_key(&mut demo, tab(), proteus_sdk::Code::Tab);
+        assert_eq!(demo.app.focused(), Some(tile));
+        press_key(&mut demo, tab(), proteus_sdk::Code::Tab);
+        demo.tick(0.5);
+        assert_eq!(glow(&demo), 0.0, "neither hovered nor focused, no glow");
+
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::Enter),
+            proteus_sdk::Code::Enter,
+        );
+        demo.take_pending_gallery_fetch();
+        settle(&mut demo);
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::Escape),
+            proteus_sdk::Code::Escape,
+        );
+        settle(&mut demo);
+        assert_eq!(glow(&demo), 0.0, "and none after another screen and back");
+    }
+
+    // The fetch button's focus grows it over the style's time, as the
+    // photos' does, rather than at once: its per-frame layout mustn't end
+    // the style's change under way (`set_declared_geometry` does).
+    #[test]
+    fn the_fetch_buttons_focus_grows_over_the_styles_time() {
+        let mut demo = advance_to_gallery();
+        // The button is laid out every frame once its label has baked, as
+        // it has in the app; headless, nothing bakes, so it's given a size.
+        let label = demo.gallery.fetch_button_label.id();
+        demo.app
+            .world_mut()
+            .entity_mut(label)
+            .insert(proteus_ui::BakedText {
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                page: 0,
+                pixel_size: [180.0, 24.0],
+            });
+        settle(&mut demo);
+        let button = demo.gallery.fetch_button;
+        // The first key after the pointer shows focus, on the first photo;
+        // focus then goes to the button.
+        press_key(
+            &mut demo,
+            named(proteus_sdk::NamedKey::ArrowUp),
+            proteus_sdk::Code::ArrowUp,
+        );
+        let _ = button.focus(&mut demo.app);
+        demo.tick(screens::styles::SECS / 2.0);
+        let scale = demo.app.get(button).unwrap().geometry.scale;
+        assert!(
+            scale > 1.0 && scale < screens::styles::SCALE,
+            "growing, not grown at once: {scale}"
+        );
+        demo.tick(screens::styles::SECS);
+        assert_eq!(
+            demo.app.get(button).unwrap().geometry.scale,
+            screens::styles::SCALE
+        );
+    }
+
     // Each video tile merges from its own columns of Home's grid, and
     // together they take every tile exactly once.
     #[test]
@@ -3793,7 +4165,7 @@ mod tests {
         let probe = demo.app.get(tile).unwrap().geometry.position;
         demo.pointer_moved(Some(Vec2::new(probe.x, probe.y)));
         let mut t = 0.0;
-        while t < HOVER_GLOW_DURATION_SECS + 0.5 {
+        while t < screens::styles::SECS + 0.5 {
             demo.tick(0.05);
             t += 0.05;
         }
@@ -4683,27 +5055,27 @@ mod tests {
         let probe = demo.app.get(tile).unwrap().geometry.position;
         demo.pointer_moved(Some(Vec2::new(probe.x, probe.y)));
         let mut t = 0.0;
-        while t < HOVER_GLOW_DURATION_SECS + 0.5 {
+        while t < screens::styles::SECS + 0.5 {
             demo.tick(0.05);
             t += 0.05;
         }
 
         let glow_radius = demo.app.world().get::<Glow>(tile.id()).unwrap().radius;
         assert!(
-            (glow_radius - HOVER_GLOW_MAX_RADIUS_PX).abs() < 0.01,
+            (glow_radius - screens::styles::GLOW_PX).abs() < 0.01,
             "fully-hovered tile should reach the max glow radius, got {glow_radius}"
         );
         let scale = demo.app.get(tile).unwrap().geometry.scale;
         assert!(
-            (scale - (1.0 + HOVER_SCALE_BOOST)).abs() < 0.01,
+            (scale - screens::styles::SCALE).abs() < 0.01,
             "fully-hovered tile should also scale up, got {scale}"
         );
     }
 
-    // `gallery.enlarged`'s hover reaction is deliberately incomplete: glow
-    // yes, scale no (see `Demo::advance_gallery_enlarged_hover_scale`'s doc
-    // for why). Unlike all the other hover-registered surfaces in this crate,
-    // and not an oversight to "fix".
+    // `gallery.enlarged`'s style is deliberately a glow alone: it's as big
+    // as the grid's space allows, so growing would read as a wobble (see
+    // `screens::styles::glow_only`). Unlike all the other lit surfaces in
+    // this crate, and not an oversight to "fix".
     #[test]
     fn hovering_the_enlarged_image_ramps_glow_but_never_scales() {
         use proteus_ui::Glow;
@@ -4713,20 +5085,20 @@ mod tests {
         let probe = demo.app.get(enlarged).unwrap().geometry.position;
         demo.pointer_moved(Some(Vec2::new(probe.x, probe.y)));
         let mut t = 0.0;
-        while t < HOVER_GLOW_DURATION_SECS + 0.5 {
+        while t < screens::styles::SECS + 0.5 {
             demo.tick(0.05);
             t += 0.05;
         }
 
         let glow_radius = demo.app.world().get::<Glow>(enlarged.id()).unwrap().radius;
         assert!(
-            (glow_radius - HOVER_GLOW_MAX_RADIUS_PX).abs() < 0.01,
+            (glow_radius - screens::styles::GLOW_PX).abs() < 0.01,
             "fully-hovered enlarged image should still reach the max glow radius, got {glow_radius}"
         );
         assert_eq!(
             demo.app.get(enlarged).unwrap().geometry.scale,
             1.0,
-            "but must never scale up, unlike every other hover-registered surface"
+            "but must never scale up, unlike every other lit surface"
         );
     }
 

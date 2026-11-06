@@ -7,11 +7,11 @@
 //!
 //! Unlike `screens::video_tiles`' fixed 3-tile row, this grid is fully
 //! viewport-computed (`cell_size`/`cell_quad`).
-//! Hover (glow + scale on `tiles`/`fetch_button`; glow only, no scale, on
-//! `enlarged` — see `Demo::advance_hovers`' call site for why that one's
-//! different) and theme-color/corner-radius wiring both live in `Demo`
-//! (`Demo::new`'s `register_hover` calls, `Demo::advance_theme`) — this
-//! module only owns the static geometry/spawn shape. The tiles are twice as
+//! Hover and focus are interaction styles (glow + growth on
+//! `tiles`/`fetch_button`; glow only, no growth, on `enlarged` — see
+//! `screens::styles::glow_only` for why that one's different), and
+//! theme-color/corner-radius wiring lives in `Demo` (`Demo::advance_theme`)
+//! — this module only owns the static geometry/spawn shape. The tiles are twice as
 //! round in the dark theme, [`CORNER_RADIUS_DARK`].
 //!
 //! An empty tile (before its fetch resolves) is a plain white rounded
@@ -105,7 +105,7 @@ pub struct Gallery {
 
 pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
     let tiles = std::array::from_fn(|i| {
-        app.component(
+        app.component(super::styles::lit(
             ComponentSpec::new(cell_quad(i, viewport_size))
                 .border(Border::new(BORDER_WIDTH, violet()))
                 .glow(Glow {
@@ -113,10 +113,10 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
                     color: violet(),
                     intensity: 1.0,
                 }),
-        )
+        ))
     });
 
-    let fetch_button = app.component(
+    let fetch_button = app.component(super::styles::lit(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.5),
             size: FETCH_BUTTON_FALLBACK_SIZE,
@@ -134,7 +134,7 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
             color: violet(),
             intensity: 1.0,
         }),
-    );
+    ));
     let fetch_button_label = app.component(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.1),
@@ -150,7 +150,8 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
     );
     let _ = fetch_button.add_child(app, fetch_button_label);
 
-    let enlarged = app.component(
+    // Glows without growing: it's as big as the grid's space allows.
+    let enlarged = app.component(super::styles::glow_only(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.5),
             size: Vec2::ONE,
@@ -166,7 +167,7 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
             color: violet(),
             intensity: 1.0,
         }),
-    );
+    ));
 
     let hires_overlay = app.component(
         ComponentSpec::new(QuadState {
