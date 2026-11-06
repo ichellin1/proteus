@@ -485,7 +485,12 @@ export interface Modifiers {
   meta: boolean;
 }
 
-/** A key being pressed, repeated or released. */
+/**
+ * A key being pressed, repeated or released.
+ *
+ * Caps Lock arrives as a press and a release at each tap, in every browser,
+ * although on a Mac the browser itself reports it as held while it's on.
+ */
 export interface KeyEvent {
   /**
    * What the key means, as a `KeyboardEvent`'s `key` names it, such as

@@ -1,20 +1,19 @@
-//! `VideoTiles` — reached from `Home`'s first nav button ("Videos"). Three
+//! `VideoTiles` — reached from `Home`'s first tile ("Video Demo"). Three
 //! tiles with box-cover art (falling back to a solid placeholder color if
 //! the image never loads) laid out in a fixed centered row. Clicking a tile
 //! grows it into `VideoScreen`, which plays the tile's video. `Demo` requests
 //! playback, and `DemoApp` starts it through the host (see the crate-root
 //! doc).
 //!
-//! Hover: a black overlay + title label fade in over the box art (neither
-//! visible at rest), plus the hover glow and scale all the other
-//! interactive surfaces get — the glow/scale ride the shared
-//! `HoverEntry`/`Demo::advance_hovers` engine (registered in `Demo::new`,
-//! same as everything else); the overlay/label/screen-scale are
+//! Hover or focus: a black overlay + title label fade in over the box art
+//! (neither visible at rest), plus the glow and growth all the other
+//! interactive surfaces get — the glow and growth are the tiles'
+//! interaction style (`screens::styles`); the overlay/label/screen-scale are
 //! tile-specific enough (continuous geometry-tracking through the
-//! tile↔screen transition, a hard scale bump once resting as the video screen)
-//! to need their own `Demo::advance_tile_hover`, which reads each tile's
-//! ramped hover progress back out of that same shared engine rather than
-//! duplicating the ramp. The label's colour is hardcoded rather than
+//! tile↔screen transition, a hard scale bump once resting as the video
+//! screen) to need their own `Demo::advance_tile_hover`, which follows the
+//! tile's hover or focus, whichever the input in use shows, over the same
+//! time as the style. The label's colour is hardcoded rather than
 //! theme-blended — see `violet_dark`'s own doc for why.
 //!
 //! `VideoScreen`'s loading UI (`backdrop`/`loading_dots`/`error_text`, driven
@@ -265,7 +264,7 @@ pub struct VideoTiles {
 
 pub fn spawn(app: &mut Proteus) -> VideoTiles {
     let tiles = std::array::from_fn(|idx| {
-        app.component(
+        app.component(super::styles::lit(
             ComponentSpec::new(tile_quad(idx))
                 .border(Border::new(BORDER_WIDTH, violet()))
                 .glow(Glow {
@@ -273,7 +272,7 @@ pub fn spawn(app: &mut Proteus) -> VideoTiles {
                     color: violet(),
                     intensity: 1.0,
                 }),
-        )
+        ))
     });
     // Overlay first, label second — within a z tie, draw order follows
     // spawn order (`SpawnOrder`), so the label renders on top of the

@@ -43,9 +43,10 @@ pub struct Theme {
 
 /// Border+glyph are baked into the icon PNGs themselves (Color-light
 /// treatment) — no separate `Border` component, matching
-/// `screens::nav`'s own icons. Glow is real (hover), so it's attached.
+/// `screens::nav`'s own icons. Glow is real (the demo's interaction style
+/// grows it), so it's attached.
 fn spawn_icon(app: &mut Proteus) -> Handle {
-    app.component(
+    app.component(super::styles::lit(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.9),
             size: Vec2::splat(ICON_SIZE_PX),
@@ -60,7 +61,7 @@ fn spawn_icon(app: &mut Proteus) -> Handle {
             color: violet(),
             intensity: 1.0,
         }),
-    )
+    ))
 }
 
 fn spawn_overlay(app: &mut Proteus, parent: Handle) -> Handle {

@@ -72,7 +72,9 @@ use std::rc::Rc;
 
 use proteus_runtime::glam::Vec2;
 use proteus_runtime::wgpu;
-use proteus_runtime::{Action, Code, Key, KeyEvent, KeyMap, KeyState, Modifiers, Viewport};
+use proteus_runtime::{
+    Action, CapsLockTaps, Code, Key, KeyEvent, KeyMap, KeyState, Modifiers, Viewport,
+};
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -451,9 +453,16 @@ fn wire_keys(
         let _ = canvas.set_attribute("tabindex", "0");
     }
 
+    // Caps Lock reaches the app as a press and a release at each tap, as on
+    // every host. Browsers differ: on a Mac, Caps Lock's keydown comes as it
+    // turns on and its keyup as it turns off. So its own events are replaced
+    // by a tap whenever the state the browser reports changes, and every
+    // other key notes that state, in case it changed outside the canvas.
+    let caps_lock = Rc::new(RefCell::new(CapsLockTaps::default()));
     let listen = |event: &str, pressed: bool| {
         let inbox = inbox.clone();
         let bound_keys = bound_keys.clone();
+        let caps_lock = caps_lock.clone();
         let closure: Closure<dyn FnMut(KeyboardEvent)> = Closure::new(move |e: KeyboardEvent| {
             // Keys pressed while an input method composes text are the input
             // method's, not the app's.
@@ -461,6 +470,19 @@ fn wire_keys(
                 return;
             }
             let event = key_event(&e, pressed);
+            let caps_on = e.get_modifier_state("CapsLock");
+            if event.code == Code::CapsLock {
+                if !e.repeat() {
+                    if let Some(tap) = caps_lock.borrow_mut().key(caps_on, event.modifiers) {
+                        inbox
+                            .borrow_mut()
+                            .input
+                            .extend(tap.into_iter().map(Input::Key));
+                    }
+                }
+                return;
+            }
+            caps_lock.borrow_mut().note(caps_on);
             // So that, for example, Space and the arrows don't scroll the
             // page.
             if bound_keys.borrow().keeps(&event) {

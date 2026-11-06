@@ -1,4 +1,4 @@
-//! The `Loading` screen — reached from `Home`'s "Gallery" nav button (and
+//! The `Loading` screen — reached from `Home`'s "Photo Gallery" tile (and
 //! from `Gallery`'s own "Fetch New Images" button, a refetch). Just the
 //! animated logo mark (the same 19-frame loop `Splash` uses, looping
 //! forever here instead of playing once — see `Demo::advance_loading_logo`)

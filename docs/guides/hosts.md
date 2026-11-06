@@ -195,8 +195,10 @@ Read it from the canvas element, with `clientWidth` and `clientHeight`.
 
 ## Platform notes
 
-- **Input** is the pointer: a mouse natively, and a mouse, touch or pen in a browser. Keyboard
-  input isn't supported yet.
+- **Input** is the pointer: a mouse natively, and a mouse, touch or pen in a browser; and the
+  keyboard. Caps Lock arrives as a press and a release at each tap on both hosts, although a
+  browser on a Mac reports it as held while it's on, and winit on a Mac doesn't report it, so
+  the native host reads it from macOS.
 - **A hidden tab** stops the browser's frame loop. When the tab returns, transitions continue
   where they stopped.
 - **A lost GPU context** in a browser, which can happen when the GPU driver resets or the

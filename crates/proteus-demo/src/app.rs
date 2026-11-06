@@ -263,15 +263,6 @@ impl App for DemoApp {
         };
         self.advance_viewport(&mut demo, f);
         demo.advance(f.proteus, dt);
-        for update in demo.take_pending_texture_churn() {
-            let texture = f.bake_texture(
-                update.width,
-                update.height,
-                update.rgba,
-                TextureRequest::default(),
-            );
-            let _ = update.handle.set_texture(f.proteus, texture);
-        }
         self.advance_gallery(&mut demo, f);
         self.advance_video(&mut demo, f);
         self.demo = Some(demo);

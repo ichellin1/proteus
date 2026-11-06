@@ -86,8 +86,8 @@ it's planned.
   a feature: Keyboard & Focus in this one. The stress tests are removed, since the benchmarks
   measure more, and so is the 3D placeholder, which is far off. An About tile, saying what
   Proteus is for a visitor, takes its place. The Layout tile stays, as a preview of the layout
-  system coming in v0.6.0. The demo gets a setting for which devices it accepts, and Escape and
-  Backspace go back a screen.
+  system coming in v0.6.0. The demo gets a setting for which devices it accepts (dropped in
+  step 8: the demo is always hybrid), and Escape and Backspace go back a screen.
 - **Decided (2026-10-29): hosts turn every device's keys into one set of keys.** winit's key
   events, the browser's `KeyboardEvent`, and later a TV remote's own key codes all arrive as the
   same values, named as the web names them, which winit mirrors. A key can be named by what it
@@ -393,7 +393,7 @@ A new example, in Rust and TypeScript, that's used with the keyboard.
   and `keep_tab`, as a full-screen app would.
 - [x] `examples/browse`, in Rust and TypeScript, the same app, with each of the cases above.
 - [x] It runs natively and in a browser, from both languages, with the README's commands.
-- [ ] It's wired into the workspace, CI, the Makefile, the pre-push hook and the examples
+- [x] It's wired into the workspace, CI, the Makefile, the pre-push hook and the examples
   table, and CI passes.
 
 ### Step 7 — The demo's new home page
@@ -401,10 +401,75 @@ A new example, in Rust and TypeScript, that's used with the keyboard.
 The home page's grid, header, tagline and About tile, and the Layout tile as a preview of
 v0.6.0, with the stress tests, the 3D placeholder and the Examples screen removed.
 
+- **Decided (2026-11-04): the home page is one 4 by 2 grid of eight tiles,** under "See what
+  Proteus can do" and a one-line tagline: Video Demo, Photo Gallery, Effects, Text,
+  Transformations, Layout, Keyboard & Focus and About. Every tile takes part in each transition, so
+  nothing appears or disappears: the eight merge into a detail screen's panel and split back
+  from it, and Back from a detail screen goes Home; they merge into the gallery's loading logo
+  and split back from it; the gallery, 4 by 3, comes back with each column's top photo becoming
+  the top tile and the other two merging into the bottom one; and the eight merge, by columns
+  (the first, the second and third, the fourth), into the three video tiles, and split back.
+- **Decided (2026-11-06): the Keyboard & Focus panel is a virtual keyboard.** A generic US
+  layout of rounded keycaps, without the function keys, Esc, Tab or the arrows, centred, with
+  what the keys do below it. The keycaps are a focus group: the arrows and Tab move round it and
+  don't leave it; focus starts on the space bar as the panel opens, and coming back lands on
+  the keycap focused last. Focus shows as a glow, without growing, so keycaps don't overlap and
+  the nearest keycap is the one drawn nearest. A key the key map doesn't bind flashes its
+  keycap, matched by where the key is; Enter or Space, or a click, flashes the focused or
+  clicked keycap; and Backspace still goes back. Caps Lock toggles the keycaps to their shifted
+  values, with its keycap tinted meanwhile. The keyboard keeps the light theme's colors in both
+  themes.
+- **Decided (2026-11-06): Caps Lock arrives as a press and a release at each tap, on every
+  host.** Platforms differ: a browser on a Mac reports it as held while it's on, and winit on a
+  Mac doesn't report it at all. The web host taps whenever `getModifierState` says it changed,
+  and the native host on a Mac reads it from macOS each frame the window has focus, through the
+  runtime's `CapsLockTaps`.
+- **Decided (2026-11-04): About says what Proteus is for a visitor,** from the README's opening,
+  and Layout says the layout system is coming in v0.6.0.
+- [x] The home page's grid, heading and tagline, with each screen's transitions to and from it.
+- [x] The Stress Tests, the 3D placeholder and the Examples screen are removed.
+- [x] The About, Layout and Keyboard & Focus panels.
+- [x] Tests for each transition to and from the grid, and for the pressed-key display, and the
+  demo's docs updated.
+
 ### Step 8 — The demo on the keyboard
 
-The demo uses interaction styles instead of its own hover code, works with the keyboard on
-every screen, and has its setting for which devices it accepts.
+The demo uses interaction styles instead of its own hover code, and works with the keyboard on
+every screen as well as the pointer.
+
+- **Decided (2026-11-06): the demo's hover is interaction styles.** Its own hover code goes, and
+  each surface that used it gets the same hover and focused style, a 15 px glow and 7% growth,
+  over 0.25 s; the enlarged photo glows without growing. The video tiles' overlay and title
+  follow hover or focus, whichever the input in use shows.
+- **Decided (2026-11-06): every screen works with the keys, without focus groups.** The arrows
+  move to the nearest component, Tab in reading order, Enter or Space clicks, and Escape or
+  Backspace goes back. Home's tiles are the pieces of every split and merge, so they stay
+  without a group. As each transition ends, focus lands on the tile Home was left from (the
+  first, the first time), the tile that was playing or the first video tile, the back icon
+  while a video plays, the photo that was enlarged or the first photo, the enlarged photo, the
+  back icon on a panel (the space bar on Keyboard & Focus), and nothing while loading. The top
+  bar's icons are reachable too.
+- **Decided (2026-11-06): the demo is always hybrid, with no device setting.** A control in the
+  top bar to choose the pointer, the keyboard or both wasn't clear to a visitor, and the demo
+  shows the two working together. The engine's setting is shown and tested on its own.
+- **Decided (2026-11-06): `set_declared_geometry` ends a style's change under way.** A hover
+  style still changing carried on toward the old geometry and undid the move, so backing out of
+  a video with Backspace, with the pointer resting on it, left the tile at the screen's size
+  (B-38). Now a style shown is applied on top of the new geometry at once.
+- [x] The demo's hover code is replaced by interaction styles, and the video tiles' overlay and
+  title follow hover or focus.
+- [x] Every screen works with the keys, with focus landing as decided as each transition ends.
+- **Decided (2026-11-06): input that changes screens waits for the change under way to end.**
+  The demo switches to the next screen as a transition starts, so a second Backspace during it
+  acted as though it had ended, starting another change from components still moving (B-39).
+  The theme and the keyboard's flashes still work during one.
+- [x] Input that changes screens waits for the change under way, with a test.
+- [x] A style started while the effects are fading back rests where the fade is heading (B-40),
+  with an SDK test and a demo test.
+- [x] `set_declared_geometry` ends a style's change under way, in Rust and TypeScript, with a
+  test that fails without it.
+- [x] Tests: the styles, where focus lands on each screen, opening and leaving screens with the
+  keys, the video overlay on focus, and backing out of a video with Backspace while hovered.
 
 ### Step 9 — Docs
 

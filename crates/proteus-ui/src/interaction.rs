@@ -386,6 +386,18 @@ pub struct InteractionDef {
 }
 
 impl InteractionDef {
+    /// The style for `kind`, if one is set. [`InteractionStateKind::Default`]
+    /// has none: it's the declared geometry.
+    pub fn style(&self, kind: InteractionStateKind) -> Option<&StyleOverride> {
+        match kind {
+            InteractionStateKind::Hover => self.hover.as_ref(),
+            InteractionStateKind::Pressed => self.pressed.as_ref(),
+            InteractionStateKind::Focused => self.focused.as_ref(),
+            InteractionStateKind::Disabled => self.disabled.as_ref(),
+            InteractionStateKind::Default => None,
+        }
+    }
+
     /// A style setting each effect property any of these styles sets, to
     /// tell which ones they change; its values mean nothing.
     fn effects_touched(&self) -> StyleOverride {
@@ -456,6 +468,7 @@ type InteractionStyleQuery<'w, 's> = Query<
             Option<&'static DropShadow>,
             Option<&'static RestingEffects>,
             Option<&'static StyleTiming>,
+            Option<&'static EffectTransition>,
         ),
     ),
 >;
@@ -478,7 +491,7 @@ pub fn interaction_style_system(
 ) {
     let navigating = *mode == InputMode::Navigating;
     for (entity, quad_state, def, existing, lifecycle, disabled, effects) in query.iter() {
-        let (glow, border, shadow, resting, timing) = effects;
+        let (glow, border, shadow, resting, timing, changing) = effects;
         if matches!(lifecycle, Some(Lifecycle::Transitioning)) {
             continue;
         }
@@ -568,10 +581,13 @@ pub fn interaction_style_system(
             shadow: shadow.copied(),
         };
         // At rest, the effects are the ones to come back to, with any change
-        // the app made since.
+        // the app made since. If they're still on their way back from the
+        // last style, where they're heading is the rest, not where they are:
+        // recording a half-faded glow would leave it there for good.
         let resting = if existing.current == InteractionStateKind::Default {
-            commands.entity(entity).insert(RestingEffects(current));
-            current
+            let rest = changing.map_or(current, |change| change.to);
+            commands.entity(entity).insert(RestingEffects(rest));
+            rest
         } else {
             resting.map_or(current, |r| r.0)
         };
