@@ -30,12 +30,12 @@ proteus-render                                            the pipeline, the shad
 | Crate | What it holds |
 |---|---|
 | `proteus-render` | The instanced pipeline, its shader (in named parts under `shaders/quad/`), the texture atlases and their registry, text rasterizing and image decoding. Knows nothing about components. |
-| `proteus-ui` | The component model on `bevy_ecs`: geometry, the hierarchy, transitions in all three shapes, input and hit testing, interaction styles, component baking, and turning the world into instances to draw. |
+| `proteus-ui` | The component model on `bevy_ecs`: geometry, the hierarchy, transitions in all three shapes, input and hit testing, the keyboard, focus and its navigation, interaction styles, component baking, and turning the world into instances to draw. |
 | `proteus-sdk` | The API an app uses: `Proteus`, which holds the app's components, and the handles it returns. It draws nothing itself. |
 | `proteus-gpu` | Creates a wgpu device, queue and configured surface from a platform's surface, the same way on every platform. |
 | `proteus-runtime` | The contract between an app and a host: `App`, `Frame`, `HostServices` and `ProteusConfig`, and the `Engine` and `Renderer` that run a frame. |
-| `proteus-host-winit` | The native host: a winit window, its event loop, pointer input, and assets read from a directory. |
-| `proteus-host-web` | The web host: a canvas, the `requestAnimationFrame` loop, Pointer Events, and fetched assets. Runs a Rust `App`, or a TypeScript app through `mount`. |
+| `proteus-host-winit` | The native host: a winit window, its event loop, pointer and key input, and assets read from a directory. |
+| `proteus-host-web` | The web host: a canvas, the `requestAnimationFrame` loop, Pointer Events and key events, and fetched assets. Runs a Rust `App`, or a TypeScript app through `mount`. |
 | `proteus-sdk-web` | The wasm bridge from TypeScript to `proteus-sdk`, and the TypeScript SDK itself in `ts/`, published to npm. |
 
 These are published. The rest of the workspace isn't: `proteus-demo`, the reference demo,
@@ -106,7 +106,7 @@ same sequence, in `proteus-host-web`'s `mount`, with its JavaScript `update` in 
 flush_commands       apply changes queued during the last tick
 input                hit-test the pointer and record this tick's input events
 interaction_style    start style transitions for hover, press, focus and disabled
-navigation           keyboard focus movement (a placeholder; does nothing yet)
+navigation           move focus for the actions no key callback claimed
 channel_dispatch     turn channel requests into transition requests
 transition_setup     start requested transitions, splits and merges
 transition_tick      advance transitions and interpolate geometry
@@ -356,6 +356,10 @@ virtuals and no bakes. It is experimental.
 
 ## Input
 
+An app works with the pointer, the keyboard, or both, whichever it accepts; see "Pointer,
+keyboard or both" under [Key design decisions](#key-design-decisions). Input from a device it
+doesn't accept is dropped as it arrives, before anything below sees it.
+
 The host converts its platform's pointer events into world units and reports them to the
 engine: moved (or left), pressed, and released. In the next tick, `hit_test_system` finds the
 component under the pointer and records this tick's events in `InteractionEvents`; the
@@ -368,7 +372,26 @@ transitioning without `TransitionInteractionConfig::allow_pointer`. A disabled c
 doesn't pass it through: it blocks what is behind it but receives no events, as a disabled
 control does on the web.
 
-Keyboard input isn't handled yet; the navigation stage holds its place in the schedule.
+Each host turns its platform's key events into the same key values on every platform. A key event
+names the key two ways, as a browser's `KeyboardEvent` does: by what it types or does with the
+keyboard layout in use, its key, such as `a` or `Enter`; and by where it is on the keyboard,
+whatever the layout prints on it, its code, such as `KeyA`. The host reports each press and
+release, and `KeyInput` records them, adding the engine's repeats and long presses while a key
+stays held.
+
+At the start of each tick, before the schedule runs, each key event is looked up in the `KeyMap`
+for its action, then passed to the key callbacks: the focused component's first, then its
+ancestors', nearest first, then the app's, until one claims it. If none does, the engine does
+what the action does by default. A key that moves focus queues its action in
+`NavigationRequests`, and `navigation_system` moves focus with it, following focus groups and
+named neighbours. `Activate` presses and clicks the focused component, as the pointer does.
+
+`FocusState` holds the focused component. When it can no longer keep focus, because it was
+hidden, disabled or made non-interactive, it loses focus, and the callback the app registered
+with `on_focus_lost` is called with the component and the reason. `InputMode` records whether
+the pointer or the keys were used last: the focused style shows only while the keys are in use,
+and the hover style only while the pointer is. The devices the app accepts are held in
+`AppDevices`, and a component can accept fewer with `AcceptsDevices`.
 
 ## Texture lifetime
 
@@ -463,6 +486,15 @@ platform: the native `run` blocks in winit's event loop until the window closes,
 entry point would fit neither, so each host runs its platform's loop its own way and calls the
 same `Engine` underneath.
 
+**Pointer, keyboard or both, chosen by the app.** Interfaces are used in three ways: with a
+pointer alone, as on a touch-screen kiosk; with keys alone, as on a TV with a remote; or with
+both, as on a desktop or in a browser. An app chooses with `set_input_devices`, and can change
+while it runs. A set of devices, rather than three modes, means a new device, such as a game
+controller, adds a member rather than more combinations. With both, the last input wins, so the
+focused style shows only while the keys are in use and the hover style only while the pointer
+is, and never both at once. Components respond to actions rather than keys, so a key, a remote's
+button and later a controller's all drive the same code.
+
 **One core, two languages.** The TypeScript SDK wraps the Rust core rather than
 reimplementing it, so behavior is the same in both, and every fix reaches both. Rust is the
 first-class language: the API is designed in Rust, and TypeScript follows it.
@@ -488,5 +520,7 @@ These are known shortcomings, each planned to be addressed in a future release:
   with its pieces' own, rather than one curve that changes size.
 - Text is a single line.
 - One video at a time.
-- No keyboard input.
+- No text input: no text field, cursor or selection, and no input methods for composing text.
+  A key's text arrives in its event, for an app to use itself.
+- Touch is the pointer, with no gestures such as pinch or swipe.
 - On the web, a lost GPU context leaves the canvas blank until the page reloads.

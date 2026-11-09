@@ -1,6 +1,6 @@
 # Use a platform feature Proteus doesn't provide
 
-Proteus draws the app and handles the pointer. For anything else, such as the clipboard, a file
+Proteus draws the app and handles the pointer and the keyboard. For anything else, such as the clipboard, a file
 picker, opening a web page or playing a sound, the app uses the platform directly, alongside
 Proteus. Nothing in Proteus needs to know.
 

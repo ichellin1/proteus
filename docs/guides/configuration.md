@@ -214,6 +214,20 @@ When a window moves to a display of another density, its text is baked again at 
 A baked component keeps the scale it was first baked at, since baking destroys what it was
 drawn from.
 
+### Input
+
+| Rust | TypeScript | Default | What it sets |
+|---|---|---|---|
+| `input.autofocus` | `input.autofocus` | Off | Gives the web canvas keyboard focus when the app starts, so keys reach it without a click first. Off, so an app in a page doesn't take the page's focus. A native window has focus when it opens. |
+| `input.keep_tab` | `input.keepTab` | Off | Keeps Tab and Shift+Tab in the web canvas, wrapping round from the last component to the first, as a native window does. Off, so Tab can leave a canvas in a page at either end, as keyboard users need; on for a full-screen or TV app. |
+| `input.key_repeat` | `input.keyRepeat` | 250 ms, then every 100 ms | How held keys repeat: by the engine, the same on every platform, or as the system repeats them, at the speed each user set. |
+| `input.long_press_ms` | `input.longPressMs` | 500 | How long a key is held before it's long-pressed, in milliseconds. |
+| `input.navigating_actions` | `input.navigatingActions` | The six that move focus | The actions whose keys switch the app to navigating, where the focused style shows; see [Pointing and navigating](./keyboard-and-focus.md#pointing-and-navigating). Built-in actions only here. |
+
+The app can change the last three while it runs, with `set_key_repeat`, `set_long_press_ms` and
+`set_navigating_actions`, and the devices it accepts with `set_input_devices`; see
+[Keyboard and focus](./keyboard-and-focus.md).
+
 ### Diagnostics
 
 `debug.validate_config`, on by default, logs `estimated_gpu_bytes` when the app starts. Rust only.

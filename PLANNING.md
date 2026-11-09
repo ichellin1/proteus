@@ -477,6 +477,33 @@ The interaction and hosts guides, the notes on non-interactive and disabled comp
 ARCHITECTURE's known limits. The guides say to handle actions, and to use keys only for typing
 and for keys the map doesn't cover.
 
+- **Decided (2026-11-06): the keyboard gets a guide of its own,** Keyboard and focus, beside
+  Interaction, which keeps the pointer and the styles: actions and the key map, handling keys,
+  what can take focus and how it moves, focus groups, putting focus where it belongs, Enter and
+  Space, pointing and navigating, input devices, and held keys.
+- **Decided (2026-11-06): `InputConfig`'s five unread settings are removed** (D-03):
+  `focus_input_delay_ms`, `click_moves_focus`, `drag_threshold_px`,
+  `transition_interaction_allow_pointer` and `transition_interaction_allow_navigation`, with an
+  upgrade note. A drag threshold is a ROADMAP candidate.
+- **Decided (2026-11-09): a how-to, Make an app work with the keyboard,** joins the guide: where
+  focus starts and goes as screens change, groups, Back, waiting for a screen change to end, one
+  highlight at a time, scrolling to the focused component, and a TV app.
+- [x] The Keyboard and focus guide, in Rust and TypeScript, with each snippet checked.
+- [x] The how-to, in Rust and TypeScript, with each snippet checked.
+- **Decided (2026-11-09): an app that doesn't accept the pointer is always navigating.** Nothing
+  could switch it to pointing, yet it started there, so a TV app showed no focus until the first
+  key, which only showed where focus was. Now the focused style shows from the start, and the
+  first arrow moves focus.
+- [x] A keyboard-only app navigates from the start, with a test that fails without it.
+- [x] Pointer, keyboard or both, the three ways an app can work, explained in the Keyboard and
+  focus guide, as a key design decision in ARCHITECTURE, and where it bears on the interaction
+  guide and the how-to.
+- [x] The interaction guide: the keyboard in its events, which component gets input, focus during
+  a transition, and the styles' effects and timing.
+- [x] ARCHITECTURE's input, schedule, crates and known limits; the configuration guide's input
+  settings; the components guide's spec table; the hosts guide's keyboard on the web; and the
+  pointer-only lines elsewhere.
+
 ## Standing decisions
 
 - **Non-interactive and disabled components ignore all input** (2026-09-28), not just the

@@ -77,9 +77,13 @@ Only the geometry is required. Everything else is optional:
 | `visible` | `visible` | Whether it starts visible. A hidden component is neither drawn nor clickable. |
 | `opacity` | `opacity` | How transparent it is, and everything in it, from `0` to `1`. |
 | `hover`, `pressed`, `focused`, `disabled` | the same names | How it looks while the pointer is over it, while pressed, focused, or disabled. |
-| `non_interactive` | `nonInteractive` | Takes the component out of input, for things that are never controls, such as labels. |
-| `start_disabled` | `startDisabled` | Starts it disabled: drawn, blocking input, but responding to none. |
-| `transition_interaction` | `transitionInteraction` | Whether it takes input while it transitions. |
+| `style_transition` | `styleTransition` | How its changes of style are timed; 0.15 s, easing out, by default. |
+| `non_interactive` | `nonInteractive` | Takes the component out of input, for things that are never controls, such as labels: the pointer passes through it, and focus over it. |
+| `start_disabled` | `startDisabled` | Starts it disabled: drawn, blocking the pointer, unable to take focus, and responding to no input. |
+| `transition_interaction` | `transitionInteraction` | Whether it takes the pointer, and focus, while it transitions. |
+| `devices` | `devices` | The input devices it accepts, of those the app does; every one by default. See [A component's devices](./keyboard-and-focus.md#a-components-devices). |
+| `focus_group` | `focusGroup` | Makes the components under it a focus group; see [Focus groups](./keyboard-and-focus.md#focus-groups). |
+| `default_focus` | `defaultFocus` | Marks it as where focus lands as it enters its group, or as a split ends. |
 | `bake` | `bake` | Draws it and its children into one image, once, for detailed content that never changes. |
 
 Text, images, input and interaction styles each have a guide of their own.
