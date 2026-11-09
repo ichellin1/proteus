@@ -3268,6 +3268,36 @@ fn arrow_down(state: KeyState) -> KeyEvent {
     )
 }
 
+// An app that doesn't accept the pointer navigates from the start: the
+// focused component shows its focused style at once, and the first arrow
+// moves focus, rather than only showing where it is, as it would after the
+// pointer was used.
+#[test]
+fn an_app_without_the_pointer_navigates_from_the_start() {
+    let mut app = Proteus::new();
+    let style = StyleOverride {
+        scale: Some(2.0),
+        ..Default::default()
+    };
+    let top = app.component(ComponentSpec::new(quad_at(0.0, 100.0)).focused(style.clone()));
+    let below = app.component(ComponentSpec::new(quad_at(0.0, -100.0)).focused(style));
+    app.set_input_devices(InputDevices::KEYBOARD);
+    assert_eq!(app.input_mode(), InputMode::Navigating);
+
+    top.focus(&mut app).unwrap();
+    for _ in 0..10 {
+        app.tick(0.05);
+    }
+    assert_eq!(
+        app.get(top).unwrap().state,
+        proteus_sdk::InteractionStateKind::Focused
+    );
+
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(app.focused(), Some(below), "the first arrow moves focus");
+}
+
 #[test]
 fn the_app_starts_pointing_and_a_navigating_key_switches_it() {
     let mut app = Proteus::new();

@@ -1066,6 +1066,10 @@ export class ProteusApp {
    * component or callback sees it. Turning the pointer off ends its hover and
    * releases its press; turning the keyboard off releases the keys held. A
    * component can narrow the set further, with {@link ComponentSpec.devices}.
+   *
+   * An app that doesn't accept the pointer is navigating from then on, see
+   * {@link ProteusApp.inputMode}: the focused style shows at once, and the
+   * first key that moves focus moves it, rather than only showing where it is.
    */
   setInputDevices(devices: InputDevice[]): void {
     this.wasmApp.setInputDevices(devices);
@@ -1120,7 +1124,8 @@ export class ProteusApp {
   /**
    * Which style of input the app is in: `"pointing"`, after the pointer moved
    * or was pressed, or `"navigating"`, after a key bound to one of the
-   * navigating actions was pressed. The focused style shows only while
+   * navigating actions was pressed, and always in an app that doesn't accept
+   * the pointer. The focused style shows only while
    * navigating, and the hover style only while pointing. Use it, for example,
    * to show hints for one style of input or the other.
    */
