@@ -61,11 +61,12 @@ pub struct Nav {
 }
 
 /// Border+glyph are baked into the icon PNGs themselves (Color-light
-/// treatment) — no separate `Border` component. Glow is real (hover), so
-/// it's attached; `Interactable` too, since these two entities are the
-/// click targets (their overlay children below are display-only).
+/// treatment) — no separate `Border` component. Glow is real (the demo's
+/// interaction style grows it), so it's attached; `Interactable` too, since
+/// these two entities are the click targets (their overlay children below
+/// are display-only).
 fn spawn_icon(app: &mut Proteus) -> Handle {
-    app.component(
+    app.component(super::styles::lit(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.9), // above every screen's own content (z<=0.51)
             size: Vec2::splat(ICON_SIZE_PX),
@@ -82,7 +83,7 @@ fn spawn_icon(app: &mut Proteus) -> Handle {
         })
         // Faded in by `Demo::advance_nav_icons`, with its overlays.
         .opacity(0.0),
-    )
+    ))
 }
 
 fn spawn_overlay(app: &mut Proteus, parent: Handle) -> Handle {

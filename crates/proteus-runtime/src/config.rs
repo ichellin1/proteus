@@ -377,9 +377,8 @@ impl Default for FrameConfig {
 // InputConfig
 // ---------------------------------------------------------------------------
 
-/// Input settings. Only `autofocus`, `keep_tab`, `key_repeat`,
-/// `long_press_ms` and `navigating_actions` are read yet: for the others,
-/// input uses fixed defaults, which they match.
+/// Input settings: the keyboard's focus on the web, how held keys repeat and
+/// long-press, and which keys switch the app to navigating.
 #[derive(Debug, Clone)]
 pub struct InputConfig {
     /// Whether the web host gives the canvas keyboard focus when the app
@@ -407,19 +406,6 @@ pub struct InputConfig {
     /// app's own are defined later; `Proteus::set_navigating_actions` takes
     /// those too, while the app runs.
     pub navigating_actions: Vec<Action>,
-    /// How long, in milliseconds, a newly focused component waits before it
-    /// accepts input.
-    pub focus_input_delay_ms: u32,
-    /// Default for `TransitionInteractionConfig::allow_pointer`.
-    pub transition_interaction_allow_pointer: bool,
-    /// Default for `TransitionInteractionConfig::allow_navigation`.
-    pub transition_interaction_allow_navigation: bool,
-    /// Whether clicking a component also gives it focus. `false` keeps
-    /// pointer and keyboard focus separate.
-    pub click_moves_focus: bool,
-    /// How far the pointer must move, in pixels, before a press counts as a
-    /// drag. `0.0` starts dragging immediately, as now.
-    pub drag_threshold_px: f32,
 }
 
 impl Default for InputConfig {
@@ -430,11 +416,6 @@ impl Default for InputConfig {
             key_repeat: KeyRepeat::default(),
             long_press_ms: 500,
             navigating_actions: Action::MOVING_FOCUS.to_vec(),
-            focus_input_delay_ms: 0,
-            transition_interaction_allow_pointer: false,
-            transition_interaction_allow_navigation: false,
-            click_moves_focus: true,
-            drag_threshold_px: 0.0,
         }
     }
 }

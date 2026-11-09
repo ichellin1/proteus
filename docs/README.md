@@ -21,13 +21,15 @@ Build a button that transforms into a panel, step by step:
   another.
 - [Splits and merges](./guides/splits-and-merges.md): one component into several, and several
   into one.
-- [Interaction](./guides/interaction.md): pointer events, which component gets the pointer, and
-  hover, pressed and disabled styles.
+- [Interaction](./guides/interaction.md): pointer events, which component gets input, and
+  hover, pressed, focused and disabled styles.
+- [Keyboard and focus](./guides/keyboard-and-focus.md): actions and the key map, handling keys,
+  moving focus and focus groups, and the input devices an app accepts.
 - [Text, images and video](./guides/content.md): what a component shows, and how to change it.
-- [Configuration](./guides/configuration.md): GPU memory, the background color, the font, and
-  how images load.
-- [Hosts and platforms](./guides/hosts.md): what runs an app, loading assets, and the size of the
-  window.
+- [Configuration](./guides/configuration.md): GPU memory, the background color, the font, how
+  images load, and how keys repeat.
+- [Hosts and platforms](./guides/hosts.md): what runs an app, loading assets, the size of the
+  window, and the keyboard on the web.
 
 ## How-tos
 
@@ -40,6 +42,8 @@ Build a button that transforms into a panel, step by step:
   own.
 - [Use a platform feature Proteus doesn't provide](./how-to/platform-features.md), such as the
   clipboard or opening a web page.
+- [Make an app work with the keyboard](./how-to/keyboard-navigation.md): where focus starts and
+  goes as screens change, groups, Back, and one highlight at a time.
 - [Tricks](./how-to/tricks.md): show anything the platform can draw, such as text in any font.
 
 ## API reference

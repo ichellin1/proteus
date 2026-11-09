@@ -38,7 +38,7 @@ proteus-host-winit = "0.2"
 - `proteus-sdk` is what you build an app with: components, transitions and input.
 - `proteus-runtime` defines the app: the `App` trait, which a host runs.
 - `proteus-host-winit` is the native host. It opens the window, runs the frame loop, and passes
-  the pointer to your app.
+  the pointer and the keys to your app.
 
 ## Write the app
 

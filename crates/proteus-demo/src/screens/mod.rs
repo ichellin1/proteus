@@ -4,11 +4,12 @@
 
 pub mod background;
 pub mod example_detail;
-pub mod examples_home;
 pub mod gallery;
 pub mod home;
+pub mod keyboard;
 pub mod loading;
 pub mod nav;
 pub mod splash;
+pub mod styles;
 pub mod theme;
 pub mod video_tiles;

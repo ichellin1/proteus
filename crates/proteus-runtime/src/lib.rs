@@ -52,6 +52,7 @@
 
 mod app;
 mod bake;
+mod caps_lock;
 /// [`ProteusConfig`] and its sections.
 pub mod config;
 mod config_dto;
@@ -61,6 +62,7 @@ mod services;
 mod viewport;
 
 pub use app::{App, Frame};
+pub use caps_lock::CapsLockTaps;
 pub use config::{Allowed, ConfigError, ProteusConfig};
 pub use config_dto::ProteusConfigDto;
 pub use engine::Engine;

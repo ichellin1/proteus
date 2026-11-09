@@ -31,6 +31,7 @@ pages! {
     guides_transitions => "guides/transitions.md",
     guides_splits_and_merges => "guides/splits-and-merges.md",
     guides_interaction => "guides/interaction.md",
+    guides_keyboard_and_focus => "guides/keyboard-and-focus.md",
     guides_content => "guides/content.md",
     guides_configuration => "guides/configuration.md",
     guides_hosts => "guides/hosts.md",
@@ -39,6 +40,7 @@ pages! {
     how_to_loading_images => "how-to/loading-images.md",
     how_to_custom_easing => "how-to/custom-easing.md",
     how_to_platform_features => "how-to/platform-features.md",
+    how_to_keyboard_navigation => "how-to/keyboard-navigation.md",
     how_to_tricks => "how-to/tricks.md",
 }
 

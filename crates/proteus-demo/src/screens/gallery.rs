@@ -7,11 +7,11 @@
 //!
 //! Unlike `screens::video_tiles`' fixed 3-tile row, this grid is fully
 //! viewport-computed (`cell_size`/`cell_quad`).
-//! Hover (glow + scale on `tiles`/`fetch_button`; glow only, no scale, on
-//! `enlarged` — see `Demo::advance_hovers`' call site for why that one's
-//! different) and theme-color/corner-radius wiring both live in `Demo`
-//! (`Demo::new`'s `register_hover` calls, `Demo::advance_theme`) — this
-//! module only owns the static geometry/spawn shape. The tiles are twice as
+//! Hover and focus are interaction styles (glow + growth on
+//! `tiles`/`fetch_button`; glow only, no growth, on `enlarged` — see
+//! `screens::styles::glow_only` for why that one's different), and
+//! theme-color/corner-radius wiring lives in `Demo` (`Demo::advance_theme`)
+//! — this module only owns the static geometry/spawn shape. The tiles are twice as
 //! round in the dark theme, [`CORNER_RADIUS_DARK`].
 //!
 //! An empty tile (before its fetch resolves) is a plain white rounded
@@ -52,7 +52,7 @@ const FETCH_BUTTON_LABEL: &str = "Fetch New Images";
 const FETCH_BUTTON_TOP_MARGIN_PX: f32 = 65.0;
 const FETCH_BUTTON_FALLBACK_SIZE: Vec2 = Vec2::new(220.0, 46.0);
 const FETCH_BUTTON_PADDING_PX: f32 = 15.0;
-/// The fetch button blends its corner radius like the nav buttons, since it's
+/// The fetch button blends its corner radius like Home's tiles, since it's
 /// a button like them: twice as round in the dark theme.
 pub const FETCH_BUTTON_CORNER_RADIUS: f32 = 20.0;
 pub const FETCH_BUTTON_CORNER_RADIUS_DARK: f32 = 2.0 * FETCH_BUTTON_CORNER_RADIUS;
@@ -105,7 +105,7 @@ pub struct Gallery {
 
 pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
     let tiles = std::array::from_fn(|i| {
-        app.component(
+        app.component(super::styles::lit(
             ComponentSpec::new(cell_quad(i, viewport_size))
                 .border(Border::new(BORDER_WIDTH, violet()))
                 .glow(Glow {
@@ -113,10 +113,10 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
                     color: violet(),
                     intensity: 1.0,
                 }),
-        )
+        ))
     });
 
-    let fetch_button = app.component(
+    let fetch_button = app.component(super::styles::lit(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.5),
             size: FETCH_BUTTON_FALLBACK_SIZE,
@@ -134,7 +134,7 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
             color: violet(),
             intensity: 1.0,
         }),
-    );
+    ));
     let fetch_button_label = app.component(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.1),
@@ -150,7 +150,8 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
     );
     let _ = fetch_button.add_child(app, fetch_button_label);
 
-    let enlarged = app.component(
+    // Glows without growing: it's as big as the grid's space allows.
+    let enlarged = app.component(super::styles::glow_only(
         ComponentSpec::new(QuadState {
             position: Vec3::new(0.0, 0.0, 0.5),
             size: Vec2::ONE,
@@ -166,7 +167,7 @@ pub fn spawn(app: &mut Proteus, viewport_size: Vec2) -> Gallery {
             color: violet(),
             intensity: 1.0,
         }),
-    );
+    ));
 
     let hires_overlay = app.component(
         ComponentSpec::new(QuadState {
@@ -253,8 +254,7 @@ pub fn layout(viewport_size: Vec2) -> [QuadState; TILE_COUNT] {
 /// from the label's actual baked width (`+ 2 * FETCH_BUTTON_PADDING_PX`),
 /// horizontally centered, top-anchored `FETCH_BUTTON_TOP_MARGIN_PX` below
 /// the viewport's top edge. `None` until the label has baked (text bakes
-/// within the first frame or two — see `screens::examples_home::layout`'s
-/// identical convention).
+/// within the first frame or two).
 pub fn fetch_button_quad(
     app: &Proteus,
     gallery: &Gallery,
@@ -294,45 +294,9 @@ pub fn large_image_quad(aspect: Vec2, viewport_size: Vec2) -> QuadState {
     }
 }
 
-/// Tile indices (row-major, matching `MergeLayout::Grid`'s expectation) for
-/// the `width`-column-wide slice of the grid starting at `start_col` — used
-/// by `Demo::start_gallery_to_home`'s three column-grouped merges (column 0
-/// alone → nav button 0, columns 1–2 → nav button 1, column 3 alone → nav
-/// button 2). The 1+2+1 grouping is deliberately asymmetric: 4 grid columns
-/// have to land on 3 nav buttons.
-pub fn column_group_tiles(start_col: usize, width: usize) -> Vec<usize> {
-    (0..ROWS)
-        .flat_map(move |row| (start_col..start_col + width).map(move |col| row * COLS + col))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // `Demo::start_gallery_to_home`'s three groups — `(0,1)`, `(1,2)`,
-    // `(3,1)` — must partition all 12 tiles with no overlaps and no gaps,
-    // or some tile would either merge into two nav buttons at once or
-    // never converge anywhere.
-    #[test]
-    fn start_gallery_to_home_groups_partition_every_tile_exactly_once() {
-        let mut covered: Vec<usize> = [(0, 1), (1, 2), (3, 1)]
-            .into_iter()
-            .flat_map(|(start_col, width)| column_group_tiles(start_col, width))
-            .collect();
-        covered.sort_unstable();
-        assert_eq!(covered, (0..TILE_COUNT).collect::<Vec<_>>());
-    }
-
-    // Row-major order (`MergeLayout::Grid`'s expectation): within one
-    // group, indices must increase strictly — a group spanning columns
-    // 1–2 should yield `[1, 2, 5, 6, 9, 10]`, not row/column-swapped.
-    #[test]
-    fn column_group_tiles_is_row_major() {
-        assert_eq!(column_group_tiles(1, 2), vec![1, 2, 5, 6, 9, 10]);
-        assert_eq!(column_group_tiles(0, 1), vec![0, 4, 8]);
-        assert_eq!(column_group_tiles(3, 1), vec![3, 7, 11]);
-    }
 
     // The grid must fit within the viewport (margins/gaps respected on
     // both axes) at a representative size, and every cell must be a

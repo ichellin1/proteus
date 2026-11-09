@@ -275,7 +275,9 @@ impl Handle {
     ///
     /// Use this when a component's layout can only be worked out after it is
     /// created, such as a cell sized to fit its baked label. Transitions into
-    /// the component, and its interaction styles, use the new geometry.
+    /// the component, and its interaction styles, use the new geometry. A
+    /// style shown, such as hover, is shown on top of the new geometry at
+    /// once, and a style's change still under way ends there.
     ///
     /// # Errors
     ///
@@ -285,8 +287,26 @@ impl Handle {
         app: &mut Proteus,
         state: QuadState,
     ) -> Result<(), HandleError> {
-        entity_mut(app, self.0, "set_declared_geometry")?.insert(state.clone());
-        declare(app, self.0, state);
+        check_alive(app, self.0, "set_declared_geometry")?;
+        declare(app, self.0, state.clone());
+        let world = &mut app.world.world;
+        // A style still changing would carry on toward the old geometry and
+        // undo this one, so it ends, at the style applied to the new one.
+        let styled = match (
+            world.get::<proteus_ui::InteractionState>(self.0),
+            world.get::<proteus_ui::InteractionDef>(self.0),
+        ) {
+            (Some(shown), Some(def)) => def.style(shown.current).map(|s| s.resolve(&state)),
+            _ => None,
+        };
+        let mut entity = world.entity_mut(self.0);
+        if entity
+            .get::<proteus_ui::ActiveTransition>()
+            .is_some_and(|t| t.interaction_style)
+        {
+            entity.remove::<proteus_ui::ActiveTransition>();
+        }
+        entity.insert(styled.unwrap_or(state));
         Ok(())
     }
 

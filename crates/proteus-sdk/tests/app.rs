@@ -666,6 +666,93 @@ fn hover_style_resolves_and_applies() {
     assert_eq!(data.geometry.color, Vec4::new(0.0, 1.0, 0.0, 1.0));
 }
 
+// Hovering a component again while its glow is still fading back from the
+// last hover: the glow it rests at is still the one it had before any hover,
+// not the half-faded one, so leaving it fades the glow all the way out.
+#[test]
+fn a_style_started_mid_fade_rests_at_the_glow_before_any_style() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0))
+            .glow(proteus_sdk::Glow::new(0.0, Vec4::ONE))
+            .hover(StyleOverride {
+                glow_radius: Some(20.0),
+                ..Default::default()
+            }),
+    );
+    let glow = |app: &Proteus| {
+        app.world()
+            .get::<proteus_sdk::Glow>(button.id())
+            .unwrap()
+            .radius
+    };
+    let away = Some(Vec2::new(900.0, 900.0));
+    let over = Some(Vec2::new(100.0, 100.0));
+    app.pointer_moved(away);
+    app.tick(0.016);
+    app.pointer_moved(over);
+    for _ in 0..10 {
+        app.tick(0.05);
+    }
+    assert_eq!(glow(&app), 20.0, "hovered");
+
+    // Leave, and come back while the glow is still fading out.
+    app.pointer_moved(away);
+    app.tick(0.016);
+    app.tick(0.05);
+    let fading = glow(&app);
+    assert!(fading > 0.0 && fading < 20.0, "still fading: {fading}");
+    app.pointer_moved(over);
+    for _ in 0..10 {
+        app.tick(0.05);
+    }
+
+    // Leave for good: the glow fades all the way out.
+    app.pointer_moved(away);
+    for _ in 0..10 {
+        app.tick(0.05);
+    }
+    assert_eq!(glow(&app), 0.0, "back to the glow it had before any hover");
+}
+
+// Moving a hovered component with `set_declared_geometry` while its hover
+// style is still growing: the style's change ends, and the hover style shows
+// on top of the new geometry, rather than carrying on toward the old one and
+// undoing the move.
+#[test]
+fn set_declared_geometry_moves_a_component_mid_style_change() {
+    let mut app = Proteus::new();
+    let button = app.component(
+        ComponentSpec::new(quad_at(100.0, 100.0)).hover(StyleOverride {
+            scale: Some(2.0),
+            ..Default::default()
+        }),
+    );
+    app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
+    app.tick(0.016);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(0.016);
+    app.tick(0.05);
+    let scale = app.get(button).unwrap().geometry.scale;
+    assert!(
+        scale > 1.0 && scale < 2.0,
+        "the hover style is still changing: {scale}"
+    );
+
+    let moved = QuadState {
+        size: Vec2::new(10.0, 10.0),
+        ..quad_at(100.0, 100.0)
+    };
+    let _ = button.set_declared_geometry(&mut app, moved.clone());
+    for _ in 0..20 {
+        app.tick(0.05);
+    }
+    let data = app.get(button).unwrap();
+    assert_eq!(data.state, proteus_sdk::InteractionStateKind::Hover);
+    assert_eq!(data.geometry.size, moved.size, "the move holds");
+    assert_eq!(data.geometry.scale, 2.0, "with the hover style on top");
+}
+
 // ---------------------------------------------------------------------------
 // free_resources() — GPU-backed, skipped gracefully with no adapter
 // ---------------------------------------------------------------------------
@@ -3179,6 +3266,36 @@ fn arrow_down(state: KeyState) -> KeyEvent {
         Modifiers::default(),
         None,
     )
+}
+
+// An app that doesn't accept the pointer navigates from the start: the
+// focused component shows its focused style at once, and the first arrow
+// moves focus, rather than only showing where it is, as it would after the
+// pointer was used.
+#[test]
+fn an_app_without_the_pointer_navigates_from_the_start() {
+    let mut app = Proteus::new();
+    let style = StyleOverride {
+        scale: Some(2.0),
+        ..Default::default()
+    };
+    let top = app.component(ComponentSpec::new(quad_at(0.0, 100.0)).focused(style.clone()));
+    let below = app.component(ComponentSpec::new(quad_at(0.0, -100.0)).focused(style));
+    app.set_input_devices(InputDevices::KEYBOARD);
+    assert_eq!(app.input_mode(), InputMode::Navigating);
+
+    top.focus(&mut app).unwrap();
+    for _ in 0..10 {
+        app.tick(0.05);
+    }
+    assert_eq!(
+        app.get(top).unwrap().state,
+        proteus_sdk::InteractionStateKind::Focused
+    );
+
+    app.key_event(arrow_down(KeyState::Pressed));
+    app.tick(0.016);
+    assert_eq!(app.focused(), Some(below), "the first arrow moves focus");
 }
 
 #[test]

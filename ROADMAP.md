@@ -193,6 +193,8 @@ Not yet placed in a release. Unordered within each area.
 - A composite-bake transition strategy: flatten a subtree into one quad for the length of a
   transition. [Design note](./docs/design/composite-bake.md)
 - Advanced transition effects, such as particle dissolution and fluid deformation.
+- A drag threshold: how far the pointer moves before a press counts as a drag, so a slightly
+  moving click isn't one. v0.3.0 removed an `InputConfig` setting for it that did nothing.
 - Signals: reactive state that notifies its observers when its value changes.
 - A component library: scrolling lists, grids, forms and other common patterns.
 - A style system: styles set declaratively, outside the app's code, such as in a style file, and

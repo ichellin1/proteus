@@ -436,7 +436,8 @@ impl Proteus {
 
     /// Which style of input the app is in: pointing, after the pointer moved
     /// or was pressed, or navigating, after a key bound to one of the
-    /// navigating actions was pressed. The focused style shows only while
+    /// navigating actions was pressed, and always in an app that doesn't
+    /// accept the pointer. The focused style shows only while
     /// navigating, and the hover style only while pointing. Use it, for
     /// example, to show hints for one style of input or the other.
     pub fn input_mode(&self) -> InputMode {
@@ -794,6 +795,10 @@ impl Proteus {
     /// and releases its press; turning the keyboard off releases the keys
     /// held. A component can narrow the set further, with
     /// [`ComponentSpec::devices`].
+    ///
+    /// An app that doesn't accept the pointer is navigating from then on, see
+    /// [`Proteus::input_mode`]: the focused style shows at once, and the first
+    /// key that moves focus moves it, rather than only showing where it is.
     pub fn set_input_devices(&mut self, devices: InputDevices) {
         let before = self.input_devices();
         self.world.world.resource_mut::<AppDevices>().0 = devices;
@@ -809,6 +814,11 @@ impl Proteus {
         }
         if dropped(InputDevice::Keyboard) {
             self.release_keys();
+        }
+        // Nothing can switch an app without the pointer to pointing, so it
+        // navigates, with focus shown, from the start.
+        if !devices.contains(InputDevice::Pointer) {
+            self.set_input_mode(InputMode::Navigating);
         }
     }
 

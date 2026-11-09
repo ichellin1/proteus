@@ -1,8 +1,8 @@
 # Hosts and platforms
 
 A Proteus app doesn't open its own window. A **host** runs it: the host owns the window or
-canvas, the GPU, the frame loop, pointer input and the screen's size, and calls the app's code
-each frame. The same app runs on either host unchanged. Proteus currently ships with two hosts: `proteus-host-winit` and `proteus-host-web`. Developers are welcome to create thier own hosts for unsupported platforms. New hosts like ones that support mobile targets are planned for future releases. 
+canvas, the GPU, the frame loop, the pointer and the keyboard, and the screen's size, and calls
+the app's code each frame. The same app runs on either host unchanged. Proteus currently ships with two hosts: `proteus-host-winit` and `proteus-host-web`. Developers are welcome to create their own hosts for unsupported platforms. New hosts like ones that support mobile targets are planned for future releases. 
 
 | Host | Runs on | Draws with |
 |---|---|---|
@@ -193,10 +193,31 @@ fn update(&mut self, f: &mut Frame, _dt: f32) {
 In TypeScript, the canvas's size is its CSS size, which the page sets, such as `width: 100vw`.
 Read it from the canvas element, with `clientWidth` and `clientHeight`.
 
+## The keyboard on the web
+
+A canvas in a page takes the keyboard only while it has focus, as a text field does. The web host
+gives the canvas `tabindex="0"`, unless the page set one, so a click on it, or Tab from the page,
+focuses it; with `input.autofocus` set, it takes focus when the app starts. A browser may outline
+the canvas while it has focus; style it with CSS's `:focus-visible` to change that.
+
+While the canvas has focus, the browser doesn't act on the keys the key map binds, so Space and
+the arrows don't scroll the page, and Backspace doesn't go back a page. Other keys, such as the
+browser's own shortcuts, still reach the browser.
+
+Tab and Shift+Tab move focus within the app, and leave the canvas, for the page around it, past
+the app's last component or before its first, as keyboard users of a page need. A full-screen or
+TV app sets `input.keep_tab` to keep them in, wrapping round, as a native window does.
+
+Both hosts name keys the same way, as a browser's `KeyboardEvent` does: by what the key types or
+does with the keyboard layout in use, such as `a` or `Enter`, and by where it is on the keyboard,
+whatever the layout prints on it, such as `KeyA`. So a key binding works the same on each.
+
 ## Platform notes
 
-- **Input** is the pointer: a mouse natively, and a mouse, touch or pen in a browser. Keyboard
-  input isn't supported yet.
+- **Input** is the pointer: a mouse natively, and a mouse, touch or pen in a browser; and the
+  keyboard. Caps Lock arrives as a press and a release at each tap on both hosts, although a
+  browser on a Mac reports it as held while it's on, and winit on a Mac doesn't report it, so
+  the native host reads it from macOS.
 - **A hidden tab** stops the browser's frame loop. When the tab returns, transitions continue
   where they stopped.
 - **A lost GPU context** in a browser, which can happen when the GPU driver resets or the
