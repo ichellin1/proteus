@@ -68,7 +68,11 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   again: run `make build-sdk-web` before `npm install`. The SDK from npm needs nothing.
 - **`InputConfig` written out in full** no longer compiles in Rust: `autofocus`, `keep_tab`,
   `key_repeat`, `long_press_ms` and `navigating_actions` are new. Fill in the rest with
-  `..Default::default()`. It's no longer `Copy`, since it holds a list of actions.
+  `..Default::default()`. It's no longer `Copy`, since it holds a list of actions. Its
+  `focus_input_delay_ms`, `click_moves_focus`, `drag_threshold_px`,
+  `transition_interaction_allow_pointer` and `transition_interaction_allow_navigation` are
+  removed: none of them did anything. A transition's input is set per component, with
+  `transition_interaction`.
 - **`StyleOverride` written out in full** no longer compiles in Rust: it has fields for glow,
   border and drop shadow. Fill in the rest with `..StyleOverride::default()`.
 - **The web canvas can take keyboard focus:** the host gives it `tabindex="0"` unless the page
@@ -79,7 +83,7 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   round, for a full-screen app.
 - **Focus leaves a component that can no longer keep it:** when the focused component is
   destroyed, hidden, disabled or made non-interactive, focus is cleared, its `on_blur` fires, and
-  `on_focus_lost` says why. In 0.2 it kept focus, and showed its focused style again when
+  the app's `on_focus_lost` callback is called with the component and the reason. In 0.2 it kept focus, and showed its focused style again when
   re-enabled.
 - **Enter and Space click the focused component:** a pointer click gives a component focus, so
   in an app that doesn't handle keys, Enter or Space clicks the last component clicked again.
