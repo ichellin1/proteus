@@ -1,7 +1,7 @@
 {
   "name": "proteus-example-browse",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A TV-style browse screen, used with the keys or the pointer, built with the Proteus TypeScript SDK.",
   "type": "module",
   "scripts": {

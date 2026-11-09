@@ -7,13 +7,12 @@ header = """
 # Changelog
 
 The changes in each version of Proteus. This file is generated from the commit history; see
-RELEASING.md.
-"""
+RELEASING.md."""
 # Each version's section. Version 0.1.0 opens with a summary of everything in
 # it: the work before it didn't use Conventional Commits, so the list below
 # the summary only covers the work that prepared the release. Versions 0.2.0
 # and 0.3.0 open with what to change when upgrading. The blank line first separates it
-# from the one before: git-cliff trims the header's.
+# from the header, or the version before.
 body = """
 
 {% if version -%}
@@ -54,10 +53,12 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   `corner_radii`, in place of `corner_radius`. Set it with `set_corner_radius` or
   `set_corner_radii`.
 - **A still screen isn't drawn:** `update` still runs every frame, but when nothing changed the
-  GPU draws nothing. Set `frame.skip_idle_frames` to `false` to draw every frame, as 0.1 did.
+  GPU draws nothing. Set `frame.skip_idle_frames` to `false` to draw every frame regardless of
+  changes, as 0.1 did.
 - **Text and baked components are baked at the display's resolution,** up to twice the logical
   size, so they take up to four times the atlas space on high-density displays. An app that
-  filled its atlas in 0.1 can lower `resources.max_bake_scale`, or raise its memory.
+  filled its atlas in 0.1 can lower `resources.max_bake_scale`, or raise its memory. Component
+  level overrides will be added in a future release.
 - **A corner radius past half the shorter side draws as half,** as in CSS, so a short, wide
   component with a large radius is a pill. In 0.1 the shape shrank instead.
 {% endif %}
@@ -83,8 +84,8 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   round, for a full-screen app.
 - **Focus leaves a component that can no longer keep it:** when the focused component is
   destroyed, hidden, disabled or made non-interactive, focus is cleared, its `on_blur` fires, and
-  the app's `on_focus_lost` callback is called with the component and the reason. In 0.2 it kept focus, and showed its focused style again when
-  re-enabled.
+  the app's `on_focus_lost` callback is called with the component and the reason. In 0.2 it kept
+  focus, and showed its focused style again when re-enabled.
 - **Enter and Space click the focused component:** a pointer click gives a component focus, so
   in an app that doesn't handle keys, Enter or Space clicks the last component clicked again.
   A component that shouldn't be clicked this way handles `Action::Activate` itself, or doesn't
@@ -104,11 +105,13 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 """
 trim = false
 footer = ""
-# The template's tags leave stray blank lines: keep one between blocks, and
-# drop them at the end, where git-cliff adds the file's final newline.
+# The template's tags leave stray blank lines: keep one between blocks, and end
+# each section with one newline, which with the next section's first line
+# makes the blank line between versions. scripts/version.mjs removes the one
+# left at the end of the file.
 postprocessors = [
     { pattern = "\n{3,}", replace = "\n\n" },
-    { pattern = "\n+$", replace = "" },
+    { pattern = "\n+$", replace = "\n" },
 ]
 
 [git]

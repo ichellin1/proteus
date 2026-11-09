@@ -127,6 +127,10 @@ if (command === "set") {
   // dependency where it is.
   execFileSync("cargo", ["update", "--workspace"], { cwd: root, stdio: "inherit" });
   execFileSync("git-cliff", ["--tag", `v${version}`, "--output", "CHANGELOG.md"], { cwd: root, stdio: "inherit" });
+  // Each version's section ends with a newline, to keep a blank line before
+  // the next; the last one's leaves a blank line at the end of the file.
+  const changelog = join(root, "CHANGELOG.md");
+  writeFileSync(changelog, readFileSync(changelog, "utf8").replace(/\n+$/, "\n"));
 }
 const lockfile = readFileSync(join(root, "Cargo.lock"), "utf8");
 for (const [, name] of internalCrates) {
