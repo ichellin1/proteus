@@ -7,6 +7,7 @@
 //! cargo run --release -p proteus-bench -- small 500,2000  # at other counts
 //! cargo run --release -p proteus-bench -- phases          # the CPU's phases
 //! cargo run --release -p proteus-bench -- video           # full-screen video
+//! cargo run --release -p proteus-bench -- text            # baking text
 //! ```
 //!
 //! Three scenes, each at every count in [`COUNTS`], the same as the browser
@@ -53,6 +54,18 @@
 //! components that changed: on a still frame, and on a frame where 1% of the
 //! components moved.
 //!
+//! `text` times baking text, at bake scales 1 and 2, on two workloads:
+//! [`LABELS`] short labels from 14 to 24 pixels, like a screen of buttons and
+//! tiles, and [`LINES`] long lines of 16-pixel text, the nearest thing to a
+//! paragraph while text is one line. It times two things:
+//!
+//! - **Rasterizing:** `FontAtlas::rasterize_text` alone, for every text in
+//!   the workload, with no GPU: the median of [`RASTER_PASSES`] passes. This
+//!   is the part a new text engine replaces.
+//! - **Frames:** frames in which every text is replaced with `set_text`, so
+//!   the engine bakes all of them again, timed as the other scenes are:
+//!   rasterizing, adding each to the atlas and uploading it, then drawing.
+//!
 //! The results are printed as Markdown tables, with the GPU and platform they
 //! ran on, ready to record.
 
@@ -60,9 +73,10 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use proteus_host_winit::DirHostServices;
+use proteus_render::FontAtlas;
 use proteus_runtime::glam::{Vec2, Vec3, Vec4};
 use proteus_runtime::{wgpu, App, Engine, Frame, ProteusConfig, Viewport};
-use proteus_sdk::{ComponentSpec, Easing, Handle, QuadState, TransitionConfig, VideoHandle};
+use proteus_sdk::{ComponentSpec, Easing, Handle, QuadState, Text, TransitionConfig, VideoHandle};
 
 /// The component counts measured.
 const COUNTS: [usize; 7] = [100, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000];
@@ -114,6 +128,43 @@ impl Scenario {
 
 /// The counts `video` measures unless told otherwise.
 const VIDEO_COUNTS: [usize; 3] = [1, 10, 50];
+
+/// The labels in `text`'s labels workload: a quarter of the main atlas at a
+/// scale of 2. Every text is replaced each frame, and a texture released in
+/// `App::update` can't be evicted until the next frame, so the old and new
+/// texts must fit at once, or some bakes fail and the frame times are wrong.
+const LABELS: usize = 500;
+/// The lines in `text`'s lines workload.
+const LINES: usize = 20;
+/// Passes over a workload when timing rasterizing alone.
+const RASTER_PASSES: usize = 100;
+/// What the labels say, in turn.
+const LABEL_WORDS: [&str; 16] = [
+    "Settings",
+    "Play",
+    "Watch later",
+    "Search",
+    "Home",
+    "Library",
+    "Continue watching",
+    "Profile",
+    "Sign out",
+    "New episodes",
+    "Top picks for you",
+    "Add to list",
+    "Back",
+    "Downloads",
+    "Recently added",
+    "Help",
+];
+/// What the lines say, in turn: about 80 characters each, so that at 16
+/// pixels and a scale of 2 each fits an atlas page.
+const LINE_TEXTS: [&str; 4] = [
+    "Proteus draws every component as a textured, rounded rectangle in one call.",
+    "A split turns one component into several, and a merge turns several into one.",
+    "Text is rasterized on the CPU, then added to the atlas and drawn like an image.",
+    "Kerning pulls pairs such as AV, To and Wa closer; office and fluffy have ligatures.",
+];
 
 /// A small random-number generator (xorshift), so every run draws the same
 /// scene without a dependency.
@@ -271,15 +322,158 @@ fn measure(
         frames: 0,
     };
     let viewport = Viewport::new(Vec2::new(SIZE.0 as f32, SIZE.1 as f32), 1.0);
-    let mut engine = Engine::new(
+    let (mut cpu, mut interval) = run_frames(
         device,
         queue,
-        FORMAT,
+        view,
         viewport,
         config,
         &mut scene,
         &mut services,
     );
+    Result {
+        count,
+        cpu: summary(&mut cpu),
+        interval: summary(&mut interval),
+    }
+}
+
+/// One of `text`'s workloads.
+#[derive(Clone, Copy)]
+enum TextWorkload {
+    Labels,
+    Lines,
+}
+
+impl TextWorkload {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Labels => "labels",
+            Self::Lines => "lines",
+        }
+    }
+
+    /// The workload's texts, the same on every run.
+    fn texts(self) -> Vec<Text> {
+        match self {
+            Self::Labels => (0..LABELS)
+                .map(|i| {
+                    let size = 14.0 + (i % 6) as f32 * 2.0;
+                    Text::new(LABEL_WORDS[i % LABEL_WORDS.len()], size)
+                })
+                .collect(),
+            Self::Lines => (0..LINES)
+                .map(|i| Text::new(LINE_TEXTS[i % LINE_TEXTS.len()], 16.0))
+                .collect(),
+        }
+    }
+}
+
+/// The app `text` measures: a component for each text, every one replaced
+/// with `set_text` each frame, so all of them are baked again.
+struct TextScene {
+    texts: Vec<Text>,
+    components: Vec<Handle>,
+    random: Random,
+}
+
+impl App for TextScene {
+    fn setup(&mut self, f: &mut Frame) {
+        for text in &self.texts {
+            let geometry = QuadState {
+                position: self.random.position(),
+                size: Vec2::new(40.0, 20.0),
+                ..Default::default()
+            };
+            let spec = ComponentSpec::new(geometry).text(text.clone());
+            self.components.push(f.proteus.component(spec));
+        }
+    }
+
+    fn update(&mut self, f: &mut Frame, _dt: f32) {
+        for (handle, text) in self.components.iter().zip(&self.texts) {
+            handle
+                .set_text(f.proteus, text.clone())
+                .expect("components live as long as the scene");
+        }
+    }
+}
+
+/// `text`'s results for one workload at one bake scale.
+struct TextResult {
+    /// Rasterizing every text, with no GPU: the median, in milliseconds.
+    raster: f64,
+    cpu: (f64, f64),
+    interval: (f64, f64),
+}
+
+fn measure_text(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    view: &wgpu::TextureView,
+    workload: TextWorkload,
+    scale: f32,
+) -> TextResult {
+    let texts = workload.texts();
+
+    let mut font = FontAtlas::with_embedded_font();
+    let mut passes = Vec::with_capacity(RASTER_PASSES);
+    for i in 0..WARM_UP.min(20) + RASTER_PASSES {
+        let start = Instant::now();
+        for text in &texts {
+            let glyphs = font.rasterize_text(
+                &text.content,
+                text.size_px * scale,
+                text.letter_spacing_px * scale,
+            );
+            std::hint::black_box(glyphs);
+        }
+        if i >= WARM_UP.min(20) {
+            passes.push(start.elapsed());
+        }
+    }
+
+    let mut config = ProteusConfig::web();
+    config.memory.max_instances = (2 * texts.len() as u32).next_power_of_two().max(4096);
+    config.resources.max_bake_scale = scale;
+    let mut services = DirHostServices::new(".");
+    let mut scene = TextScene {
+        texts,
+        components: Vec::new(),
+        random: Random(0x9e37_79b9_7f4a_7c15),
+    };
+    // The target stays 1280 × 800 pixels; at a scale of 2 it's half as many
+    // logical pixels across.
+    let logical = Vec2::new(SIZE.0 as f32, SIZE.1 as f32) / scale;
+    let viewport = Viewport::new(logical, scale);
+    let (mut cpu, mut interval) = run_frames(
+        device,
+        queue,
+        view,
+        viewport,
+        config,
+        &mut scene,
+        &mut services,
+    );
+    TextResult {
+        raster: summary(&mut passes).0,
+        cpu: summary(&mut cpu),
+        interval: summary(&mut interval),
+    }
+}
+
+/// Makes an engine for `app` and runs [`WARM_UP`] frames, then times
+/// [`FRAMES`] frames: the CPU's time for each and the interval between them.
+fn run_frames<A: App>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    view: &wgpu::TextureView,
+    viewport: Viewport,
+    config: ProteusConfig,
+    app: &mut A,
+    services: &mut DirHostServices,
+) -> (Vec<Duration>, Vec<Duration>) {
+    let mut engine = Engine::new(device, queue, FORMAT, viewport, config, app, services);
 
     let mut cpu = Vec::with_capacity(FRAMES);
     let mut interval = Vec::with_capacity(FRAMES);
@@ -294,7 +488,7 @@ fn measure(
         if i == WARM_UP + FRAMES {
             break;
         }
-        engine.frame(DT, view, &mut scene, &mut services);
+        engine.frame(DT, view, app, services);
         // An empty submission, to wait on later: it finishes after the
         // frame's own work.
         in_flight.push_back(queue.submit(std::iter::empty()));
@@ -314,11 +508,7 @@ fn measure(
     device
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("waiting for the GPU failed");
-    Result {
-        count,
-        cpu: summary(&mut cpu),
-        interval: summary(&mut interval),
-    }
+    (cpu, interval)
 }
 
 /// Times `tick`, `refresh_cascades`, `collect_instances` and
@@ -398,7 +588,10 @@ fn main() {
         }
         return;
     }
-    let scenarios: Vec<Scenario> = if only.as_deref() == Some("video") {
+    let text = only.as_deref() == Some("text");
+    let scenarios: Vec<Scenario> = if text {
+        Vec::new()
+    } else if only.as_deref() == Some("video") {
         vec![Scenario::Video]
     } else {
         Scenario::ALL
@@ -421,8 +614,10 @@ fn main() {
             COUNTS.to_vec()
         }
     });
-    if scenarios.is_empty() || counts.is_empty() {
-        eprintln!("usage: proteus-bench [all|small|large|moving|video|phases] [count,count,...]");
+    if !text && (scenarios.is_empty() || counts.is_empty()) {
+        eprintln!(
+            "usage: proteus-bench [all|small|large|moving|video|phases|text] [count,count,...]"
+        );
         std::process::exit(2);
     }
 
@@ -470,6 +665,30 @@ fn main() {
         SIZE.1,
         !cfg!(debug_assertions),
     );
+    if text {
+        println!("### text\n");
+        println!(
+            "| Workload | Texts | Bake scale | Rasterizing (ms) | CPU median (ms) | CPU p99 (ms) \
+             | Frame interval median (ms) | Frame interval p99 (ms) |"
+        );
+        println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+        for workload in [TextWorkload::Labels, TextWorkload::Lines] {
+            for scale in [1.0, 2.0] {
+                let r = measure_text(&device, &queue, &view, workload, scale);
+                println!(
+                    "| {} | {} | {scale} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} |",
+                    workload.name(),
+                    workload.texts().len(),
+                    r.raster,
+                    r.cpu.0,
+                    r.cpu.1,
+                    r.interval.0,
+                    r.interval.1
+                );
+            }
+        }
+        return;
+    }
     for scenario in scenarios {
         println!("### {}\n", scenario.name());
         println!("| Components | CPU median (ms) | CPU p99 (ms) | Frame interval median (ms) | Frame interval p99 (ms) |");

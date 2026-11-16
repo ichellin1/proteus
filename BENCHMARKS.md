@@ -108,6 +108,15 @@ Another mode, `phases`, needs no GPU. It times a still frame's work on the compo
 `Proteus::tick`, `Proteus::refresh_cascades`, which works out each component's visibility and
 opacity, and `collect_instances`, which turns the components into what the GPU draws.
 
+A last mode, `text`, times baking text, at bake scales 1 and 2, on two workloads: 500 short
+labels from 14 to 24 pixels, like a screen of buttons and tiles, and 20 lines of about 80
+characters at 16 pixels, the nearest thing to a paragraph while text is one line. It times
+**rasterizing** alone, turning every text into pixels on the CPU with no GPU, the median of 100
+passes; and **frames** in which every text is replaced, so the engine bakes all of them again,
+timed as the scenes are: rasterizing, adding each to the atlas and uploading it, then drawing.
+There are 500 labels rather than more because the old and new texts must fit in the atlas at
+once: a texture an app releases in its update can't be evicted until the next frame.
+
 ### In a browser
 
 `benches/browser` is a page that draws the same scenes six ways, on a 1280 × 800 area at the
@@ -232,6 +241,21 @@ time included waiting for the GPU. They also found that every frame collected ev
 instance from scratch, 4.5 ms at 100,000 even with nothing moving; the cache takes 0.19 ms there,
 20 times less, and uploads only what changed. With every component moving, it does them all in
 one walk, about as fast as before: 9.2 ms a frame at 100,000 in the moving scene, against 9.4.
+
+**Baking text** (`text`), on 16 November 2026, with v0.3.0's text, which `fontdue`
+rasterizes one character at a time: the baseline for v0.4.0's new text engine.
+
+| Workload | Texts | Bake scale | Rasterizing | CPU median | CPU p99 | Frame interval median | Frame interval p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Labels | 500 | 1 | 2.51 | 10.82 | 13.20 | 10.82 | 13.20 |
+| Labels | 500 | 2 | 5.63 | 17.29 | 20.07 | 17.29 | 20.07 |
+| Lines | 20 | 1 | 0.62 | 1.26 | 1.34 | 1.27 | 7.41 |
+| Lines | 20 | 2 | 1.27 | 2.85 | 3.08 | 2.86 | 5.98 |
+
+Rasterizing is a quarter to a half of baking: 5 µs a label at a scale of 1, of 22 µs in all.
+The rest is adding each text to the atlas and uploading it, one upload per text, which a new
+text engine doesn't change. A scale of 2 has four times the pixels, but rasterizing takes only
+twice as long.
 
 ### Chrome
 
@@ -387,7 +411,7 @@ cargo run --release -p proteus-bench -- [what] [counts]
 
 | Argument | Values | Default |
 |---|---|---|
-| `what` | `all`, every scene; `small`, `large` or `moving`, one scene; `video`, full-screen video, at 1, 10 and 50 unless `counts` says; or `phases`, a still frame's CPU work by phase, with no GPU | `all` |
+| `what` | `all`, every scene; `small`, `large` or `moving`, one scene; `video`, full-screen video, at 1, 10 and 50 unless `counts` says; `phases`, a still frame's CPU work by phase, with no GPU; or `text`, baking text, which takes no `counts` | `all` |
 | `counts` | The component counts to measure, separated by commas, with no spaces: `1000,10000` | `100,1000,5000,10000,25000,50000,100000` |
 
 To give `counts`, give `what` first. For example:
@@ -395,6 +419,7 @@ To give `counts`, give `what` first. For example:
 ```bash
 cargo run --release -p proteus-bench -- small 1000,10000
 cargo run --release -p proteus-bench -- phases
+cargo run --release -p proteus-bench -- text
 ```
 
 To keep the results in a file:

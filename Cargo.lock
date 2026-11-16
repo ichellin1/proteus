@@ -2179,6 +2179,7 @@ version = "0.3.0"
 dependencies = [
  "pollster",
  "proteus-host-winit",
+ "proteus-render",
  "proteus-runtime",
  "proteus-sdk",
  "proteus-ui",

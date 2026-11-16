@@ -13,5 +13,7 @@ proteus-sdk = { workspace = true }
 proteus-runtime = { workspace = true }
 # For `collect_instances`, which the `phases` mode times on its own.
 proteus-ui = { workspace = true }
+# For `FontAtlas`, which the `text` mode times on its own.
+proteus-render = { workspace = true }
 proteus-host-winit = { workspace = true }
 pollster = { workspace = true }
