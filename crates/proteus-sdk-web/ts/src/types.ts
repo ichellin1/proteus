@@ -395,6 +395,14 @@ export interface ProteusConfigOverrides {
      * pixel-exact text on 3× screens.
      */
     maxBakeScale?: number;
+    /**
+     * The most bytes of glyphs the glyph cache keeps: each glyph's pixels, kept after it's
+     * drawn, so the glyphs texts share are drawn once. Past it, the glyphs used longest ago are
+     * dropped. Default 4 MiB, about 5,000 glyphs at 48 pixels or 25,000 at 16. `0` keeps none,
+     * so preparing text takes two to three times as long. See
+     * {@link ProteusApp.clearGlyphCache}.
+     */
+    glyphCacheBytes?: number;
   };
   /** Text settings. */
   text?: {

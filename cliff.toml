@@ -103,7 +103,9 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   wide at every display scale. Layout sized from `baked_text_size`, such as a button fitted to
   its label, shifts slightly.
 - **A `\\n` in a text starts a new line.**
-- **The web host's wasm is larger,** by about 780 KB gzipped, with the text engine in it.
+- **The web host's wasm is larger,** by about 790 KB gzipped, with the text engine in it.
+- **`ResourceConfig` written out in full** no longer compiles in Rust: `glyph_cache_bytes`, the
+  glyph cache's budget, is new. Fill in the rest with `..Default::default()`.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 

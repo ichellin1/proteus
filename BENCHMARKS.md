@@ -73,6 +73,9 @@ change is also in [CHANGELOG.md](./CHANGELOG.md), under the release it shipped i
 | | | Chrome, large still scene, frame at 50,000 | 98–100 ms | 16.7 ms |
 | | | Safari, large still scene, frame at 50,000 | 102–104 ms | 17 ms |
 | | | Safari, large still scene, at 100,000 | The tab crashed | 17 ms |
+| v0.4.0 | Text shaped by parley, with a glyph cache that keeps each glyph's pixels | Native, rasterizing 500 labels at a scale of 2 | 5.63 ms | 3.56 ms |
+| | | Native, rasterizing 500 labels at a scale of 1 | 2.51 ms | 2.08 ms |
+| | | Native, frame baking 500 labels at a scale of 2 | 17.29 ms | 16.66 ms |
 
 ## How it's measured
 
@@ -256,6 +259,25 @@ Rasterizing is a quarter to a half of baking: 5 µs a label at a scale of 1, of 
 The rest is adding each text to the atlas and uploading it, one upload per text, which a new
 text engine doesn't change. A scale of 2 has four times the pixels, but rasterizing takes only
 twice as long.
+
+The same, during v0.4.0, with text shaped by parley and rasterized by swash, which places each
+glyph to a quarter of a pixel and applies the font's kerning, and with a glyph cache:
+
+| Workload | Texts | Bake scale | Rasterizing | CPU median | CPU p99 | Frame interval median | Frame interval p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Labels | 500 | 1 | 2.08 | 10.93 | 13.27 | 10.93 | 13.27 |
+| Labels | 500 | 2 | 3.56 | 16.66 | 17.36 | 16.66 | 17.36 |
+| Lines | 20 | 1 | 0.44 | 1.06 | 1.16 | 1.07 | 8.79 |
+| Lines | 20 | 2 | 0.73 | 2.33 | 2.56 | 2.33 | 5.49 |
+
+Shaping costs time: without the cache, parley took 10.20 ms to rasterize the labels at a scale
+of 2, nearly twice as long as before. The cache keeps each glyph's pixels after it's rasterized,
+so a glyph texts share is rasterized once, and rasterizing now takes 37% less time than before
+at a scale of 2, and 17% less at 1. Frames change less, since adding each text to the atlas and
+uploading it is the larger part.
+
+The text engine makes the web host's wasm larger: 7,497 KB, 2,748 KB gzipped, against 5,357 KB,
+1,958 KB gzipped, before it.
 
 ### Chrome
 

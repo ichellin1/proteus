@@ -247,7 +247,9 @@ Proteus bakes three kinds of thing:
 - **Text and images**, by `Renderer::render` before collecting instances. Text is laid out
   and shaped with parley, which applies the font's kerning and places each glyph to a quarter
   of a pixel, and its glyphs are rasterized on the CPU with swash, each text to one image,
-  white with the glyphs' coverage in alpha, so it can take any color. Images are decoded with the `image` crate. Both go into the main
+  white with the glyphs' coverage in alpha, so it can take any color. A glyph cache keeps each
+  glyph's pixels after they're rasterized, dropping those used longest ago past
+  `resources.glyph_cache_bytes`, so the glyphs texts share are rasterized once. Images are decoded with the `image` crate. Both go into the main
   atlas. With `resources.lazy_load`, a component's text or image waits until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the

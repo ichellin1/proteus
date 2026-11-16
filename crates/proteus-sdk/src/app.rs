@@ -599,6 +599,18 @@ impl Proteus {
         self.world.world.resource::<proteus_ui::KeyInput>().repeat
     }
 
+    /// Empties the glyph cache, to free its memory, such as when the app is
+    /// hidden: the renderer drops every cached glyph before it next bakes
+    /// text. Text already baked isn't affected, since its pixels are in the
+    /// atlas, not the cache; text baked afterwards rasterizes its glyphs
+    /// again. The cache's size is set by `ResourceConfig::glyph_cache_bytes`
+    /// in `proteus-runtime`.
+    pub fn clear_glyph_cache(&mut self) {
+        self.world
+            .world
+            .insert_resource(proteus_ui::ClearGlyphCache);
+    }
+
     /// Sets how long a key is held before it's long-pressed, in milliseconds.
     /// 500 by default.
     pub fn set_long_press_ms(&mut self, ms: u32) {

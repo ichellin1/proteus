@@ -120,6 +120,16 @@ pub struct BakedText {
 }
 
 // ---------------------------------------------------------------------------
+// ClearGlyphCache
+// ---------------------------------------------------------------------------
+
+/// Asks the renderer to empty its glyph cache before it next bakes text.
+/// `proteus-sdk`'s `Proteus::clear_glyph_cache` adds it, and the renderer
+/// removes it once the cache is empty.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct ClearGlyphCache;
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -148,6 +148,8 @@ pub struct ResourcesDto {
     pub lazy_load: Option<bool>,
     #[serde(default)]
     pub max_bake_scale: Option<f32>,
+    #[serde(default)]
+    pub glyph_cache_bytes: Option<u32>,
 }
 
 /// Tells an absent field from an explicit `null`, so that
@@ -243,6 +245,9 @@ impl ProteusConfigDto {
             }
             if let Some(v) = r.max_bake_scale {
                 config.resources.max_bake_scale = v;
+            }
+            if let Some(v) = r.glyph_cache_bytes {
+                config.resources.glyph_cache_bytes = v as usize;
             }
         }
         if let Some(t) = &self.text {
@@ -370,6 +375,14 @@ mod tests {
             applied.resources.image_max_side, None,
             "null is an instruction, not an omission"
         );
+    }
+
+    #[test]
+    fn glyph_cache_bytes_sets_the_glyph_cache_budget() {
+        let applied = dto(r#"{"resources":{"glyphCacheBytes":1024}}"#)
+            .apply()
+            .unwrap();
+        assert_eq!(applied.resources.glyph_cache_bytes, 1024);
     }
 
     #[test]

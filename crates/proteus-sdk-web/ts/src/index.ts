@@ -1156,6 +1156,24 @@ export class ProteusApp {
   }
 
   /**
+   * Empties the glyph cache, to free its memory, such as when the page is
+   * hidden: the host drops every cached glyph before it next prepares text.
+   * Text already on screen isn't affected; text prepared afterwards draws its
+   * glyphs again. The cache's size is the config's
+   * `resources.glyphCacheBytes`.
+   *
+   * @example
+   * ```ts
+   * document.addEventListener("visibilitychange", () => {
+   *   if (document.hidden) app.clearGlyphCache();
+   * });
+   * ```
+   */
+  clearGlyphCache(): void {
+    this.wasmApp.clearGlyphCache();
+  }
+
+  /**
    * Sets how long a key is held before it's long-pressed, in milliseconds.
    * 500 by default.
    */

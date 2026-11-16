@@ -13,6 +13,15 @@
 //! scripts that need it. Each glyph is placed to a quarter of a pixel, so text
 //! is as wide as its font designs it, at every size and display scale.
 //!
+//! ## The glyph cache
+//!
+//! Each glyph's coverage is kept after it's rasterized, so the glyphs texts
+//! share are rasterized once. The cache drops the glyphs used longest ago past
+//! a budget in bytes, [`DEFAULT_GLYPH_CACHE_BYTES`] unless
+//! [`FontAtlas::set_glyph_cache_budget`] changes it, and
+//! [`FontAtlas::clear_glyph_cache`] drops them all. Text already baked keeps
+//! its pixels: they're in the atlas, not the cache.
+//!
 //! ## Text as a texture
 //!
 //! The whole text becomes one image, at its size in pixels:
@@ -32,6 +41,8 @@
 //! used.
 
 use std::sync::Arc;
+
+use crate::glyph_cache::{CachedGlyph, GlyphCache, GlyphKey};
 
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache, SourceCacheOptions};
 use parley::{
@@ -54,6 +65,10 @@ pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/Inter-Bold.ttf"
 /// How many positions within a pixel a glyph can start at, across: a glyph
 /// is rasterized at the nearest quarter of a pixel to where it's placed.
 const SUBPIXEL_STEPS: f32 = 4.0;
+
+/// The glyph cache's budget unless [`FontAtlas::set_glyph_cache_budget`]
+/// changes it: 4 MiB, from about 5,000 glyphs at 48 pixels to 25,000 at 16.
+pub const DEFAULT_GLYPH_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // RasterizedGlyphs
@@ -93,6 +108,7 @@ pub struct FontAtlas {
     scale: ScaleContext,
     /// The font's family name, which each text asks parley for.
     family: String,
+    glyphs: GlyphCache,
 }
 
 /// Font bytes that [`FontAtlas::new`] couldn't read as a TTF or OTF font.
@@ -108,7 +124,7 @@ struct PlacedGlyph {
     top: i32,
     width: u32,
     height: u32,
-    coverage: Vec<u8>,
+    coverage: Arc<[u8]>,
 }
 
 impl FontAtlas {
@@ -148,7 +164,27 @@ impl FontAtlas {
             layout: LayoutContext::new(),
             scale: ScaleContext::new(),
             family,
+            glyphs: GlyphCache::new(DEFAULT_GLYPH_CACHE_BYTES),
         })
+    }
+
+    /// Sets the most bytes of glyphs the glyph cache keeps, dropping those
+    /// used longest ago if it holds more. 0 keeps none, so every glyph is
+    /// rasterized each time it's baked. See the module docs.
+    pub fn set_glyph_cache_budget(&mut self, bytes: usize) {
+        self.glyphs.set_budget(bytes);
+    }
+
+    /// Drops every glyph from the glyph cache, to free its memory. Texts
+    /// baked after it rasterize their glyphs again.
+    pub fn clear_glyph_cache(&mut self) {
+        self.glyphs.clear();
+    }
+
+    /// The glyph cache's size: the glyphs it holds, and their bytes, counted
+    /// as the budget counts them.
+    pub fn glyph_cache_size(&self) -> (usize, usize) {
+        (self.glyphs.len(), self.glyphs.bytes())
     }
 
     /// Lays `text` out at `size_px`, with `letter_spacing_px` of extra space
@@ -256,12 +292,17 @@ impl FontAtlas {
                 else {
                     continue;
                 };
+                let coords: Box<[i16]> = run
+                    .normalized_coords()
+                    .iter()
+                    .map(|c| c.to_bits())
+                    .collect();
                 let mut scaler = self
                     .scale
                     .builder(font_ref)
                     .size(run.font_size())
                     .hint(false)
-                    .normalized_coords(run.normalized_coords().iter().map(|c| c.to_bits()))
+                    .normalized_coords(coords.iter())
                     .build();
                 for g in glyph_run.positioned_glyphs() {
                     // Across, to the nearest quarter pixel; down, to the
@@ -269,22 +310,37 @@ impl FontAtlas {
                     let x = (g.x * SUBPIXEL_STEPS).round() / SUBPIXEL_STEPS;
                     let pen_x = x.floor();
                     let pen_y = (g.y - baseline).round();
-                    let Some(image) = Render::new(&[Source::Outline])
-                        .format(Format::Alpha)
-                        .offset(Vector::new(x - pen_x, 0.0))
-                        .render(&mut scaler, g.id as u16)
-                    else {
+                    let key = GlyphKey {
+                        font: font.data.id(),
+                        index: font.index,
+                        glyph: g.id,
+                        size_bits: run.font_size().to_bits(),
+                        coords: coords.clone(),
+                        quarter: ((x - pen_x) * SUBPIXEL_STEPS) as u8,
+                    };
+                    let glyph = self.glyphs.get_or_rasterize(key, || {
+                        let image = Render::new(&[Source::Outline])
+                            .format(Format::Alpha)
+                            .offset(Vector::new(x - pen_x, 0.0))
+                            .render(&mut scaler, g.id as u16)?;
+                        let p = image.placement;
+                        (p.width > 0 && p.height > 0).then(|| CachedGlyph {
+                            left: p.left,
+                            top: -p.top,
+                            width: p.width,
+                            height: p.height,
+                            coverage: image.data.into(),
+                        })
+                    });
+                    let Some(glyph) = glyph else {
                         continue;
                     };
-                    if image.placement.width == 0 || image.placement.height == 0 {
-                        continue;
-                    }
                     glyphs.push(PlacedGlyph {
-                        left: pen_x as i32 + image.placement.left,
-                        top: pen_y as i32 - image.placement.top,
-                        width: image.placement.width,
-                        height: image.placement.height,
-                        coverage: image.data,
+                        left: pen_x as i32 + glyph.left,
+                        top: pen_y as i32 + glyph.top,
+                        width: glyph.width,
+                        height: glyph.height,
+                        coverage: glyph.coverage,
                     });
                 }
             }
@@ -480,6 +536,50 @@ mod tests {
             two.height,
             one.height
         );
+    }
+
+    // Baking a text again rasterizes nothing new: its glyphs are cached. A
+    // glyph another text shares is cached too, where it starts at the same
+    // quarter of a pixel.
+    #[test]
+    fn baking_a_text_again_adds_nothing_to_the_glyph_cache() {
+        let mut fa = atlas();
+        fa.rasterize_text("Settings", 16.0, 0.0).unwrap();
+        let after_first = fa.glyph_cache_size();
+        assert!(after_first.0 > 0);
+        fa.rasterize_text("Settings", 16.0, 0.0).unwrap();
+        assert_eq!(fa.glyph_cache_size(), after_first);
+    }
+
+    // The cache changes how often glyphs are rasterized, never the pixels:
+    // with it, without it, and after it's cleared, a text is the same.
+    #[test]
+    fn cached_glyphs_draw_the_same_pixels() {
+        let text = "The quick brown fox, office -> waffle";
+        let mut uncached = atlas();
+        uncached.set_glyph_cache_budget(0);
+        let expected = uncached.rasterize_text(text, 21.0, 0.5).unwrap();
+        assert_eq!(uncached.glyph_cache_size(), (0, 0));
+
+        let mut fa = atlas();
+        for _ in 0..2 {
+            let cached = fa.rasterize_text(text, 21.0, 0.5).unwrap();
+            assert_eq!(cached.rgba_pixels, expected.rgba_pixels);
+        }
+        fa.clear_glyph_cache();
+        assert_eq!(fa.glyph_cache_size(), (0, 0));
+        let again = fa.rasterize_text(text, 21.0, 0.5).unwrap();
+        assert_eq!(again.rgba_pixels, expected.rgba_pixels);
+    }
+
+    #[test]
+    fn the_glyph_cache_stays_within_its_budget() {
+        let mut fa = atlas();
+        fa.set_glyph_cache_budget(20_000);
+        for size in 10..60 {
+            fa.rasterize_text("ABCDEFGHIJKLMNOPQRSTUVWXYZ", size as f32, 0.0);
+            assert!(fa.glyph_cache_size().1 <= 20_000);
+        }
     }
 
     #[test]

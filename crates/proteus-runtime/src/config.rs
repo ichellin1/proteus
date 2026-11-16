@@ -540,6 +540,16 @@ pub struct ResourceConfig {
     /// atlas space, at the cost of slightly soft text on high-density
     /// displays.
     pub max_bake_scale: f32,
+    /// The most bytes of glyphs the glyph cache keeps: each glyph's pixels,
+    /// kept after it's rasterized, so that the glyphs texts share are
+    /// rasterized once. Past it, the glyphs used longest ago are dropped, and
+    /// rasterized again if they're needed. 4 MiB by default, about 5,000
+    /// glyphs at 48 pixels or 25,000 at 16. 0 keeps none, so baking text takes
+    /// two to three times as long. The cache is emptied when the bake scale
+    /// changes, and by [`Proteus::clear_glyph_cache`].
+    ///
+    /// [`Proteus::clear_glyph_cache`]: proteus_sdk::Proteus::clear_glyph_cache
+    pub glyph_cache_bytes: usize,
 }
 
 impl Default for ResourceConfig {
@@ -548,6 +558,7 @@ impl Default for ResourceConfig {
             image_max_side: None,
             lazy_load: false,
             max_bake_scale: 2.0,
+            glyph_cache_bytes: proteus_render::DEFAULT_GLYPH_CACHE_BYTES,
         }
     }
 }
