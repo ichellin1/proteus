@@ -55,8 +55,8 @@ done, the candidates are unordered.
 
 Text that runs over several lines, in several fonts, weights and styles, with styles mixed
 within one text, on a text engine chosen for it. The scope is from ROADMAP's draft order, with a
-maximum number of lines, measuring text before it's drawn, an optional embedded font, a text
-example and the demo's Text panel added. The steps are in the order they're built; each step's
+maximum number of lines, measuring text before it's drawn, an optional embedded font, inline
+boxes, a text example and the demo's Text panel added. The steps are in the order they're built; each step's
 definition of done is written when it's planned.
 
 Today `fontdue` rasterizes text one character at a time into one image per text: one line, in
@@ -76,7 +76,7 @@ designs it, by about half a pixel a glyph.
   transitions, focus and styles: an icon in a sentence, or a link that splits. An inline image
   is the simpler form, its pixels baked into the text's image. Whether either joins v0.4.0 is
   decided with the engine, at the end of step 1, since parley has inline boxes and the others
-  don't.
+  don't. Decided in step 1: inline boxes join.
 - **Decided (2026-11-16): text wraps at a width set on the text,** not at its component's width,
   since text isn't sized to its component and components change size during transitions. By
   default it doesn't wrap, and a `\n` starts a new line, so existing text is unchanged. Lines are
@@ -94,7 +94,7 @@ designs it, by about half a pixel a glyph.
   last line as it needs, cutting between whole characters (graphemes), never within one. An
   ellipsis wider than the line is clipped, with a warning in debug builds. Text isn't cut
   through the middle of a line by height: that's the component's crop or rounded corners. An
-  image in an ellipsis comes with inline content, if that joins.
+  image in an ellipsis is a component in an inline box.
 - **Decided (2026-11-16): an app loads fonts, and each text chooses one.** `load_font` takes a
   font file's bytes, in Rust and TypeScript, and files it under the family name inside it. A
   text names a family, a weight from 100 to 900 and a style, normal or italic, and the nearest
@@ -133,11 +133,48 @@ decided above, with the wasm's size with and without the embedded font, and a te
 of short labels and wrapped paragraphs, run against today's text first. The engine, the
 embedded font, and whether inline content joins v0.4.0 are decided at its end.
 
+- **Decided (2026-11-16): the comparison harness is a workspace of its own,**
+  `checks/text-engines`, so its engines stay out of Proteus's `Cargo.lock`, builds and CI, and
+  the note's numbers can be measured again. It's deleted when v0.4.0 ships. Its fonts are
+  fetched by a script, with their checksums, rather than kept in git.
+- **Decided (2026-11-16): the wasm timings run in Node as well as a browser,** since Node runs
+  wasm on Chrome's engine, V8, without a person at the browser; the page in `out/web/` runs the
+  same in any browser.
+- [x] The native benchmark's `text` mode, timing rasterizing alone and whole frames that bake
+  every text again, with today's results in BENCHMARKS.
+- [x] `checks/text-engines`: the same texts through today's text, `fontdue`'s layout,
+  cosmic-text and parley, as images, sizes, timings with and without a glyph cache, and
+  support; the wasm size of each; and the timings in wasm.
+- [x] `docs/design/text.md`, with a recommendation.
+- **Decided (2026-11-16): the engine is parley, rasterized with swash.** It has inline boxes,
+  any variable axis, and a font stack that is the app's fallback list, and lays text out in
+  about 60% of cosmic-text's time. It adds the most to the wasm, 827 KB gzipped, and changes its
+  API every month or two, so Proteus pins one minor version and upgrades on purpose. With a
+  glyph cache, it bakes labels faster than today's text. See the
+  [design note](./docs/design/text.md).
+- **Decided (2026-11-16): the embedded font is variable Inter, roman only,** every weight in one
+  file of 458 KB gzipped, with 700 still the default weight, so existing text keeps its weight.
+  An app that wants italic loads Inter Italic, or any italic, itself.
+- **Decided (2026-11-16): inline boxes join v0.4.0,** as a step of their own after measuring
+  text, which moves layout to where the SDK can place a component in a box. An image in a line,
+  or in an ellipsis, is a component showing an image in an inline box; inline images baked into
+  the text's pixels aren't built.
+- [x] The engine, the embedded font, and whether inline content joins v0.4.0, decided.
+
 ### Step 2 — The new engine
 
-The chosen engine replaces `fontdue`'s character-by-character rasterizing, with the API
-unchanged: single lines draw as before, now kerned and without the rounded advances. The
-benchmark's before and after go in BENCHMARKS.
+parley, rasterized with swash, replaces `fontdue`'s character-by-character rasterizing, with the
+API unchanged: single lines draw as before, now kerned and without the rounded advances. A glyph
+cache keeps each glyph's pixels to use again, without which parley is slower than today's text.
+The benchmark's before and after, and the wasm's size, go in BENCHMARKS.
+
+- **Decided (2026-11-16): the glyph cache evicts the least recently used glyphs by size.** It
+  keeps each glyph's coverage by font, glyph, size in pixels, variation, and a quarter-pixel
+  horizontal offset, so glyphs are placed to within an eighth of a pixel. When its glyphs pass a
+  budget in bytes, set in `ResourceConfig` beside the atlas's settings, those used longest ago
+  are dropped, and rasterized again if they're needed. A glyph's pixels are copied into each
+  text's image as it's baked, so the cache can drop any glyph at any time; unlike the atlas,
+  nothing on screen uses it. It's cleared when the bake scale changes, as baked text is.
 
 ### Step 3 — Multi-line text
 
@@ -147,8 +184,8 @@ of ending, in Rust and TypeScript. The text example starts here.
 ### Step 4 — Fonts
 
 `load_font`, families, weights and styles, in Rust and TypeScript, with `text.default_font`
-still working; the embedded font made optional, as a Cargo feature and as a file of its own in
-the TypeScript package.
+still working; the embedded font, now variable Inter, made optional, as a Cargo feature and as a
+file of its own in the TypeScript package.
 
 ### Step 5 — Fallback
 
@@ -158,18 +195,24 @@ them has.
 ### Step 6 — Inline styles
 
 Spans with their own weight, style, size and color, in Rust and TypeScript, and spans in an
-ellipsis. Inline content, if it joins, follows as a step of its own.
+ellipsis.
 
 ### Step 7 — Measuring text
 
 `measure_text`, in Rust and TypeScript, returning the same size the text is baked at.
 
-### Step 8 — The demo's Text panel
+### Step 8 — Inline boxes
+
+A space kept in a line of text for a component, which sits there as a child of the text's
+component, flowing with the text as it wraps, in Rust and TypeScript; and a component in an
+ellipsis.
+
+### Step 9 — The demo's Text panel
 
 The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
-number of lines, fonts and weights, fallback, and mixed styles.
+number of lines, fonts and weights, fallback, mixed styles and inline boxes.
 
-### Step 9 — Docs
+### Step 10 — Docs
 
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.

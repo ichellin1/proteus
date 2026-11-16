@@ -52,16 +52,17 @@ done in PLANNING, when it comes up, and its scope can change then.
 
 ### v0.4.0 — Text
 
-- A text engine chosen by comparing `fontdue`'s own layout, cosmic-text and parley, which also
-  brings kerning and fixes glyph advances rounded up to whole pixels.
+- parley as the text engine, chosen by comparing it with `fontdue`'s own layout and
+  cosmic-text, with a glyph cache. It brings shaping and kerning, and fixes glyph advances
+  rounded up to whole pixels. [Design note](./docs/design/text.md)
 - Multi-line text and layout: line breaking at a width, alignment, line height, and a maximum
   number of lines, ending in an ellipsis of the app's choosing or clipped.
 - Multiple fonts: a font per text, several weights of one family, and falling back to another
-  font for characters the first doesn't have. The embedded font becomes optional.
+  font for characters the first doesn't have. The embedded font becomes variable Inter, and
+  optional.
 - Inline styles: bold, italic, size and color mixed within one text.
 - Measuring text before it's drawn, which the layout system in v0.6.0 needs.
-- Inline content, a component or an image within a line of text, if the engine chosen supports
-  it; decided with the engine.
+- Inline boxes: a component within a line of text, flowing with it as it wraps.
 - A text example, and the demo's Text panel showing each new feature.
 
 ### v0.5.0 — Video
