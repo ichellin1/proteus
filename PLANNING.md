@@ -51,458 +51,128 @@ done, the candidates are unordered.
 - [x] The two high-priority candidates, the shader fast path and rounded corners on baked
   slices, are decided first.
 
-## v0.3.0 — Keyboard and focus
+## v0.4.0 — Text
 
-Keyboard input and focus navigation, on both hosts, and a reference demo reorganized around
-them. The scope is from ROADMAP's draft order, with a focus example and the demo's new home page
-added. The steps are in the order they're built; each step's definition of done is written when
-it's planned.
+Text that runs over several lines, in several fonts, weights and styles, with styles mixed
+within one text, on a text engine chosen for it. The scope is from ROADMAP's draft order, with a
+maximum number of lines, measuring text before it's drawn, an optional embedded font, a text
+example and the demo's Text panel added. The steps are in the order they're built; each step's
+definition of done is written when it's planned.
 
-- **Decided (2026-10-29): an app chooses which input devices it accepts.** It's a set of
-  devices: the pointer and the keyboard in v0.3.0, then touch, TV remotes and game controllers
-  as they're added. Pointer only, keyboard only and both are settings of the set rather than
-  modes, so a new device adds a member, not new combinations. The default is every device the
-  host supports, so existing apps are unchanged, and the app can change it while it runs. Input
-  from a device the app doesn't accept is dropped before hit testing, navigation or the app's
-  callbacks see it, key callbacks included.
-- **Decided (2026-10-29): when an app accepts both styles of input, the last input wins.**
-  Pointing devices (the mouse and pen, later touch) hover and click; navigating devices (the
-  keyboard, later remotes and controllers) move focus. A key press shows the focused style, and
-  the first arrow key starts from the hovered component, if there is one; moving the pointer
-  hides the focused style again. A click still gives focus, but its focused style no longer
-  shows, as with CSS's `:focus-visible`. Going from one navigating device to another, such as
-  the keyboard then a controller, carries on from the focused component.
-- **Decided (2026-10-29): a component can narrow the devices it accepts,** with the same set.
-  It accepts what both it and the app accept. It's set when the component is created, and can
-  change as the component's state changes. A component that doesn't accept the pointer lets it
-  through to whatever is behind, as a non-interactive one does. The guides advise choosing up
-  front which devices an app and each of its components accept.
-- **Decided (2026-10-29): touch stays part of the pointer until it's built.** Browsers report
-  it through pointer events, as they do the mouse. When touch is added, the web host tells them
-  apart by the event's `pointerType`.
-- **Decided (2026-10-29): the demo's home page becomes one grid of features,** headed "See
-  what Proteus can do", with a one-line tagline saying what Proteus is. The Examples screen's
-  categories join the home page's buttons in the grid, which gains a tile as each release ships
-  a feature: Keyboard & Focus in this one. The stress tests are removed, since the benchmarks
-  measure more, and so is the 3D placeholder, which is far off. An About tile, saying what
-  Proteus is for a visitor, takes its place. The Layout tile stays, as a preview of the layout
-  system coming in v0.6.0. The demo gets a setting for which devices it accepts (dropped in
-  step 8: the demo is always hybrid), and Escape and Backspace go back a screen.
-- **Decided (2026-10-29): hosts turn every device's keys into one set of keys.** winit's key
-  events, the browser's `KeyboardEvent`, and later a TV remote's own key codes all arrive as the
-  same values, named as the web names them, which winit mirrors. A key can be named by what it
-  means, such as `Enter` or `z`, or by where it is, such as `KeyW`, so a binding by position
-  works on any layout.
-- **Decided (2026-10-29): a key map binds keys to actions.** The built-in actions are Up, Down,
-  Left and Right, bound to the arrow keys; Next and Previous, to Tab and Shift+Tab; Activate, to
-  Enter and Space; and Back, to Escape and Backspace. Remotes and controllers add bindings to
-  the same actions when they're built. Apps can define actions of their own, and rebind or add
-  to the map while they run. A binding's modifiers must match exactly. The navigation stage
-  reads actions, never keys.
-- **Decided (2026-10-29): each event carries its key, and its action if the key is bound.** It
-  also says whether the key was pressed, repeated, long-pressed or released, the modifiers, and
-  the text the key types, if any. Most handlers match on the action; the key is there for keys the map
-  doesn't cover, such as a remote's colored buttons, and for typing, where a text field must
-  take Backspace and Space before they act as Back and Activate.
-- **Decided (2026-10-29): events go up from the focused component.** An event goes to the
-  focused component, then its ancestors from the nearest, then an app-wide handler, which gets
-  it even when nothing has focus, and last to the engine's default for its action: Up, Down,
-  Left, Right, Next and Previous move focus, and Back has none. Any handler can claim the event,
-  which stops it there, as `preventDefault` does on the web. Components that are disabled,
-  non-interactive or don't accept the device are skipped, and the event carries on to their
-  ancestors. Events are handled at the start of the next tick, in the order they arrived, before
-  the update, so navigation sees only those no handler claimed.
-- **Decided (2026-10-29): typing text with an input method is left for later.** Dead keys,
-  input methods for Chinese, Japanese and Korean, phone keyboards and pasting produce text that
-  doesn't match one key press, and need the text input events browsers and winit send apart from
-  keys. Each key's own text is enough for simple typing in this release; full text input is a
-  candidate in ROADMAP.
-- **Decided (2026-10-29): any interactive component can take focus,** as the pointer already
-  treats it: one that's enabled, visible, accepts a navigating device the app accepts, and isn't
-  transitioning, unless its `allow_navigation` is set. A component the app forgot to make
-  non-interactive becomes a stop for navigation, as it's already a target for the pointer; the
-  guides say so. An opt-in, like the web's `tabindex`, would go against components accepting
-  every device by default.
-- **Decided (2026-10-29): focus follows a component into what it transforms into,** by
-  default. Through a channel, it goes to the `to` component; in a split, to the first target;
-  in a merge in which any source had focus, to the destination. It moves when the transition
-  starts, and while the target can't take events, they go on to its ancestors and the app. The
-  app can put focus elsewhere in code. A component moving with `animate_to` keeps its focus.
-- **Decided (2026-10-29): the engine never moves focus on its own.** When the focused component
-  can no longer take focus, because it's destroyed, hidden, disabled, made non-interactive or
-  stops accepting navigating devices, focus is cleared, `on_blur` fires (except on a destroyed
-  component, whose callbacks are gone), and the app is told through an app-wide callback,
-  where a well-designed app puts focus where it belongs. Otherwise focus stays empty until the
-  user presses a navigation action. Back still reaches the app-wide handler with nothing
-  focused, so an app that handles it can't leave a screen locked.
-- **Decided (2026-10-29): with nothing focused, navigation starts from where the user was.**
-  The engine records where the lost component was, and the first navigation action starts from
-  there: Up, Down, Left and Right go to the nearest component in that direction, Next and
-  Previous carry on in Tab order, and Activate does nothing. Browsers keep the same starting
-  point when the focused element is removed. With no such place, at the start or after the
-  screen has changed, it starts from the hovered component, then a component the app has marked
-  as its default focus, like tvOS's preferred focus, and last the first component in Tab order.
-  A first component is never focused except in answer to a key.
-- **Decided (2026-10-29): Activate presses and clicks the focused component, as the pointer
-  does,** unless a handler claims it. Its key down fires `on_press` and `on_click` and shows the
-  pressed style; its key up fires `on_release` on the component that was pressed, even if focus
-  has moved since, as a pointer released off a button still releases it. A repeat doesn't click
-  again. So a component is styled and wired once and behaves the same with every device, and
-  apps that handle clicks work from the keyboard unchanged. A component that should behave
-  otherwise, such as a slider, handles Activate itself. The guides say that a click means the
-  component was chosen, by whatever device, as a `click` does on the web.
-- **Decided (2026-10-29): a key held long enough is long-pressed.** The event fires once, when
-  the key has been held past a threshold, 500 ms by default as on Android, which an app can
-  change. The engine measures it from the key down. The released event says whether a long
-  press happened, so an app can tell a tap from a hold. Activate's click has already fired by
-  then, so an app that wants a tap and a hold to do different things handles Activate itself,
-  ignoring the key's repeats: the guides show it. A long press of the pointer can follow when
-  touch is built.
-- **Decided (2026-10-29): the engine repeats held keys itself,** rather than passing on the
-  system's repeats, whose timing each user sets, as long as about two seconds before the first,
-  and which some remotes don't send. A held key repeats first 250 ms after its press, then every
-  100 ms until it's released, the same on every platform and device. The app's config sets both
-  as `input.key_repeat`, and can change them while it runs; `System` uses the system's repeats
-  instead, as they arrive, for an app whose typing should feel like the rest of the platform, and
-  for devices such as infrared remotes that send a press and then repeats, but no release. The
-  engine can only tell such a key was released when its repeats stop, so those devices need
-  their own repeats; inferring the release, and a setting for each device, come with remotes in
-  v0.8.0.
-  Repeats follow the engine's tick, so they're accurate to about a frame. A long press and
-  repeats both happen while a key is held; an app that wants the long press ignores the repeats.
-- **Decided (2026-10-29): a component can name its neighbours,** for any of Up, Down, Left,
-  Right, Next and Previous, and a neighbour it names wins over the one navigation would choose.
-  This is how an app sets an order its layout doesn't suggest; there's no separate tab index.
-  It's v0.1.0's design, which never got built.
-- **Decided (2026-10-29): the arrows go to the nearest component in their direction.** Only
-  components past the focused one's edge in that direction count. Those it overlaps sideways,
-  in its beam, come first, the nearest along the direction winning, so Down in a column goes to
-  the next item in it; without one, distance along the direction and a weighted sideways
-  distance decide, as on Android and in the W3C's spatial navigation draft. Components are
-  measured where they're drawn, as hit testing does, a rotated one by its bounding box. The
-  arrows don't wrap, and a held arrow moves focus each time the key repeats.
-- **Decided (2026-10-29): Next and Previous follow reading order on screen,** not the order
-  components were made in, which in apps like the demo doesn't match the screen: rows from top
-  to bottom, two components being in one row when their vertical extents mostly overlap. They
-  wrap from the last component to the first. The app sets its reading direction, left to right
-  by default or right to left, which orders each row; the arrows keep their physical direction
-  either way. A direction for part of a screen waits for bidirectional text.
-- **Decided (2026-10-29): a component can make its subtree a focus group.** For each action, a
-  group either lets focus leave, the default, stops it at its edge, or wraps it round to the
-  other end. When focus enters, it lands on the member nearest where it came from, the default;
-  on the member focused last, as a row of a TV home page does; or on the group's default focus.
-  A horizontal row stops or wraps Left and Right, lets Up and Down leave, and remembers its last
-  focus; a dialog stops every action and wraps Next and Previous. Groups are subtrees rather
-  than names, since baking works on subtrees too, so apps are designed around them. Groups nest
-  as subtrees do: the innermost group's rules apply first, and an action that leaves it goes to
-  the next group out.
-- **Decided (2026-10-29): only components on screen can take focus from navigation,** since
-  there's no scrolling yet, with one exception: a member of the group focus is in, so that a
-  row's next item can be reached while off screen. Until scrolling lists exist, the app scrolls
-  it into view in `on_focus`.
+Today `fontdue` rasterizes text one character at a time into one image per text: one line, in
+the app's one font. Nothing shapes it, so there's no kerning, no ligatures and no combining
+marks, and each glyph's advance is rounded up to a whole pixel, so text is wider than its font
+designs it, by about half a pixel a glyph.
 
-### Step 1 — Keys reach the engine
+- **Decided (2026-11-16): the text engine is chosen by comparing three, in step 1.** A design
+  note compares `fontdue`'s own layout module, the baseline, which adds nothing to the build;
+  cosmic-text; and parley. For each: which crate reads fonts, which shapes and which rasterizes,
+  and whether each is built on Google's fontations or on the crates before it; the size it adds
+  to the wasm; bake time, from a new text benchmark; the same strings rendered by each, against
+  today's; variable fonts, fallback, spans, alignment, measuring without rasterizing and inline
+  boxes; and how well each is kept up. The embedded font is chosen with it.
+- **Decided (2026-11-16): inline content waits for the engine.** An inline box keeps a space in
+  a line for a component, which sits there as a child of the text's component, with its own
+  transitions, focus and styles: an icon in a sentence, or a link that splits. An inline image
+  is the simpler form, its pixels baked into the text's image. Whether either joins v0.4.0 is
+  decided with the engine, at the end of step 1, since parley has inline boxes and the others
+  don't.
+- **Decided (2026-11-16): text wraps at a width set on the text,** not at its component's width,
+  since text isn't sized to its component and components change size during transitions. By
+  default it doesn't wrap, and a `\n` starts a new line, so existing text is unchanged. Lines are
+  broken in logical pixels, so they break in the same places at every display scale. Wrapping
+  again when a component changes size is a candidate.
+- **Decided (2026-11-16): lines are aligned to the start, center or end of the text,** and the
+  anchor places the text on its component, as it does today. A single line looks as it does
+  today. Justified text is a candidate.
+- **Decided (2026-11-16): line height is a multiple of the size,** as CSS's `line-height: 1.2`
+  is, and the font's own line spacing by default.
+- **Decided (2026-11-16): a text can have a maximum number of lines,** and says how it ends when
+  there's more: with an ellipsis, "…" by default, or "..." if the font has no "…"; with a string
+  of the app's own, such as " more"; with spans of the app's own, styled as any span is; or
+  clipped, dropping the lines past the last with no mark. The ellipsis replaces as much of the
+  last line as it needs, cutting between whole characters (graphemes), never within one. An
+  ellipsis wider than the line is clipped, with a warning in debug builds. Text isn't cut
+  through the middle of a line by height: that's the component's crop or rounded corners. An
+  image in an ellipsis comes with inline content, if that joins.
+- **Decided (2026-11-16): an app loads fonts, and each text chooses one.** `load_font` takes a
+  font file's bytes, in Rust and TypeScript, and files it under the family name inside it. A
+  text names a family, a weight from 100 to 900 and a style, normal or italic, and the nearest
+  weight the family has is used, as in CSS. `text.default_font` keeps working, so nothing breaks.
+- **Decided (2026-11-16): the embedded font is optional.** In Rust it's a Cargo feature,
+  `embedded-font`, on by default, so a first app shows text with no setup; an app with fonts of
+  its own turns it off and doesn't carry it. Without it, a text with no font to draw in draws
+  nothing, with a warning saying how to fix it. TypeScript's package is built in advance, so
+  there the font moves out of the wasm into a file of its own in the package, which `mount`
+  fetches only when the app sets no font. The release notes tell TypeScript apps about that
+  request, and that hosting the app may need the font file.
+- **Decided (2026-11-16): fallback fonts are the app's, never the system's,** so text looks the
+  same on every platform and nothing more is fetched on the web. The app gives an ordered list
+  of fonts to try for a character the text's font doesn't have; one that none of them has draws
+  as the font's missing-glyph box. Color emoji is a candidate.
+- **Decided (2026-11-16): one text can mix styles, as spans.** A span is part of the text with
+  its own weight, style, size or color, and takes whatever it doesn't set from the text:
+  `Text::rich([Span::new("Hello "), Span::new("world").bold()])` in Rust, and
+  `text: { spans: [{ content, weight, italic, sizePx, color }] }` in TypeScript. Plain `content`
+  keeps working. Span colors are baked into the text's image, and the component's opacity still
+  applies; a text without colored spans keeps today's white image tinted by its color.
+- **Decided (2026-11-16): text can be measured before it's drawn.** `measure_text` returns a
+  text's size at once, rather than after the host has baked it, which the layout system in
+  v0.6.0 needs. Laying text out moves from the renderer to where the SDK can reach it, which is
+  cheapest while the engine is being replaced.
+- **Decided (2026-11-16): the new engine fixes kerning and the rounded advances,** and
+  `TextConfig::default_size_px`, which nothing reads, is removed, with an upgrade note.
+- **Decided (2026-11-16): each feature is tried by hand in an example as it lands,** and the
+  demo shows each new feature. A text example starts with multi-line text, and each later step
+  adds its cases to it.
 
-Both hosts read key events and report them to the engine as the common set of keys, with the
-modifiers, whether the key repeats and the text it types. Keys still held are released when the
-window or canvas loses focus. Nothing acts on them until step 3.
+### Step 1 — Comparing text engines
 
-- **Decided (2026-10-29): Proteus has key types of its own,** rather than the `keyboard-types`
-  crate, which would put another 0.x crate in the SDK's public API, and wouldn't save the
-  mapping from winit or from TV remotes' codes.
-- **Decided (2026-10-29): focusing the canvas at the start is the app's choice,** through an
-  `autofocus` option of the web host, off by default, so an app in a page doesn't take the
-  page's focus. The demo and the examples turn it on.
-- **Decided (2026-10-29): which keys the browser is kept from acting on waits for step 3,**
-  since it depends on what the key map binds. Step 3 also keeps Tab from trapping keyboard
-  users in a canvas embedded in a page, which WCAG's success criterion 2.1.2 rules out.
-- [x] The engine has the common set of keys, by meaning and by position, with a catch-all for a
-  key without a name of its own, and key events with their state, modifiers and text.
-- [x] The native host reports winit's key events, without the synthetic ones, with the
-  modifiers.
-- [x] The web host reports the canvas's key events, without those during an input method's
-  composition. The canvas can take focus, and `autofocus` gives it focus.
-- [x] Keys still held are released when the window or canvas loses focus, or the page is hidden.
-- [x] Tests cover turning winit's keys and the web's names into the set of keys, the order of a
-  tick's events and their clearing after it, and releasing held keys.
-- [x] Each key event is logged at `trace` level, so the step can be checked by hand before step
-  3 uses them. `Proteus::key_event` logs it, for both hosts.
+The design note, `docs/design/text.md`, comparing `fontdue`'s layout, cosmic-text and parley as
+decided above, with the wasm's size with and without the embedded font, and a text benchmark
+of short labels and wrapped paragraphs, run against today's text first. The engine, the
+embedded font, and whether inline content joins v0.4.0 are decided at its end.
 
-### Step 2 — Input devices and focus
+### Step 2 — The new engine
 
-The set of devices an app and each component accept, and the focus API, in Rust and
-TypeScript: give a component focus, failing with the reason when it can't take it; ask whether
-it has focus and which component does; clear it; mark a default focus; and the app-wide
-callback for focus that's lost. Focus follows transformations, and is cleared when its component
-can no longer take it. Today focus is never cleared, so a destroyed component keeps it.
+The chosen engine replaces `fontdue`'s character-by-character rasterizing, with the API
+unchanged: single lines draw as before, now kerned and without the rounded advances. The
+benchmark's before and after go in BENCHMARKS.
 
-- **Decided (2026-10-29): a click gives focus only to a component that can take it.** Clicking
-  one that doesn't accept the keyboard leaves focus where it is, as clicking empty space does.
-  Every component accepts every device by default, so apps that don't narrow them are
-  unchanged.
-- **Decided (2026-10-29): the app's devices are set in code, not in its config,** in `setup`
-  like the rest of its starting state.
-- **Decided (2026-10-29): a split gives focus to the target marked as the default focus,** or
-  to the first target when none is. The same mark says where focus starts in step 4, so one mark
-  means "start here" in both. Calling `focus` on a target doesn't work, since a split's targets
-  are usually hidden until it starts, and it starts on the next tick.
-- [x] `InputDevices`, for the app and for each component, set when a component is created and
-  changed while the app runs, in Rust and TypeScript. Input from a device the app doesn't
-  accept is dropped, and a component that doesn't accept the pointer lets it through.
-- [x] The focus API, in Rust and TypeScript: give a component focus, failing with the reason;
-  ask whether it has focus and which component does; clear it; mark a default focus; and the
-  app-wide callback for focus that's lost.
-- [x] Focus follows 1→1 transitions, splits and merges from when they start; a split's goes to
-  the target marked as the default focus, or the first.
-- [x] Focus is cleared, with `on_blur` and the focus-lost callback, when its component is
-  destroyed, hidden, disabled, made non-interactive or stops accepting the keyboard, and where
-  it was is recorded. A component hidden for a split or merge in progress keeps its focus.
-- [x] Tests for each of these.
-- [x] The release notes say what changes for apps: focus now leaves a disabled or hidden
-  component, where it used to stay.
+### Step 3 — Multi-line text
 
-### Step 3 — The key map and actions
+Wrapping at a width, `\n`, alignment, line height, and a maximum number of lines with each way
+of ending, in Rust and TypeScript. The text example starts here.
 
-The key map, its built-in actions and the app's own, and callbacks for key events on components
-and on the app, in Rust and TypeScript, going up from the focused component, with long presses
-measured and held keys repeated by the engine. Unclaimed, Activate presses and clicks the
-focused component. Built in four commits: the key map and callbacks; repeats and long press;
-Activate's press and click; and the web host keeping bound keys from the browser.
+### Step 4 — Fonts
 
-- **Decided (2026-10-29): actions and keys are enums.** An enum without data is a byte or two
-  however many variants it has, so the web's whole list of key names would cost nothing to copy
-  or compare; only the variants holding a name, for keys without one of their own, allocate, at
-  the rate keys are typed. Devices add bindings to the same actions, so `Action` doesn't grow
-  with them; a game controller's buttons get an enum of their own.
-- **Decided (2026-10-29): an app's own actions are ids, not names.** `define_action("search")`
-  returns an `AppAction`, a number, so `Action` holds no string and is `Copy`, though it's
-  looked up for every key event. TypeScript uses the names, turned into ids at the boundary.
-- **Decided (2026-10-29): on the web, Tab can leave the canvas.** Next on the last component,
-  and Previous on the first, are left to the browser, which moves focus out of the canvas as it
-  does at the end of a page, rather than wrapping: wrapping would trap keyboard users in a
-  canvas embedded in a page, which WCAG's success criterion 2.1.2 rules out. An app sets
-  `input.keep_tab` to wrap instead, for a full-screen or TV app. Native windows always wrap.
-  This step adds the setting; step 4, which knows the first and last components, uses it.
-- **Decided (2026-10-29): the web host keeps the browser from acting on bound keys.** Its
-  listener has to decide at once, but handlers run at the next tick, so the host copies the
-  bindings where the listener can read them each frame. A key that isn't bound but that a
-  handler claims still reaches the browser; the guides say so.
-- [x] The key map, with the built-in actions and the app's own, bound by meaning or position
-  with exact modifiers, and changed while the app runs, in Rust and TypeScript.
-- [x] Key callbacks on components and on the app. Events go up from the focused component,
-  skipping those that can't take them, before the update; unclaimed navigation actions are
-  queued for navigation.
-- [x] The engine repeats held keys, after 250 ms and every 100 ms, and reports long presses,
-  after 500 ms, both configurable and `System` repeats among them.
-- [x] Unclaimed, Activate presses and clicks the focused component, with its pressed style, and
-  releases it on key up.
-- [x] The web host keeps the browser from acting on bound keys, and has `input.keep_tab`.
-- [x] Tests for each of these, and the release notes updated.
+`load_font`, families, weights and styles, in Rust and TypeScript, with `text.default_font`
+still working; the embedded font made optional, as a Cargo feature and as a file of its own in
+the TypeScript package.
 
-### Step 4 — Navigation
+### Step 5 — Fallback
 
-The schedule's navigation stage moves focus with the Up, Down, Left, Right, Next and Previous
-actions, follows the last input wins, starts from where the user was when nothing has focus,
-and reads `TransitionInteractionConfig::allow_navigation`. Named neighbours, the arrows'
-nearest component, reading order for Next and Previous with the app's reading direction, and
-focus groups. Built in four commits: the input mode; navigation; focus groups; and Tab leaving
-the web canvas only at the ends.
+The app's ordered list of fallback fonts, and the missing-glyph box for a character none of
+them has.
 
-- **Decided (2026-10-29): the first navigation in pointing mode shows focus rather than moving
-  it,** as on TVs and consoles, so the user sees where they are. It focuses the hovered
-  component, if it can take focus; or else reveals the focused one, whose focused style a click
-  left hidden; or else starts as navigation does with nothing focused. Later presses move focus.
-- **Decided (2026-10-29): the hover style shows only in pointing mode,** as the focused style
-  shows only in navigating mode, so a pointer resting on one component while the keys move to
-  another doesn't show two highlights. Hover is still tracked, and shows again when the pointer
-  moves.
-- **Decided (2026-10-29): which actions switch to navigating mode is the app's choice.** By
-  default, the six that move focus, so the arrows and Tab switch it, and Enter, Space, Escape
-  and typing don't. They're actions rather than keys, so a rebound key or a remote's D-pad
-  switches it too. The config sets them at the start, as `input.navigating_actions`, among the
-  built-in actions; `set_navigating_actions` changes them while the app runs, the app's own
-  actions among them.
-- **Decided (2026-10-29): the reading direction is set in code,** in `setup` like the app's
-  devices, not in the config.
-- **Decided (2026-10-29): the engine learns the viewport's size,** from the renderer when it's
-  made and on each resize, to tell which components are on screen.
-- **Decided (2026-10-29): the web host learns whether Tab would leave the app.** After each
-  tick, the engine works out whether Next or Previous would move focus out of the app, focus
-  groups included, and the host's key listener leaves Tab to the browser only then, unless the
-  app keeps Tab.
-- [x] The input mode, set by the navigating actions and the pointer, with the focused style
-  shown only when navigating and the hover style only when pointing, readable in Rust and
-  TypeScript; and the first navigation in pointing mode showing focus.
-- [x] Navigation: named neighbours; the arrows, in line first, then nearest; Next and Previous
-  in reading order, with the app's direction, wrapping as `TabWraps` says. Only components on
-  screen, skipping transitioning ones unless they allow navigation, and starting, with nothing
-  focused, from where focus was lost, the hovered component, the default focus, or the first in
-  reading order.
-- [x] Focus groups on subtrees: leave, stop or wrap for each action; entry by the nearest
-  member, the last focused or the default; nesting; and members off screen within the group.
-- [x] On the web, Tab and Shift+Tab leave the canvas only at the ends, unless the app keeps them
-  or a focus group wraps them.
-- [x] Tests for each of these, and the release notes updated.
+### Step 6 — Inline styles
 
-### Step 5 — Interaction styles for glow, border and shadow
+Spans with their own weight, style, size and color, in Rust and TypeScript, and spans in an
+ellipsis. Inline content, if it joins, follows as a step of its own.
 
-Interaction styles can change a component's glow, border and drop shadow, which the demo's
-hover needs, and each component can time its own style changes.
+### Step 7 — Measuring text
 
-- **Decided (2026-11-03): a style changes each effect property on its own,** with fields such
-  as `glow_radius` and `border_color` beside `color` and `corner_radius`, rather than a whole
-  glow or border, which would replace its color too, and fight an app that sets the color
-  itself, as the demo blends it by theme.
-- **Decided (2026-11-03): drop shadows are included,** the same way: offset, color, softness and
-  spread.
-- **Decided (2026-11-03): effects animate with the geometry and return to where they rest.**
-  When a component leaves its default style, the effect values its styles change are recorded
-  as its resting ones, which the default style returns to. Only the properties a style changes
-  are animated, so an app setting the others meanwhile is left alone; one it sets that a style
-  changes is undone when the style ends, and the docs say so.
-- **Decided (2026-11-03): each component can time its style changes,** with
-  `ComponentSpec::style_transition` and a `Handle` setter, 0.15 s by default, so the demo keeps
-  its 0.25 s hover.
-- **Decided (2026-11-03): a style can only change an effect the component has.** On one without
-  it, the change does nothing, and a warning says so when the component is created; the docs say
-  to give the component the effect at rest, such as a glow of radius 0.
-- [x] Styles change a glow's radius, color and intensity, a border's width and color, and a
-  drop shadow's offset, color, softness and spread, in Rust and TypeScript, animating with the
-  geometry and returning to the component's resting values.
-- [x] A component can time its own style changes.
-- [x] A style's change to an effect the component lacks does nothing, with a warning when the
-  component is created, and the docs say how to give it the effect at rest.
-- [x] Tests: a hover glow growing and shrinking back, a border color on focus, a shadow, other
-  properties the app sets left alone, a custom timing, and a component without the effect.
+`measure_text`, in Rust and TypeScript, returning the same size the text is baked at.
 
-### Step 6 — A focus example
+### Step 8 — The demo's Text panel
 
-A new example, in Rust and TypeScript, that's used with the keyboard.
-
-- **Decided (2026-11-03): the example is `browse`, a TV-style browse screen,** named for what the
-  app is, as the other examples are. It shows each case of the input features once, since
-  trying them by hand in an example finds problems the tests miss, and shows outside developers
-  each case: a genre bar that's a focus group whose entry is the chosen genre, its default
-  focus, with wrapping arrows, and whose buttons take focus while they transition; rows of
-  tiles that are groups keeping Left and Right, letting Up and Down leave, with nearest entry,
-  and scrolling to a tile off screen; focused and hover styles with effects; every tile merging
-  into a title's page, which keeps the arrows and wraps Tab, while the genre buttons are
-  disabled, and splitting back on Back or Close; the page turning into a video through a
-  channel, as the bar fades out; focus set from code as each change ends; a long press that
-  favourites a tile; and a hint that follows the input mode. On the web it sets `autofocus`
-  and `keep_tab`, as a full-screen app would.
-- [x] `examples/browse`, in Rust and TypeScript, the same app, with each of the cases above.
-- [x] It runs natively and in a browser, from both languages, with the README's commands.
-- [x] It's wired into the workspace, CI, the Makefile, the pre-push hook and the examples
-  table, and CI passes.
-
-### Step 7 — The demo's new home page
-
-The home page's grid, header, tagline and About tile, and the Layout tile as a preview of
-v0.6.0, with the stress tests, the 3D placeholder and the Examples screen removed.
-
-- **Decided (2026-11-04): the home page is one 4 by 2 grid of eight tiles,** under "See what
-  Proteus can do" and a one-line tagline: Video Demo, Photo Gallery, Effects, Text,
-  Transformations, Layout, Keyboard & Focus and About. Every tile takes part in each transition, so
-  nothing appears or disappears: the eight merge into a detail screen's panel and split back
-  from it, and Back from a detail screen goes Home; they merge into the gallery's loading logo
-  and split back from it; the gallery, 4 by 3, comes back with each column's top photo becoming
-  the top tile and the other two merging into the bottom one; and the eight merge, by columns
-  (the first, the second and third, the fourth), into the three video tiles, and split back.
-- **Decided (2026-11-06): the Keyboard & Focus panel is a virtual keyboard.** A generic US
-  layout of rounded keycaps, without the function keys, Esc, Tab or the arrows, centred, with
-  what the keys do below it. The keycaps are a focus group: the arrows and Tab move round it and
-  don't leave it; focus starts on the space bar as the panel opens, and coming back lands on
-  the keycap focused last. Focus shows as a glow, without growing, so keycaps don't overlap and
-  the nearest keycap is the one drawn nearest. A key the key map doesn't bind flashes its
-  keycap, matched by where the key is; Enter or Space, or a click, flashes the focused or
-  clicked keycap; and Backspace still goes back. Caps Lock toggles the keycaps to their shifted
-  values, with its keycap tinted meanwhile. The keyboard keeps the light theme's colors in both
-  themes.
-- **Decided (2026-11-06): Caps Lock arrives as a press and a release at each tap, on every
-  host.** Platforms differ: a browser on a Mac reports it as held while it's on, and winit on a
-  Mac doesn't report it at all. The web host taps whenever `getModifierState` says it changed,
-  and the native host on a Mac reads it from macOS each frame the window has focus, through the
-  runtime's `CapsLockTaps`.
-- **Decided (2026-11-04): About says what Proteus is for a visitor,** from the README's opening,
-  and Layout says the layout system is coming in v0.6.0.
-- [x] The home page's grid, heading and tagline, with each screen's transitions to and from it.
-- [x] The Stress Tests, the 3D placeholder and the Examples screen are removed.
-- [x] The About, Layout and Keyboard & Focus panels.
-- [x] Tests for each transition to and from the grid, and for the pressed-key display, and the
-  demo's docs updated.
-
-### Step 8 — The demo on the keyboard
-
-The demo uses interaction styles instead of its own hover code, and works with the keyboard on
-every screen as well as the pointer.
-
-- **Decided (2026-11-06): the demo's hover is interaction styles.** Its own hover code goes, and
-  each surface that used it gets the same hover and focused style, a 15 px glow and 7% growth,
-  over 0.25 s; the enlarged photo glows without growing. The video tiles' overlay and title
-  follow hover or focus, whichever the input in use shows.
-- **Decided (2026-11-06): every screen works with the keys, without focus groups.** The arrows
-  move to the nearest component, Tab in reading order, Enter or Space clicks, and Escape or
-  Backspace goes back. Home's tiles are the pieces of every split and merge, so they stay
-  without a group. As each transition ends, focus lands on the tile Home was left from (the
-  first, the first time), the tile that was playing or the first video tile, the back icon
-  while a video plays, the photo that was enlarged or the first photo, the enlarged photo, the
-  back icon on a panel (the space bar on Keyboard & Focus), and nothing while loading. The top
-  bar's icons are reachable too.
-- **Decided (2026-11-06): the demo is always hybrid, with no device setting.** A control in the
-  top bar to choose the pointer, the keyboard or both wasn't clear to a visitor, and the demo
-  shows the two working together. The engine's setting is shown and tested on its own.
-- **Decided (2026-11-06): `set_declared_geometry` ends a style's change under way.** A hover
-  style still changing carried on toward the old geometry and undid the move, so backing out of
-  a video with Backspace, with the pointer resting on it, left the tile at the screen's size
-  (B-38). Now a style shown is applied on top of the new geometry at once.
-- [x] The demo's hover code is replaced by interaction styles, and the video tiles' overlay and
-  title follow hover or focus.
-- [x] Every screen works with the keys, with focus landing as decided as each transition ends.
-- **Decided (2026-11-06): input that changes screens waits for the change under way to end.**
-  The demo switches to the next screen as a transition starts, so a second Backspace during it
-  acted as though it had ended, starting another change from components still moving (B-39).
-  The theme and the keyboard's flashes still work during one.
-- [x] Input that changes screens waits for the change under way, with a test.
-- [x] A style started while the effects are fading back rests where the fade is heading (B-40),
-  with an SDK test and a demo test.
-- [x] `set_declared_geometry` ends a style's change under way, in Rust and TypeScript, with a
-  test that fails without it.
-- [x] Tests: the styles, where focus lands on each screen, opening and leaving screens with the
-  keys, the video overlay on focus, and backing out of a video with Backspace while hovered.
+The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
+number of lines, fonts and weights, fallback, and mixed styles.
 
 ### Step 9 — Docs
 
-The interaction and hosts guides, the notes on non-interactive and disabled components, and
-ARCHITECTURE's known limits. The guides say to handle actions, and to use keys only for typing
-and for keys the map doesn't cover.
-
-- **Decided (2026-11-06): the keyboard gets a guide of its own,** Keyboard and focus, beside
-  Interaction, which keeps the pointer and the styles: actions and the key map, handling keys,
-  what can take focus and how it moves, focus groups, putting focus where it belongs, Enter and
-  Space, pointing and navigating, input devices, and held keys.
-- **Decided (2026-11-06): `InputConfig`'s five unread settings are removed** (D-03):
-  `focus_input_delay_ms`, `click_moves_focus`, `drag_threshold_px`,
-  `transition_interaction_allow_pointer` and `transition_interaction_allow_navigation`, with an
-  upgrade note. A drag threshold is a ROADMAP candidate.
-- **Decided (2026-11-09): a how-to, Make an app work with the keyboard,** joins the guide: where
-  focus starts and goes as screens change, groups, Back, waiting for a screen change to end, one
-  highlight at a time, scrolling to the focused component, and a TV app.
-- [x] The Keyboard and focus guide, in Rust and TypeScript, with each snippet checked.
-- [x] The how-to, in Rust and TypeScript, with each snippet checked.
-- **Decided (2026-11-09): an app that doesn't accept the pointer is always navigating.** Nothing
-  could switch it to pointing, yet it started there, so a TV app showed no focus until the first
-  key, which only showed where focus was. Now the focused style shows from the start, and the
-  first arrow moves focus.
-- [x] A keyboard-only app navigates from the start, with a test that fails without it.
-- [x] Pointer, keyboard or both, the three ways an app can work, explained in the Keyboard and
-  focus guide, as a key design decision in ARCHITECTURE, and where it bears on the interaction
-  guide and the how-to.
-- [x] The interaction guide: the keyboard in its events, which component gets input, focus during
-  a transition, and the styles' effects and timing.
-- [x] ARCHITECTURE's input, schedule, crates and known limits; the configuration guide's input
-  settings; the components guide's spec table; the hosts guide's keyboard on the web; and the
-  pointer-only lines elsewhere.
+A Text guide, from the content guide's text section; the configuration guide's text settings;
+ARCHITECTURE's text, baking, crates and known limits; and the release notes.
 
 ## Standing decisions
 

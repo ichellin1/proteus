@@ -33,34 +33,36 @@ and of 100,000 large ones from 108.7 to 5.1 ms; [BENCHMARKS.md](./BENCHMARKS.md)
 history. Its planning is [archived](./docs/archive/PLANNING-v0.2.0.md), and its
 [release notes](./CHANGELOG.md) say what to change when upgrading.
 
-v0.3.0, keyboard and focus, is next.
+v0.3.0, shipped on 2026-11-09, brought the keyboard and focus. Both hosts report keys, a key map
+binds them to actions such as Up, Activate and Back, and focus moves between components with the
+arrows and Tab, kept in a row or a dialog by focus groups. An app and each of its components
+choose which input devices they accept, and when both the pointer and the keyboard are accepted,
+the last input wins. Interaction styles change glow, border and drop shadow, the `browse`
+example is a TV-style screen used with the keys, and the reference demo's home page is one grid
+of features that works with the keyboard. Its planning is
+[archived](./docs/archive/PLANNING-v0.3.0.md), and its [release notes](./CHANGELOG.md) say what
+to change when upgrading.
+
+v0.4.0, text, is next.
 
 ## Releases
 
 A draft order, from release planning. Each release is planned in detail, with a definition of
 done in PLANNING, when it comes up, and its scope can change then.
 
-### v0.3.0 — Keyboard and focus
-
-- Keyboard input: both hosts read key events and report them to the engine, and a key map binds
-  keys to actions, such as Up, Activate and Back, that apps and navigation respond to.
-- Focus navigation: the schedule's navigation stage, a placeholder today, moves focus between
-  components with the arrow keys and Tab, and the focused style follows it. Focus groups keep
-  it inside a row or a dialog, in the directions they choose.
-- Every new kind of input skips non-interactive and disabled components, as the pointer does;
-  see the decision in PLANNING.
-- An app chooses which input devices it accepts, pointer, keyboard or both, and so can each
-  component. When it accepts both, the last input wins.
-- A focus example, in Rust and TypeScript.
-- The reference demo's home page becomes one grid of features, and the demo works with the
-  keyboard, using interaction styles rather than its own hover code.
-
 ### v0.4.0 — Text
 
-- Multi-line text and layout: line breaking, alignment, line height.
+- A text engine chosen by comparing `fontdue`'s own layout, cosmic-text and parley, which also
+  brings kerning and fixes glyph advances rounded up to whole pixels.
+- Multi-line text and layout: line breaking at a width, alignment, line height, and a maximum
+  number of lines, ending in an ellipsis of the app's choosing or clipped.
 - Multiple fonts: a font per text, several weights of one family, and falling back to another
-  font for characters the first doesn't have.
+  font for characters the first doesn't have. The embedded font becomes optional.
 - Inline styles: bold, italic, size and color mixed within one text.
+- Measuring text before it's drawn, which the layout system in v0.6.0 needs.
+- Inline content, a component or an image within a line of text, if the engine chosen supports
+  it; decided with the engine.
+- A text example, and the demo's Text panel showing each new feature.
 
 ### v0.5.0 — Video
 
@@ -169,6 +171,11 @@ Not yet placed in a release. Unordered within each area.
   and Korean, phone keyboards and pasting. v0.3.0's key events carry only each key's own text.
 - Resolution-independent text, with signed distance fields, if rasterized text proves
   insufficient.
+- Justified text, aligned to both edges of its width.
+- Text that wraps again when its component changes size. v0.4.0's text wraps at a width set on
+  the text.
+- Color emoji, and other fonts with colored glyphs. Text is baked as white with coverage in
+  alpha, tinted by its color, apart from colored spans.
 
 ### Images, textures and memory
 
