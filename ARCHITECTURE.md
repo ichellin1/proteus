@@ -244,9 +244,10 @@ alpha, which keeps bilinear filtering right at antialiased edges.
 To bake is to render something into an atlas region, once, so it can be drawn as a texture.
 Proteus bakes three kinds of thing:
 
-- **Text and images**, by `Renderer::render` before collecting instances. Text is rasterized
-  on the CPU with `fontdue`, one line to one image, white with the glyphs' coverage in alpha,
-  so it can take any color. Images are decoded with the `image` crate. Both go into the main
+- **Text and images**, by `Renderer::render` before collecting instances. Text is laid out
+  and shaped with parley, which applies the font's kerning and places each glyph to a quarter
+  of a pixel, and its glyphs are rasterized on the CPU with swash, each text to one image,
+  white with the glyphs' coverage in alpha, so it can take any color. Images are decoded with the `image` crate. Both go into the main
   atlas. With `resources.lazy_load`, a component's text or image waits until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the
@@ -518,7 +519,7 @@ These are known shortcomings, each planned to be addressed in a future release:
   moves to a display of another density.
 - A rounded component with a border shows its baked corners in a split or merge, crossfading
   with its pieces' own, rather than one curve that changes size.
-- Text is a single line.
+- Text is one line, or more where it has a `\n`: it doesn't wrap, or align its lines.
 - One video at a time.
 - No text input: no text field, cursor or selection, and no input methods for composing text.
   A key's text arrives in its event, for an app to use itself.

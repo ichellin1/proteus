@@ -119,12 +119,12 @@ export interface StyleOverride {
 }
 
 /**
- * A single line of text. The host bakes it the next time it renders a frame.
- * Text wider than an atlas page (2048 pixels by default) is clipped to it,
- * with a warning.
+ * Text: one line, or more where it has a `\n`. The host bakes it the next time it renders a
+ * frame. Text wider than an atlas page (2048 pixels by default) is clipped to it, with a
+ * warning.
  */
 export interface TextSpec {
-  /** The text: a single line. */
+  /** The text. A `\n` starts a new line. */
   content: string;
   /** Font size in pixels. */
   sizePx: number;
@@ -231,7 +231,7 @@ export interface ComponentSpec {
    * logged.
    */
   bake?: boolean;
-  /** A single line of text drawn on the component. */
+  /** Text drawn on the component: one line, or more where it has a `\n`. */
   text?: TextSpec;
   /** An image drawn on the component. */
   image?: ImageSpec;

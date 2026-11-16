@@ -6,7 +6,7 @@ before it next draws. You give the content; when and how it reaches the GPU is t
 
 ## Text
 
-A component's text is one line, drawn over its fill in the component's center, or wherever its
+A component's text is one line, or more where it has a `\n`, drawn over its fill in the component's center, or wherever its
 anchor puts it; see [Anchor](./components.md#anchor).
 
 #### Rust

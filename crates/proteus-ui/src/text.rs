@@ -1,10 +1,10 @@
-//! Text: a single line of text drawn on an entity.
+//! Text: a line of text drawn on an entity, or more where it has a `\n`.
 //!
 //! ```text
 //! Text { content, size_px }      declared on an entity
 //!         │  the renderer finds Text without BakedText
 //!         ▼
-//! FontAtlas::rasterize_text      the glyphs, as pixels
+//! FontAtlas::rasterize_text      laid out, shaped and rasterized
 //!         │  added to the main atlas
 //!         ▼
 //! BakedText + TextTextureRef     where the text is in the atlas
@@ -22,10 +22,10 @@
 //!
 //! ## Text larger than an atlas page
 //!
-//! Text is one line, with no length limit. Text wider or taller than an atlas
-//! page ([`AtlasConfig::page_size`], 2048 pixels by default) is clipped to the
-//! page, with a warning: the part that fits is drawn at its normal size, and
-//! the rest is cut off.
+//! Text is one line, or more where it has a `\n`, with no length limit. Text
+//! wider or taller than an atlas page ([`AtlasConfig::page_size`], 2048
+//! pixels by default) is clipped to the page, with a warning: the part that
+//! fits is drawn at its normal size, and the rest is cut off.
 //!
 //! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
 
@@ -36,7 +36,7 @@ use glam::Vec4;
 // Text component
 // ---------------------------------------------------------------------------
 
-/// A single line of text to draw on an entity.
+/// Text to draw on an entity: one line, or more where it has a `\n`.
 ///
 /// The renderer rasterizes it into the main atlas and adds a [`BakedText`].
 /// Changing `content` or `size_px` afterwards has no effect until the

@@ -141,8 +141,9 @@ is, less the same build with no engine:
 | cosmic-text | 1,892 KB | 664 KB | 38 |
 | parley + swash | 2,288 KB | 827 KB | 55 |
 
-For scale, the SDK's wasm is 2,705 KB, 930 KB gzipped, with today's `fontdue` and Inter Bold in
-it; its dependencies come to 136 crates.
+For scale, the web host's wasm, which holds the renderer and so today's `fontdue` and Inter Bold,
+is 5,357 KB, 1,958 KB gzipped; the SDK's own wasm, 2,705 KB, has no text engine in it. Their
+dependencies come to 136 crates.
 
 - **It's code, not data:** 1.55 MB of cosmic-text's build and 1.92 MB of parley's is code.
 - **Both build two versions of fontations' crates:** cosmic-text two of skrifa and read-fonts,
