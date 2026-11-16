@@ -175,6 +175,19 @@ The benchmark's before and after, and the wasm's size, go in BENCHMARKS.
   are dropped, and rasterized again if they're needed. A glyph's pixels are copied into each
   text's image as it's baked, so the cache can drop any glyph at any time; unlike the atlas,
   nothing on screen uses it. It's cleared when the bake scale changes, as baked text is.
+- **Decided (2026-11-16): an app can empty the glyph cache,** with `clear_glyph_cache` in Rust
+  and `clearGlyphCache` in TypeScript, to free its memory, such as when it's hidden. Text
+  already baked keeps its pixels. Proteus doesn't tell an app when it's hidden: a TypeScript
+  app listens for the page's `visibilitychange`, and lifecycle callbacks are a candidate in
+  ROADMAP.
+- [x] parley, rasterized with swash, replaces `fontdue` in `FontAtlas`, with its API unchanged:
+  kerned, placed to a quarter pixel, as wide at every scale, and a `\n` starting a new line.
+- [x] The glyph cache, with its budget in `ResourceConfig` and the TypeScript config, emptied
+  when the bake scale changes and by `clear_glyph_cache`.
+- [x] Tests: kerning, a line's width at scales 1 and 2, descenders, the cache's budget and
+  eviction order, cached and uncached pixels the same, and both ways of emptying it.
+- [x] The benchmark's before and after, and the web host's wasm size, in BENCHMARKS; the
+  configuration guide, ARCHITECTURE and the release notes.
 
 ### Step 3 — Multi-line text
 

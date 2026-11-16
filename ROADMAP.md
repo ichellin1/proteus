@@ -204,6 +204,10 @@ Not yet placed in a release. Unordered within each area.
 - A drag threshold: how far the pointer moves before a press counts as a drag, so a slightly
   moving click isn't one. v0.3.0 removed an `InputConfig` setting for it that did nothing.
 - Signals: reactive state that notifies its observers when its value changes.
+- App lifecycle callbacks: the app told when it's hidden or shown, and suspended or resumed, to
+  free memory, such as with `clear_glyph_cache`, pause video or save its state. The web host
+  already listens for the page being hidden, only to release held keys; native mobile hosts
+  will need it.
 - A component library: scrolling lists, grids, forms and other common patterns.
 - A style system: styles set declaratively, outside the app's code, such as in a style file, and
   applied to components by name. Colors, corner radii, borders, shadows, text and interaction

@@ -20,7 +20,8 @@ glam = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-fontdue = { workspace = true }
+parley = { workspace = true }
+swash = { workspace = true }
 etagere = { workspace = true }
 bevy_ecs = { workspace = true }
 image = { workspace = true }

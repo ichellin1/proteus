@@ -119,12 +119,12 @@ export interface StyleOverride {
 }
 
 /**
- * A single line of text. The host bakes it the next time it renders a frame.
- * Text wider than an atlas page (2048 pixels by default) is clipped to it,
- * with a warning.
+ * Text: one line, or more where it has a `\n`. The host bakes it the next time it renders a
+ * frame. Text wider than an atlas page (2048 pixels by default) is clipped to it, with a
+ * warning.
  */
 export interface TextSpec {
-  /** The text: a single line. */
+  /** The text. A `\n` starts a new line. */
   content: string;
   /** Font size in pixels. */
   sizePx: number;
@@ -231,7 +231,7 @@ export interface ComponentSpec {
    * logged.
    */
   bake?: boolean;
-  /** A single line of text drawn on the component. */
+  /** Text drawn on the component: one line, or more where it has a `\n`. */
   text?: TextSpec;
   /** An image drawn on the component. */
   image?: ImageSpec;
@@ -395,6 +395,14 @@ export interface ProteusConfigOverrides {
      * pixel-exact text on 3× screens.
      */
     maxBakeScale?: number;
+    /**
+     * The most bytes of glyphs the glyph cache keeps: each glyph's pixels, kept after it's
+     * drawn, so the glyphs texts share are drawn once. Past it, the glyphs used longest ago are
+     * dropped. Default 4 MiB, about 5,000 glyphs at 48 pixels or 25,000 at 16. `0` keeps none,
+     * so preparing text takes two to three times as long. See
+     * {@link ProteusApp.clearGlyphCache}.
+     */
+    glyphCacheBytes?: number;
   };
   /** Text settings. */
   text?: {

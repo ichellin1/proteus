@@ -163,6 +163,39 @@ await mount("canvas", {
 `FontSource::from_bytes` checks the font, so a file that isn't one, such as a failed download,
 is an error the app handles. In TypeScript, `mount` throws.
 
+### The glyph cache
+
+Proteus keeps each glyph's pixels after it draws them, so the letters texts share are drawn
+once: every "e" in every label of one size and font. That makes preparing text two to three
+times faster. The cache has a budget, and past it drops the glyphs used longest ago, drawing
+them again if they're needed.
+
+| Rust | TypeScript | Default | What it sets |
+|---|---|---|---|
+| `resources.glyph_cache_bytes` | `resources.glyphCacheBytes` | 4 MiB | The most bytes of glyphs the cache keeps: about 5,000 at 48 pixels, or 25,000 at 16. `0` keeps none. |
+
+The cache is emptied when the display's scale changes, since glyphs are kept by their size in
+pixels. An app can empty it to free its memory, such as when it's hidden. Text already on
+screen isn't affected: its pixels are in the atlas, not the cache.
+
+#### Rust
+
+```rust
+# use proteus_sdk::Proteus;
+# let mut app = Proteus::new();
+app.clear_glyph_cache();
+```
+
+#### TypeScript
+
+```ts
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) app.clearGlyphCache();
+});
+```
+
+A browser tells a page when it's hidden, as above. A native app isn't told yet.
+
 ### Images
 
 | Rust | TypeScript | Default | What it sets |

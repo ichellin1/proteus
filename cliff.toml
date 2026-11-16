@@ -10,8 +10,8 @@ The changes in each version of Proteus. This file is generated from the commit h
 RELEASING.md."""
 # Each version's section. Version 0.1.0 opens with a summary of everything in
 # it: the work before it didn't use Conventional Commits, so the list below
-# the summary only covers the work that prepared the release. Versions 0.2.0
-# and 0.3.0 open with what to change when upgrading. The blank line first separates it
+# the summary only covers the work that prepared the release. Versions from
+# 0.2.0 open with what to change when upgrading. The blank line first separates it
 # from the header, or the version before.
 body = """
 
@@ -94,6 +94,18 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   pointing:** a click still gives focus, but its focused style waits until the arrows or Tab are
   pressed, and the hover style hides until the pointer moves again. In 0.2 a click showed the
   focused style at once.
+{% endif %}
+{%- if version == "v0.4.0" %}
+### Upgrading from 0.3
+
+- **Text is shaped:** the font's kerning is applied, and glyphs are placed to a quarter of a
+  pixel rather than each rounded up to a whole one, so text is a few percent narrower, and as
+  wide at every display scale. Layout sized from `baked_text_size`, such as a button fitted to
+  its label, shifts slightly.
+- **A `\\n` in a text starts a new line.**
+- **The web host's wasm is larger,** by about 790 KB gzipped, with the text engine in it.
+- **`ResourceConfig` written out in full** no longer compiles in Rust: `glyph_cache_bytes`, the
+  glyph cache's budget, is new. Fill in the rest with `..Default::default()`.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 

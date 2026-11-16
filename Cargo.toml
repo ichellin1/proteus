@@ -82,7 +82,12 @@ bytemuck = { version = "1", features = ["derive"] }
 half = "2"
 glam = "0.29"
 etagere = "0.3"  # shelf-based 2D atlas packing (used by TextureRegistry)
-fontdue = "0.8"  # pure-Rust font rasterization — no system font dependencies
+# Text layout and shaping, without system fonts (its `system` feature is
+# off). Pinned to one minor version: each changes its API, so upgrades are
+# done on purpose. See docs/design/text.md.
+parley = { version = "~0.13.0", default-features = false, features = ["std"] }
+# Rasterizes the glyphs parley lays out.
+swash = "~0.2.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }  # PNG and JPEG decoding; pure Rust, works on native and wasm32
 
 # ECS

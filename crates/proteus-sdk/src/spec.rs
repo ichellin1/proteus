@@ -207,7 +207,7 @@ impl ComponentSpec {
         self
     }
 
-    /// Draws a single line of text on this component.
+    /// Draws text on this component: one line, or more where it has a `\n`.
     ///
     /// The host bakes the text the next time it renders a frame. Until then,
     /// [`Handle::baked_text_size`] returns `None`.

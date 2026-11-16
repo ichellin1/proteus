@@ -119,13 +119,14 @@ impl Renderer {
         // Use the configured font, or the embedded one. Bytes that aren't a
         // font fall back to the embedded font rather than stopping the app;
         // `FontSource::from_bytes` lets an app catch them earlier.
-        let font_atlas = match &config.text.default_font {
+        let mut font_atlas = match &config.text.default_font {
             FontSource::Embedded => proteus_render::FontAtlas::with_embedded_font(),
             FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes).unwrap_or_else(|e| {
                 log::error!("ProteusConfig.text.default_font: {e}; using the embedded font");
                 proteus_render::FontAtlas::with_embedded_font()
             }),
         };
+        font_atlas.set_glyph_cache_budget(config.resources.glyph_cache_bytes);
 
         Self {
             font_atlas,
@@ -164,6 +165,9 @@ impl Renderer {
         let world = proteus.world_mut();
         if world.resource::<BakeScale>().0 != scale {
             world.insert_resource(BakeScale(scale));
+            // Glyphs are cached by their size in pixels, so those at the old
+            // scale won't be used again.
+            self.font_atlas.clear_glyph_cache();
             let baked: Vec<_> = world
                 .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<BakedText>>()
                 .iter(world)
@@ -200,6 +204,12 @@ impl Renderer {
         let gpu = proteus.world().resource::<GpuContext>().clone();
         let world = proteus.world_mut();
 
+        if world
+            .remove_resource::<proteus_ui::ClearGlyphCache>()
+            .is_some()
+        {
+            self.font_atlas.clear_glyph_cache();
+        }
         let lazy_load = self.config.resources.lazy_load;
         bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue, lazy_load);
         bake::bake_pending_images(
@@ -574,6 +584,56 @@ mod tests {
             (size_2[0] - size_1[0]).abs() <= 1.0,
             "{size_1:?} then {size_2:?}"
         );
+    }
+
+    // Glyphs are cached by their size in pixels, so a new scale empties the
+    // cache, and the text baked at it fills it again.
+    #[test]
+    fn a_new_display_scale_empties_the_glyph_cache() {
+        let Some((mut scene, _label)) = text_scene(1.0, ProteusConfig::default()) else {
+            return;
+        };
+        assert!(scene.renderer.font_atlas.glyph_cache_size().0 > 0);
+        scene.renderer.resize(
+            &mut scene.proteus,
+            Viewport::new(Vec2::new(64.0, 64.0), 2.0),
+        );
+        assert_eq!(scene.renderer.font_atlas.glyph_cache_size(), (0, 0));
+        scene.frame();
+        assert!(scene.renderer.font_atlas.glyph_cache_size().0 > 0);
+    }
+
+    // `Proteus::clear_glyph_cache` empties it before the next bake, and text
+    // already baked keeps drawing.
+    #[test]
+    fn clear_glyph_cache_empties_it_and_baked_text_stays() {
+        let Some((mut scene, label)) = text_scene(1.0, ProteusConfig::default()) else {
+            return;
+        };
+        let before = baked_text(&scene, &label);
+        scene.proteus.clear_glyph_cache();
+        scene.frame();
+        assert_eq!(scene.renderer.font_atlas.glyph_cache_size(), (0, 0));
+        assert!(scene
+            .proteus
+            .world()
+            .get_resource::<proteus_ui::ClearGlyphCache>()
+            .is_none());
+        assert_eq!(
+            baked_text(&scene, &label),
+            before,
+            "the text is still baked"
+        );
+    }
+
+    #[test]
+    fn glyph_cache_bytes_sets_the_cache_budget() {
+        let mut config = ProteusConfig::default();
+        config.resources.glyph_cache_bytes = 0;
+        let Some((scene, _label)) = text_scene(1.0, config) else {
+            return;
+        };
+        assert_eq!(scene.renderer.font_atlas.glyph_cache_size(), (0, 0));
     }
 
     #[test]

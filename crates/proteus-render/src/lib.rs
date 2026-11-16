@@ -16,6 +16,7 @@
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
 pub mod font_atlas;
+mod glyph_cache;
 pub mod main_atlas_allocator;
 pub mod mesh;
 pub mod pipeline;
@@ -23,7 +24,9 @@ pub mod static_texture;
 pub mod texture_registry;
 pub mod transition_atlas;
 
-pub use font_atlas::{FontAtlas, FontError, RasterizedGlyphs, EMBEDDED_FONT_BYTES};
+pub use font_atlas::{
+    FontAtlas, FontError, RasterizedGlyphs, DEFAULT_GLYPH_CACHE_BYTES, EMBEDDED_FONT_BYTES,
+};
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{
     pack_atlas_page, unpack_atlas_page, QuadInstance, QuadVertex, ATLAS_PAGE_SHIFT,

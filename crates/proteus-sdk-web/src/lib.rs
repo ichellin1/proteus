@@ -962,6 +962,12 @@ impl ProteusApp {
         Ok(())
     }
 
+    /// Calls [`Proteus::clear_glyph_cache`](sdk::Proteus::clear_glyph_cache).
+    #[wasm_bindgen(js_name = clearGlyphCache)]
+    pub fn clear_glyph_cache(&mut self) {
+        self.0.borrow_mut().clear_glyph_cache();
+    }
+
     /// Calls [`Proteus::set_long_press_ms`](sdk::Proteus::set_long_press_ms).
     #[wasm_bindgen(js_name = setLongPressMs)]
     pub fn set_long_press_ms(&mut self, ms: u32) {
