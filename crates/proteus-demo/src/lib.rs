@@ -714,9 +714,9 @@ impl Demo {
             let flag = nav_click.clone();
             key.on_click(proteus, move |_| flag.set(Some(NavClick::FlashKey(i))));
         }
-        for idx in 0..3 {
+        for (idx, tile) in video_tiles.tiles.iter().enumerate() {
             let flag = nav_click.clone();
-            video_tiles.tiles[idx].on_click(proteus, move |_| {
+            tile.on_click(proteus, move |_| {
                 flag.set(Some(NavClick::OpenVideoScreen(idx)))
             });
         }
@@ -727,9 +727,9 @@ impl Demo {
                 .fetch_button
                 .on_click(proteus, move |_| flag.set(Some(NavClick::RefetchGallery)));
         }
-        for idx in 0..gallery::TILE_COUNT {
+        for (idx, tile) in gallery.tiles.iter().enumerate() {
             let flag = nav_click.clone();
-            gallery.tiles[idx].on_click(proteus, move |_| {
+            tile.on_click(proteus, move |_| {
                 flag.set(Some(NavClick::OpenGalleryImage(idx)))
             });
         }

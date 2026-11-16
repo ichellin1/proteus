@@ -20,3 +20,4 @@ These are working notes for contributors, not guides; for using Proteus, see the
 | [video](./video.md) | Copying frames to the GPU, punch-through video, playback controls, several videos, and video in splits and merges |
 | [many-transitions](./many-transitions.md) | Starting many transitions in one call from TypeScript |
 | [composite-bake](./composite-bake.md) | Transitioning a flattened subtree as one quad |
+| [text](./text.md) | Choosing a text engine: `fontdue`'s layout, cosmic-text or parley |
