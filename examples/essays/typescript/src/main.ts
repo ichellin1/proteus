@@ -8,15 +8,35 @@
  * stops after five lines, ending in an ellipsis of the card's own; and its
  * source is clipped after two lines. A card opens into its essay (1→1), whose
  * byline is two lines split with a `\n`, whose opening wraps at the column's
- * width, and whose pull quote is centered. While an essay is open, the
- * buttons at the top change its alignment and line height.
+ * width, and whose pull quote is centered. While an essay is open, a toolbar
+ * at the top sets its body's size, alignment, bold and italic, line height
+ * and font, as a text editor's does.
  *
  * The essays are Mary Wollstonecraft's "A Vindication of the Rights of Woman"
  * (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis Stevenson's
  * "An Apology for Idlers" (1877), from their Project Gutenberg editions, each
  * cited where it's shown.
  *
+ * The essays are set in Lora, a serif downloaded from `fonts/`, with its
+ * italic for the pull quotes; titles are Inter at 800 and years at 500, from
+ * the built-in variable font; bylines are Inter slanted, since Inter's italic
+ * isn't loaded; and the buttons and sources are Inter with no weight set,
+ * bold. The toolbar's icons are Material Icons, a font too, and its last
+ * button sets the body in Crimson Pro, downloaded when it's first chosen.
+ *
  * Techniques worth copying:
+ *   - A font that's downloaded is given to `loadFont` as a promise, with its
+ *     family's name: texts in Lora wait, not drawn, until it arrives, rather
+ *     than change font once drawn. Lora's italic joins the same family.
+ *   - A font downloaded only when it's needed is still named to `loadFont`
+ *     at the start, with a promise settled once it's fetched: Crimson Pro,
+ *     with `whileLoading: "defaultFont"`, so its button and the body show the
+ *     default font until it arrives, then swap to it.
+ *   - An icon font's ligatures turn a name, such as "format_bold", into its
+ *     icon: the toolbar's icons are text in Material Icons.
+ *   - A chosen button, or one toggled on, has its hover style removed with
+ *     `setStyle`, so it stays in the accent color under the pointer, and gets
+ *     it back when it's no longer chosen.
  *   - Text is placed by its component's anchor: with an anchor of (0, 0), the
  *     text's top-left corner is at the component's position. A card's texts
  *     are small children, placed from the card's top-left corner.
@@ -31,8 +51,8 @@
  *   - Changing a text's alignment or line height means setting it again:
  *     `setText` replaces it, and the host lays it out again.
  *
- * Not shown here: fonts and weights, other scripts, mixed styles within a
- * text, measuring text, and components within a line of text.
+ * Not shown here: a weight a font doesn't have, other scripts, mixed styles
+ * within a text, measuring text, and components within a line of text.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
@@ -117,6 +137,31 @@ const ESSAYS: Essay[] = [
   },
 ];
 
+/**
+ * The family the essays are set in, from two files in `fonts/`, from Google
+ * Fonts under the SIL Open Font License; see `fonts/OFL-Lora.txt`.
+ */
+const LORA = "Lora";
+/**
+ * The second family the body can be set in, from Google Fonts under the SIL
+ * Open Font License; see `fonts/OFL-CrimsonPro.txt`. Downloaded when it's first
+ * chosen. It has no italic file, so its italic is slanted.
+ */
+const CRIMSON = "Crimson Pro";
+/**
+ * The toolbar's icons: Google's Material Icons, a font whose ligatures turn an
+ * icon's name, such as "format_bold", into its glyph. Apache License 2.0; see
+ * `fonts/LICENSE-MaterialIcons.txt`.
+ */
+const ICONS = "Material Icons";
+
+/** A font file from the example's `fonts/` folder. */
+function fontFile(file: string): Promise<ArrayBuffer> {
+  return fetch(new URL(`../../fonts/${file}`, import.meta.url)).then((r) =>
+    r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${file}: ${r.status}`)),
+  );
+}
+
 const CARD_WIDTH = 320;
 const CARD_HEIGHT = 300;
 const CARD_Y = -20;
@@ -130,30 +175,47 @@ const PANEL_Y = -40;
 const PANEL_PADDING = 40;
 const PANEL_COLUMN = PANEL_WIDTH - 2 * PANEL_PADDING;
 
-/** How far the title sits from the canvas's left edge, and the settings bar from its right edge. */
+/** How far the title sits from the canvas's left edge, and the toolbar from its right edge. */
 const MARGIN = 40;
 const TITLE_TOP = 362;
-/** The middle of the title's line, where the settings bar is centered. */
+/** The middle of the title's line, where the toolbar is centered. */
 const BAR_Y = TITLE_TOP - 19;
-const SETTING_WIDTH = 64;
-const SETTING_HEIGHT = 30;
-/** From one setting's button to the next. */
-const SETTING_STEP = SETTING_WIDTH + 6;
-/** The widths of the settings' labels, and the gap between the two settings. */
-const ALIGN_LABEL = 50;
-const LINE_HEIGHT_LABEL = 90;
-const SETTINGS_GAP = 24;
-/** The settings bar's width: each label and its three buttons, and the gap. */
-const BAR_WIDTH = ALIGN_LABEL + LINE_HEIGHT_LABEL + 2 * (2 * SETTING_STEP + SETTING_WIDTH) + SETTINGS_GAP;
+const TOOL_WIDTH = 34;
+const TOOL_HEIGHT = 30;
+/** The gap between a group's buttons, and between groups. */
+const TOOL_GAP = 4;
+const GROUP_GAP = 14;
 
-/** The alignments the body can take, with their buttons' labels. */
-const ALIGNS = [
-  ["Start", "start"],
-  ["Center", "center"],
-  ["End", "end"],
+/** The body's sizes: the icon's size on its button, and the body's. */
+const SIZES = [
+  [14, 15],
+  [18, 17],
+  [22, 20],
 ] as const;
-/** The line heights the body can take. */
-const LINE_HEIGHTS = [1.2, 1.5, 1.8];
+/** The body's alignments, with their icons. */
+const ALIGNS = [
+  ["format_align_left", "start"],
+  ["format_align_center", "center"],
+  ["format_align_right", "end"],
+] as const;
+/** The body's line heights, with their icons. */
+const SPACINGS = [
+  ["density_small", 1.2],
+  ["density_medium", 1.5],
+  ["density_large", 1.8],
+] as const;
+/** The families the body can be set in. */
+const FAMILIES = [LORA, CRIMSON];
+
+/** How the body is set: the toolbar's choices. */
+interface Settings {
+  size: number;
+  align: number;
+  bold: boolean;
+  italic: boolean;
+  spacing: number;
+  family: number;
+}
 
 /** Geometry for a box of the given size at `(x, y, z)`, placed by `anchor`. */
 function box(
@@ -201,15 +263,35 @@ function button(x: number, y: number, width: number, height: number, label: stri
   };
 }
 
-/**
- * A setting's button: shown in the accent color, and left alone by the
- * pointer, while disabled, which is how the chosen one is marked.
- */
-function settingButton(x: number, label: string): ComponentSpec {
+/** A toolbar button at `x`, showing `label`: an icon, or "Aa" in a family. */
+function tool(x: number, label: TextSpec): ComponentSpec {
   return {
-    ...button(x, BAR_Y, SETTING_WIDTH, SETTING_HEIGHT, label, false),
-    disabled: { color: ACCENT },
+    geometry: box(x, BAR_Y, 0, TOOL_WIDTH, TOOL_HEIGHT, BUTTON, 8),
+    hover: { color: BUTTON_HOVER },
+    pressed: { scale: 0.94 },
+    visible: false,
+    text: { ...label, color: WHITE },
   };
+}
+
+/** An icon from Material Icons, by name, at `sizePx`. */
+function icon(name: string, sizePx: number): TextSpec {
+  return { content: name, sizePx, family: ICONS };
+}
+
+/**
+ * Marks `button` as on, in the accent color, or off. An on button has no hover
+ * style, so the pointer leaves it as it is; off, it gets it back.
+ */
+function mark(button: Handle, on: boolean): void {
+  button.setStyle("hover", on ? undefined : { color: BUTTON_HOVER });
+  const geometry = button.declaredGeometry();
+  if (geometry) button.setDeclaredGeometry({ ...geometry, color: on ? ACCENT : BUTTON });
+}
+
+/** Marks the `chosen` button of a group as on, and the rest as off. */
+function select(buttons: Handle[], chosen: number): void {
+  buttons.forEach((b, i) => mark(b, i === chosen));
 }
 
 /** A card's texts, in reading order. */
@@ -218,12 +300,13 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
   const top = CARD_HEIGHT / 2 - CARD_PADDING;
   const specs: ComponentSpec[] = [
     // Aligned to the end of the column, so it lines up with the card's right edge.
-    textAt(left, top, { content: essay.year, sizePx: 13, color: MUTED, wrapWidth: CARD_COLUMN, align: "end" }),
+    textAt(left, top, { content: essay.year, sizePx: 13, weight: 500, color: MUTED, wrapWidth: CARD_COLUMN, align: "end" }),
     // At most two lines, ending in the default "…".
-    textAt(left, top - 24, { content: essay.title, sizePx: 22, color: INK, wrapWidth: CARD_COLUMN, maxLines: 2 }),
+    textAt(left, top - 24, { content: essay.title, sizePx: 22, weight: 800, color: INK, wrapWidth: CARD_COLUMN, maxLines: 2 }),
     // At most five lines, ending in the card's own ellipsis.
     textAt(left, top - 86, {
       content: essay.opening,
+      family: LORA,
       sizePx: 15,
       color: INK,
       wrapWidth: CARD_COLUMN,
@@ -245,37 +328,53 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
 }
 
 function main(app: ProteusApp, canvasWidth: number): void {
-  // The title sits a margin from the canvas's left edge, and the settings bar,
-  // on the title's line, a margin from its right edge.
+  // Lora, upright and italic, and the icons, downloaded: both of Lora's files
+  // are one family, and texts in either font wait for it.
+  for (const file of ["Lora-Variable.ttf", "Lora-Italic-Variable.ttf"]) {
+    app.loadFont(fontFile(file), { family: LORA }).catch((e: unknown) => console.warn(e));
+  }
+  app.loadFont(fontFile("MaterialIcons-Regular.ttf"), { family: ICONS }).catch((e: unknown) => console.warn(e));
+  // Crimson Pro is coming, but isn't downloaded until it's first chosen: the
+  // promise is settled then. Meanwhile, its texts are drawn in the default
+  // font, and again in it once it loads.
+  let fetchCrimson = () => {};
+  const crimson = new Promise<ArrayBuffer>((resolve, reject) => {
+    fetchCrimson = () => {
+      fetchCrimson = () => {};
+      fontFile("CrimsonPro-Variable.ttf").then(resolve, reject);
+    };
+  });
+  app.loadFont(crimson, { family: CRIMSON, whileLoading: "defaultFont" }).catch((e: unknown) => console.warn(e));
+
+  // The title sits a margin from the canvas's left edge, and the toolbar, on
+  // the title's line, a margin from its right edge.
   app.component(textAt(-canvasWidth / 2 + MARGIN, TITLE_TOP, { content: "Essays", sizePx: 30, color: WHITE }));
 
-  // The settings bar: a label, then its buttons, for each setting. Hidden
-  // until an essay is open, since it changes only the essay.
-  const bar: Handle[] = [];
-  function row(label: string, x: number, labelWidth: number, labels: string[]): Handle[] {
-    bar.push(
-      app.component(textAt(x, BAR_Y + 9, { content: label, sizePx: 14, color: WHITE, wrapWidth: labelWidth }, false)),
-    );
-    const buttons = labels.map((text, i) =>
-      app.component(settingButton(x + labelWidth + SETTING_WIDTH / 2 + i * SETTING_STEP, text)),
-    );
-    bar.push(...buttons);
-    return buttons;
-  }
-  const barLeft = canvasWidth / 2 - MARGIN - BAR_WIDTH;
-  const alignButtons = row(
-    "Align",
-    barLeft,
-    ALIGN_LABEL,
-    ALIGNS.map(([label]) => label),
-  );
-  const afterAlign = barLeft + ALIGN_LABEL + 2 * SETTING_STEP + SETTING_WIDTH + SETTINGS_GAP;
-  const lineHeightButtons = row(
-    "Line height",
-    afterAlign,
-    LINE_HEIGHT_LABEL,
-    LINE_HEIGHTS.map((h) => String(h)),
-  );
+  // The toolbar: its groups, left to right, each button's label made from its
+  // index in the group. Hidden until an essay is open, since it changes only
+  // the essay. Bold and italic sit together, as one group.
+  const groups: [number, (i: number) => TextSpec, number][] = [
+    [SIZES.length, (i) => icon("format_size", SIZES[i][0]), GROUP_GAP],
+    [ALIGNS.length, (i) => icon(ALIGNS[i][0], 20), GROUP_GAP],
+    [1, () => icon("format_bold", 20), TOOL_GAP],
+    [1, () => icon("format_italic", 20), GROUP_GAP],
+    [SPACINGS.length, (i) => icon(SPACINGS[i][0], 20), GROUP_GAP],
+    [FAMILIES.length, (i) => ({ content: "Aa", sizePx: 17, family: FAMILIES[i] }), 0],
+  ];
+  const widthOf = (n: number) => n * TOOL_WIDTH + (n - 1) * TOOL_GAP;
+  const barWidth = groups.reduce((sum, [n, , gap]) => sum + widthOf(n) + gap, 0);
+  let x = canvasWidth / 2 - MARGIN - barWidth + TOOL_WIDTH / 2;
+  const made = groups.map(([count, label, gap]) => {
+    const group: Handle[] = [];
+    for (let i = 0; i < count; i++) {
+      group.push(app.component(tool(x, label(i))));
+      x += TOOL_WIDTH + TOOL_GAP;
+    }
+    x += gap - TOOL_GAP;
+    return group;
+  });
+  const [sizeButtons, alignButtons, [boldButton], [italicButton], spacingButtons, familyButtons] = made;
+  const toolbar = made.flat();
 
   // A card for each essay, with its texts as children.
   const cards: Handle[] = [];
@@ -315,20 +414,22 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const channel = app.transitionChannel();
   /** The essay open, or opening. */
   let open: number | undefined;
-  let alignChoice = 0;
-  let lineHeightChoice = 1;
+  const settings: Settings = { size: 1, align: 0, bold: false, italic: false, spacing: 1, family: 0 };
 
   const setVisible = (handles: Handle[], visible: boolean) => handles.forEach((h) => h.setVisible(visible));
 
-  /** The opening of essay `i`, set as the settings bar says. */
+  /** The opening of essay `i`, set as the toolbar says. */
   function bodyText(i: number): TextSpec {
     return {
       content: ESSAYS[i].opening,
-      sizePx: 17,
+      family: FAMILIES[settings.family],
+      sizePx: SIZES[settings.size][1],
+      weight: settings.bold ? 700 : 400,
+      italic: settings.italic,
       color: INK,
       wrapWidth: PANEL_COLUMN,
-      align: ALIGNS[alignChoice][1],
-      lineHeight: LINE_HEIGHTS[lineHeightChoice],
+      align: ALIGNS[settings.align][1],
+      lineHeight: SPACINGS[settings.spacing][1],
     };
   }
 
@@ -337,11 +438,11 @@ function main(app: ProteusApp, canvasWidth: number): void {
     if (open !== undefined) return;
     open = i;
     const essay = ESSAYS[i];
-    title.setText({ content: essay.title, sizePx: 30, color: INK, wrapWidth: PANEL_COLUMN });
+    title.setText({ content: essay.title, sizePx: 30, weight: 800, color: INK, wrapWidth: PANEL_COLUMN });
     // Two lines, split with a `\n`.
-    byline.setText({ content: `${essay.author}\n${essay.year}`, sizePx: 14, color: MUTED });
+    byline.setText({ content: `${essay.author}\n${essay.year}`, sizePx: 14, color: MUTED, italic: true });
     body.setText(bodyText(i));
-    quote.setText({ content: essay.quote, sizePx: 20, color: ACCENT, wrapWidth: 600, align: "center" });
+    quote.setText({ content: essay.quote, sizePx: 20, family: LORA, italic: true, color: ACCENT, wrapWidth: 600, align: "center" });
     source.setText({ content: essay.source, sizePx: 12, color: MUTED, wrapWidth: PANEL_COLUMN });
     setVisible(cardContents[i], false);
     channel.set(panel, cards[i], OPEN, true);
@@ -353,23 +454,19 @@ function main(app: ProteusApp, canvasWidth: number): void {
     const i = open;
     open = undefined;
     setVisible(essayView, false);
-    setVisible(bar, false);
+    setVisible(toolbar, false);
     channel.set(cards[i], panel, OPEN, true);
   }
 
-  /**
-   * Marks the `chosen` button of a row by disabling it, so it shows the accent
-   * color, and hovering or clicking it does nothing, since it's chosen already.
-   * The rest are enabled.
-   */
-  function select(buttons: Handle[], chosen: number): void {
-    buttons.forEach((b, i) => b.setDisabled(i === chosen));
-  }
-
-  /** Applies the settings bar's choices to its buttons and the open body. */
+  /** Applies the toolbar's choices to its buttons and the open body. */
   function apply(): void {
-    select(alignButtons, alignChoice);
-    select(lineHeightButtons, lineHeightChoice);
+    select(sizeButtons, settings.size);
+    select(alignButtons, settings.align);
+    mark(boldButton, settings.bold);
+    mark(italicButton, settings.italic);
+    select(spacingButtons, settings.spacing);
+    select(familyButtons, settings.family);
+    if (FAMILIES[settings.family] === CRIMSON) fetchCrimson();
     if (open !== undefined) body.setText(bodyText(open));
   }
   apply();
@@ -381,21 +478,21 @@ function main(app: ProteusApp, canvasWidth: number): void {
   });
   panel.onTransitionComplete(() => {
     setVisible(essayView, true);
-    setVisible(bar, true);
+    setVisible(toolbar, true);
   });
   back.onClick(closeEssay);
-  alignButtons.forEach((b, i) =>
-    b.onClick(() => {
-      alignChoice = i;
+  // Each button changes one setting.
+  const on = (button: Handle, change: () => void) =>
+    button.onClick(() => {
+      change();
       apply();
-    }),
-  );
-  lineHeightButtons.forEach((b, i) =>
-    b.onClick(() => {
-      lineHeightChoice = i;
-      apply();
-    }),
-  );
+    });
+  sizeButtons.forEach((b, i) => on(b, () => (settings.size = i)));
+  alignButtons.forEach((b, i) => on(b, () => (settings.align = i)));
+  on(boldButton, () => (settings.bold = !settings.bold));
+  on(italicButton, () => (settings.italic = !settings.italic));
+  spacingButtons.forEach((b, i) => on(b, () => (settings.spacing = i)));
+  familyButtons.forEach((b, i) => on(b, () => (settings.family = i)));
 }
 
 const canvas = document.getElementById("app") as HTMLCanvasElement;

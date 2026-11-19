@@ -9,11 +9,29 @@ at most two lines and ends in "…", its opening is spaced at a line height of 1
 after five lines, ending in an ellipsis of its own, and its source is clipped after two lines. The
 third card's ellipsis is longer than a line, so it takes a line of its own. A card opens into its
 essay (1→1): a two-line byline split with `\n`, an opening that wraps at the column's width, a
-centered pull quote, and the source in full. While an essay is open, the buttons at the top
-change its alignment and line height.
+centered pull quote, and the source in full. While an essay is open, a toolbar at the top sets
+its body's size, alignment, bold and italic, line height and font, as a text editor's does. Its
+icons are Material Icons, a font whose ligatures turn an icon's name into the icon, and a chosen
+button stays in the accent color under the pointer, since its hover style is removed with
+`set_style`.
 
-Not shown yet: fonts and weights, other scripts, mixed styles within a text, measuring text,
-and components within a line of text.
+The essays are set in Lora, a serif loaded from [`fonts/`](./fonts), with its italic for the
+pull quotes. Titles and years are the built-in Inter at weights 800 and 500, bylines are Inter
+slanted, since Inter's italic isn't loaded, and buttons and sources are Inter with no weight
+set, bold. The TypeScript version downloads Lora and the icons, and their texts wait for them;
+the Rust version builds them in. The toolbar's last button sets the body in Crimson Pro, which
+both versions download only when it's first chosen: until it arrives, its button and the body
+show the default font, then swap to it. Crimson Pro has no italic file, so its italic is
+slanted.
+
+Lora and Crimson Pro are from Google Fonts, under the SIL Open Font License, in
+[`fonts/OFL-Lora.txt`](./fonts/OFL-Lora.txt) and
+[`fonts/OFL-CrimsonPro.txt`](./fonts/OFL-CrimsonPro.txt). Material Icons is from Google, under
+the Apache License 2.0, in [`fonts/LICENSE-MaterialIcons.txt`](./fonts/LICENSE-MaterialIcons.txt).
+To watch a font arrive, throttle the network in the browser's developer tools.
+
+Not shown yet: a weight a font doesn't have, other scripts, mixed styles within a text,
+measuring text, and components within a line of text.
 
 Techniques worth copying are described at the top of each version's source:
 [`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).
