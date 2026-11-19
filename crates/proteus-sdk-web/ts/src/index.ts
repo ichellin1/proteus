@@ -43,6 +43,7 @@ import type {
   TransitionDropped,
   Size,
   Vec2,
+  StyleOverride,
 } from "./types.js";
 
 export * from "./types.js";
@@ -638,6 +639,20 @@ export class Handle {
    */
   setDisabled(disabled: boolean): void {
     this.app.wasmApp.setDisabled(this.wasmHandle, disabled);
+  }
+
+  /**
+   * Sets this component's style for `state`, such as its hover style, or
+   * removes it with `undefined`, while the app runs. If the component is in
+   * that state now, it changes to the new style over its style timing, as it
+   * would entering the state. A button that shows it's chosen, for example,
+   * removes its hover style, so the pointer leaves it as it is, and sets it
+   * again when it's no longer chosen.
+   *
+   * @throws If `style` isn't a valid {@link StyleOverride}.
+   */
+  setStyle(state: "hover" | "pressed" | "focused" | "disabled", style: StyleOverride | undefined): void {
+    this.app.wasmApp.setStyle(this.wasmHandle, state, style);
   }
 
   /**

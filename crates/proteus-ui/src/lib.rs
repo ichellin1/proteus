@@ -76,7 +76,7 @@ pub use input::{
 pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{
     effect_transition_system, interaction_style_system, EffectTransition, EffectValues,
-    InteractionDef, InteractionState, InteractionStateKind, RestingEffects, StyleOverride,
+    InteractionDef, InteractionState, InteractionStateKind, RestingEffects, Restyle, StyleOverride,
     StyleTiming, STYLE_TRANSITION_CONFIG,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};

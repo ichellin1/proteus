@@ -1202,6 +1202,41 @@ impl ProteusApp {
             .map(dto::input_device_names)
     }
 
+    /// Calls [`Handle::set_style`](sdk::Handle::set_style). `state` is
+    /// `"hover"`, `"pressed"`, `"focused"` or `"disabled"`, and `style` a
+    /// style override, or `undefined` to remove it; throws otherwise.
+    #[wasm_bindgen(js_name = setStyle)]
+    pub fn set_style(
+        &mut self,
+        handle: &Handle,
+        state: &str,
+        style: JsValue,
+    ) -> Result<(), JsValue> {
+        let state = match state {
+            "hover" => sdk::InteractionStateKind::Hover,
+            "pressed" => sdk::InteractionStateKind::Pressed,
+            "focused" => sdk::InteractionStateKind::Focused,
+            "disabled" => sdk::InteractionStateKind::Disabled,
+            other => {
+                return Err(crate::js_error(&format!(
+                    "invalid state {other:?}: expected \"hover\", \"pressed\", \"focused\" or \
+                     \"disabled\""
+                )))
+            }
+        };
+        let style = if style.is_undefined() || style.is_null() {
+            None
+        } else {
+            let dto: dto::StyleOverrideDto = serde_wasm_bindgen::from_value(style)
+                .map_err(|e| crate::js_error(&format!("invalid style: {e}")))?;
+            Some((&dto).into())
+        };
+        handle
+            .0
+            .set_style(&mut self.0.borrow_mut(), state, style)
+            .map_err(handle_err)
+    }
+
     /// Calls [`Handle::set_disabled`](sdk::Handle::set_disabled).
     #[wasm_bindgen(js_name = setDisabled)]
     pub fn set_disabled(&mut self, handle: &Handle, disabled: bool) -> Result<(), JsValue> {
