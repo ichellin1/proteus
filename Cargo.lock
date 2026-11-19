@@ -831,6 +831,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "essays"
+version = "0.3.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "proteus-host-web",
+ "proteus-host-winit",
+ "proteus-runtime",
+ "proteus-sdk",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
+]
+
+[[package]]
 name = "etagere"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

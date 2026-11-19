@@ -22,6 +22,20 @@
 //! [`FontAtlas::clear_glyph_cache`] drops them all. Text already baked keeps
 //! its pixels: they're in the atlas, not the cache.
 //!
+//! ## Lines
+//!
+//! A [`TextLayout`] says how to lay a text out: its size and letter spacing,
+//! the width its lines wrap at, how they align, their height, and how many are
+//! shown, ending in an ellipsis or clipped past the last. Lines are broken in
+//! logical pixels and scaled as they're rasterized, so a text breaks at the
+//! same words at every display scale.
+//!
+//! An ellipsis is laid out with the text, so it wraps as words do. The text
+//! keeps as much of itself as fits in its maximum number of lines with the
+//! ellipsis after it, cut between clusters, so never inside a character; an
+//! ellipsis wider than a line takes lines of its own. An ellipsis too long to
+//! fit on its own is clipped, with a warning.
+//!
 //! ## Text as a texture
 //!
 //! The whole text becomes one image, at its size in pixels:
@@ -46,8 +60,8 @@ use crate::glyph_cache::{CachedGlyph, GlyphCache, GlyphKey};
 
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache, SourceCacheOptions};
 use parley::{
-    FontContext, FontFamily, FontFamilyName, Layout, LayoutContext, LineHeight,
-    PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, Layout, LayoutContext,
+    LineHeight, OverflowWrap, PositionedLayoutItem, StyleProperty,
 };
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::{Format, Vector};
@@ -69,6 +83,85 @@ const SUBPIXEL_STEPS: f32 = 4.0;
 /// The glyph cache's budget unless [`FontAtlas::set_glyph_cache_budget`]
 /// changes it: 4 MiB, from about 5,000 glyphs at 48 pixels to 25,000 at 16.
 pub const DEFAULT_GLYPH_CACHE_BYTES: usize = 4 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// TextLayout
+// ---------------------------------------------------------------------------
+
+/// Where a text's lines sit across its box: its wrap width, or its widest
+/// line without one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextAlign {
+    /// Against the start of the box: the left, for left-to-right text.
+    #[default]
+    Start,
+    /// In the middle of the box.
+    Center,
+    /// Against the end of the box: the right, for left-to-right text.
+    End,
+}
+
+/// How a text with more lines than its maximum ends.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TextOverflow {
+    /// With this text after the last line shown: "…", the default, or one of
+    /// the app's own, such as `" more"`. "…" is drawn as "..." in a font that
+    /// has no "…".
+    Ellipsis(String),
+    /// With the lines past the last shown left out, and no mark.
+    Clip,
+}
+
+impl Default for TextOverflow {
+    fn default() -> Self {
+        Self::Ellipsis(DEFAULT_ELLIPSIS.to_owned())
+    }
+}
+
+/// The ellipsis a text ends in unless it sets its own: "…".
+pub const DEFAULT_ELLIPSIS: &str = "\u{2026}";
+
+/// How to lay a text out, in logical pixels: everything but its font. Made
+/// with [`TextLayout::new`], with the fields it doesn't set changed after.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextLayout<'a> {
+    /// The text. A `\n` starts a new line.
+    pub content: &'a str,
+    /// The font's size.
+    pub size_px: f32,
+    /// Extra space between characters; negative tightens them.
+    pub letter_spacing_px: f32,
+    /// The width lines wrap at. `None` breaks lines only at `\n`.
+    pub wrap_width: Option<f32>,
+    /// Where lines sit across the text's box.
+    pub align: TextAlign,
+    /// The distance from one line's baseline to the next, as a multiple of
+    /// the size, as CSS's unitless `line-height` is. `None` is the font's own
+    /// line spacing.
+    pub line_height: Option<f32>,
+    /// The most lines shown. `None` shows them all.
+    pub max_lines: Option<u32>,
+    /// What ends a text with more lines than `max_lines`: an ellipsis, or
+    /// `None` to clip.
+    pub ellipsis: Option<&'a str>,
+}
+
+impl<'a> TextLayout<'a> {
+    /// `content` at `size_px`, on lines broken only at `\n`, aligned to the
+    /// start, at the font's line spacing, with no maximum number of lines.
+    pub fn new(content: &'a str, size_px: f32) -> Self {
+        Self {
+            content,
+            size_px,
+            letter_spacing_px: 0.0,
+            wrap_width: None,
+            align: TextAlign::Start,
+            line_height: None,
+            max_lines: None,
+            ellipsis: Some(DEFAULT_ELLIPSIS),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // RasterizedGlyphs
@@ -108,6 +201,8 @@ pub struct FontAtlas {
     scale: ScaleContext,
     /// The font's family name, which each text asks parley for.
     family: String,
+    /// Whether the font has "…", so it can end a text.
+    has_ellipsis: bool,
     glyphs: GlyphCache,
 }
 
@@ -115,6 +210,17 @@ pub struct FontAtlas {
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("not a TTF or OTF font that can be read: {0}")]
 pub struct FontError(String);
+
+/// A text laid out within its maximum number of lines.
+struct Fitted {
+    layout: Layout<()>,
+    /// How many of the layout's lines are drawn: fewer than it has when the
+    /// text is clipped.
+    line_count: usize,
+    /// What was laid out in place of the text when it ends in an ellipsis.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests check it"))]
+    content: Option<String>,
+}
 
 /// A glyph rasterized for one text, before it's drawn into the text's image.
 struct PlacedGlyph {
@@ -150,6 +256,8 @@ impl FontAtlas {
             shared: false,
             system_fonts: false,
         });
+        let has_ellipsis = swash::FontRef::from_index(blob.as_ref(), 0)
+            .is_some_and(|font| font.charmap().map('\u{2026}') != 0);
         let families = collection.register_fonts(blob, None);
         let family = families
             .first()
@@ -164,6 +272,7 @@ impl FontAtlas {
             layout: LayoutContext::new(),
             scale: ScaleContext::new(),
             family,
+            has_ellipsis,
             glyphs: GlyphCache::new(DEFAULT_GLYPH_CACHE_BYTES),
         })
     }
@@ -190,7 +299,8 @@ impl FontAtlas {
     /// Lays `text` out at `size_px`, with `letter_spacing_px` of extra space
     /// between glyphs (`0.0` for the font's normal spacing), and rasterizes it
     /// into an RGBA pixel buffer. A `\n` starts a new line. The image spans
-    /// the glyphs' ink, so it has no padding after the last glyph.
+    /// the glyphs' ink, so it has no padding after the last glyph. The same as
+    /// [`FontAtlas::rasterize`] with a [`TextLayout::new`] and a scale of 1.
     ///
     /// Returns `None` if `text` draws no pixels: it's empty, or only
     /// whitespace.
@@ -200,17 +310,34 @@ impl FontAtlas {
         size_px: f32,
         letter_spacing_px: f32,
     ) -> Option<RasterizedGlyphs> {
-        if text.is_empty() {
+        let mut layout = TextLayout::new(text, size_px);
+        layout.letter_spacing_px = letter_spacing_px;
+        self.rasterize(&layout, 1.0)
+    }
+
+    /// Lays `text` out and rasterizes it into an RGBA pixel buffer, at `scale`
+    /// pixels per logical pixel, as a bake at the display's scale is. Lines
+    /// break where they would at a scale of 1. See the module docs.
+    ///
+    /// The image is the text's box: as wide as its wrap width, or without one
+    /// its widest line's ink, and from the top of its first line to the bottom
+    /// of its last, widened where ink reaches past it.
+    ///
+    /// Returns `None` if `text` draws no pixels: it's empty, or only
+    /// whitespace.
+    pub fn rasterize(&mut self, text: &TextLayout, scale: f32) -> Option<RasterizedGlyphs> {
+        if text.content.is_empty() {
             return None;
         }
-        let layout = self.lay_out(text, size_px, letter_spacing_px);
+        let Fitted {
+            layout, line_count, ..
+        } = self.fit(text, scale);
 
         // The image's height: from the top of the first line to the bottom of
-        // the last, each part rounded up on its own, so that the baseline sits
-        // on a whole pixel and descenders are never cut off.
-        let mut lines = layout.lines();
-        let first = *lines.next()?.metrics();
-        let last = layout.lines().last().map_or(first, |l| *l.metrics());
+        // the last shown, each part rounded up on its own, so that the
+        // baseline sits on a whole pixel and descenders are never cut off.
+        let first = *layout.lines().next()?.metrics();
+        let last = *layout.lines().nth(line_count - 1)?.metrics();
         let ascent_px = (first.baseline - first.block_min_coord).ceil() as i32;
         let below_px = (last.block_max_coord - first.baseline).ceil() as i32;
         let height = ascent_px + below_px;
@@ -218,13 +345,20 @@ impl FontAtlas {
             return None;
         }
 
-        let glyphs = self.rasterize_glyphs(&layout, first.baseline);
+        let glyphs = self.rasterize_glyphs(&layout, first.baseline, line_count);
 
-        // The image's width: from the leftmost ink, or the pen's start if
-        // that's further left, to the rightmost ink. A glyph's ink can reach
-        // left of the pen, as Inter's "j" does, or past its own advance.
+        // The image's width: the wrap width, if there is one, widened to the
+        // ink where it reaches past it; without one, from the leftmost ink, or
+        // the pen's start if that's further left, to the rightmost ink. A
+        // glyph's ink can reach left of the pen, as Inter's "j" does, or past
+        // its own advance.
+        let box_width = text.wrap_width.map_or(0, |w| (w * scale).ceil() as i32);
         let min_left = glyphs.iter().map(|g| g.left).min()?.min(0);
-        let max_right = glyphs.iter().map(|g| g.left + g.width as i32).max()?;
+        let max_right = glyphs
+            .iter()
+            .map(|g| g.left + g.width as i32)
+            .max()?
+            .max(box_width);
         let width = (max_right - min_left).max(0) as u32;
         if width == 0 {
             return None;
@@ -259,28 +393,132 @@ impl FontAtlas {
         })
     }
 
-    /// Shapes `text` and breaks it into lines at each `\n`.
-    fn lay_out(&mut self, text: &str, size_px: f32, letter_spacing_px: f32) -> Layout<()> {
-        // Fractional positions, rounded when the glyphs are rasterized.
+    /// Lays `text` out within its maximum number of lines. Past the maximum,
+    /// an ellipsis replaces the end of what fits, or the lines past it are
+    /// left out.
+    fn fit(&mut self, text: &TextLayout, scale: f32) -> Fitted {
+        let full = self.lay_out(text.content, text, scale);
+        let line_count = full.len();
+        let fitted = |layout, line_count, content| Fitted {
+            layout,
+            line_count,
+            content,
+        };
+        let Some(max) = text.max_lines.map(|n| n.max(1) as usize) else {
+            return fitted(full, line_count, None);
+        };
+        if line_count <= max {
+            return fitted(full, line_count, None);
+        }
+        let Some(ellipsis) = text.ellipsis else {
+            return fitted(full, max, None);
+        };
+        let ellipsis = if ellipsis == DEFAULT_ELLIPSIS && !self.has_ellipsis {
+            "..."
+        } else {
+            ellipsis
+        };
+
+        // Where the text can be cut: between clusters, so never inside a
+        // character, up to the end of the last line shown.
+        let end = full.lines().nth(max - 1).map_or(0, |l| l.text_range().end);
+        let mut cuts: Vec<usize> = full
+            .lines()
+            .take(max)
+            .flat_map(|line| line.runs().flat_map(|run| run.clusters()))
+            .map(|cluster| cluster.text_range().start)
+            .filter(|&at| at < end)
+            .chain([0, end])
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        let with_ellipsis = |cut: usize| {
+            let head = text.content[..cut].trim_end();
+            if head.is_empty() {
+                ellipsis.trim_start().to_owned()
+            } else {
+                format!("{head}{ellipsis}")
+            }
+        };
+        // The longest cut whose text and ellipsis fit in `max` lines. A
+        // shorter cut never takes more lines, so a binary search finds it.
+        let fits = |atlas: &mut Self, cut: usize| {
+            let content = with_ellipsis(cut);
+            let layout = atlas.lay_out(&content, text, scale);
+            (layout.len() <= max).then_some((layout, content))
+        };
+        let Some(mut best) = fits(self, cuts[0]) else {
+            log::warn!(
+                "the ellipsis {ellipsis:?} of the text {:?} needs more than its {max} line(s) \
+                 on its own, at a wrap width of {:?}, so it's clipped: raise its maximum number \
+                 of lines, widen its wrap width, or shorten its ellipsis",
+                text.content,
+                text.wrap_width,
+            );
+            let content = ellipsis.trim_start().to_owned();
+            let layout = self.lay_out(&content, text, scale);
+            return fitted(layout, max, Some(content));
+        };
+        let (mut low, mut high) = (0, cuts.len() - 1);
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            match fits(self, cuts[mid]) {
+                Some(found) => {
+                    best = found;
+                    low = mid;
+                }
+                None => high = mid - 1,
+            }
+        }
+        let (layout, content) = best;
+        let line_count = layout.len();
+        fitted(layout, line_count, Some(content))
+    }
+
+    /// Shapes `content` in `text`'s style, breaks it into lines, and aligns
+    /// them, at `scale`.
+    fn lay_out(&mut self, content: &str, text: &TextLayout, scale: f32) -> Layout<()> {
+        // Sizes in logical pixels, scaled by parley; fractional positions,
+        // rounded when the glyphs are rasterized.
         let mut builder = self
             .layout
-            .ranged_builder(&mut self.fonts, text, 1.0, false);
+            .ranged_builder(&mut self.fonts, content, scale, false);
         builder.push_default(StyleProperty::FontFamily(FontFamily::Single(
             FontFamilyName::Named(self.family.as_str().into()),
         )));
-        builder.push_default(StyleProperty::FontSize(size_px));
-        builder.push_default(StyleProperty::LetterSpacing(letter_spacing_px));
-        builder.push_default(StyleProperty::LineHeight(LineHeight::MetricsRelative(1.0)));
-        let mut layout = builder.build(text);
-        layout.break_all_lines(None);
+        builder.push_default(StyleProperty::FontSize(text.size_px));
+        builder.push_default(StyleProperty::LetterSpacing(text.letter_spacing_px));
+        builder.push_default(StyleProperty::LineHeight(match text.line_height {
+            Some(multiple) => LineHeight::FontSizeRelative(multiple),
+            None => LineHeight::MetricsRelative(1.0),
+        }));
+        // A word wider than the wrap width breaks between characters, rather
+        // than running out of the box.
+        builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
+        let mut layout = builder.build(content);
+        // Set before breaking lines, which aligns them.
+        let alignment = match text.align {
+            TextAlign::Start => Alignment::Start,
+            TextAlign::Center => Alignment::Center,
+            TextAlign::End => Alignment::End,
+        };
+        layout.set_alignment(alignment, AlignmentOptions::default());
+        layout.break_all_lines(text.wrap_width.map(|w| w * scale));
         layout
     }
 
-    /// Rasterizes every glyph in `layout`, placed relative to the pen's start
-    /// and the first line's baseline, at `baseline`.
-    fn rasterize_glyphs(&mut self, layout: &Layout<()>, baseline: f32) -> Vec<PlacedGlyph> {
+    /// Rasterizes every glyph in the first `line_count` lines of `layout`,
+    /// placed relative to the pen's start and the first line's baseline, at
+    /// `baseline`.
+    fn rasterize_glyphs(
+        &mut self,
+        layout: &Layout<()>,
+        baseline: f32,
+        line_count: usize,
+    ) -> Vec<PlacedGlyph> {
         let mut glyphs = Vec::new();
-        for line in layout.lines() {
+        for line in layout.lines().take(line_count) {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
@@ -404,7 +642,9 @@ mod tests {
     #[test]
     fn kerning_pulls_a_pair_together() {
         let mut fa = atlas();
-        let shaped = fa.lay_out("AV", 64.0, 0.0).full_width();
+        let shaped = fa
+            .lay_out("AV", &TextLayout::new("AV", 64.0), 1.0)
+            .full_width();
 
         let font = swash::FontRef::from_index(EMBEDDED_FONT_BYTES, 0).unwrap();
         let metrics = font.glyph_metrics(&[]).scale(64.0);
@@ -580,6 +820,217 @@ mod tests {
             fa.rasterize_text("ABCDEFGHIJKLMNOPQRSTUVWXYZ", size as f32, 0.0);
             assert!(fa.glyph_cache_size().1 <= 20_000);
         }
+    }
+
+    const PARAGRAPH: &str = "Proteus draws every component as a textured, rounded rectangle, \
+        in one call. A split turns one component into several, and a merge turns several into one.";
+
+    fn wrapped(width: f32) -> TextLayout<'static> {
+        let mut text = TextLayout::new(PARAGRAPH, 16.0);
+        text.wrap_width = Some(width);
+        text
+    }
+
+    /// The columns of `g` from the left that have no ink.
+    fn left_margin(g: &RasterizedGlyphs) -> u32 {
+        ink_columns(g).start
+    }
+
+    #[test]
+    fn text_wraps_at_its_width_and_its_box_is_that_wide() {
+        let mut fa = atlas();
+        let fitted = fa.fit(&wrapped(200.0), 1.0);
+        assert!(fitted.line_count >= 5, "{} lines", fitted.line_count);
+        // Trailing spaces hang past the width, as in CSS, so they don't count.
+        for line in fitted.layout.lines() {
+            let m = line.metrics();
+            assert!(m.advance - m.hanging_advance <= 200.5, "{}", m.advance);
+        }
+        let g = fa.rasterize(&wrapped(200.0), 1.0).unwrap();
+        assert_eq!(g.width, 200);
+    }
+
+    // Lines are broken in logical pixels, so the same words start each line at
+    // every display scale.
+    #[test]
+    fn text_breaks_at_the_same_words_at_every_scale() {
+        let mut fa = atlas();
+        let starts = |fa: &mut FontAtlas, scale| -> Vec<usize> {
+            let fitted = fa.fit(&wrapped(230.0), scale);
+            fitted
+                .layout
+                .lines()
+                .map(|l| l.text_range().start)
+                .collect()
+        };
+        let at_1 = starts(&mut fa, 1.0);
+        assert_eq!(at_1, starts(&mut fa, 2.0));
+        assert_eq!(at_1, starts(&mut fa, 1.5));
+    }
+
+    #[test]
+    fn a_word_wider_than_the_wrap_width_breaks_between_characters() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new("Supercalifragilisticexpialidocious", 24.0);
+        text.wrap_width = Some(120.0);
+        let fitted = fa.fit(&text, 1.0);
+        assert!(fitted.line_count > 1);
+        for line in fitted.layout.lines() {
+            let m = line.metrics();
+            assert!(m.advance - m.hanging_advance <= 120.5, "{}", m.advance);
+        }
+    }
+
+    // Centered and end-aligned lines start further from the box's left edge
+    // than lines aligned to the start.
+    #[test]
+    fn lines_align_within_the_box() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new("Short line", 16.0);
+        text.wrap_width = Some(300.0);
+        let start = fa.rasterize(&text, 1.0).unwrap();
+        text.align = TextAlign::Center;
+        let center = fa.rasterize(&text, 1.0).unwrap();
+        text.align = TextAlign::End;
+        let end = fa.rasterize(&text, 1.0).unwrap();
+        assert!(left_margin(&start) <= 2);
+        let ink = ink_columns(&start).len() as u32;
+        let centered = (300 - ink) / 2;
+        assert!(
+            left_margin(&center).abs_diff(centered) <= 2,
+            "{}",
+            left_margin(&center)
+        );
+        assert!(
+            left_margin(&end).abs_diff(300 - ink) <= 2,
+            "{}",
+            left_margin(&end)
+        );
+        assert_eq!(start.width, 300);
+    }
+
+    #[test]
+    fn line_height_spaces_the_lines() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new("One\nTwo\nThree", 20.0);
+        let natural = fa.rasterize(&text, 1.0).unwrap().height as f32;
+        text.line_height = Some(2.0);
+        let double = fa.rasterize(&text, 1.0).unwrap().height as f32;
+        assert!(
+            (double - 3.0 * 40.0).abs() <= 2.0,
+            "{double} for three lines at 40"
+        );
+        assert!(double > natural);
+    }
+
+    #[test]
+    fn clipped_text_shows_its_maximum_number_of_lines() {
+        let mut fa = atlas();
+        let all = fa.rasterize(&wrapped(200.0), 1.0).unwrap();
+        let mut text = wrapped(200.0);
+        text.max_lines = Some(2);
+        text.ellipsis = None;
+        let fitted = fa.fit(&text, 1.0);
+        assert_eq!(fitted.line_count, 2);
+        assert_eq!(fitted.content, None);
+        let two = fa.rasterize(&text, 1.0).unwrap();
+        let one_line = all.height as f32 / fa.fit(&wrapped(200.0), 1.0).line_count as f32;
+        assert!((two.height as f32 - 2.0 * one_line).abs() <= 2.0);
+    }
+
+    // The ellipsis ends the last line shown, after as much of the text as fits
+    // beside it.
+    #[test]
+    fn an_ellipsis_ends_the_last_line_shown() {
+        let mut fa = atlas();
+        let mut text = wrapped(200.0);
+        text.max_lines = Some(2);
+        let fitted = fa.fit(&text, 1.0);
+        assert_eq!(fitted.line_count, 2);
+        let content = fitted.content.unwrap();
+        assert!(content.ends_with('\u{2026}'), "{content:?}");
+        let head = content.trim_end_matches('\u{2026}');
+        assert!(PARAGRAPH.starts_with(head));
+        assert!(!head.ends_with(' '), "no space before the ellipsis");
+        // A word more wouldn't have fitted.
+        let next = PARAGRAPH[head.len()..].trim_start();
+        let one_more = next.split(' ').next().unwrap();
+        let longer = format!("{head} {one_more}\u{2026}");
+        assert!(fa.lay_out(&longer, &text, 1.0).len() > 2);
+    }
+
+    // The app's own ellipsis is used, and wraps onto a line of its own when it
+    // doesn't fit beside the text.
+    #[test]
+    fn an_ellipsis_wider_than_a_line_wraps_onto_its_own() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new(PARAGRAPH, 16.0);
+        text.wrap_width = Some(90.0);
+        text.max_lines = Some(3);
+        text.ellipsis = Some(" read the whole article");
+        let fitted = fa.fit(&text, 1.0);
+        let content = fitted.content.unwrap();
+        assert!(content.ends_with(" read the whole article"), "{content:?}");
+        assert!(
+            content.len() > " read the whole article".len(),
+            "some text is kept"
+        );
+        assert!(fitted.line_count <= 3);
+    }
+
+    // An ellipsis that can't fit in the lines allowed on its own is clipped.
+    #[test]
+    fn an_ellipsis_too_long_on_its_own_is_clipped() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new(PARAGRAPH, 16.0);
+        text.wrap_width = Some(60.0);
+        text.max_lines = Some(1);
+        text.ellipsis = Some(" read the whole article");
+        let fitted = fa.fit(&text, 1.0);
+        assert_eq!(fitted.content.as_deref(), Some("read the whole article"));
+        assert_eq!(fitted.line_count, 1);
+        assert!(fa.rasterize(&text, 1.0).is_some());
+    }
+
+    // The text is cut between clusters, so "e" and a combining accent stay
+    // together.
+    #[test]
+    fn an_ellipsis_never_splits_a_character() {
+        let mut fa = atlas();
+        let accented = "cafe\u{301} ".repeat(30);
+        let mut text = TextLayout::new(&accented, 16.0);
+        text.wrap_width = Some(100.0);
+        text.max_lines = Some(2);
+        for width in [97.0, 100.0, 103.0, 106.0, 109.0] {
+            text.wrap_width = Some(width);
+            let content = fa.fit(&text, 1.0).content.unwrap();
+            let head = content.trim_end_matches('\u{2026}');
+            assert!(
+                head.ends_with('\u{301}') || !head.ends_with('e'),
+                "{head:?} at {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_font_without_an_ellipsis_ends_in_three_dots() {
+        let mut fa = atlas();
+        fa.has_ellipsis = false;
+        let mut text = wrapped(200.0);
+        text.max_lines = Some(1);
+        let content = fa.fit(&text, 1.0).content.unwrap();
+        assert!(content.ends_with("..."), "{content:?}");
+        text.ellipsis = Some(" more");
+        let content = fa.fit(&text, 1.0).content.unwrap();
+        assert!(content.ends_with(" more"), "the app's own ellipsis is kept");
+    }
+
+    #[test]
+    fn text_within_its_maximum_isnt_changed() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new("Two\nlines", 16.0);
+        text.max_lines = Some(2);
+        assert_eq!(fa.fit(&text, 1.0).content, None);
     }
 
     #[test]

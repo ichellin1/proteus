@@ -18,7 +18,7 @@ use proteus_sdk::{
     KeyRepeat, KeyState, Modifiers, QuadState, StyleOverride, TransitionConfig, TransitionData,
     TransitionDropped,
 };
-use proteus_ui::{Border, DropShadow, Glow, Image, Text};
+use proteus_ui::{Border, DropShadow, Glow, Image, Text, TextAlign, TextOverflow};
 
 /// Reads a field given as `undefined` or `null` as its default, as if it had
 /// been left out. serde's `default` only covers a missing key, but TypeScript
@@ -220,6 +220,39 @@ pub struct TextDto {
     pub color: Option<ColorDto>,
     #[serde(default, deserialize_with = "or_default")]
     pub letter_spacing_px: f32,
+    #[serde(default)]
+    pub wrap_width: Option<f32>,
+    #[serde(default)]
+    pub align: Option<TextAlignDto>,
+    #[serde(default)]
+    pub line_height: Option<f32>,
+    #[serde(default)]
+    pub max_lines: Option<u32>,
+    #[serde(default)]
+    pub overflow: Option<TextOverflowDto>,
+}
+
+/// `"start"`, `"center"` or `"end"`.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextAlignDto {
+    Start,
+    Center,
+    End,
+}
+
+/// `"clip"`, or `{ ellipsis: "…" }` with any text.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum TextOverflowDto {
+    Keyword(TextOverflowKeyword),
+    Ellipsis { ellipsis: String },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextOverflowKeyword {
+    Clip,
 }
 
 impl From<&TextDto> for Text {
@@ -228,6 +261,25 @@ impl From<&TextDto> for Text {
             Text::new(d.content.clone(), d.size_px).with_letter_spacing(d.letter_spacing_px);
         if let Some(c) = &d.color {
             text = text.with_color(glam::Vec4::new(c.r, c.g, c.b, c.a));
+        }
+        text.wrap_width = d.wrap_width;
+        text.line_height = d.line_height;
+        text.max_lines = d.max_lines;
+        if let Some(align) = d.align {
+            text.align = match align {
+                TextAlignDto::Start => TextAlign::Start,
+                TextAlignDto::Center => TextAlign::Center,
+                TextAlignDto::End => TextAlign::End,
+            };
+        }
+        match &d.overflow {
+            Some(TextOverflowDto::Keyword(TextOverflowKeyword::Clip)) => {
+                text.overflow = TextOverflow::Clip;
+            }
+            Some(TextOverflowDto::Ellipsis { ellipsis }) => {
+                text.overflow = TextOverflow::Ellipsis(ellipsis.clone());
+            }
+            None => {}
         }
         text
     }
@@ -1046,6 +1098,34 @@ mod tests {
         );
         assert!(parse(r#"{}"#).is_err());
         assert!(parse(r#"{"key": "a", "code": "KeyA"}"#).is_err());
+    }
+
+    #[test]
+    fn text_with_lines() {
+        let text = |json: &str| serde_json::from_str::<TextDto>(json).map(|d| Text::from(&d));
+        let plain = text(r#"{"content": "Hi", "sizePx": 16}"#).unwrap();
+        assert_eq!(plain, Text::new("Hi", 16.0));
+
+        let wrapped = text(
+            r#"{"content": "Hi", "sizePx": 16, "wrapWidth": 200, "align": "center",
+                "lineHeight": 1.5, "maxLines": 2, "overflow": {"ellipsis": " more"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            wrapped,
+            Text::new("Hi", 16.0)
+                .with_wrap_width(200.0)
+                .with_align(TextAlign::Center)
+                .with_line_height(1.5)
+                .with_max_lines(2)
+                .with_ellipsis(" more")
+        );
+        let clipped = text(r#"{"content": "Hi", "sizePx": 16, "overflow": "clip"}"#).unwrap();
+        assert_eq!(clipped.overflow, TextOverflow::Clip);
+
+        assert!(text(r#"{"content": "Hi", "sizePx": 16, "align": "middle"}"#).is_err());
+        assert!(text(r#"{"content": "Hi", "sizePx": 16, "overflow": "fade"}"#).is_err());
+        assert!(text(r#"{"content": "Hi", "sizePx": 16, "overflow": {"dots": "…"}}"#).is_err());
     }
 
     #[test]

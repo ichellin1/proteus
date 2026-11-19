@@ -56,7 +56,8 @@ done, the candidates are unordered.
 Text that runs over several lines, in several fonts, weights and styles, with styles mixed
 within one text, on a text engine chosen for it. The scope is from ROADMAP's draft order, with a
 maximum number of lines, measuring text before it's drawn, an optional embedded font, inline
-boxes, a text example and the demo's Text panel added. The steps are in the order they're built; each step's
+boxes, a text example and the demo's Text panel added, and one image feature, images given as
+raw pixels. The steps are in the order they're built; each step's
 definition of done is written when it's planned.
 
 Today `fontdue` rasterizes text one character at a time into one image per text: one line, in
@@ -92,7 +93,9 @@ designs it, by about half a pixel a glyph.
   of the app's own, such as " more"; with spans of the app's own, styled as any span is; or
   clipped, dropping the lines past the last with no mark. The ellipsis replaces as much of the
   last line as it needs, cutting between whole characters (graphemes), never within one. An
-  ellipsis wider than the line is clipped, with a warning in debug builds. Text isn't cut
+  ellipsis wider than the line wraps onto lines of its own, which the text gives up; one too
+  long to fit in the maximum on its own is clipped, with a warning suggesting more lines, a
+  wider wrap width or a shorter ellipsis (decided in step 3). Text isn't cut
   through the middle of a line by height: that's the component's crop or rounded corners. An
   image in an ellipsis is a component in an inline box.
 - **Decided (2026-11-16): an app loads fonts, and each text chooses one.** `load_font` takes a
@@ -125,6 +128,10 @@ designs it, by about half a pixel a glyph.
 - **Decided (2026-11-16): each feature is tried by hand in an example as it lands,** and the
   demo shows each new feature. A text example starts with multi-line text, and each later step
   adds its cases to it.
+- **Decided (2026-11-18): images given as raw pixels join v0.4.0,** though they aren't text. A
+  map app built on Proteus draws SVG icons, trails and boundaries on a browser canvas, and
+  today has to encode each one as a PNG for Proteus to decode again. Small, and outside the
+  text work, so it's a step of its own.
 
 ### Step 1 — Comparing text engines
 
@@ -194,6 +201,39 @@ The benchmark's before and after, and the wasm's size, go in BENCHMARKS.
 Wrapping at a width, `\n`, alignment, line height, and a maximum number of lines with each way
 of ending, in Rust and TypeScript. The text example starts here.
 
+- **Decided (2026-11-16): a text's box is its wrap width,** when it has one, and otherwise its
+  widest line. Lines align within the box, and the anchor places the box on the component, so a
+  text with a wrap width doesn't change size when its words do, and centered text stays put.
+  `baked_text_size` returns the box.
+- **Decided (2026-11-16): a word wider than the wrap width breaks between characters,** as CSS's
+  `overflow-wrap: anywhere` does, rather than running out of the box.
+- **Decided (2026-11-16): the ellipsis is found by a binary search** over the text's cluster
+  boundaries, each try laying out the text up to the cut and the ellipsis after it, and keeping
+  the longest that fits in the maximum number of lines. It covers an ellipsis beside the text
+  and one wider than a line alike.
+- **Decided (2026-11-16): the options are `Text`'s fields, set with `with_` methods,** as its
+  color and letter spacing are: `with_wrap_width`, `with_align`, `with_line_height`,
+  `with_max_lines`, `with_ellipsis` and `with_overflow`. `proteus-render` has a `TextLayout` of
+  its own, since it can't see `Text`, and `FontAtlas::rasterize` lays one out at a scale;
+  `rasterize_text` stays, and calls it.
+- **Decided (2026-11-16): the example is a reading app, `essays`,** whose cards' texts show
+  each option once, opening into an essay whose alignment and line height can be changed. Later
+  steps add their cases to it. **Decided (2026-11-19), after the user's review:** the essays are
+  real, public-domain ones from Project Gutenberg, each cited; the settings bar shows only while
+  an essay is open, since it changes only the essay, on the title's line at the window's right
+  margin; a chosen setting's button is disabled, so it stays in the accent color under the
+  pointer; the cards have no photo placeholders; and a card's source is clipped after two
+  lines.
+- [x] Wrapping, alignment, line height, a maximum number of lines, and the ellipsis and clipping,
+  in `proteus-render`, `Text`, and TypeScript's `TextSpec`.
+- [x] Tests: the wrap width and the box, the same breaks at three scales, a long word, each
+  alignment, line height, clipping, an ellipsis beside the text, wrapping onto its own lines,
+  and too long to fit, never splitting a character, the "..." fallback, and the TypeScript
+  fields and their bad values.
+- [x] `examples/essays`, in Rust and TypeScript, wired into the workspace, CI, the Makefile, the
+  pre-push hook and the examples table.
+- [x] The content guide, ARCHITECTURE's known limits and the release notes.
+
 ### Step 4 — Fonts
 
 `load_font`, families, weights and styles, in Rust and TypeScript, with `text.default_font`
@@ -220,12 +260,40 @@ A space kept in a line of text for a component, which sits there as a child of t
 component, flowing with the text as it wraps, in Rust and TypeScript; and a component in an
 ellipsis.
 
-### Step 9 — The demo's Text panel
+### Step 9 — Images as raw pixels
+
+An image given as RGBA pixels and their size, rather than as a PNG or JPEG file, so an app that
+draws its own pixels, such as on a browser canvas, skips encoding a file for Proteus to decode
+again. Everything after decoding is unchanged: `max_side`, scaling down to fit an atlas page,
+and premultiplying on upload.
+
+- **Decided (2026-11-18): the pixels are straight alpha, sRGB, 4 bytes each,** row by row from
+  the top, which is what decoding a file gives today and what a canvas's `getImageData` returns,
+  so neither side converts them.
+- **Decided (2026-11-18): `Image::from_rgba(width, height, pixels)` sits beside `Image::new`,**
+  and `Image` holds either a file's bytes or the pixels with their size. In TypeScript,
+  `ImageSpec` is either `{ bytes, maxSide }` or `{ pixels, width, height, maxSide }`, where
+  `pixels` is a `Uint8Array` or a `Uint8ClampedArray`, so an `ImageData` is passed as it is.
+- **Decided (2026-11-18): pixels of the wrong length are dropped with a warning,** as a broken
+  file is today: anything other than `width × height × 4` bytes, or a width or height of 0.
+- **Decided (2026-11-18): it isn't zero-copy.** The pixels are copied out of the canvas and into
+  the wasm's memory; what it saves is the encode and the decode. Uploading an `ImageBitmap` to
+  the GPU directly is a candidate.
+- [ ] `Image::from_rgba`, `Handle::set_image` taking either form, and TypeScript's `ImageSpec`.
+- [ ] Tests: pixels baked the same as the same image decoded from a PNG, `max_side` and an
+  image larger than an atlas page, each wrong length and a zero size, and the TypeScript
+  fields and their bad values.
+- [ ] The gallery example shows a tile from raw pixels the app makes itself: drawn on a canvas
+  in TypeScript, computed in Rust.
+- [ ] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
+  baking, and the release notes.
+
+### Step 10 — The demo's Text panel
 
 The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
 number of lines, fonts and weights, fallback, mixed styles and inline boxes.
 
-### Step 10 — Docs
+### Step 11 — Docs
 
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.

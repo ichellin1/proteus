@@ -1,13 +1,14 @@
 # Text, images and video
 
-A component can show a line of text, an image, or video. Proteus draws all three from textures
+A component can show text, an image, or video. Proteus draws all three from textures
 on the GPU, which the host prepares from what you give it: it renders text, and decodes images,
 before it next draws. You give the content; when and how it reaches the GPU is the host's job.
 
 ## Text
 
-A component's text is one line, or more where it has a `\n`, drawn over its fill in the component's center, or wherever its
-anchor puts it; see [Anchor](./components.md#anchor).
+A component's text is drawn over its fill, in the component's center, or wherever its anchor
+puts it; see [Anchor](./components.md#anchor). It's one line, or more where it has a `\n`, unless
+it wraps; see [Lines](#lines).
 
 #### Rust
 
@@ -35,13 +36,74 @@ const title = app.component({
 });
 ```
 
-- **Size** is in pixels. The text isn't wrapped or shrunk to fit the component.
+- **Size** is in pixels. The text isn't shrunk to fit the component, or wrapped at its width:
+  it wraps at a width of its own.
 - **Color** defaults to white. Its alpha is multiplied by the component's opacity.
 - **Letter spacing** adds space between characters, in pixels; a negative value tightens it.
 - **The font** is the app's one font: Inter Bold, built into Proteus, unless the app sets its
   own. A text can't choose a different font. See [Configuration](./configuration.md#text).
 - **Text wider than an atlas page**, 2048 pixels by default, is cut off at the page's width,
   with a warning.
+
+### Lines
+
+A text can wrap at a width, align its lines within it, space them, and stop after a number of
+lines.
+
+#### Rust
+
+```rust
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text, TextAlign};
+# let mut app = Proteus::new();
+let summary = app.component(
+    ComponentSpec::new(QuadState::default()).text(
+        Text::new("Proteus draws every component as a textured, rounded rectangle.", 16.0)
+            .with_wrap_width(280.0)
+            .with_align(TextAlign::Center)
+            .with_line_height(1.4)
+            .with_max_lines(2)
+            .with_ellipsis(" more"),
+    ),
+);
+```
+
+#### TypeScript
+
+```ts
+const summary = app.component({
+  geometry: app.get(card)!.geometry,
+  text: {
+    content: "Proteus draws every component as a textured, rounded rectangle.",
+    sizePx: 16,
+    wrapWidth: 280,
+    align: "center",
+    lineHeight: 1.4,
+    maxLines: 2,
+    overflow: { ellipsis: " more" },
+  },
+});
+```
+
+- **The wrap width** is in logical pixels, and is also the width of the text's box. Without one,
+  lines break only at `\n`, and the box is as wide as the widest line. A word wider than the
+  wrap width breaks between characters. Lines break at the same words on every display.
+- **Alignment** places each line at the start, center or end of the box. The anchor places the
+  box on the component.
+- **Line height** is the distance from one baseline to the next, as a multiple of the size, as
+  CSS's unitless `line-height` is. Without one, it's the font's own line spacing.
+- **The maximum number of lines** ends text that runs past it in an ellipsis, "…" by default, or
+  clips it, dropping the lines past the last with no mark: `TextOverflow::Clip` in Rust,
+  `overflow: "clip"` in TypeScript.
+
+An ellipsis is laid out with the text, so it wraps as words do, and the text keeps as much of
+itself as fits with the ellipsis after it, cut between whole characters. An ellipsis wider than
+a line, such as " read the whole article" on a narrow card, takes lines of its own, and the
+text gives them up. One too long to fit in the maximum number of lines on its own is clipped,
+with a warning suggesting more lines, a wider wrap width or a shorter ellipsis.
+
+The [essays example](../../examples/essays) shows each of these once, in both languages.
+
+### Changing text
 
 To change a component's text, use `set_text`, which replaces it. The host renders the new text
 before it next draws.
@@ -64,7 +126,7 @@ card.setText({ content: "12", sizePx: 24 });
 
 The text's size isn't known until the host has rendered it. `baked_text_size` returns it from
 then on, which is useful for layout that depends on the text's real width, such as a button
-sized to its label.
+sized to its label. For wrapped text, it's the wrap width across, and the lines' height down.
 
 ## Images
 

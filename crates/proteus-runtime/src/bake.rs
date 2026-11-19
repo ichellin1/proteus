@@ -104,11 +104,7 @@ pub(crate) fn bake_pending_text(
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     for (entity, text) in pending {
         let mut scale = bake_scale;
-        let mut glyphs = font_atlas.rasterize_text(
-            &text.content,
-            text.size_px * scale,
-            text.letter_spacing_px * scale,
-        );
+        let mut glyphs = font_atlas.rasterize(&text.layout(), scale);
         // Too large for a page at the bake scale: rasterized again, at the
         // largest scale that fits, if that is above 1.
         let max = world
@@ -123,11 +119,7 @@ pub(crate) fn bake_pending_text(
             );
             if fitted < scale {
                 scale = fitted;
-                glyphs = font_atlas.rasterize_text(
-                    &text.content,
-                    text.size_px * scale,
-                    text.letter_spacing_px * scale,
-                );
+                glyphs = font_atlas.rasterize(&text.layout(), scale);
             }
         }
         let Some(mut glyphs) = glyphs else {

@@ -132,6 +132,33 @@ export interface TextSpec {
   color?: Color;
   /** Extra tracking between glyphs, in pixels. Default `0`. */
   letterSpacingPx?: number;
+  /**
+   * The width lines wrap at, in CSS pixels, and the width of the text's box, which its lines
+   * align within. Omit it to break lines only at `\n`, with a box as wide as the widest line. A
+   * word wider than the wrap width breaks between characters.
+   */
+  wrapWidth?: number;
+  /** Where lines sit across the text's box. Default `"start"`. */
+  align?: "start" | "center" | "end";
+  /**
+   * The distance from one line's baseline to the next, as a multiple of the size, as CSS's
+   * unitless `line-height` is. Omit it for the font's own line spacing.
+   */
+  lineHeight?: number;
+  /** The most lines shown. Omit it to show them all. */
+  maxLines?: number;
+  /**
+   * How text with more lines than `maxLines` ends: `{ ellipsis: "…" }`, the default, with any
+   * text, such as `" more"`; or `"clip"`. An ellipsis wraps as words do, and the text keeps as
+   * much of itself as fits with it; one too long to fit in `maxLines` on its own is clipped,
+   * with a warning.
+   */
+  overflow?:
+    | "clip"
+    | {
+        /** The text that ends the last line shown, such as `"…"` or `" more"`. */
+        ellipsis: string;
+      };
 }
 
 /**

@@ -64,6 +64,7 @@ done in PLANNING, when it comes up, and its scope can change then.
 - Measuring text before it's drawn, which the layout system in v0.6.0 needs.
 - Inline boxes: a component within a line of text, flowing with it as it wraps.
 - A text example, and the demo's Text panel showing each new feature.
+- Images given as raw pixels, such as from a browser canvas, rather than as a PNG or JPEG file.
 
 ### v0.5.0 — Video
 
@@ -189,6 +190,8 @@ Not yet placed in a release. Unordered within each area.
 - Evicting, moving and releasing textures still in use, with a way to restore them.
   [Design note](./docs/design/texture-restoration.md)
 - Animated images, such as GIFs and sprite sheets, with every frame packed into the atlas.
+- On the web, an `ImageBitmap` or canvas uploaded to the GPU directly, through wgpu's copy from
+  an external image, rather than copied as pixels into the wasm's memory first.
 - Mipmaps for the atlases, so text, images and bakes drawn smaller than their texture don't
   shimmer or alias. Costs a third more atlas memory, a pass after each bake, and padding so
   atlas regions don't bleed into each other at the smaller levels.

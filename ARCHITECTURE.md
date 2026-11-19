@@ -521,7 +521,8 @@ These are known shortcomings, each planned to be addressed in a future release:
   moves to a display of another density.
 - A rounded component with a border shows its baked corners in a split or merge, crossfading
   with its pieces' own, rather than one curve that changes size.
-- Text is one line, or more where it has a `\n`: it doesn't wrap, or align its lines.
+- Text doesn't justify its lines, or wrap again when its component changes size: it wraps at a
+  width of its own.
 - One video at a time.
 - No text input: no text field, cursor or selection, and no input methods for composing text.
   A key's text arrives in its event, for an app to use itself.

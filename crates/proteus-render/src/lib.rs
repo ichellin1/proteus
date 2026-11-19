@@ -25,7 +25,8 @@ pub mod texture_registry;
 pub mod transition_atlas;
 
 pub use font_atlas::{
-    FontAtlas, FontError, RasterizedGlyphs, DEFAULT_GLYPH_CACHE_BYTES, EMBEDDED_FONT_BYTES,
+    FontAtlas, FontError, RasterizedGlyphs, TextAlign, TextLayout, TextOverflow, DEFAULT_ELLIPSIS,
+    DEFAULT_GLYPH_CACHE_BYTES, EMBEDDED_FONT_BYTES,
 };
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{

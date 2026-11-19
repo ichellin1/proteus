@@ -78,6 +78,6 @@ pub use proteus_ui::{
     FocusBlocked, FocusEntry, FocusGroup, Glow, Image, ImageCrop, InputDevice, InputDevices,
     InputMode, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyRepeat, KeyState,
     MergeLayout, Modifiers, NamedKey, Opacity, QuadState, ReadingDirection, SplitStrategy,
-    StyleOverride, Text, TransitionConfig, TransitionDropped, TransitionInteractionConfig,
-    Visibility,
+    StyleOverride, Text, TextAlign, TextOverflow, TransitionConfig, TransitionDropped,
+    TransitionInteractionConfig, Visibility,
 };
