@@ -91,6 +91,20 @@ pub struct Text {
     /// keeps as much of itself as fits with it; one too long to fit in
     /// `max_lines` on its own is clipped, with a warning.
     pub overflow: TextOverflow,
+    /// The font family, such as `"Lora"`, from a font the app has loaded.
+    /// `None`, the default, is the app's default font. A family the app has
+    /// said it will load waits, or is drawn in the default font meanwhile, as
+    /// [`Fonts::expect`] says; one never loaded is drawn in the default font,
+    /// with a warning.
+    pub family: Option<String>,
+    /// The weight, from 100 to 900: 400 is regular and 700 bold. A family
+    /// without the weight uses its nearest, and one with no bold face is
+    /// thickened. `None`, the default, is the font's own weight, or 700, bold,
+    /// in the embedded font.
+    pub weight: Option<u16>,
+    /// Whether the text is italic: in the family's italic face, or slanted if
+    /// it has none. Off by default.
+    pub italic: bool,
 }
 
 impl Text {
@@ -106,6 +120,9 @@ impl Text {
             line_height: None,
             max_lines: None,
             overflow: TextOverflow::Ellipsis(DEFAULT_ELLIPSIS.to_owned()),
+            family: None,
+            weight: None,
+            italic: false,
         }
     }
 
@@ -149,6 +166,24 @@ impl Text {
         self
     }
 
+    /// Sets the font family, such as `"Lora"`. See [`Text::family`].
+    pub fn with_family(mut self, family: impl Into<String>) -> Self {
+        self.family = Some(family.into());
+        self
+    }
+
+    /// Sets the weight, from 100 to 900: 400 is regular and 700 bold.
+    pub fn with_weight(mut self, weight: u16) -> Self {
+        self.weight = Some(weight);
+        self
+    }
+
+    /// Makes the text italic. See [`Text::italic`].
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
     /// How the renderer lays this text out.
     pub fn layout(&self) -> TextLayout<'_> {
         TextLayout {
@@ -163,6 +198,9 @@ impl Text {
                 TextOverflow::Ellipsis(e) => Some(e),
                 TextOverflow::Clip => None,
             },
+            family: self.family.as_deref(),
+            weight: self.weight,
+            italic: self.italic,
         }
     }
 
@@ -213,6 +251,92 @@ pub struct BakedText {
     pub page: u32,
     /// The text's size in pixels, which is the size it is drawn at.
     pub pixel_size: [f32; 2],
+}
+
+// ---------------------------------------------------------------------------
+// Fonts
+// ---------------------------------------------------------------------------
+
+/// How a text in a font that's still loading is drawn meanwhile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WhileLoading {
+    /// Not at all, until the font loads, or fails and the default font is
+    /// used. The default, since a text that changes font once drawn looks
+    /// like a mistake.
+    #[default]
+    Hide,
+    /// In the default font, and again in its own once it loads, for an app
+    /// that would rather show something at once.
+    DefaultFont,
+}
+
+/// What's known of a font family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FontStatus {
+    /// The app said it will load it; its texts are drawn as it says.
+    Expected(WhileLoading),
+    /// Loaded: its texts are drawn in it.
+    Loaded,
+    /// Its load failed: its texts are drawn in the default font.
+    Failed,
+}
+
+/// The fonts an app has loaded, or said it will, by family. `proteus-sdk`'s
+/// `Proteus::load_font`, `expect_font` and `font_failed` change it, and the
+/// renderer adds each font loaded before it next bakes text.
+#[derive(Resource, Debug, Default)]
+pub struct Fonts {
+    status: std::collections::HashMap<String, FontStatus>,
+    /// Fonts loaded that the renderer hasn't added yet: their bytes and
+    /// family.
+    pending: Vec<(std::sync::Arc<[u8]>, String)>,
+    /// The families a warning has been logged for.
+    warned: std::collections::HashSet<String>,
+}
+
+impl Fonts {
+    /// Says a font of `family` will be loaded, and how its texts are drawn
+    /// until it is. Does nothing to a family already loaded.
+    pub fn expect(&mut self, family: impl Into<String>, while_loading: WhileLoading) {
+        let family = family.into();
+        if self.status.get(&family) != Some(&FontStatus::Loaded) {
+            self.status
+                .insert(family, FontStatus::Expected(while_loading));
+        }
+    }
+
+    /// Adds a font of `family`, from its file's `bytes`, for the renderer to
+    /// load.
+    pub fn loaded(&mut self, family: impl Into<String>, bytes: std::sync::Arc<[u8]>) {
+        let family = family.into();
+        self.status.insert(family.clone(), FontStatus::Loaded);
+        self.pending.push((bytes, family));
+    }
+
+    /// Says the font of `family` failed to load, so its texts are drawn in
+    /// the default font. Does nothing to a family already loaded.
+    pub fn failed(&mut self, family: impl Into<String>) {
+        let family = family.into();
+        if self.status.get(&family) != Some(&FontStatus::Loaded) {
+            self.status.insert(family, FontStatus::Failed);
+        }
+    }
+
+    /// What's known of `family`: `None` if it was never expected or loaded.
+    pub fn status(&self, family: &str) -> Option<FontStatus> {
+        self.status.get(family).copied()
+    }
+
+    /// Takes the fonts loaded since the last call, for the renderer.
+    pub fn take_pending(&mut self) -> Vec<(std::sync::Arc<[u8]>, String)> {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Whether this is the first time `family` is warned about, so each
+    /// family's warning is logged once.
+    pub fn first_warning(&mut self, family: &str) -> bool {
+        self.warned.insert(family.to_owned())
+    }
 }
 
 // ---------------------------------------------------------------------------

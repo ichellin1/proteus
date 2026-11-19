@@ -40,8 +40,9 @@ const title = app.component({
   it wraps at a width of its own.
 - **Color** defaults to white. Its alpha is multiplied by the component's opacity.
 - **Letter spacing** adds space between characters, in pixels; a negative value tightens it.
-- **The font** is the app's one font: Inter Bold, built into Proteus, unless the app sets its
-  own. A text can't choose a different font. See [Configuration](./configuration.md#text).
+- **The font** is the app's default font, Inter, built into Proteus, bold unless the text sets
+  a weight. A text can name another family the app has loaded, a weight and italic; see
+  [Fonts](#fonts).
 - **Text wider than an atlas page**, 2048 pixels by default, is cut off at the page's width,
   with a warning.
 
@@ -102,6 +103,83 @@ text gives them up. One too long to fit in the maximum number of lines on its ow
 with a warning suggesting more lines, a wider wrap width or a shorter ellipsis.
 
 The [essays example](../../examples/essays) shows each of these once, in both languages.
+
+### Fonts
+
+An app loads a font from its file's bytes, and texts name its family to be drawn in it. Loading
+a second file of the same family, such as its italic, adds it to the family.
+
+#### Rust
+
+```rust
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text};
+# let mut app = Proteus::new();
+# let bytes: Vec<u8> = Vec::new();
+// `bytes` holds a TTF or OTF file, such as from `std::fs::read`.
+match app.load_font(bytes) {
+    Ok(family) => {
+        app.component(ComponentSpec::new(QuadState::default()).text(
+            Text::new("Chapter one", 28.0)
+                .with_family(family)
+                .with_weight(600)
+                .italic(),
+        ));
+    }
+    Err(e) => eprintln!("can't read the font: {e}"),
+}
+```
+
+#### TypeScript
+
+```ts
+const bytes = new Uint8Array(await (await fetch("fonts/Lora.ttf")).arrayBuffer());
+const family = app.loadFont(bytes);
+app.component({
+  geometry: app.get(card)!.geometry,
+  text: { content: "Chapter one", sizePx: 28, family, weight: 600, italic: true },
+});
+```
+
+- **The family** is the name inside the font's file, which `load_font` returns. Without one, a
+  text is in the default font.
+- **The weight** runs from 100 to 900: 400 is regular and 700 bold. A family without the weight
+  uses its nearest, as in CSS, and one with no bold face is thickened. Without one, a text is in
+  the font's own weight, or bold in the built-in Inter.
+- **Italic** uses the family's italic face, and slants the upright one if it has none.
+
+A font that's downloaded arrives after the app starts. Proteus waits for it if it's told the
+family is coming, so its texts aren't drawn in one font and then another:
+
+#### Rust
+
+```rust
+# use proteus_sdk::{Proteus, WhileLoading};
+# let mut app = Proteus::new();
+app.expect_font("Lora", WhileLoading::Hide);
+// Later, once the download has finished, or failed:
+# let downloaded: Option<Vec<u8>> = None;
+let loaded = downloaded.map(|bytes| app.load_font(bytes));
+if !matches!(loaded, Some(Ok(_))) {
+    app.font_failed("Lora");
+}
+```
+
+#### TypeScript
+
+```ts
+app.loadFont(fetch("fonts/Lora.ttf").then((r) => r.arrayBuffer()), { family: "Lora" });
+```
+
+| The family is | Its texts are drawn |
+|---|---|
+| Loaded | in it |
+| Coming, waiting: `WhileLoading::Hide`, `whileLoading: "hide"`, the default | not at all, until it loads or fails |
+| Coming, meanwhile: `WhileLoading::DefaultFont`, `whileLoading: "defaultFont"` | in the default font, then again in their own once it loads |
+| Failed, or never loaded or expected | in the default font, with a warning |
+
+A family that's coming but never loads or fails keeps its texts hidden, as an image that never
+loads is never drawn. The [essays example](../../examples/essays) loads Lora this way in
+TypeScript.
 
 ### Changing text
 

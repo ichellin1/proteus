@@ -12,6 +12,12 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 
+[features]
+default = ["embedded-font"]
+# Inter, built in as the default font. Turn it off, with `default-features =
+# false` here and on the host, for an app that gives its own default font.
+embedded-font = ["proteus-render/embedded-font"]
+
 [dependencies]
 # `ProteusConfigDto`: a partial, deserializable ProteusConfig — see config_dto.rs.
 serde = { workspace = true }

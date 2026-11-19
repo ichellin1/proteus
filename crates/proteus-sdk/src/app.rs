@@ -599,6 +599,74 @@ impl Proteus {
         self.world.world.resource::<proteus_ui::KeyInput>().repeat
     }
 
+    /// Loads the TTF or OTF font in `bytes`, and returns the family name
+    /// inside it, which texts name with `Text::with_family` to be drawn in
+    /// it. A font of a family already loaded adds a face to it, such as its
+    /// italic or a static weight. The host adds the font before it next draws
+    /// text, and texts in its family that were drawn in the default font
+    /// while it loaded are drawn again in it.
+    ///
+    /// A font that arrives later, such as from a download, can be expected
+    /// first with [`Proteus::expect_font`], so its texts wait for it.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError`] if `bytes` isn't a TTF or OTF font that can be read.
+    ///
+    /// [`FontError`]: proteus_render::FontError
+    pub fn load_font(
+        &mut self,
+        bytes: impl Into<std::sync::Arc<[u8]>>,
+    ) -> Result<String, proteus_render::FontError> {
+        let bytes = bytes.into();
+        let family = proteus_render::font_family_name(&bytes)?;
+        self.fonts().loaded(family.clone(), bytes);
+        Ok(family)
+    }
+
+    /// Says a font of `family` will be loaded with [`Proteus::load_font`],
+    /// such as once a download finishes, and how its texts are drawn until
+    /// then: not at all, with [`WhileLoading::Hide`], or in the default font,
+    /// then again in their own, with [`WhileLoading::DefaultFont`]. If the
+    /// load fails, call [`Proteus::font_failed`], and they're drawn in the
+    /// default font. Texts in a family neither expected nor loaded are drawn
+    /// in the default font, with a warning.
+    ///
+    /// A family that's expected but never loaded or failed keeps its texts
+    /// hidden, as an image that's never loaded is never drawn.
+    ///
+    /// [`WhileLoading::Hide`]: proteus_ui::WhileLoading::Hide
+    /// [`WhileLoading::DefaultFont`]: proteus_ui::WhileLoading::DefaultFont
+    pub fn expect_font(
+        &mut self,
+        family: impl Into<String>,
+        while_loading: proteus_ui::WhileLoading,
+    ) {
+        self.fonts().expect(family, while_loading);
+    }
+
+    /// Says the font of `family`, expected with [`Proteus::expect_font`],
+    /// failed to load, so its texts are drawn in the default font, with a
+    /// warning.
+    pub fn font_failed(&mut self, family: impl Into<String>) {
+        self.fonts().failed(family);
+    }
+
+    /// What's known of the font `family`: expected, loaded or failed, or
+    /// `None` if it was never expected or loaded.
+    pub fn font_status(&self, family: &str) -> Option<proteus_ui::FontStatus> {
+        self.world
+            .world
+            .get_resource::<proteus_ui::Fonts>()
+            .and_then(|fonts| fonts.status(family))
+    }
+
+    fn fonts(&mut self) -> bevy_ecs::world::Mut<'_, proteus_ui::Fonts> {
+        self.world
+            .world
+            .get_resource_or_insert_with(proteus_ui::Fonts::default)
+    }
+
     /// Empties the glyph cache, to free its memory, such as when the app is
     /// hidden: the renderer drops every cached glyph before it next bakes
     /// text. Text already baked isn't affected, since its pixels are in the

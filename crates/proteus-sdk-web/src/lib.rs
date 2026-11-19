@@ -962,6 +962,39 @@ impl ProteusApp {
         Ok(())
     }
 
+    /// Calls [`Proteus::load_font`](sdk::Proteus::load_font): returns the
+    /// family name, or throws if the bytes aren't a font.
+    #[wasm_bindgen(js_name = loadFont)]
+    pub fn load_font(&mut self, bytes: Vec<u8>) -> Result<String, JsValue> {
+        self.0
+            .borrow_mut()
+            .load_font(bytes)
+            .map_err(|e| crate::js_error(&e.to_string()))
+    }
+
+    /// Calls [`Proteus::expect_font`](sdk::Proteus::expect_font).
+    /// `while_loading` is `"hide"` or `"defaultFont"`; throws otherwise.
+    #[wasm_bindgen(js_name = expectFont)]
+    pub fn expect_font(&mut self, family: String, while_loading: &str) -> Result<(), JsValue> {
+        let while_loading = match while_loading {
+            "hide" => sdk::WhileLoading::Hide,
+            "defaultFont" => sdk::WhileLoading::DefaultFont,
+            other => {
+                return Err(crate::js_error(&format!(
+                    "invalid whileLoading {other:?}: expected \"hide\" or \"defaultFont\""
+                )))
+            }
+        };
+        self.0.borrow_mut().expect_font(family, while_loading);
+        Ok(())
+    }
+
+    /// Calls [`Proteus::font_failed`](sdk::Proteus::font_failed).
+    #[wasm_bindgen(js_name = fontFailed)]
+    pub fn font_failed(&mut self, family: String) {
+        self.0.borrow_mut().font_failed(family);
+    }
+
     /// Calls [`Proteus::clear_glyph_cache`](sdk::Proteus::clear_glyph_cache).
     #[wasm_bindgen(js_name = clearGlyphCache)]
     pub fn clear_glyph_cache(&mut self) {

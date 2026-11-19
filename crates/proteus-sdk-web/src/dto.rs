@@ -230,6 +230,12 @@ pub struct TextDto {
     pub max_lines: Option<u32>,
     #[serde(default)]
     pub overflow: Option<TextOverflowDto>,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub weight: Option<u16>,
+    #[serde(default)]
+    pub italic: bool,
 }
 
 /// `"start"`, `"center"` or `"end"`.
@@ -263,6 +269,9 @@ impl From<&TextDto> for Text {
             text = text.with_color(glam::Vec4::new(c.r, c.g, c.b, c.a));
         }
         text.wrap_width = d.wrap_width;
+        text.family = d.family.clone();
+        text.weight = d.weight;
+        text.italic = d.italic;
         text.line_height = d.line_height;
         text.max_lines = d.max_lines;
         if let Some(align) = d.align {
@@ -1119,6 +1128,17 @@ mod tests {
                 .with_line_height(1.5)
                 .with_max_lines(2)
                 .with_ellipsis(" more")
+        );
+        let styled = text(
+            r#"{"content": "Hi", "sizePx": 16, "family": "Lora", "weight": 500, "italic": true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            styled,
+            Text::new("Hi", 16.0)
+                .with_family("Lora")
+                .with_weight(500)
+                .italic()
         );
         let clipped = text(r#"{"content": "Hi", "sizePx": 16, "overflow": "clip"}"#).unwrap();
         assert_eq!(clipped.overflow, TextOverflow::Clip);

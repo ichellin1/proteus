@@ -240,6 +240,53 @@ of ending, in Rust and TypeScript. The text example starts here.
 still working; the embedded font, now variable Inter, made optional, as a Cargo feature and as a
 file of its own in the TypeScript package.
 
+- **Decided (2026-11-19): a text in a font that's still loading waits, not drawn,** by default:
+  a text that changes font once drawn looks like a mistake. An app says a family is coming with
+  `expect_font`, and how its texts are drawn meanwhile: `WhileLoading::Hide`, the default, or
+  `WhileLoading::DefaultFont`, in the default font and again in their own once it loads, like
+  CSS's `font-display`. If the load fails, `font_failed` draws them in the default font. A family
+  never expected or loaded is drawn in the default font, with a warning, since it's most likely
+  misspelled. TypeScript's `loadFont` does all three from a promise, with the family named. An
+  expected family that never loads or fails keeps its texts hidden; there's no timeout.
+- **Decided (2026-11-19): fonts are queued, and the renderer adds them,** since the renderer
+  lays text out until step 7 moves fonts to where the SDK can reach them. `load_font` checks the
+  bytes and returns the family name at once.
+- **Decided (2026-11-19): a text that sets no weight is bold in the embedded Inter,** as the
+  static Inter Bold was, and in the font's own weight in an app's own default font, so neither
+  changes. A weight a family lacks uses its nearest, and a missing italic or bold face is
+  synthesized, slanted 14° or thickened by a thirtieth of the size, as parley suggests.
+- **Decided (2026-11-19): the TypeScript package's font is copied in by its `prebuild`,** from
+  `proteus-render`'s assets, rather than kept twice in the repository, and every workflow builds
+  the package's host wasm with `--no-default-features`.
+- **Decided (2026-11-19): `TextConfig::default_size_px` is removed here,** as decided for
+  v0.4.0; step 2 missed it.
+- [x] `load_font`, `expect_font`, `font_failed` and `font_status` in Rust; `loadFont`, with bytes
+  or a promise, in TypeScript; `family`, `weight` and `italic` on texts in both.
+- [x] Variable Inter embedded, behind `embedded-font`, on by default in `proteus-runtime` and the
+  hosts; the TypeScript package fetching it from `fonts/` when no font is set.
+- [x] Tests: loading and family names, a loaded family, weights, the nearest weight, a real and
+  a synthesized italic, an atlas with no font, waiting for an expected font, the default font
+  meanwhile, a failed or unknown family, bad bytes, and the TypeScript fields.
+- [x] The essays example in Lora, with Inter's weights and a synthesized italic; TypeScript
+  downloading Lora with the promise form.
+- **Decided (2026-11-19), after the user's review: the essays example gets a text-editor
+  toolbar,** of icon buttons with no labels, setting the body's size, alignment, bold and
+  italic, line height and font. Its icons are Material Icons, a font, drawn through its
+  ligatures. The second font, Crimson Pro, is downloaded only when it's first chosen, expected
+  with `WhileLoading::DefaultFont`, in Rust through the host's `fetch_async`, so both ways of
+  waiting are shown.
+- **Decided (2026-11-19): a component's interaction styles can change while the app runs,**
+  with `Handle::set_style` and `setStyle`, so a chosen or toggled-on button drops its hover
+  style and stays as it is under the pointer. Disabling a chosen button did that before, but a
+  toggle must stay clickable, and a disabled button lost keyboard focus. A style changed while
+  it shows is applied again.
+- [x] `set_style` in Rust and TypeScript, with a test that changes a style while it shows; the
+  interaction guide.
+- [x] The essays toolbar, in Rust and TypeScript, with tests for the body's settings, chosen
+  buttons under the pointer, and Crimson Pro loading once chosen.
+- [x] The content guide's Fonts section, the configuration guide, ARCHITECTURE and the release
+  notes.
+
 ### Step 5 — Fallback
 
 The app's ordered list of fallback fonts, and the missing-glyph box for a character none of

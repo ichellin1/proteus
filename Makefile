@@ -79,7 +79,8 @@ build-sdk-web:
 	wasm-pack build crates/proteus-host-web \
 	  --target bundler \
 	  --out-dir ../proteus-sdk-web/ts/pkg-host \
-	  --release
+	  --release \
+	  -- --no-default-features
 	cd crates/proteus-sdk-web/ts && npm run build
 
 ## The built proteus-sdk package, which the TypeScript examples use. It is

@@ -125,8 +125,9 @@ jobs:
       - name: Build the WebAssembly
         run: |
           wasm-pack build crates/proteus-sdk-web --release --target bundler --out-dir ts/pkg
+          # Without the built-in font: the package ships it as a file.
           wasm-pack build crates/proteus-host-web --release --target bundler \
-            --out-dir ../proteus-sdk-web/ts/pkg-host
+            --out-dir ../proteus-sdk-web/ts/pkg-host -- --no-default-features
 
       - name: Install Node
         uses: actions/setup-node@v4

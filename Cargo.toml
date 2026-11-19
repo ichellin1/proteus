@@ -66,10 +66,13 @@ categories = ["gui", "graphics", "rendering", "wasm"]
 # crates.io requires of a published crate's dependencies. scripts/version.mjs
 # keeps the versions equal to the workspace version above.
 proteus-gpu = { path = "crates/proteus-gpu", version = "0.3.0" }
-proteus-render = { path = "crates/proteus-render", version = "0.3.0" }
+# Without default features, so the embedded font is only built in where an app
+# asks for it: through proteus-runtime's or a host's `embedded-font` feature,
+# both on by default.
+proteus-render = { path = "crates/proteus-render", version = "0.3.0", default-features = false }
 proteus-ui = { path = "crates/proteus-ui", version = "0.3.0" }
 proteus-sdk = { path = "crates/proteus-sdk", version = "0.3.0" }
-proteus-runtime = { path = "crates/proteus-runtime", version = "0.3.0" }
+proteus-runtime = { path = "crates/proteus-runtime", version = "0.3.0", default-features = false }
 proteus-host-winit = { path = "crates/proteus-host-winit", version = "0.3.0" }
 proteus-host-web = { path = "crates/proteus-host-web", version = "0.3.0" }
 proteus-sdk-web = { path = "crates/proteus-sdk-web", version = "0.3.0" }

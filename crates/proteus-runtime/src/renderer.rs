@@ -49,6 +49,15 @@ pub struct Renderer {
     content_version: Option<u64>,
 }
 
+/// A font atlas with the embedded font, or, without the `embedded-font`
+/// feature, with no font until the app gives one.
+fn embedded_font() -> proteus_render::FontAtlas {
+    #[cfg(feature = "embedded-font")]
+    return proteus_render::FontAtlas::with_embedded_font();
+    #[cfg(not(feature = "embedded-font"))]
+    proteus_render::FontAtlas::empty()
+}
+
 impl Renderer {
     /// Creates the GPU resources, adds them to `proteus`'s world, sets the
     /// projection for `viewport`, and builds the font atlas.
@@ -120,10 +129,10 @@ impl Renderer {
         // font fall back to the embedded font rather than stopping the app;
         // `FontSource::from_bytes` lets an app catch them earlier.
         let mut font_atlas = match &config.text.default_font {
-            FontSource::Embedded => proteus_render::FontAtlas::with_embedded_font(),
+            FontSource::Embedded => embedded_font(),
             FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes).unwrap_or_else(|e| {
                 log::error!("ProteusConfig.text.default_font: {e}; using the embedded font");
-                proteus_render::FontAtlas::with_embedded_font()
+                embedded_font()
             }),
         };
         font_atlas.set_glyph_cache_budget(config.resources.glyph_cache_bytes);
@@ -189,6 +198,36 @@ impl Renderer {
         self.draw(proteus, target);
     }
 
+    /// Adds the fonts the app has loaded since the last frame to the font
+    /// atlas, and bakes again the texts in their families that were drawn in
+    /// the default font while they loaded.
+    fn add_loaded_fonts(&mut self, world: &mut bevy_ecs::world::World) {
+        let loaded = world
+            .get_resource_mut::<proteus_ui::Fonts>()
+            .map(|mut fonts| fonts.take_pending())
+            .unwrap_or_default();
+        for (bytes, family) in loaded {
+            if let Err(e) = self.font_atlas.load_font(&bytes) {
+                // `Proteus::load_font` checked the bytes, so this shouldn't
+                // happen.
+                log::error!("the font of the family {family:?} couldn't be loaded: {e}");
+                continue;
+            }
+            let drawn: Vec<_> = world
+                .query_filtered::<(bevy_ecs::entity::Entity, &proteus_ui::Text), bevy_ecs::query::With<BakedText>>()
+                .iter(world)
+                .filter(|(_, text)| text.family.as_deref() == Some(family.as_str()))
+                .map(|(entity, _)| entity)
+                .collect();
+            for entity in drawn {
+                // Releases the old texture; see `proteus_ui::texture_ref`.
+                world
+                    .entity_mut(entity)
+                    .remove::<(BakedText, TextTextureRef)>();
+            }
+        }
+    }
+
     /// Bakes pending text and images, brings every visible component's
     /// instances up to date, and uploads the ones that changed. Returns whether this frame would look
     /// different from the last one prepared: the components' data changed, or
@@ -210,6 +249,7 @@ impl Renderer {
         {
             self.font_atlas.clear_glyph_cache();
         }
+        self.add_loaded_fonts(world);
         let lazy_load = self.config.resources.lazy_load;
         bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue, lazy_load);
         bake::bake_pending_images(
@@ -609,6 +649,103 @@ mod tests {
                 "{size:?}"
             );
         }
+    }
+
+    /// Lora, the family the essays example loads.
+    const LORA: &[u8] = include_bytes!("../../../examples/essays/fonts/Lora-Variable.ttf");
+
+    /// A component showing "Proteus" in Lora at 24 pixels, after a frame.
+    fn lora_scene(prepare: impl FnOnce(&mut Proteus)) -> Option<(Scene, Handle)> {
+        let mut scene = Scene::with_scale(ProteusConfig::default(), 1.0)?;
+        prepare(&mut scene.proteus);
+        let text = Text::new("Proteus", 24.0).with_family("Lora");
+        let label = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(text));
+        scene.frame();
+        Some((scene, label))
+    }
+
+    fn baked(scene: &Scene, handle: &Handle) -> Option<[f32; 2]> {
+        scene
+            .proteus
+            .world()
+            .get::<BakedText>(handle.id())
+            .map(|b| b.pixel_size)
+    }
+
+    /// The width "Proteus" is in Inter, the default font, at 24 pixels.
+    fn in_default_font() -> Option<f32> {
+        let (scene, label) = text_scene_with("Proteus", 24.0)?;
+        baked(&scene, &label).map(|size| size[0])
+    }
+
+    fn text_scene_with(content: &str, size: f32) -> Option<(Scene, Handle)> {
+        let mut scene = Scene::with_scale(ProteusConfig::default(), 1.0)?;
+        let label = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(Text::new(content, size)));
+        scene.frame();
+        Some((scene, label))
+    }
+
+    // A text in a family the app expects waits, not drawn, and is drawn in
+    // it once it loads.
+    #[test]
+    fn a_text_waits_for_its_expected_font() {
+        let Some((mut scene, label)) =
+            lora_scene(|app| app.expect_font("Lora", proteus_sdk::WhileLoading::Hide))
+        else {
+            return;
+        };
+        scene.frame();
+        assert_eq!(baked(&scene, &label), None, "not drawn while Lora loads");
+        assert_eq!(scene.proteus.load_font(LORA).unwrap(), "Lora");
+        scene.frame();
+        let width = baked(&scene, &label).expect("drawn once Lora loads")[0];
+        assert_ne!(Some(width), in_default_font(), "in Lora");
+    }
+
+    // With `DefaultFont`, it's drawn in the default font meanwhile, and again
+    // in its own once it loads.
+    #[test]
+    fn a_text_can_show_the_default_font_while_its_font_loads() {
+        let Some((mut scene, label)) =
+            lora_scene(|app| app.expect_font("Lora", proteus_sdk::WhileLoading::DefaultFont))
+        else {
+            return;
+        };
+        let meanwhile = baked(&scene, &label).expect("drawn at once")[0];
+        assert_eq!(Some(meanwhile), in_default_font());
+        scene.proteus.load_font(LORA).unwrap();
+        scene.frame();
+        let width = baked(&scene, &label).expect("drawn again")[0];
+        assert_ne!(width, meanwhile, "in Lora now");
+    }
+
+    // A family whose load failed, or that was never expected or loaded, is
+    // drawn in the default font.
+    #[test]
+    fn a_failed_or_unknown_family_is_drawn_in_the_default_font() {
+        let Some((scene, label)) = lora_scene(|app| {
+            app.expect_font("Lora", proteus_sdk::WhileLoading::Hide);
+            app.font_failed("Lora");
+        }) else {
+            return;
+        };
+        let default = in_default_font();
+        assert_eq!(baked(&scene, &label).map(|s| s[0]), default, "failed");
+        let Some((scene, label)) = lora_scene(|_| {}) else {
+            return;
+        };
+        assert_eq!(baked(&scene, &label).map(|s| s[0]), default, "never loaded");
+    }
+
+    #[test]
+    fn bytes_that_arent_a_font_are_an_error() {
+        let mut app = Proteus::new();
+        assert!(app.load_font(vec![1u8, 2, 3]).is_err());
+        assert_eq!(app.font_status("Lora"), None);
     }
 
     // Glyphs are cached by their size in pixels, so a new scale empties the
