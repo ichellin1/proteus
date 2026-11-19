@@ -31,6 +31,8 @@
 
 use bevy_ecs::prelude::*;
 use glam::Vec4;
+pub use proteus_render::{TextAlign, TextOverflow};
+use proteus_render::{TextLayout, DEFAULT_ELLIPSIS};
 
 // ---------------------------------------------------------------------------
 // Text component
@@ -39,9 +41,22 @@ use glam::Vec4;
 /// Text to draw on an entity: one line, or more where it has a `\n`.
 ///
 /// The renderer rasterizes it into the main atlas and adds a [`BakedText`].
-/// Changing `content` or `size_px` afterwards has no effect until the
-/// `BakedText` is removed; `proteus-sdk`'s `Handle::set_text` does both. Text larger than an atlas page is clipped; see the
-/// [module docs](self).
+/// Changing a field afterwards has no effect until the `BakedText` is
+/// removed; `proteus-sdk`'s `Handle::set_text` does both. Text larger than an
+/// atlas page is clipped; see the [module docs](self).
+///
+/// Its lines can wrap at a width, align within it, take a line height, and
+/// stop at a number of lines, ending in an ellipsis or clipped:
+///
+/// ```
+/// # use proteus_ui::{Text, TextAlign};
+/// let summary = Text::new("A long summary of the article…", 16.0)
+///     .with_wrap_width(280.0)
+///     .with_align(TextAlign::Center)
+///     .with_line_height(1.4)
+///     .with_max_lines(3)
+///     .with_ellipsis(" more");
+/// ```
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Text {
     /// The text. Any character the font has can be used.
@@ -57,6 +72,25 @@ pub struct Text {
     ///
     /// [`FontAtlas::rasterize_text`]: proteus_render::FontAtlas::rasterize_text
     pub letter_spacing_px: f32,
+    /// The width lines wrap at, in logical pixels, and the width of the text's
+    /// box, which its lines align within. `None`, the default, breaks lines
+    /// only at `\n`, and the box is as wide as the widest line. A word wider
+    /// than the wrap width breaks between characters.
+    pub wrap_width: Option<f32>,
+    /// Where lines sit across the text's box. [`TextAlign::Start`] by default.
+    /// The text's anchor places the box on its entity.
+    pub align: TextAlign,
+    /// The distance from one line's baseline to the next, as a multiple of
+    /// the size, as CSS's unitless `line-height` is. `None`, the default, is
+    /// the font's own line spacing.
+    pub line_height: Option<f32>,
+    /// The most lines shown. `None`, the default, shows them all.
+    pub max_lines: Option<u32>,
+    /// How text with more lines than `max_lines` ends: with an ellipsis, "…"
+    /// by default, or clipped. An ellipsis wraps as words do, and the text
+    /// keeps as much of itself as fits with it; one too long to fit in
+    /// `max_lines` on its own is clipped, with a warning.
+    pub overflow: TextOverflow,
 }
 
 impl Text {
@@ -67,6 +101,68 @@ impl Text {
             size_px,
             color: Vec4::ONE,
             letter_spacing_px: 0.0,
+            wrap_width: None,
+            align: TextAlign::Start,
+            line_height: None,
+            max_lines: None,
+            overflow: TextOverflow::Ellipsis(DEFAULT_ELLIPSIS.to_owned()),
+        }
+    }
+
+    /// Wraps lines at `width` logical pixels, which is also the width of the
+    /// text's box. See [`Text::wrap_width`].
+    pub fn with_wrap_width(mut self, width: f32) -> Self {
+        self.wrap_width = Some(width);
+        self
+    }
+
+    /// Sets where lines sit across the text's box.
+    pub fn with_align(mut self, align: TextAlign) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// Sets the distance between baselines, as a multiple of the size: `1.5`
+    /// is one and a half times the size.
+    pub fn with_line_height(mut self, multiple: f32) -> Self {
+        self.line_height = Some(multiple);
+        self
+    }
+
+    /// Shows at most `lines` lines, ending in the text's overflow: an
+    /// ellipsis, "…" by default, or clipped.
+    pub fn with_max_lines(mut self, lines: u32) -> Self {
+        self.max_lines = Some(lines);
+        self
+    }
+
+    /// Ends text with more lines than its maximum in `ellipsis`, such as
+    /// `" more"`, rather than "…".
+    pub fn with_ellipsis(mut self, ellipsis: impl Into<String>) -> Self {
+        self.overflow = TextOverflow::Ellipsis(ellipsis.into());
+        self
+    }
+
+    /// Sets how text with more lines than its maximum ends.
+    pub fn with_overflow(mut self, overflow: TextOverflow) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    /// How the renderer lays this text out.
+    pub fn layout(&self) -> TextLayout<'_> {
+        TextLayout {
+            content: &self.content,
+            size_px: self.size_px,
+            letter_spacing_px: self.letter_spacing_px,
+            wrap_width: self.wrap_width,
+            align: self.align,
+            line_height: self.line_height,
+            max_lines: self.max_lines,
+            ellipsis: match &self.overflow {
+                TextOverflow::Ellipsis(e) => Some(e),
+                TextOverflow::Clip => None,
+            },
         }
     }
 

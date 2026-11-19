@@ -586,6 +586,31 @@ mod tests {
         );
     }
 
+    // A wrapped text is baked as its box: its wrap width across, in logical
+    // pixels, at every scale, and its lines down.
+    #[test]
+    fn a_wrapped_text_is_baked_at_its_wrap_width() {
+        for scale in [1.0, 2.0] {
+            let Some(mut scene) = Scene::with_scale(ProteusConfig::default(), scale) else {
+                return;
+            };
+            let text = Text::new("A paragraph long enough to wrap onto a few lines", 16.0)
+                .with_wrap_width(120.0)
+                .with_max_lines(2);
+            let label = scene
+                .proteus
+                .component(ComponentSpec::new(QuadState::default()).text(text));
+            scene.frame();
+            let (size, _) = baked_text(&scene, &label);
+            assert_eq!(size[0], 120.0, "at a scale of {scale}");
+            let one_line = 16.0 * 1.2;
+            assert!(
+                size[1] > 1.5 * one_line && size[1] < 2.5 * one_line,
+                "{size:?}"
+            );
+        }
+    }
+
     // Glyphs are cached by their size in pixels, so a new scale empties the
     // cache, and the text baked at it fills it again.
     #[test]

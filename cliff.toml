@@ -106,6 +106,9 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **The web host's wasm is larger,** by about 790 KB gzipped, with the text engine in it.
 - **`ResourceConfig` written out in full** no longer compiles in Rust: `glyph_cache_bytes`, the
   glyph cache's budget, is new. Fill in the rest with `..Default::default()`.
+- **`Text` written out in full** no longer compiles in Rust: `wrap_width`, `align`,
+  `line_height`, `max_lines` and `overflow` are new. Make it with `Text::new` and its `with_`
+  methods, or fill in the rest with `..Text::new(content, size)`.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 
