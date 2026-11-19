@@ -35,6 +35,7 @@ import type {
   MergeLayout,
   SplitStrategy,
   TextSpec,
+  LoadFontOptions,
   TextureRequest,
   TextureState,
   TransitionInteractionConfig,
@@ -42,6 +43,7 @@ import type {
   TransitionDropped,
   Size,
   Vec2,
+  StyleOverride,
 } from "./types.js";
 
 export * from "./types.js";
@@ -640,6 +642,20 @@ export class Handle {
   }
 
   /**
+   * Sets this component's style for `state`, such as its hover style, or
+   * removes it with `undefined`, while the app runs. If the component is in
+   * that state now, it changes to the new style over its style timing, as it
+   * would entering the state. A button that shows it's chosen, for example,
+   * removes its hover style, so the pointer leaves it as it is, and sets it
+   * again when it's no longer chosen.
+   *
+   * @throws If `style` isn't a valid {@link StyleOverride}.
+   */
+  setStyle(state: "hover" | "pressed" | "focused" | "disabled", style: StyleOverride | undefined): void {
+    this.app.wasmApp.setStyle(this.wasmHandle, state, style);
+  }
+
+  /**
    * Sets whether this component accepts input while transitioning.
    * `undefined` restores the default, where a transitioning component ignores
    * input.
@@ -1171,6 +1187,74 @@ export class ProteusApp {
    */
   clearGlyphCache(): void {
     this.wasmApp.clearGlyphCache();
+  }
+
+  /**
+   * Loads a TTF or OTF font, and returns the family name inside it, which texts name in
+   * `family` to be drawn in it. A font of a family already loaded adds a face to it, such as its
+   * italic.
+   *
+   * Given bytes, it loads them at once. Given a promise of them, such as a download, it needs the
+   * family's name in `options`: texts in that family wait, not drawn, until it loads, or with
+   * `whileLoading: "defaultFont"` are drawn in the default font meanwhile and again once it
+   * loads. If the promise rejects, or the font's family isn't the one named, the family is
+   * marked as failed, its texts are drawn in the default font, and the returned promise
+   * rejects.
+   *
+   * @throws If `bytes` isn't a TTF or OTF font that can be read.
+   *
+   * @example
+   * ```ts
+   * app.loadFont(fetch("fonts/Lora.ttf").then((r) => r.arrayBuffer()), { family: "Lora" });
+   * ```
+   */
+  loadFont(bytes: Uint8Array): string;
+  loadFont(bytes: Promise<ArrayBuffer | Uint8Array>, options: LoadFontOptions): Promise<string>;
+  loadFont(
+    bytes: Uint8Array | Promise<ArrayBuffer | Uint8Array>,
+    options?: LoadFontOptions,
+  ): string | Promise<string> {
+    if (bytes instanceof Uint8Array) {
+      return this.wasmApp.loadFont(bytes);
+    }
+    if (!options) {
+      throw new Error("loadFont: a promise of a font needs its family, in options.family");
+    }
+    const { family, whileLoading = "hide" } = options;
+    this.wasmApp.expectFont(family, whileLoading);
+    return bytes.then(
+      (data) => {
+        const loaded = this.wasmApp.loadFont(data instanceof Uint8Array ? data : new Uint8Array(data));
+        if (loaded !== family) {
+          this.wasmApp.fontFailed(family);
+          throw new Error(`loadFont: expected the family "${family}", but the font is "${loaded}"`);
+        }
+        return loaded;
+      },
+      (error: unknown) => {
+        this.wasmApp.fontFailed(family);
+        throw error;
+      },
+    );
+  }
+
+  /**
+   * Sets the app's fallback fonts: families tried, in order, for a character a text's own
+   * family lacks, before the default font, as a CSS font stack is. A character none of them has
+   * is drawn as a box, with a warning. Replaces the list; an empty one turns fallback off.
+   * Families not loaded yet are skipped until they are, and texts are drawn again as they load,
+   * or wait for them if `loadFont` was given `whileLoading: "hide"`.
+   *
+   * None are set by default, and each costs memory, and a download: list only the fonts the
+   * app's text needs, so what it draws is known.
+   *
+   * @example
+   * ```ts
+   * app.setFallbackFonts(["Noto Serif Devanagari"]);
+   * ```
+   */
+  setFallbackFonts(families: string[]): void {
+    this.wasmApp.setFallbackFonts(families);
   }
 
   /**

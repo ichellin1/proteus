@@ -12,6 +12,11 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 
+[features]
+default = ["embedded-font"]
+# Inter, built in as the default font: see proteus-runtime's feature.
+embedded-font = ["proteus-runtime/embedded-font"]
+
 [dependencies]
 # Hosts depend on proteus-runtime only — it re-exports wgpu + glam at the
 # versions it builds against. winit and pollster are this host's own

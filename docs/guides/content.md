@@ -40,8 +40,9 @@ const title = app.component({
   it wraps at a width of its own.
 - **Color** defaults to white. Its alpha is multiplied by the component's opacity.
 - **Letter spacing** adds space between characters, in pixels; a negative value tightens it.
-- **The font** is the app's one font: Inter Bold, built into Proteus, unless the app sets its
-  own. A text can't choose a different font. See [Configuration](./configuration.md#text).
+- **The font** is the app's default font, Inter, built into Proteus, bold unless the text sets
+  a weight. A text can name another family the app has loaded, a weight and italic; see
+  [Fonts](#fonts).
 - **Text wider than an atlas page**, 2048 pixels by default, is cut off at the page's width,
   with a warning.
 
@@ -102,6 +103,126 @@ text gives them up. One too long to fit in the maximum number of lines on its ow
 with a warning suggesting more lines, a wider wrap width or a shorter ellipsis.
 
 The [essays example](../../examples/essays) shows each of these once, in both languages.
+
+### Fonts
+
+An app loads a font from its file's bytes, and texts name its family to be drawn in it. Loading
+a second file of the same family, such as its italic, adds it to the family.
+
+#### Rust
+
+```rust
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text};
+# let mut app = Proteus::new();
+# let bytes: Vec<u8> = Vec::new();
+// `bytes` holds a TTF or OTF file, such as from `std::fs::read`.
+match app.load_font(bytes) {
+    Ok(family) => {
+        app.component(ComponentSpec::new(QuadState::default()).text(
+            Text::new("Chapter one", 28.0)
+                .with_family(family)
+                .with_weight(600)
+                .italic(),
+        ));
+    }
+    Err(e) => eprintln!("can't read the font: {e}"),
+}
+```
+
+#### TypeScript
+
+```ts
+const bytes = new Uint8Array(await (await fetch("fonts/Lora.ttf")).arrayBuffer());
+const family = app.loadFont(bytes);
+app.component({
+  geometry: app.get(card)!.geometry,
+  text: { content: "Chapter one", sizePx: 28, family, weight: 600, italic: true },
+});
+```
+
+- **The family** is the name inside the font's file, which `load_font` returns. Without one, a
+  text is in the default font.
+- **The weight** runs from 100 to 900: 400 is regular and 700 bold. A family without the weight
+  uses its nearest, as in CSS, and one with no bold face is thickened. Without one, a text is in
+  the font's own weight, or bold in the built-in Inter.
+- **Italic** uses the family's italic face, and slants the upright one if it has none.
+
+A font that's downloaded arrives after the app starts. Proteus waits for it if it's told the
+family is coming, so its texts aren't drawn in one font and then another:
+
+#### Rust
+
+```rust
+# use proteus_sdk::{Proteus, WhileLoading};
+# let mut app = Proteus::new();
+app.expect_font("Lora", WhileLoading::Hide);
+// Later, once the download has finished, or failed:
+# let downloaded: Option<Vec<u8>> = None;
+let loaded = downloaded.map(|bytes| app.load_font(bytes));
+if !matches!(loaded, Some(Ok(_))) {
+    app.font_failed("Lora");
+}
+```
+
+#### TypeScript
+
+```ts
+app.loadFont(fetch("fonts/Lora.ttf").then((r) => r.arrayBuffer()), { family: "Lora" });
+```
+
+| The family is | Its texts are drawn |
+|---|---|
+| Loaded | in it |
+| Coming, waiting: `WhileLoading::Hide`, `whileLoading: "hide"`, the default | not at all, until it loads or fails |
+| Coming, meanwhile: `WhileLoading::DefaultFont`, `whileLoading: "defaultFont"` | in the default font, then again in their own once it loads |
+| Failed, or never loaded or expected | in the default font, with a warning |
+
+A family that's coming but never loads or fails keeps its texts hidden, as an image that never
+loads is never drawn. The [essays example](../../examples/essays) loads Lora this way in
+TypeScript.
+
+### Fallback
+
+A font has the characters its designers drew, and no more: Inter has Latin, Greek and Cyrillic,
+but not Hindi's Devanagari, Chinese or emoji. A character a text's font lacks is looked for in
+the app's fallback fonts, in order, then in the default font. One none of them has is drawn as
+the font's missing-glyph box, a rectangle, with a warning naming it.
+
+#### Rust
+
+```rust
+# use proteus_sdk::Proteus;
+# let mut app = Proteus::new();
+# let devanagari: Vec<u8> = Vec::new();
+// `devanagari` holds Noto Serif Devanagari, a TTF file.
+if app.load_font(devanagari).is_ok() {
+    app.set_fallback_fonts(["Noto Serif Devanagari"]);
+}
+```
+
+#### TypeScript
+
+```ts
+app.setFallbackFonts(["Noto Serif Devanagari"]);
+```
+
+- **There are none by default.** Fallback is the app's choice: Proteus never uses the system's
+  fonts, so text is drawn the same everywhere, and nothing is fetched that the app didn't ask
+  for.
+- **List only what the app's text needs.** Each fallback is a font the app ships or downloads,
+  and keeps in memory: a font for Chinese, Japanese or Korean is several megabytes. A long list
+  makes it harder to know which font draws a given character, and a character the app didn't
+  plan for can arrive in a font that doesn't match the rest. In almost every app, fonts should
+  be deterministic: choose them for the text the app shows, and know what each covers.
+- **The list is the app's,** for every text, tried in the order given; calling it again replaces
+  it.
+- **A fallback that's still loading** is treated as a text's own family is: if it's expected
+  with `WhileLoading::Hide`, texts with characters no loaded font has wait for it; otherwise
+  they're drawn with boxes, and again once it loads.
+- **Color emoji** isn't drawn yet: emoji fonts store their glyphs in color, and text is drawn in
+  one color. A black-and-white emoji font, such as Noto Emoji, works as a fallback.
+
+The [essays example](../../examples/essays) draws an essay in Hindi with a fallback font.
 
 ### Changing text
 

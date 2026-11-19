@@ -27,6 +27,12 @@ bevy_ecs = { workspace = true }
 image = { workspace = true }
 slotmap = { workspace = true }
 
+[features]
+default = ["embedded-font"]
+# Inter, embedded as the default font. Without it, an app gives its own; see
+# the module docs of `font_atlas`.
+embedded-font = []
+
 [dev-dependencies]
 # pollster: blocks on wgpu async init inside integration tests
 pollster = { workspace = true }

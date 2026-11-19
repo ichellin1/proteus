@@ -124,13 +124,13 @@ are removed to make room.
 
 ### Text
 
-An app has one font, used for all its text. It's Inter Bold, built into Proteus, unless the app
-gives its own. It can't be changed while the app runs. Support for several fonts, such as a
-regular and a bold weight, or a heading font and a body font, is planned for a future release.
+An app's default font draws every text that names no family. It's Inter, built into Proteus,
+unless the app gives its own. Other fonts are loaded while the app runs; see
+[Fonts](./content.md#fonts).
 
 | Rust | TypeScript | Default | What it sets |
 |---|---|---|---|
-| `text.default_font` | `text.font` | Inter Bold | The font of all text, from a TTF or OTF file's bytes. |
+| `text.default_font` | `text.font` | Inter | The default font, from a TTF or OTF file's bytes. |
 
 #### Rust
 
@@ -162,6 +162,25 @@ await mount("canvas", {
 
 `FontSource::from_bytes` checks the font, so a file that isn't one, such as a failed download,
 is an error the app handles. In TypeScript, `mount` throws.
+
+#### Leaving the built-in font out
+
+Inter adds 877 KB to an app. One that gives its own default font can leave it out.
+
+- **In Rust,** it's the `embedded-font` feature, on by default in `proteus-runtime` and in the
+  hosts. Turn it off on each that the app depends on:
+
+  ```toml
+  [dependencies]
+  proteus-runtime = { version = "0.4", default-features = false }
+  proteus-host-winit = { version = "0.4", default-features = false }
+  ```
+
+  Without it, text draws nothing, with a warning, until the app sets `text.default_font` or
+  loads a font, the first of which becomes the default.
+- **In TypeScript,** it isn't in the package's wasm. `mount` fetches it from the package's
+  `fonts/` folder, only when the config sets no `text.font`. Bundlers such as Vite copy it into
+  the app's output; an app served another way serves the file too, or sets `text.font`.
 
 ### The glyph cache
 

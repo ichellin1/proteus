@@ -13,8 +13,8 @@ use bevy_ecs::world::World;
 use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, TextureId};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{
-    BakeScale, BakedImage, BakedText, EffectiveVisibility, Image, ImageTextureRef, Text,
-    TextTextureRef, Visibility,
+    BakeScale, BakedImage, BakedText, EffectiveVisibility, FontStatus, Fonts, Image,
+    ImageTextureRef, MissingGlyphs, Text, TextTextureRef, Visibility, WaitsForFont, WhileLoading,
 };
 
 use crate::services::HostServices;
@@ -91,7 +91,7 @@ pub(crate) fn bake_pending_text(
             &Text,
             Option<&Visibility>,
             Option<&EffectiveVisibility>,
-        ), Without<BakedText>>();
+        ), (Without<BakedText>, Without<WaitsForFont>)>();
         query
             .iter(world)
             .filter(|(_, _, vis, eff_vis)| !lazy_load || is_visible(*vis, *eff_vis))
@@ -103,8 +103,19 @@ pub(crate) fn bake_pending_text(
     // at its logical size.
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     for (entity, text) in pending {
+        let Some(in_default_font) = font_choice(world, font_atlas, &text) else {
+            // Its font is still loading: it waits, not drawn.
+            continue;
+        };
+        let layout = || {
+            let mut layout = text.layout();
+            if in_default_font {
+                layout.family = None;
+            }
+            layout
+        };
         let mut scale = bake_scale;
-        let mut glyphs = font_atlas.rasterize(&text.layout(), scale);
+        let mut glyphs = font_atlas.rasterize(&layout(), scale);
         // Too large for a page at the bake scale: rasterized again, at the
         // largest scale that fits, if that is above 1.
         let max = world
@@ -119,8 +130,22 @@ pub(crate) fn bake_pending_text(
             );
             if fitted < scale {
                 scale = fitted;
-                glyphs = font_atlas.rasterize(&text.layout(), scale);
+                glyphs = font_atlas.rasterize(&layout(), scale);
             }
+        }
+        // Characters no font has: the text waits if a fallback font that
+        // might have them is still loading and its texts wait for it, and
+        // otherwise is drawn with boxes, and marked so it's baked again when
+        // a font loads.
+        let missing = glyphs.as_ref().is_some_and(|g| !g.missing.is_empty());
+        if missing && waits_for_fallback(world) {
+            world.entity_mut(entity).insert(WaitsForFont);
+            continue;
+        }
+        if missing {
+            world.entity_mut(entity).insert(MissingGlyphs);
+        } else {
+            world.entity_mut(entity).remove::<MissingGlyphs>();
         }
         let Some(mut glyphs) = glyphs else {
             world.entity_mut(entity).insert(BakedText {
@@ -178,6 +203,53 @@ pub(crate) fn bake_pending_text(
             },
             TextTextureRef(texture_id),
         ));
+    }
+}
+
+/// Whether a fallback font is expected, with its texts waiting for it: a text
+/// with characters no loaded font has might find them there.
+fn waits_for_fallback(world: &World) -> bool {
+    world.get_resource::<Fonts>().is_some_and(|fonts| {
+        fonts
+            .fallbacks()
+            .iter()
+            .any(|family| fonts.status(family) == Some(FontStatus::Expected(WhileLoading::Hide)))
+    })
+}
+
+/// Whether `text` is drawn in the default font rather than its own family,
+/// or `None` if it waits, not drawn, for its family to load. See
+/// [`Fonts`]. A family that failed or was never loaded is warned about once.
+fn font_choice(world: &mut World, font_atlas: &FontAtlas, text: &Text) -> Option<bool> {
+    let Some(family) = &text.family else {
+        return Some(false);
+    };
+    if font_atlas.has_family(family) {
+        return Some(false);
+    }
+    let mut fonts = world.get_resource_or_insert_with(Fonts::default);
+    match fonts.status(family) {
+        Some(FontStatus::Expected(WhileLoading::Hide)) => None,
+        Some(FontStatus::Expected(WhileLoading::DefaultFont)) => Some(true),
+        Some(FontStatus::Failed) => {
+            if fonts.first_warning(family) {
+                log::warn!("the font family {family:?} failed to load: its text is drawn in the default font");
+            }
+            Some(true)
+        }
+        // Loaded, but not added to the atlas yet: the renderer adds it before
+        // the next bake, and bakes the text again.
+        Some(FontStatus::Loaded) => Some(true),
+        None => {
+            if fonts.first_warning(family) {
+                log::warn!(
+                    "no font of the family {family:?} has been loaded, or is expected: its text \
+                     is drawn in the default font. Load it with `load_font`, or say it's coming \
+                     with `expect_font`"
+                );
+            }
+            Some(true)
+        }
     }
 }
 

@@ -38,10 +38,12 @@
   "files": [
     "dist",
     "pkg",
-    "pkg-host"
+    "pkg-host",
+    "fonts"
   ],
   "sideEffects": false,
   "scripts": {
+    "prebuild": "mkdir -p fonts && cp ../../proteus-render/assets/Inter-Variable.ttf ../../proteus-render/assets/LICENSE-Inter.txt fonts/",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "prepack": "rm -f pkg/.gitignore pkg-host/.gitignore",

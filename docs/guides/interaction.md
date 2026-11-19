@@ -205,5 +205,41 @@ pressed styles depend on the pointer, so they apply after a transition ends.
 A style applies on top of where the component rests, so after the component moves, its styles
 move with it; see [Where a component rests](./components.md#where-a-component-rests).
 
+`set_style` changes a style while the app runs, or removes it with `None`, `undefined` in
+TypeScript. If the component is in that state now, it changes to the new style as it would
+entering it. A button that shows it's chosen, such as one of a group of options, removes its
+hover style so the pointer leaves it as it is, and sets it again when it's no longer chosen:
+
+#### Rust
+
+```rust
+# use proteus_sdk::glam::Vec4;
+# use proteus_sdk::{ComponentSpec, InteractionStateKind, Proteus, QuadState, StyleOverride};
+# let mut app = Proteus::new();
+# let option = app.component(ComponentSpec::new(QuadState::default()));
+// Chosen: no hover style.
+option.set_style(&mut app, InteractionStateKind::Hover, None)?;
+// No longer chosen: lighter under the pointer again.
+let lighter = StyleOverride {
+    color: Some(Vec4::new(0.37, 0.36, 0.42, 1.0)),
+    ..Default::default()
+};
+option.set_style(&mut app, InteractionStateKind::Hover, Some(lighter))?;
+# Ok::<(), proteus_sdk::HandleError>(())
+```
+
+#### TypeScript
+
+```ts
+import { colorFrom } from "proteus-sdk";
+
+// Chosen: no hover style.
+button.setStyle("hover", undefined);
+// No longer chosen: lighter under the pointer again.
+button.setStyle("hover", { color: colorFrom("#5f5c6a") });
+```
+
+The [essays example](../../examples/essays)'s toolbar marks its chosen buttons this way.
+
 `app.get` reports the style that applies now, as the snapshot's interaction state: default,
 hover, pressed, focused or disabled.

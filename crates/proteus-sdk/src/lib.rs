@@ -81,3 +81,7 @@ pub use proteus_ui::{
     StyleOverride, Text, TextAlign, TextOverflow, TransitionConfig, TransitionDropped,
     TransitionInteractionConfig, Visibility,
 };
+pub use proteus_ui::{FontStatus, WhileLoading};
+
+/// What [`Proteus::load_font`] returns for bytes that aren't a font.
+pub use proteus_render::FontError;

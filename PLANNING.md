@@ -240,10 +240,79 @@ of ending, in Rust and TypeScript. The text example starts here.
 still working; the embedded font, now variable Inter, made optional, as a Cargo feature and as a
 file of its own in the TypeScript package.
 
+- **Decided (2026-11-19): a text in a font that's still loading waits, not drawn,** by default:
+  a text that changes font once drawn looks like a mistake. An app says a family is coming with
+  `expect_font`, and how its texts are drawn meanwhile: `WhileLoading::Hide`, the default, or
+  `WhileLoading::DefaultFont`, in the default font and again in their own once it loads, like
+  CSS's `font-display`. If the load fails, `font_failed` draws them in the default font. A family
+  never expected or loaded is drawn in the default font, with a warning, since it's most likely
+  misspelled. TypeScript's `loadFont` does all three from a promise, with the family named. An
+  expected family that never loads or fails keeps its texts hidden; there's no timeout.
+- **Decided (2026-11-19): fonts are queued, and the renderer adds them,** since the renderer
+  lays text out until step 7 moves fonts to where the SDK can reach them. `load_font` checks the
+  bytes and returns the family name at once.
+- **Decided (2026-11-19): a text that sets no weight is bold in the embedded Inter,** as the
+  static Inter Bold was, and in the font's own weight in an app's own default font, so neither
+  changes. A weight a family lacks uses its nearest, and a missing italic or bold face is
+  synthesized, slanted 14° or thickened by a thirtieth of the size, as parley suggests.
+- **Decided (2026-11-19): the TypeScript package's font is copied in by its `prebuild`,** from
+  `proteus-render`'s assets, rather than kept twice in the repository, and every workflow builds
+  the package's host wasm with `--no-default-features`.
+- **Decided (2026-11-19): `TextConfig::default_size_px` is removed here,** as decided for
+  v0.4.0; step 2 missed it.
+- [x] `load_font`, `expect_font`, `font_failed` and `font_status` in Rust; `loadFont`, with bytes
+  or a promise, in TypeScript; `family`, `weight` and `italic` on texts in both.
+- [x] Variable Inter embedded, behind `embedded-font`, on by default in `proteus-runtime` and the
+  hosts; the TypeScript package fetching it from `fonts/` when no font is set.
+- [x] Tests: loading and family names, a loaded family, weights, the nearest weight, a real and
+  a synthesized italic, an atlas with no font, waiting for an expected font, the default font
+  meanwhile, a failed or unknown family, bad bytes, and the TypeScript fields.
+- [x] The essays example in Lora, with Inter's weights and a synthesized italic; TypeScript
+  downloading Lora with the promise form.
+- **Decided (2026-11-19), after the user's review: the essays example gets a text-editor
+  toolbar,** of icon buttons with no labels, setting the body's size, alignment, bold and
+  italic, line height and font. Its icons are Material Icons, a font, drawn through its
+  ligatures. The second font, Crimson Pro, is downloaded only when it's first chosen, expected
+  with `WhileLoading::DefaultFont`, in Rust through the host's `fetch_async`, so both ways of
+  waiting are shown.
+- **Decided (2026-11-19): a component's interaction styles can change while the app runs,**
+  with `Handle::set_style` and `setStyle`, so a chosen or toggled-on button drops its hover
+  style and stays as it is under the pointer. Disabling a chosen button did that before, but a
+  toggle must stay clickable, and a disabled button lost keyboard focus. A style changed while
+  it shows is applied again.
+- [x] `set_style` in Rust and TypeScript, with a test that changes a style while it shows; the
+  interaction guide.
+- [x] The essays toolbar, in Rust and TypeScript, with tests for the body's settings, chosen
+  buttons under the pointer, and Crimson Pro loading once chosen.
+- [x] The content guide's Fonts section, the configuration guide, ARCHITECTURE and the release
+  notes.
+
 ### Step 5 — Fallback
 
 The app's ordered list of fallback fonts, and the missing-glyph box for a character none of
 them has.
+
+- **Decided (2026-11-19): fonts are tried in a fixed order:** the text's family, then the app's
+  fallback fonts in the order given, then the default font, last, as a catch-all. It's the
+  order CSS, Unity and Godot use: the list given is the order used. A character none of them
+  has is drawn as the family's missing-glyph box, with a warning once per character.
+- **Decided (2026-11-19): one fallback list, for the whole app,** set with
+  `set_fallback_fonts`. A list per text or per family is a candidate. There are none by default:
+  fallback is the app's choice, and the guide says to list only the fonts its text needs, since
+  each costs memory and a download, and fonts should be deterministic.
+- **Decided (2026-11-19): a fallback still loading is treated as a text's own family is.** If
+  it's expected with `WhileLoading::Hide`, a text with characters no loaded font has waits for
+  it; otherwise it's drawn with boxes, marked, and baked again when a font loads. A change to
+  the list bakes every text again.
+- **Decided (2026-11-19): the example's fourth essay is in Hindi,** Bharatendu Harishchandra's
+  "भारतवर्ष की उन्नति कैसे हो सकती है?" (1884), from Hindi Wikisource, drawn by Noto Serif
+  Devanagari as the fallback, since none of the example's other fonts has Devanagari.
+- [x] `set_fallback_fonts` and `fallback_fonts` in Rust, `setFallbackFonts` in TypeScript, and
+  `RasterizedGlyphs::missing`.
+- [x] Tests: a fallback drawing a script, one named before it loads, the fallbacks before the
+  default font, a box for a character no font has, waiting for an expected fallback, and boxes
+  drawn again when one loads.
+- [x] The essays example's Hindi essay, and the content guide's Fallback section.
 
 ### Step 6 — Inline styles
 

@@ -28,7 +28,7 @@ slotmap = { workspace = true }
 # QuadPipeline constants for UV sentinel assertions.
 bevy_ecs = { workspace = true }
 glam = { workspace = true }
-proteus-render = { workspace = true }
+proteus-render = { workspace = true, features = ["embedded-font"] }
 # wgpu and pollster: the GPU test for component baking (tests/static_bake.rs),
 # set up as in proteus-render/tests/headless_render.rs.
 wgpu = { workspace = true }

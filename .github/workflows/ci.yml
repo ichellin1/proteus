@@ -203,7 +203,9 @@ jobs:
         # wasm-pack output (ts/pkg-host) alongside proteus-sdk-web's own
         # (ts/pkg). ARCHITECTURE.md's TypeScript section explains why
         # bundling two separate wasm modules into one npm package is sound.
-        run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host
+        # Without the built-in font: the package ships it as a file, fetched
+        # only when an app sets no font of its own.
+        run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host -- --no-default-features
 
       - name: Install Node toolchain
         uses: actions/setup-node@v4

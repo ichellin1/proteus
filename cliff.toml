@@ -106,8 +106,18 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **The web host's wasm is larger,** by about 790 KB gzipped, with the text engine in it.
 - **`ResourceConfig` written out in full** no longer compiles in Rust: `glyph_cache_bytes`, the
   glyph cache's budget, is new. Fill in the rest with `..Default::default()`.
+- **`RasterizedGlyphs` written out in full** no longer compiles in Rust: `missing`, the
+  characters no font had, is new.
+- **`TextConfig::default_size_px` is removed:** nothing read it, since every text sets its own
+  size.
+- **The built-in font is variable Inter,** in place of a static Inter Bold made from it, at the
+  same optical size. Text that sets no weight is still bold, and looks as it did.
+- **The TypeScript SDK fetches the built-in font as a file,** `fonts/Inter-Variable.ttf` in the
+  package, when `mount` is given no `text.font`: one more request as the app starts. Bundlers
+  such as Vite copy it into the app's output; an app served another way must serve it too, or
+  set `text.font`. The wasm is about 190 KB smaller, gzipped, without it.
 - **`Text` written out in full** no longer compiles in Rust: `wrap_width`, `align`,
-  `line_height`, `max_lines` and `overflow` are new. Make it with `Text::new` and its `with_`
+  `line_height`, `max_lines`, `overflow`, `family`, `weight` and `italic` are new. Make it with `Text::new` and its `with_`
   methods, or fill in the rest with `..Text::new(content, size)`.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}

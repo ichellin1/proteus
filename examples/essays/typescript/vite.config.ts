@@ -6,4 +6,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 // needed, and why their versions are pinned.
 export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
+  // The fonts are in the example's own folder, shared with the Rust version,
+  // one level up from this one.
+  server: { fs: { allow: [".."] } },
 });

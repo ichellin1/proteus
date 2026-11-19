@@ -37,6 +37,10 @@ pub(crate) struct GlyphKey {
     pub coords: Box<[i16]>,
     /// Which quarter of a pixel the glyph starts at, across: 0 to 3.
     pub quarter: u8,
+    /// Whether the glyph is slanted, standing in for an italic face.
+    pub slanted: bool,
+    /// Whether the glyph is thickened, standing in for a bold face.
+    pub emboldened: bool,
 }
 
 /// A rasterized glyph: its coverage, and where it sits from its pen position,
@@ -169,6 +173,8 @@ mod tests {
             size_bits: 16.0f32.to_bits(),
             coords: Box::new([]),
             quarter: 0,
+            slanted: false,
+            emboldened: false,
         }
     }
 
