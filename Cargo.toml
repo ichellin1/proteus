@@ -19,6 +19,7 @@ members = [
     "examples/stepper/rust",
     "examples/menu/rust",
     "examples/browse/rust",
+    "examples/essays/rust",
     "benches/native",
     "benches/browser/rust",
     "checks/corners",
@@ -44,6 +45,7 @@ default-members = [
     "examples/stepper/rust",
     "examples/menu/rust",
     "examples/browse/rust",
+    "examples/essays/rust",
     "benches/native",
     "checks/corners",
 ]
