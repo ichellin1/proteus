@@ -181,6 +181,49 @@ A family that's coming but never loads or fails keeps its texts hidden, as an im
 loads is never drawn. The [essays example](../../examples/essays) loads Lora this way in
 TypeScript.
 
+### Fallback
+
+A font has the characters its designers drew, and no more: Inter has Latin, Greek and Cyrillic,
+but not Hindi's Devanagari, Chinese or emoji. A character a text's font lacks is looked for in
+the app's fallback fonts, in order, then in the default font. One none of them has is drawn as
+the font's missing-glyph box, a rectangle, with a warning naming it.
+
+#### Rust
+
+```rust
+# use proteus_sdk::Proteus;
+# let mut app = Proteus::new();
+# let devanagari: Vec<u8> = Vec::new();
+// `devanagari` holds Noto Serif Devanagari, a TTF file.
+if app.load_font(devanagari).is_ok() {
+    app.set_fallback_fonts(["Noto Serif Devanagari"]);
+}
+```
+
+#### TypeScript
+
+```ts
+app.setFallbackFonts(["Noto Serif Devanagari"]);
+```
+
+- **There are none by default.** Fallback is the app's choice: Proteus never uses the system's
+  fonts, so text is drawn the same everywhere, and nothing is fetched that the app didn't ask
+  for.
+- **List only what the app's text needs.** Each fallback is a font the app ships or downloads,
+  and keeps in memory: a font for Chinese, Japanese or Korean is several megabytes. A long list
+  makes it harder to know which font draws a given character, and a character the app didn't
+  plan for can arrive in a font that doesn't match the rest. In almost every app, fonts should
+  be deterministic: choose them for the text the app shows, and know what each covers.
+- **The list is the app's,** for every text, tried in the order given; calling it again replaces
+  it.
+- **A fallback that's still loading** is treated as a text's own family is: if it's expected
+  with `WhileLoading::Hide`, texts with characters no loaded font has wait for it; otherwise
+  they're drawn with boxes, and again once it loads.
+- **Color emoji** isn't drawn yet: emoji fonts store their glyphs in color, and text is drawn in
+  one color. A black-and-white emoji font, such as Noto Emoji, works as a fallback.
+
+The [essays example](../../examples/essays) draws an essay in Hindi with a fallback font.
+
 ### Changing text
 
 To change a component's text, use `set_text`, which replaces it. The host renders the new text

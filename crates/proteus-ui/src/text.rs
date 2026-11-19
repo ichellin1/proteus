@@ -292,6 +292,14 @@ pub struct Fonts {
     pending: Vec<(std::sync::Arc<[u8]>, String)>,
     /// The families a warning has been logged for.
     warned: std::collections::HashSet<String>,
+    /// The fallback families, in the order they're tried.
+    fallbacks: Vec<String>,
+    /// Whether the fallback families changed since the renderer last took
+    /// them.
+    fallbacks_changed: bool,
+    /// Counts every change, so the renderer can tell when to try texts that
+    /// wait for a font again.
+    version: u64,
 }
 
 impl Fonts {
@@ -302,6 +310,7 @@ impl Fonts {
         if self.status.get(&family) != Some(&FontStatus::Loaded) {
             self.status
                 .insert(family, FontStatus::Expected(while_loading));
+            self.version += 1;
         }
     }
 
@@ -311,6 +320,7 @@ impl Fonts {
         let family = family.into();
         self.status.insert(family.clone(), FontStatus::Loaded);
         self.pending.push((bytes, family));
+        self.version += 1;
     }
 
     /// Says the font of `family` failed to load, so its texts are drawn in
@@ -319,7 +329,33 @@ impl Fonts {
         let family = family.into();
         if self.status.get(&family) != Some(&FontStatus::Loaded) {
             self.status.insert(family, FontStatus::Failed);
+            self.version += 1;
         }
+    }
+
+    /// Sets the fallback families: tried in order for a character a text's
+    /// own family lacks, before the default font.
+    pub fn set_fallbacks(&mut self, families: Vec<String>) {
+        self.fallbacks = families;
+        self.fallbacks_changed = true;
+        self.version += 1;
+    }
+
+    /// The fallback families, in the order they're tried.
+    pub fn fallbacks(&self) -> &[String] {
+        &self.fallbacks
+    }
+
+    /// The fallback families if they changed since the last call, for the
+    /// renderer.
+    pub fn take_fallbacks(&mut self) -> Option<Vec<String>> {
+        std::mem::take(&mut self.fallbacks_changed).then(|| self.fallbacks.clone())
+    }
+
+    /// A number that changes whenever a font is expected, loaded or failed,
+    /// or the fallbacks change.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// What's known of `family`: `None` if it was never expected or loaded.
@@ -338,6 +374,17 @@ impl Fonts {
         self.warned.insert(family.to_owned())
     }
 }
+
+/// Marks a text drawn with characters no font had, as boxes, so it's baked
+/// again when a font loads or the fallbacks change.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct MissingGlyphs;
+
+/// Marks a text waiting, not drawn, for a fallback font that's expected with
+/// [`WhileLoading::Hide`], since it has characters only a font still to load
+/// might have. Removed when what's known of the fonts changes.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct WaitsForFont;
 
 // ---------------------------------------------------------------------------
 // ClearGlyphCache

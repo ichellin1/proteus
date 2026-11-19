@@ -253,7 +253,9 @@ Proteus bakes three kinds of thing:
   default font, Inter with the `embedded-font` feature, or a family the app has loaded with
   `Proteus::load_font`, which queues the font in the `Fonts` resource for the renderer to add
   before it next bakes. A text whose family is expected but not loaded waits, or is drawn in the
-  default font and baked again once it loads, as the app chose. Images are decoded with the `image` crate. Both go into the main
+  default font and baked again once it loads, as the app chose. A character the text's family
+  lacks is looked for in the app's fallback fonts, in order, then the default font; one none has
+  is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font loads. Images are decoded with the `image` crate. Both go into the main
   atlas. With `resources.lazy_load`, a component's text or image waits until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the

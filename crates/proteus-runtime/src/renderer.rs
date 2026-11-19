@@ -40,6 +40,8 @@ use crate::viewport::Viewport;
 /// component. See the module docs.
 pub struct Renderer {
     font_atlas: proteus_render::FontAtlas,
+    /// The version of the app's `Fonts` last seen, to tell when it changed.
+    fonts_version: u64,
     config: ProteusConfig,
     viewport: Viewport,
     /// Every component's instances, kept from frame to frame.
@@ -139,6 +141,7 @@ impl Renderer {
 
         Self {
             font_atlas,
+            fonts_version: 0,
             config,
             viewport,
             instances: InstanceCache::default(),
@@ -200,12 +203,44 @@ impl Renderer {
 
     /// Adds the fonts the app has loaded since the last frame to the font
     /// atlas, and bakes again the texts in their families that were drawn in
-    /// the default font while they loaded.
+    /// the default font while they loaded, and those drawn with boxes for
+    /// characters no font had. A change to the fallbacks bakes every text
+    /// again, and any change to the fonts lets the texts waiting for one try
+    /// again.
     fn add_loaded_fonts(&mut self, world: &mut bevy_ecs::world::World) {
-        let loaded = world
-            .get_resource_mut::<proteus_ui::Fonts>()
-            .map(|mut fonts| fonts.take_pending())
-            .unwrap_or_default();
+        let Some(mut fonts) = world.get_resource_mut::<proteus_ui::Fonts>() else {
+            return;
+        };
+        let loaded = fonts.take_pending();
+        let fallbacks = fonts.take_fallbacks();
+        let version = fonts.version();
+        if version != self.fonts_version {
+            self.fonts_version = version;
+            let waiting: Vec<_> = world
+                .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<proteus_ui::WaitsForFont>>()
+                .iter(world)
+                .collect();
+            for entity in waiting {
+                world
+                    .entity_mut(entity)
+                    .remove::<proteus_ui::WaitsForFont>();
+            }
+        }
+        if let Some(fallbacks) = fallbacks {
+            self.font_atlas.set_fallbacks(&fallbacks);
+            let baked: Vec<_> = world
+                .query_filtered::<bevy_ecs::entity::Entity, (
+                    bevy_ecs::query::With<BakedText>,
+                    bevy_ecs::query::With<proteus_ui::Text>,
+                )>()
+                .iter(world)
+                .collect();
+            for entity in baked {
+                world
+                    .entity_mut(entity)
+                    .remove::<(BakedText, TextTextureRef)>();
+            }
+        }
         for (bytes, family) in loaded {
             if let Err(e) = self.font_atlas.load_font(&bytes) {
                 // `Proteus::load_font` checked the bytes, so this shouldn't
@@ -214,10 +249,16 @@ impl Renderer {
                 continue;
             }
             let drawn: Vec<_> = world
-                .query_filtered::<(bevy_ecs::entity::Entity, &proteus_ui::Text), bevy_ecs::query::With<BakedText>>()
+                .query_filtered::<(
+                    bevy_ecs::entity::Entity,
+                    &proteus_ui::Text,
+                    bevy_ecs::query::Has<proteus_ui::MissingGlyphs>,
+                ), bevy_ecs::query::With<BakedText>>()
                 .iter(world)
-                .filter(|(_, text)| text.family.as_deref() == Some(family.as_str()))
-                .map(|(entity, _)| entity)
+                .filter(|(_, text, missing)| {
+                    *missing || text.family.as_deref() == Some(family.as_str())
+                })
+                .map(|(entity, _, _)| entity)
                 .collect();
             for entity in drawn {
                 // Releases the old texture; see `proteus_ui::texture_ref`.
@@ -739,6 +780,89 @@ mod tests {
             return;
         };
         assert_eq!(baked(&scene, &label).map(|s| s[0]), default, "never loaded");
+    }
+
+    /// Noto Serif Devanagari, the fallback the essays example uses for Hindi.
+    const DEVANAGARI: &[u8] =
+        include_bytes!("../../../examples/essays/fonts/NotoSerifDevanagari-Variable.ttf");
+    const HINDI: &str = "नमस्ते";
+
+    fn hindi_scene(prepare: impl FnOnce(&mut Proteus)) -> Option<(Scene, Handle)> {
+        let mut scene = Scene::with_scale(ProteusConfig::default(), 1.0)?;
+        prepare(&mut scene.proteus);
+        let label = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(Text::new(HINDI, 24.0)));
+        scene.frame();
+        Some((scene, label))
+    }
+
+    fn has_boxes(scene: &Scene, handle: &Handle) -> bool {
+        scene
+            .proteus
+            .world()
+            .get::<proteus_ui::MissingGlyphs>(handle.id())
+            .is_some()
+    }
+
+    // With no fallback, Hindi is drawn as boxes; with one, in it.
+    #[test]
+    fn a_fallback_font_draws_what_the_font_lacks() {
+        let Some((scene, label)) = hindi_scene(|_| {}) else {
+            return;
+        };
+        assert!(has_boxes(&scene, &label));
+        let Some((scene, label)) = hindi_scene(|app| {
+            app.load_font(DEVANAGARI).unwrap();
+            app.set_fallback_fonts(["Noto Serif Devanagari"]);
+        }) else {
+            return;
+        };
+        assert!(baked(&scene, &label).is_some());
+        assert!(!has_boxes(&scene, &label));
+    }
+
+    // A text with characters only an expected fallback might have waits for
+    // it, while a text the loaded fonts cover is drawn at once.
+    #[test]
+    fn a_text_waits_for_an_expected_fallback() {
+        let Some((mut scene, label)) = hindi_scene(|app| {
+            app.set_fallback_fonts(["Noto Serif Devanagari"]);
+            app.expect_font("Noto Serif Devanagari", proteus_sdk::WhileLoading::Hide);
+        }) else {
+            return;
+        };
+        let latin = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(Text::new("Hello", 24.0)));
+        scene.frame();
+        assert_eq!(baked(&scene, &label), None, "waits for the fallback");
+        assert!(baked(&scene, &latin).is_some(), "Latin needs no fallback");
+
+        scene.proteus.load_font(DEVANAGARI).unwrap();
+        scene.frame();
+        assert!(baked(&scene, &label).is_some());
+        assert!(!has_boxes(&scene, &label));
+    }
+
+    // With `DefaultFont`, it's drawn at once with boxes, and again in the
+    // fallback once it loads.
+    #[test]
+    fn a_text_with_boxes_is_drawn_again_when_a_fallback_loads() {
+        let Some((mut scene, label)) = hindi_scene(|app| {
+            app.set_fallback_fonts(["Noto Serif Devanagari"]);
+            app.expect_font(
+                "Noto Serif Devanagari",
+                proteus_sdk::WhileLoading::DefaultFont,
+            );
+        }) else {
+            return;
+        };
+        assert!(has_boxes(&scene, &label), "drawn at once, with boxes");
+        scene.proteus.load_font(DEVANAGARI).unwrap();
+        scene.frame();
+        assert!(baked(&scene, &label).is_some());
+        assert!(!has_boxes(&scene, &label), "drawn again, in the fallback");
     }
 
     #[test]

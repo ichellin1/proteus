@@ -652,6 +652,30 @@ impl Proteus {
         self.fonts().failed(family);
     }
 
+    /// Sets the app's fallback fonts: families tried, in order, for a
+    /// character a text's own family lacks, before the default font, as a
+    /// CSS font stack is. A character none of them has is drawn as a box,
+    /// with a warning. Replaces the list; an empty one turns fallback off.
+    /// Families not loaded yet are skipped until they are, and texts are
+    /// drawn again as they load, or wait for them if they're expected with
+    /// `WhileLoading::Hide`.
+    ///
+    /// None are set by default, and each costs memory, and a download if the
+    /// app fetches it: list only the fonts the app's text needs, so what it
+    /// draws is known. See the content guide's Fallback section.
+    pub fn set_fallback_fonts<S: Into<String>>(&mut self, families: impl IntoIterator<Item = S>) {
+        let families = families.into_iter().map(Into::into).collect();
+        self.fonts().set_fallbacks(families);
+    }
+
+    /// The app's fallback fonts, in the order they're tried.
+    pub fn fallback_fonts(&self) -> Vec<String> {
+        self.world
+            .world
+            .get_resource::<proteus_ui::Fonts>()
+            .map_or_else(Vec::new, |fonts| fonts.fallbacks().to_vec())
+    }
+
     /// What's known of the font `family`: expected, loaded or failed, or
     /// `None` if it was never expected or loaded.
     pub fn font_status(&self, family: &str) -> Option<proteus_ui::FontStatus> {

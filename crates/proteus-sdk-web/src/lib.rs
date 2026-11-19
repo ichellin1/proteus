@@ -989,6 +989,12 @@ impl ProteusApp {
         Ok(())
     }
 
+    /// Calls [`Proteus::set_fallback_fonts`](sdk::Proteus::set_fallback_fonts).
+    #[wasm_bindgen(js_name = setFallbackFonts)]
+    pub fn set_fallback_fonts(&mut self, families: Vec<String>) {
+        self.0.borrow_mut().set_fallback_fonts(families);
+    }
+
     /// Calls [`Proteus::font_failed`](sdk::Proteus::font_failed).
     #[wasm_bindgen(js_name = fontFailed)]
     pub fn font_failed(&mut self, family: String) {

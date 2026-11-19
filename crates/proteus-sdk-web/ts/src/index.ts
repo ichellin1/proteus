@@ -1239,6 +1239,25 @@ export class ProteusApp {
   }
 
   /**
+   * Sets the app's fallback fonts: families tried, in order, for a character a text's own
+   * family lacks, before the default font, as a CSS font stack is. A character none of them has
+   * is drawn as a box, with a warning. Replaces the list; an empty one turns fallback off.
+   * Families not loaded yet are skipped until they are, and texts are drawn again as they load,
+   * or wait for them if `loadFont` was given `whileLoading: "hide"`.
+   *
+   * None are set by default, and each costs memory, and a download: list only the fonts the
+   * app's text needs, so what it draws is known.
+   *
+   * @example
+   * ```ts
+   * app.setFallbackFonts(["Noto Serif Devanagari"]);
+   * ```
+   */
+  setFallbackFonts(families: string[]): void {
+    this.wasmApp.setFallbackFonts(families);
+  }
+
+  /**
    * Sets how long a key is held before it's long-pressed, in milliseconds.
    * 500 by default.
    */

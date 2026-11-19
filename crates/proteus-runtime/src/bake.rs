@@ -14,7 +14,7 @@ use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, Textu
 use proteus_sdk::TextureHandle;
 use proteus_ui::{
     BakeScale, BakedImage, BakedText, EffectiveVisibility, FontStatus, Fonts, Image,
-    ImageTextureRef, Text, TextTextureRef, Visibility, WhileLoading,
+    ImageTextureRef, MissingGlyphs, Text, TextTextureRef, Visibility, WaitsForFont, WhileLoading,
 };
 
 use crate::services::HostServices;
@@ -91,7 +91,7 @@ pub(crate) fn bake_pending_text(
             &Text,
             Option<&Visibility>,
             Option<&EffectiveVisibility>,
-        ), Without<BakedText>>();
+        ), (Without<BakedText>, Without<WaitsForFont>)>();
         query
             .iter(world)
             .filter(|(_, _, vis, eff_vis)| !lazy_load || is_visible(*vis, *eff_vis))
@@ -132,6 +132,20 @@ pub(crate) fn bake_pending_text(
                 scale = fitted;
                 glyphs = font_atlas.rasterize(&layout(), scale);
             }
+        }
+        // Characters no font has: the text waits if a fallback font that
+        // might have them is still loading and its texts wait for it, and
+        // otherwise is drawn with boxes, and marked so it's baked again when
+        // a font loads.
+        let missing = glyphs.as_ref().is_some_and(|g| !g.missing.is_empty());
+        if missing && waits_for_fallback(world) {
+            world.entity_mut(entity).insert(WaitsForFont);
+            continue;
+        }
+        if missing {
+            world.entity_mut(entity).insert(MissingGlyphs);
+        } else {
+            world.entity_mut(entity).remove::<MissingGlyphs>();
         }
         let Some(mut glyphs) = glyphs else {
             world.entity_mut(entity).insert(BakedText {
@@ -190,6 +204,17 @@ pub(crate) fn bake_pending_text(
             TextTextureRef(texture_id),
         ));
     }
+}
+
+/// Whether a fallback font is expected, with its texts waiting for it: a text
+/// with characters no loaded font has might find them there.
+fn waits_for_fallback(world: &World) -> bool {
+    world.get_resource::<Fonts>().is_some_and(|fonts| {
+        fonts
+            .fallbacks()
+            .iter()
+            .any(|family| fonts.status(family) == Some(FontStatus::Expected(WhileLoading::Hide)))
+    })
 }
 
 /// Whether `text` is drawn in the default font rather than its own family,

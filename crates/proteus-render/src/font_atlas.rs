@@ -48,7 +48,11 @@
 //! ## Fonts
 //!
 //! A [`FontAtlas`] has a default font, and any others loaded with
-//! [`FontAtlas::load_font`], each under the family name inside it. A text
+//! [`FontAtlas::load_font`], each under the family name inside it. A
+//! character a text's family lacks is looked for in the fallback families,
+//! in order, set with [`FontAtlas::set_fallbacks`], then in the default font;
+//! one none of them has is drawn as the family's missing-glyph box, a
+//! rectangle, and reported in [`RasterizedGlyphs::missing`]. A text
 //! names a family, or takes the default, and asks for a weight and italic; a
 //! family that lacks the weight uses its nearest, as in CSS. A family with no
 //! italic face is slanted, and one with no bold face is thickened. No system
@@ -207,6 +211,9 @@ pub struct RasterizedGlyphs {
     /// RGBA pixels, `width * height * 4` bytes. Alpha is the glyph coverage,
     /// not premultiplied.
     pub rgba_pixels: Vec<u8>,
+    /// The characters no font had, drawn as the font's missing-glyph box, in
+    /// the order they first appear, each once.
+    pub missing: Vec<char>,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +243,10 @@ pub struct FontAtlas {
     has_ellipsis: bool,
     /// Whether the warning that there's no font to draw in was logged.
     warned_no_font: bool,
+    /// The fallback families, in the order they're tried.
+    fallbacks: Vec<String>,
+    /// The characters no font had that a warning has been logged for.
+    warned_missing: HashSet<char>,
     glyphs: GlyphCache,
 }
 
@@ -254,6 +265,27 @@ pub fn font_family_name(font_bytes: &[u8]) -> Result<String, FontError> {
     FontAtlas::empty().load_font(font_bytes)
 }
 
+/// The characters in the first `line_count` lines of `layout`, laid out from
+/// `content`, that no font had: each once, in order.
+fn missing_chars(layout: &Layout<()>, line_count: usize, content: &str) -> Vec<char> {
+    let mut missing = Vec::new();
+    for line in layout.lines().take(line_count) {
+        for run in line.runs() {
+            for cluster in run.clusters() {
+                if cluster.is_hard_line_break() || !cluster.glyphs().any(|g| g.id == 0) {
+                    continue;
+                }
+                for c in content[cluster.text_range()].chars() {
+                    if !c.is_whitespace() && !missing.contains(&c) {
+                        missing.push(c);
+                    }
+                }
+            }
+        }
+    }
+    missing
+}
+
 /// Whether the font has "…", so it can end a text.
 fn has_ellipsis(font_bytes: &[u8]) -> bool {
     swash::FontRef::from_index(font_bytes, 0)
@@ -267,7 +299,6 @@ struct Fitted {
     /// text is clipped.
     line_count: usize,
     /// What was laid out in place of the text when it ends in an ellipsis.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the tests check it"))]
     content: Option<String>,
 }
 
@@ -329,6 +360,8 @@ impl FontAtlas {
             families: HashSet::new(),
             has_ellipsis: false,
             warned_no_font: false,
+            fallbacks: Vec::new(),
+            warned_missing: HashSet::new(),
             glyphs: GlyphCache::new(DEFAULT_GLYPH_CACHE_BYTES),
         }
     }
@@ -348,6 +381,13 @@ impl FontAtlas {
             self.default_family = Some(family.clone());
         }
         Ok(family)
+    }
+
+    /// Sets the fallback families, tried in order for a character a text's
+    /// own family lacks, before the default font. A family not loaded yet is
+    /// skipped until it is. See the module docs.
+    pub fn set_fallbacks(&mut self, families: &[String]) {
+        self.fallbacks = families.to_vec();
     }
 
     /// Whether a font of `family` has been loaded.
@@ -434,7 +474,9 @@ impl FontAtlas {
             return None;
         }
         let Fitted {
-            layout, line_count, ..
+            layout,
+            line_count,
+            content,
         } = self.fit(text, scale);
 
         // The image's height: from the top of the first line to the bottom of
@@ -490,10 +532,27 @@ impl FontAtlas {
             }
         }
 
+        let missing = missing_chars(
+            &layout,
+            line_count,
+            content.as_deref().unwrap_or(text.content),
+        );
+        for &c in &missing {
+            if self.warned_missing.insert(c) {
+                log::warn!(
+                    "no font has {c:?} (U+{:04X}), in the text {:?}, so it's drawn as a box: add a \
+                     font that has it to the fallback fonts",
+                    c as u32,
+                    text.content,
+                );
+            }
+        }
+
         Some(RasterizedGlyphs {
             width,
             height: height as u32,
             rgba_pixels: rgba,
+            missing,
         })
     }
 
@@ -599,9 +658,20 @@ impl FontAtlas {
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, scale, false);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::Single(
-            FontFamilyName::Named(family.into()),
-        )));
+        // The text's family, then the fallbacks, in order, then the default
+        // font, each tried in turn for a character the ones before it lack.
+        let mut stack = vec![family.clone()];
+        let loaded = self.fallbacks.iter().filter(|f| self.families.contains(*f));
+        for name in loaded.chain(&self.default_family) {
+            if !stack.contains(name) {
+                stack.push(name.clone());
+            }
+        }
+        let names: Vec<FontFamilyName<'_>> = stack
+            .into_iter()
+            .map(|name| FontFamilyName::Named(name.into()))
+            .collect();
+        builder.push_default(StyleProperty::FontFamily(FontFamily::List(names.into())));
         if let Some(weight) = weight {
             builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight as f32)));
         }
@@ -1262,6 +1332,70 @@ mod tests {
             slanted.width > straight.width,
             "a slant widens straight strokes"
         );
+    }
+
+    const CRIMSON: &[u8] = include_bytes!("../../../examples/essays/fonts/CrimsonPro-Variable.ttf");
+    const DEVANAGARI: &[u8] =
+        include_bytes!("../../../examples/essays/fonts/NotoSerifDevanagari-Variable.ttf");
+
+    // A script no loaded font has is drawn as boxes, and reported; with a
+    // fallback font that has it, it's drawn in that.
+    #[test]
+    fn a_fallback_font_draws_a_script_the_font_lacks() {
+        let mut fa = atlas();
+        let text = TextLayout::new("Hello नमस्ते", 32.0);
+        let boxes = pixels(&mut fa, &text);
+        assert_eq!(boxes.missing, vec!['न', 'म', 'स', '्', 'त', 'े']);
+
+        // Named before it's loaded, it's skipped until it is.
+        fa.set_fallbacks(&["Noto Serif Devanagari".to_owned()]);
+        assert!(!pixels(&mut fa, &text).missing.is_empty());
+
+        assert_eq!(fa.load_font(DEVANAGARI).unwrap(), "Noto Serif Devanagari");
+        let drawn = pixels(&mut fa, &text);
+        assert!(drawn.missing.is_empty());
+        assert_ne!(drawn.rgba_pixels, boxes.rgba_pixels);
+    }
+
+    // The fallbacks are tried, in order, before the default font: Lora lacks
+    // "ĸ" and these letters, which Crimson Pro and Inter both have, and
+    // Crimson Pro draws them.
+    #[test]
+    fn the_fallbacks_come_before_the_default_font() {
+        let mut fa = atlas();
+        fa.load_font(LORA).unwrap();
+        fa.load_font(CRIMSON).unwrap();
+        let mut text = TextLayout::new("ĸǅǆǈǉǋǌ", 48.0);
+        text.weight = Some(400);
+        // The glyph's ink width tells which font drew it; the line's height
+        // is the text's own family's either way.
+        let mut in_family = |fa: &mut FontAtlas, family: &'static str| {
+            text.family = Some(family);
+            ink_columns(&pixels(fa, &text)).len()
+        };
+        let crimson = in_family(&mut fa, "Crimson Pro");
+        let inter = in_family(&mut fa, "Inter");
+        assert_ne!(crimson, inter);
+
+        assert_eq!(
+            in_family(&mut fa, "Lora"),
+            inter,
+            "no fallbacks: the default font"
+        );
+        fa.set_fallbacks(&["Crimson Pro".to_owned()]);
+        assert_eq!(in_family(&mut fa, "Lora"), crimson, "the fallback first");
+    }
+
+    // A character no font has is drawn as a box, not left out.
+    #[test]
+    fn a_character_no_font_has_is_drawn_as_a_box() {
+        let mut fa = atlas();
+        let ab = pixels(&mut fa, &TextLayout::new("ab", 32.0));
+        let with_box = pixels(&mut fa, &TextLayout::new("a中b", 32.0));
+        assert_eq!(with_box.missing, vec!['中']);
+        assert!(with_box.width > ab.width + 10, "room for the box");
+        let ink = |g: &RasterizedGlyphs| g.rgba_pixels.chunks(4).filter(|p| p[3] > 0).count();
+        assert!(ink(&with_box) > ink(&ab), "the box is drawn");
     }
 
     #[test]

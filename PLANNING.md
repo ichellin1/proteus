@@ -292,6 +292,28 @@ file of its own in the TypeScript package.
 The app's ordered list of fallback fonts, and the missing-glyph box for a character none of
 them has.
 
+- **Decided (2026-11-19): fonts are tried in a fixed order:** the text's family, then the app's
+  fallback fonts in the order given, then the default font, last, as a catch-all. It's the
+  order CSS, Unity and Godot use: the list given is the order used. A character none of them
+  has is drawn as the family's missing-glyph box, with a warning once per character.
+- **Decided (2026-11-19): one fallback list, for the whole app,** set with
+  `set_fallback_fonts`. A list per text or per family is a candidate. There are none by default:
+  fallback is the app's choice, and the guide says to list only the fonts its text needs, since
+  each costs memory and a download, and fonts should be deterministic.
+- **Decided (2026-11-19): a fallback still loading is treated as a text's own family is.** If
+  it's expected with `WhileLoading::Hide`, a text with characters no loaded font has waits for
+  it; otherwise it's drawn with boxes, marked, and baked again when a font loads. A change to
+  the list bakes every text again.
+- **Decided (2026-11-19): the example's fourth essay is in Hindi,** Bharatendu Harishchandra's
+  "भारतवर्ष की उन्नति कैसे हो सकती है?" (1884), from Hindi Wikisource, drawn by Noto Serif
+  Devanagari as the fallback, since none of the example's other fonts has Devanagari.
+- [x] `set_fallback_fonts` and `fallback_fonts` in Rust, `setFallbackFonts` in TypeScript, and
+  `RasterizedGlyphs::missing`.
+- [x] Tests: a fallback drawing a script, one named before it loads, the fallbacks before the
+  default font, a box for a character no font has, waiting for an expected fallback, and boxes
+  drawn again when one loads.
+- [x] The essays example's Hindi essay, and the content guide's Fallback section.
+
 ### Step 6 — Inline styles
 
 Spans with their own weight, style, size and color, in Rust and TypeScript, and spans in an
