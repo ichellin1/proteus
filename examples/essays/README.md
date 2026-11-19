@@ -1,8 +1,15 @@
 # Essays Example
 
-A reading app with three public-domain essays: Mary Wollstonecraft's "A Vindication of the
+A reading app with four public-domain essays: Mary Wollstonecraft's "A Vindication of the
 Rights of Woman" (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis Stevenson's "An
-Apology for Idlers" (1877), from their Project Gutenberg editions.
+Apology for Idlers" (1877), from their Project Gutenberg editions, and Bharatendu
+Harishchandra's "भारतवर्ष की उन्नति कैसे हो सकती है?" ("How can India progress?", 1884), in
+Hindi, from Hindi Wikisource.
+
+None of the essays' fonts has Hindi's script, Devanagari, so the app names one fallback font,
+Noto Serif Devanagari, with `set_fallback_fonts`: a character a text's font lacks is looked for
+there, then in the default font. Only that one is listed, so every character the app draws is
+known to be covered.
 
 Each essay has a card. Its year is aligned to the end of the card's column, its title wraps onto
 at most two lines and ends in "…", its opening is spaced at a line height of 1.45 and stops
@@ -30,8 +37,11 @@ Lora and Crimson Pro are from Google Fonts, under the SIL Open Font License, in
 the Apache License 2.0, in [`fonts/LICENSE-MaterialIcons.txt`](./fonts/LICENSE-MaterialIcons.txt).
 To watch a font arrive, throttle the network in the browser's developer tools.
 
-Not shown yet: a weight a font doesn't have, other scripts, mixed styles within a text,
-measuring text, and components within a line of text.
+Noto Serif Devanagari is from Google Fonts, under the SIL Open Font License, in
+[`fonts/OFL-NotoSerifDevanagari.txt`](./fonts/OFL-NotoSerifDevanagari.txt).
+
+Not shown yet: a weight a font doesn't have, a character no font has, drawn as a box, mixed
+styles within a text, measuring text, and components within a line of text.
 
 Techniques worth copying are described at the top of each version's source:
 [`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).

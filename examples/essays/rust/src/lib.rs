@@ -1,6 +1,6 @@
 //! A reading app, the same app as the TypeScript essays example.
 //!
-//! A row of cards, one for each of three public-domain essays. Each card's
+//! A row of cards, one for each of four public-domain essays. Each card's
 //! year is aligned to the end of its column; its title wraps onto at most two
 //! lines, ending in "…"; its opening is spaced at a line height of 1.45 and
 //! stops after five lines, ending in an ellipsis of the card's own; and its
@@ -13,7 +13,10 @@
 //! The essays are Mary Wollstonecraft's "A Vindication of the Rights of
 //! Woman" (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis
 //! Stevenson's "An Apology for Idlers" (1877), from their Project Gutenberg
-//! editions, each cited where it's shown.
+//! editions, and Bharatendu Harishchandra's "भारतवर्ष की उन्नति कैसे हो सकती
+//! है?" ("How can India progress?", 1884), in Hindi, from Hindi Wikisource,
+//! each cited where it's shown. None of the essays' fonts has Hindi's script,
+//! Devanagari: it's drawn by the app's fallback font, Noto Serif Devanagari.
 //!
 //! The essays are set in Lora, a serif built in from `fonts/`, with its
 //! italic for the pull quotes; titles are Inter at 800 and years at 500, from
@@ -32,6 +35,10 @@
 //!     and the body show the default font until it arrives, then swap to it;
 //!     `update` fetches it with the host's `fetch_async`, then calls
 //!     `load_font`, or `font_failed` if the fetch fails.
+//!   - A fallback font is named once, for the whole app, with
+//!     `set_fallback_fonts`: a character a text's font lacks is looked for
+//!     there, then in the default font. Only the fonts the text needs are
+//!     listed, so what's drawn is known.
 //!   - An icon font's ligatures turn a name, such as "format_bold", into its
 //!     icon: the toolbar's icons are text in Material Icons.
 //!   - A chosen button, or one toggled on, has its hover style removed with
@@ -51,8 +58,9 @@
 //!   - Changing a text's alignment or line height means setting it again:
 //!     `set_text` replaces it, and the host lays it out again.
 //!
-//! Not shown here: a weight a font doesn't have, other scripts, mixed styles
-//! within a text, measuring text, and components within a line of text.
+//! Not shown here: a weight a font doesn't have, a character no font has,
+//! drawn as a box, mixed styles within a text, measuring text, and components
+//! within a line of text.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -105,7 +113,7 @@ struct Essay {
     source: &'static str,
 }
 
-const ESSAYS: [Essay; 3] = [
+const ESSAYS: [Essay; 4] = [
     Essay {
         year: "1792",
         title: "A Vindication of the Rights of Woman: with Strictures on Political and \
@@ -152,6 +160,17 @@ const ESSAYS: [Essay; 3] = [
         source: "From \u{201c}An Apology for Idlers\u{201d} by Robert Louis Stevenson (1877), \
             in \u{201c}Virginibus Puerisque\u{201d}, Project Gutenberg eBook #386. Public domain.",
     },
+    Essay {
+        year: "1884",
+        title: "भारतवर्ष की उन्नति कैसे हो सकती है?",
+        author: "भारतेन्दु हरिश्चंद्र",
+        // In Hindi, which none of the essays' fonts has: every character is
+        // drawn by the fallback font, Noto Serif Devanagari.
+        opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
+        more: " आगे पढ़ें",
+        quote: "\u{201c}हमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u{201d}",
+        source: "From \u{201c}भारतवर्ष की उन्नति कैसे हो सकती है?\u{201d} by Bharatendu Harishchandra (1884), in \u{201c}Bharatendu Samagra\u{201d} (1987), Hindi Wikisource. Public domain.",
+    },
 ];
 
 /// The family the essays are set in, and its two files, from Google Fonts
@@ -171,11 +190,17 @@ const CRIMSON_FILE: &str = "fonts/CrimsonPro-Variable.ttf";
 /// an icon's name, such as "format_bold", into its glyph. Apache License 2.0;
 /// see `fonts/LICENSE-MaterialIcons.txt`.
 const ICONS: &str = "Material Icons";
+
+/// The fallback font, for the Hindi essay: Noto Serif Devanagari, from Google
+/// Fonts under the SIL Open Font License; see
+/// `fonts/OFL-NotoSerifDevanagari.txt`.
+const DEVANAGARI: &str = "Noto Serif Devanagari";
+const DEVANAGARI_FONT: &[u8] = include_bytes!("../../fonts/NotoSerifDevanagari-Variable.ttf");
 const ICONS_FONT: &[u8] = include_bytes!("../../fonts/MaterialIcons-Regular.ttf");
 
-const CARD_SIZE: Vec2 = Vec2::new(320.0, 300.0);
+const CARD_SIZE: Vec2 = Vec2::new(245.0, 300.0);
 const CARD_Y: f32 = -20.0;
-const CARD_SPACING: f32 = 350.0;
+const CARD_SPACING: f32 = 265.0;
 const CARD_PADDING: f32 = 20.0;
 const CARD_COLUMN: f32 = CARD_SIZE.x - 2.0 * CARD_PADDING;
 
@@ -315,9 +340,11 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_max_lines(2),
         ),
         // At most five lines, ending in the card's own ellipsis.
+        // Below two lines of title in any of the scripts, Hindi's being the
+        // tallest.
         text_at(
             left,
-            top - 86.0,
+            top - 104.0,
             Text::new(essay.opening, 15.0)
                 .with_family(LORA)
                 .with_color(INK)
@@ -568,9 +595,12 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     // Lora, upright and italic: both files are one family. The icons are a
     // font too. Crimson Pro is coming, once it's chosen: until then, its
     // texts are drawn in the default font, and again in it once it loads.
-    for font in [LORA_UPRIGHT, LORA_ITALIC, ICONS_FONT] {
+    for font in [LORA_UPRIGHT, LORA_ITALIC, ICONS_FONT, DEVANAGARI_FONT] {
         app.load_font(font).expect("the example's fonts are valid");
     }
+    // Hindi is in none of the other fonts: a character a text's font lacks
+    // is looked for in the fallback, then in the default font.
+    app.set_fallback_fonts([DEVANAGARI]);
     app.expect_font(CRIMSON, WhileLoading::DefaultFont);
 
     // The title sits a margin from the window's left edge, and the toolbar,
@@ -630,7 +660,11 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     for (i, essay) in ESSAYS.iter().enumerate() {
         let card_text = card_texts(app, essay);
         let mut spec = ComponentSpec::new(QuadState {
-            position: Vec3::new((i as f32 - 1.0) * CARD_SPACING, CARD_Y, 0.0),
+            position: Vec3::new(
+                (i as f32 - (ESSAYS.len() - 1) as f32 / 2.0) * CARD_SPACING,
+                CARD_Y,
+                0.0,
+            ),
             size: CARD_SIZE,
             corner_radius: 18.0,
             color: PAPER,
@@ -667,7 +701,8 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         title: hidden_text(app, left, top - 60.0),
         byline: hidden_text(app, left, top - 150.0),
         body: hidden_text(app, left, top - 200.0),
-        quote: hidden_text(app, -300.0, -120.0),
+        // Below the tallest body: 20 pixels at a line height of 1.8.
+        quote: hidden_text(app, -300.0, -150.0),
         source: hidden_text(app, left, -PANEL_SIZE.y / 2.0 + PANEL_PADDING + 14.0),
     };
     let mut panel_spec = ComponentSpec::new(QuadState {

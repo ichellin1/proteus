@@ -2,7 +2,7 @@
  * Proteus TypeScript SDK example: a reading app, the same app as the Rust
  * essays example.
  *
- * A row of cards, one for each of three public-domain essays. Each card's
+ * A row of cards, one for each of four public-domain essays. Each card's
  * year is aligned to the end of its column; its title wraps onto at most two
  * lines, ending in "…"; its opening is spaced at a line height of 1.45 and
  * stops after five lines, ending in an ellipsis of the card's own; and its
@@ -14,8 +14,11 @@
  *
  * The essays are Mary Wollstonecraft's "A Vindication of the Rights of Woman"
  * (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis Stevenson's
- * "An Apology for Idlers" (1877), from their Project Gutenberg editions, each
- * cited where it's shown.
+ * "An Apology for Idlers" (1877), from their Project Gutenberg editions, and
+ * Bharatendu Harishchandra's "भारतवर्ष की उन्नति कैसे हो सकती है?" ("How can
+ * India progress?", 1884), in Hindi, from Hindi Wikisource, each cited where
+ * it's shown. None of the essays' fonts has Hindi's script, Devanagari: it's
+ * drawn by the app's fallback font, Noto Serif Devanagari.
  *
  * The essays are set in Lora, a serif downloaded from `fonts/`, with its
  * italic for the pull quotes; titles are Inter at 800 and years at 500, from
@@ -32,6 +35,10 @@
  *     at the start, with a promise settled once it's fetched: Crimson Pro,
  *     with `whileLoading: "defaultFont"`, so its button and the body show the
  *     default font until it arrives, then swap to it.
+ *   - A fallback font is named once, for the whole app, with
+ *     `setFallbackFonts`: a character a text's font lacks is looked for there,
+ *     then in the default font. Only the fonts the text needs are listed, so
+ *     what's drawn is known.
  *   - An icon font's ligatures turn a name, such as "format_bold", into its
  *     icon: the toolbar's icons are text in Material Icons.
  *   - A chosen button, or one toggled on, has its hover style removed with
@@ -51,8 +58,9 @@
  *   - Changing a text's alignment or line height means setting it again:
  *     `setText` replaces it, and the host lays it out again.
  *
- * Not shown here: a weight a font doesn't have, other scripts, mixed styles
- * within a text, measuring text, and components within a line of text.
+ * Not shown here: a weight a font doesn't have, a character no font has,
+ * drawn as a box, mixed styles within a text, measuring text, and components
+ * within a line of text.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
@@ -135,6 +143,17 @@ const ESSAYS: Essay[] = [
       "From “An Apology for Idlers” by Robert Louis Stevenson (1877), in " +
       "“Virginibus Puerisque”, Project Gutenberg eBook #386. Public domain.",
   },
+  {
+    year: "1884",
+    title: "भारतवर्ष की उन्नति कैसे हो सकती है?",
+    author: "भारतेन्दु हरिश्चंद्र",
+    // In Hindi, which none of the essays' fonts has: every character is drawn
+    // by the fallback font, Noto Serif Devanagari.
+    opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
+    more: " आगे पढ़ें",
+    quote: "\u201cहमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u201d",
+    source: "From “भारतवर्ष की उन्नति कैसे हो सकती है?” by Bharatendu Harishchandra (1884), in “Bharatendu Samagra” (1987), Hindi Wikisource. Public domain.",
+  },
 ];
 
 /**
@@ -154,6 +173,11 @@ const CRIMSON = "Crimson Pro";
  * `fonts/LICENSE-MaterialIcons.txt`.
  */
 const ICONS = "Material Icons";
+/**
+ * The fallback font, for the Hindi essay: Noto Serif Devanagari, from Google
+ * Fonts under the SIL Open Font License; see `fonts/OFL-NotoSerifDevanagari.txt`.
+ */
+const DEVANAGARI = "Noto Serif Devanagari";
 
 /** A font file from the example's `fonts/` folder. */
 function fontFile(file: string): Promise<ArrayBuffer> {
@@ -162,10 +186,10 @@ function fontFile(file: string): Promise<ArrayBuffer> {
   );
 }
 
-const CARD_WIDTH = 320;
+const CARD_WIDTH = 245;
 const CARD_HEIGHT = 300;
 const CARD_Y = -20;
-const CARD_SPACING = 350;
+const CARD_SPACING = 265;
 const CARD_PADDING = 20;
 const CARD_COLUMN = CARD_WIDTH - 2 * CARD_PADDING;
 
@@ -304,7 +328,8 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
     // At most two lines, ending in the default "…".
     textAt(left, top - 24, { content: essay.title, sizePx: 22, weight: 800, color: INK, wrapWidth: CARD_COLUMN, maxLines: 2 }),
     // At most five lines, ending in the card's own ellipsis.
-    textAt(left, top - 86, {
+    // Below two lines of title in any of the scripts, Hindi's being the tallest.
+    textAt(left, top - 104, {
       content: essay.opening,
       family: LORA,
       sizePx: 15,
@@ -334,6 +359,13 @@ function main(app: ProteusApp, canvasWidth: number): void {
     app.loadFont(fontFile(file), { family: LORA }).catch((e: unknown) => console.warn(e));
   }
   app.loadFont(fontFile("MaterialIcons-Regular.ttf"), { family: ICONS }).catch((e: unknown) => console.warn(e));
+  // Hindi is in none of the other fonts: a character a text's font lacks is
+  // looked for in the fallback, then in the default font. Its texts wait for
+  // it, as Lora's do.
+  app.loadFont(fontFile("NotoSerifDevanagari-Variable.ttf"), { family: DEVANAGARI }).catch((e: unknown) =>
+    console.warn(e),
+  );
+  app.setFallbackFonts([DEVANAGARI]);
   // Crimson Pro is coming, but isn't downloaded until it's first chosen: the
   // promise is settled then. Meanwhile, its texts are drawn in the default
   // font, and again in it once it loads.
@@ -383,7 +415,7 @@ function main(app: ProteusApp, canvasWidth: number): void {
     const texts = cardTexts(app, essay);
     cards.push(
       app.component({
-        geometry: box((i - 1) * CARD_SPACING, CARD_Y, 0, CARD_WIDTH, CARD_HEIGHT, PAPER, 18),
+        geometry: box((i - (ESSAYS.length - 1) / 2) * CARD_SPACING, CARD_Y, 0, CARD_WIDTH, CARD_HEIGHT, PAPER, 18),
         hover: { scale: 1.03 },
         children: texts.map((h) => h.id()),
       }),
@@ -401,7 +433,8 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const title = hiddenText(left, top - 60);
   const byline = hiddenText(left, top - 150);
   const body = hiddenText(left, top - 200);
-  const quote = hiddenText(-300, -120);
+  // Below the tallest body: 20 pixels at a line height of 1.8.
+  const quote = hiddenText(-300, -150);
   const source = hiddenText(left, -PANEL_HEIGHT / 2 + PANEL_PADDING + 14);
   const essayView = [title, byline, body, quote, source, back];
   const panel = app.component({
