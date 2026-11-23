@@ -238,7 +238,7 @@ pub struct TextDto {
     pub italic: bool,
 }
 
-/// `"start"`, `"center"` or `"end"`.
+/// A text's alignment, given as `"start"`, `"center"` or `"end"`.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TextAlignDto {
@@ -247,7 +247,8 @@ pub enum TextAlignDto {
     End,
 }
 
-/// `"clip"`, or `{ ellipsis: "…" }` with any text.
+/// How text with more lines than its maximum ends, given as `"clip"` or as
+/// `{ ellipsis: "…" }`, with any text in place of the `…`.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TextOverflowDto {

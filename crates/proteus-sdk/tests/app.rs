@@ -666,9 +666,10 @@ fn hover_style_resolves_and_applies() {
     assert_eq!(data.geometry.color, Vec4::new(0.0, 1.0, 0.0, 1.0));
 }
 
-// A style changed while the app runs: removed while it shows, the component
-// goes back to its declared geometry under the pointer; set again, it shows;
-// and changed while it shows, the new one applies.
+// A style set while the component is in that state must apply at once, not
+// only the next time it enters the state. Removing the hover style under the
+// pointer returns the component to its declared geometry, and setting a hover
+// style again applies it while the pointer is still there.
 #[test]
 fn set_style_changes_a_style_while_it_shows() {
     let mut app = Proteus::new();
@@ -709,7 +710,7 @@ fn set_style_changes_a_style_while_it_shows() {
     app.tick(1.0);
     assert_eq!(color(&app), violet, "the new style, while still hovered");
 
-    // Away and back: the style set is the one hover uses.
+    // After the pointer leaves and returns, hover uses the style that was set.
     app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
     app.tick(1.0);
     app.tick(1.0);

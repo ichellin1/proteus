@@ -962,7 +962,7 @@ impl ProteusApp {
         Ok(())
     }
 
-    /// Calls [`Proteus::load_font`](sdk::Proteus::load_font): returns the
+    /// Calls [`Proteus::load_font`](sdk::Proteus::load_font). Returns the
     /// family name, or throws if the bytes aren't a font.
     #[wasm_bindgen(js_name = loadFont)]
     pub fn load_font(&mut self, bytes: Vec<u8>) -> Result<String, JsValue> {
@@ -973,7 +973,8 @@ impl ProteusApp {
     }
 
     /// Calls [`Proteus::expect_font`](sdk::Proteus::expect_font).
-    /// `while_loading` is `"hide"` or `"defaultFont"`; throws otherwise.
+    /// `while_loading` is `"hide"` or `"defaultFont"`, and the call throws for
+    /// any other value.
     #[wasm_bindgen(js_name = expectFont)]
     pub fn expect_font(&mut self, family: String, while_loading: &str) -> Result<(), JsValue> {
         let while_loading = match while_loading {
@@ -1209,8 +1210,9 @@ impl ProteusApp {
     }
 
     /// Calls [`Handle::set_style`](sdk::Handle::set_style). `state` is
-    /// `"hover"`, `"pressed"`, `"focused"` or `"disabled"`, and `style` a
-    /// style override, or `undefined` to remove it; throws otherwise.
+    /// `"hover"`, `"pressed"`, `"focused"` or `"disabled"`, and `style` is a
+    /// style override, or `undefined` to remove it. The call throws for any
+    /// other value.
     #[wasm_bindgen(js_name = setStyle)]
     pub fn set_style(
         &mut self,

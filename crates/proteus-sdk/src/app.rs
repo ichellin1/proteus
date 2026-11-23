@@ -600,11 +600,13 @@ impl Proteus {
     }
 
     /// Loads the TTF or OTF font in `bytes`, and returns the family name
-    /// inside it, which texts name with `Text::with_family` to be drawn in
-    /// it. A font of a family already loaded adds a face to it, such as its
-    /// italic or a static weight. The host adds the font before it next draws
-    /// text, and texts in its family that were drawn in the default font
-    /// while it loaded are drawn again in it.
+    /// inside it.
+    ///
+    /// Texts name that family with `Text::with_family` to be drawn in the
+    /// font. A font of a family that's already loaded adds a face to the
+    /// family, such as its italic or a static weight. The host adds the font
+    /// before it next draws text. Texts in the family that were drawn in the
+    /// default font while the font loaded are drawn again in it.
     ///
     /// A font that arrives later, such as from a download, can be expected
     /// first with [`Proteus::expect_font`], so its texts wait for it.
@@ -625,15 +627,18 @@ impl Proteus {
     }
 
     /// Says a font of `family` will be loaded with [`Proteus::load_font`],
-    /// such as once a download finishes, and how its texts are drawn until
-    /// then: not at all, with [`WhileLoading::Hide`], or in the default font,
-    /// then again in their own, with [`WhileLoading::DefaultFont`]. If the
-    /// load fails, call [`Proteus::font_failed`], and they're drawn in the
-    /// default font. Texts in a family neither expected nor loaded are drawn
-    /// in the default font, with a warning.
+    /// such as once a download finishes.
     ///
-    /// A family that's expected but never loaded or failed keeps its texts
-    /// hidden, as an image that's never loaded is never drawn.
+    /// Until the font loads, `while_loading` says how texts in the family are
+    /// drawn. With [`WhileLoading::Hide`] they aren't drawn at all. With
+    /// [`WhileLoading::DefaultFont`] they're drawn in the default font, then
+    /// again in their own. If the load fails, call [`Proteus::font_failed`],
+    /// and they're drawn in the default font. Texts in a family that is
+    /// neither expected nor loaded are drawn in the default font, with a
+    /// warning.
+    ///
+    /// With `Hide`, a family that's expected but never loaded or failed keeps
+    /// its texts hidden, as an image that's never loaded is never drawn.
     ///
     /// [`WhileLoading::Hide`]: proteus_ui::WhileLoading::Hide
     /// [`WhileLoading::DefaultFont`]: proteus_ui::WhileLoading::DefaultFont
@@ -646,29 +651,31 @@ impl Proteus {
     }
 
     /// Says the font of `family`, expected with [`Proteus::expect_font`],
-    /// failed to load, so its texts are drawn in the default font, with a
+    /// failed to load. Its texts are drawn in the default font, with a
     /// warning.
     pub fn font_failed(&mut self, family: impl Into<String>) {
         self.fonts().failed(family);
     }
 
-    /// Sets the app's fallback fonts: families tried, in order, for a
-    /// character a text's own family lacks, before the default font, as a
-    /// CSS font stack is. A character none of them has is drawn as a box,
-    /// with a warning. Replaces the list; an empty one turns fallback off.
-    /// Families not loaded yet are skipped until they are, and texts are
-    /// drawn again as they load, or wait for them if they're expected with
+    /// Sets the app's fallback fonts, the families tried in order for a
+    /// character a text's own family lacks.
+    ///
+    /// They're tried before the default font, as a CSS font stack is. A
+    /// character none of them has is drawn as a box, with a warning. This
+    /// replaces the list, and an empty list turns fallback off. A family that
+    /// isn't loaded yet is skipped until it is. Texts are drawn again as the
+    /// families load, or wait for them if they're expected with
     /// `WhileLoading::Hide`.
     ///
-    /// None are set by default, and each costs memory, and a download if the
-    /// app fetches it: list only the fonts the app's text needs, so what it
-    /// draws is known. See the content guide's Fallback section.
+    /// None are set by default. Each costs memory, and a download if the app
+    /// fetches it. List only the fonts the app's text needs, so you know what
+    /// it draws. See the content guide's Fallback section.
     pub fn set_fallback_fonts<S: Into<String>>(&mut self, families: impl IntoIterator<Item = S>) {
         let families = families.into_iter().map(Into::into).collect();
         self.fonts().set_fallbacks(families);
     }
 
-    /// The app's fallback fonts, in the order they're tried.
+    /// Returns the app's fallback fonts, in the order they're tried.
     pub fn fallback_fonts(&self) -> Vec<String> {
         self.world
             .world
@@ -676,8 +683,8 @@ impl Proteus {
             .map_or_else(Vec::new, |fonts| fonts.fallbacks().to_vec())
     }
 
-    /// What's known of the font `family`: expected, loaded or failed, or
-    /// `None` if it was never expected or loaded.
+    /// Returns whether the font `family` is expected, loaded or failed, or
+    /// `None` if it's none of these.
     pub fn font_status(&self, family: &str) -> Option<proteus_ui::FontStatus> {
         self.world
             .world
@@ -691,12 +698,14 @@ impl Proteus {
             .get_resource_or_insert_with(proteus_ui::Fonts::default)
     }
 
-    /// Empties the glyph cache, to free its memory, such as when the app is
-    /// hidden: the renderer drops every cached glyph before it next bakes
-    /// text. Text already baked isn't affected, since its pixels are in the
-    /// atlas, not the cache; text baked afterwards rasterizes its glyphs
-    /// again. The cache's size is set by `ResourceConfig::glyph_cache_bytes`
-    /// in `proteus-runtime`.
+    /// Empties the glyph cache to free its memory, such as when the app is
+    /// hidden.
+    ///
+    /// The renderer drops every cached glyph before it next bakes text. Text
+    /// already baked isn't affected, since its pixels are in the atlas, not
+    /// the cache. Text baked afterwards rasterizes its glyphs again.
+    /// `ResourceConfig::glyph_cache_bytes` in `proteus-runtime` sets the
+    /// cache's size.
     pub fn clear_glyph_cache(&mut self) {
         self.world
             .world

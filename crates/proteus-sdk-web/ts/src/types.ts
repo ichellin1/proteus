@@ -118,21 +118,21 @@ export interface StyleOverride {
   shadowSpread?: number;
 }
 
-/** How {@link ProteusApp.loadFont} loads a font that's still downloading. */
+/** Options for {@link ProteusApp.loadFont} when the font is still downloading. */
 export interface LoadFontOptions {
-  /** The family the font is, as texts name it, such as `"Lora"`. */
+  /** The font's family, as texts name it, such as `"Lora"`. */
   family: string;
   /**
-   * How texts in the family are drawn until the font loads: `"hide"`, the default, not at all;
-   * or `"defaultFont"`, in the default font, then again in their own.
+   * How texts in the family are drawn until the font loads. `"hide"`, the default, doesn't draw
+   * them. `"defaultFont"` draws them in the default font, then again in their own.
    */
   whileLoading?: "hide" | "defaultFont";
 }
 
 /**
- * Text: one line, or more where it has a `\n`. The host bakes it the next time it renders a
- * frame. Text wider than an atlas page (2048 pixels by default) is clipped to it, with a
- * warning.
+ * Text, starting a new line at each `\n`. The host bakes it the next time it renders a
+ * frame. Text wider or taller than an atlas page (2048 pixels by default) is clipped to it, with
+ * a warning.
  */
 export interface TextSpec {
   /** The text. A `\n` starts a new line. */
@@ -144,9 +144,9 @@ export interface TextSpec {
   /** Extra tracking between glyphs, in pixels. Default `0`. */
   letterSpacingPx?: number;
   /**
-   * The width lines wrap at, in CSS pixels, and the width of the text's box, which its lines
-   * align within. Omit it to break lines only at `\n`, with a box as wide as the widest line. A
-   * word wider than the wrap width breaks between characters.
+   * The width lines wrap at, in CSS pixels. This is also the width of the text's box, and lines
+   * align within the box. Omit it to break lines only at `\n`, with a box as wide as the widest
+   * line. A word wider than the wrap width breaks between characters.
    */
   wrapWidth?: number;
   /** Where lines sit across the text's box. Default `"start"`. */
@@ -160,24 +160,27 @@ export interface TextSpec {
   maxLines?: number;
   /**
    * The font family, such as `"Lora"`, from a font loaded with {@link ProteusApp.loadFont}.
-   * Omit it for the app's default font. A family still loading waits, or is drawn in the default
-   * font meanwhile, as `loadFont` was told; one never loaded is drawn in the default font, with a
-   * warning.
+   * Omit it for the app's default font. A family that's still loading waits, or is drawn in the
+   * default font meanwhile, as the `whileLoading` option of `loadFont` says. A family that was
+   * never loaded is drawn in the default font, with a warning.
    */
   family?: string;
   /**
-   * The weight, from 100 to 900: 400 is regular and 700 bold. A family without the weight uses its
-   * nearest, and one with no bold face is thickened. Omit it for the font's own weight, or 700,
-   * bold, in the built-in font.
+   * The weight, from 100 to 900, where 400 is regular and 700 is bold. A family without the
+   * weight uses its nearest weight, and one with no bold face is thickened. Omit it for the
+   * font's own weight, or 700, bold, in the built-in font.
    */
   weight?: number;
-  /** Whether the text is italic: in the family's italic face, or slanted if it has none. */
+  /**
+   * Whether the text is italic. It uses the family's italic face, or is slanted if the family
+   * has none.
+   */
   italic?: boolean;
   /**
-   * How text with more lines than `maxLines` ends: `{ ellipsis: "…" }`, the default, with any
-   * text, such as `" more"`; or `"clip"`. An ellipsis wraps as words do, and the text keeps as
-   * much of itself as fits with it; one too long to fit in `maxLines` on its own is clipped,
-   * with a warning.
+   * How text with more lines than `maxLines` ends. `{ ellipsis: "…" }`, the default, ends it
+   * with an ellipsis, which can be any text, such as `" more"`. `"clip"` cuts it off. An
+   * ellipsis wraps as words do, and the text keeps as much of itself as fits with the ellipsis.
+   * An ellipsis too long to fit in `maxLines` on its own is clipped, with a warning.
    */
   overflow?:
     | "clip"
@@ -284,7 +287,7 @@ export interface ComponentSpec {
    * logged.
    */
   bake?: boolean;
-  /** Text drawn on the component: one line, or more where it has a `\n`. */
+  /** Text drawn on the component, starting a new line at each `\n`. */
   text?: TextSpec;
   /** An image drawn on the component. */
   image?: ImageSpec;
@@ -449,10 +452,10 @@ export interface ProteusConfigOverrides {
      */
     maxBakeScale?: number;
     /**
-     * The most bytes of glyphs the glyph cache keeps: each glyph's pixels, kept after it's
-     * drawn, so the glyphs texts share are drawn once. Past it, the glyphs used longest ago are
-     * dropped. Default 4 MiB, about 5,000 glyphs at 48 pixels or 25,000 at 16. `0` keeps none,
-     * so preparing text takes two to three times as long. See
+     * The most bytes of glyphs the glyph cache keeps. The cache keeps each glyph's pixels after
+     * it's drawn, so the glyphs that texts share are drawn once. Past the limit, the glyphs used
+     * longest ago are dropped. Default 4 MiB, about 5,000 glyphs at 48 pixels or 25,000 at 16.
+     * `0` keeps none, so baking text takes two to three times as long. See
      * {@link ProteusApp.clearGlyphCache}.
      */
     glyphCacheBytes?: number;
@@ -460,11 +463,11 @@ export interface ProteusConfigOverrides {
   /** Text settings. */
   text?: {
     /**
-     * The default font: a TTF or OTF font file's bytes, for example from a
-     * `fetch()` response, used for every text that names no family. Omit it
-     * for the built-in font, Inter, which {@link mount} then fetches from
-     * this package's `fonts/` folder before the app starts. Bytes that aren't
-     * a font make `mount` throw, naming `text.font`.
+     * The default font, given as a TTF or OTF font file's bytes, for example
+     * from a `fetch()` response. It's used for every text that names no
+     * family. Omit it for the built-in font, Inter, which {@link mount} then
+     * fetches from this package's `fonts/` folder before the app starts. Bytes
+     * that aren't a font make `mount` throw, naming `text.font`.
      */
     font?: Uint8Array;
   };

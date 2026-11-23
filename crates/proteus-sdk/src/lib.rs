@@ -83,5 +83,5 @@ pub use proteus_ui::{
 };
 pub use proteus_ui::{FontStatus, WhileLoading};
 
-/// What [`Proteus::load_font`] returns for bytes that aren't a font.
+/// The error [`Proteus::load_font`] returns for bytes that aren't a font.
 pub use proteus_render::FontError;

@@ -72,8 +72,8 @@ export async function mount(
   opts: MountOptions,
 ): Promise<void> {
   const config = opts.config ?? {};
-  // The built-in font, Inter, isn't in the wasm: it's a file of this package,
-  // fetched only when the app gives no default font of its own.
+  // The built-in font, Inter, isn't in the wasm. It's a file in this package,
+  // and is fetched only when the app gives no default font of its own.
   const font = config.text?.font ?? (await builtInFont());
   await wasmMount(
     canvasId,
@@ -84,9 +84,9 @@ export async function mount(
 }
 
 /**
- * Fetches the built-in font, Inter, from this package's `fonts/`, which a
- * bundler such as Vite copies to the app's output, as it does an image the
- * app's own code refers to with `new URL(…, import.meta.url)`.
+ * Fetches the built-in font, Inter, from this package's `fonts/` folder. A
+ * bundler such as Vite copies the folder to the app's output, as it does an
+ * image that the app's own code refers to with `new URL(…, import.meta.url)`.
  *
  * @throws if the font can't be fetched.
  */

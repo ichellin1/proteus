@@ -782,12 +782,13 @@ impl Handle {
     }
 
     /// Sets this component's interaction style for `state`, such as its hover
-    /// style, or removes it with `None`, while the app runs. If the component
-    /// is in that state now, it changes to the new style over its style
-    /// timing, as it would entering the state. A button that shows it's
-    /// chosen, for example, removes its hover style, so the pointer leaves it
-    /// as it is, and sets it again when it's no longer chosen.
-    /// [`InteractionStateKind::Default`] has no style: it's the declared
+    /// style, or removes it with `None`, while the app runs.
+    ///
+    /// If the component is in that state now, it changes to the new style over
+    /// its style timing, as it would entering the state. A button that shows
+    /// it's chosen, for example, removes its hover style so that hovering it
+    /// changes nothing, and sets the style again when it's no longer chosen.
+    /// [`InteractionStateKind::Default`] has no style, since it's the declared
     /// geometry, so setting it does nothing.
     ///
     /// # Errors
