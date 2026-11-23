@@ -455,19 +455,20 @@ impl Default for TransitionDefaults {
 /// Text settings.
 #[derive(Debug, Clone)]
 pub struct TextConfig {
-    /// The default font, which every text that names no family is drawn in:
-    /// the embedded Inter, or your own, from [`FontSource::from_bytes`].
+    /// The default font, which every text that names no family is drawn in.
+    /// The default value is the embedded Inter, and you can set your own with
+    /// [`FontSource::from_bytes`].
     pub default_font: FontSource,
 }
 
 /// Where a font comes from.
 #[derive(Debug, Clone)]
 pub enum FontSource {
-    /// Inter, built into Proteus with the `embedded-font` feature, on by
-    /// default. A text in it that sets no weight is bold. Without the
+    /// Inter, built into Proteus by the `embedded-font` feature, which is on
+    /// by default. A text in it that sets no weight is bold. Without the
     /// feature, there's no default font, and text draws nothing until the app
-    /// loads one with `Proteus::load_font`; the first it loads becomes the
-    /// default.
+    /// loads one with `Proteus::load_font`. The first font it loads becomes
+    /// the default.
     Embedded,
     /// A TTF or OTF font file's bytes. Prefer [`FontSource::from_bytes`],
     /// which checks them. Bytes that turn out not to be a font are logged as
@@ -540,13 +541,14 @@ pub struct ResourceConfig {
     /// atlas space, at the cost of slightly soft text on high-density
     /// displays.
     pub max_bake_scale: f32,
-    /// The most bytes of glyphs the glyph cache keeps: each glyph's pixels,
-    /// kept after it's rasterized, so that the glyphs texts share are
-    /// rasterized once. Past it, the glyphs used longest ago are dropped, and
-    /// rasterized again if they're needed. 4 MiB by default, about 5,000
-    /// glyphs at 48 pixels or 25,000 at 16. 0 keeps none, so baking text takes
-    /// two to three times as long. The cache is emptied when the bake scale
-    /// changes, and by [`Proteus::clear_glyph_cache`].
+    /// The most bytes of glyphs the glyph cache keeps. The cache keeps each
+    /// glyph's pixels after the glyph is rasterized, so the glyphs that texts
+    /// share are rasterized once. Past the limit, the glyphs used longest ago
+    /// are dropped, and rasterized again if they're needed. The default is
+    /// 4 MiB, which is about 5,000 glyphs at 48 pixels or 25,000 at 16. A
+    /// value of 0 keeps none, so baking text takes two to three times as long.
+    /// The cache is emptied when the bake scale changes, and by
+    /// [`Proteus::clear_glyph_cache`].
     ///
     /// [`Proteus::clear_glyph_cache`]: proteus_sdk::Proteus::clear_glyph_cache
     pub glyph_cache_bytes: usize,

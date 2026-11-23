@@ -1,50 +1,56 @@
-//! Each glyph's coverage, kept after it's rasterized to use again.
+//! The coverage of each glyph, kept after it's rasterized so it can be used
+//! again.
 //!
-//! [`FontAtlas`](crate::FontAtlas) rasterizes text one glyph at a time, and
-//! most texts share glyphs with others: every "e" in every label at 16 pixels
-//! is the same pixels. The cache keeps them, keyed by everything that changes
-//! them: the font, the glyph, its size in pixels, the font's variation, and
-//! which quarter of a pixel it starts at across.
+//! [`FontAtlas`](crate::FontAtlas) rasterizes text one glyph at a time. Most
+//! texts share glyphs with others, since every "e" in every label at 16 pixels
+//! has the same pixels. The cache keeps each glyph's pixels, keyed by
+//! everything that changes a glyph's pixels: the font, the glyph, its size in
+//! pixels, the font's variation, such as its weight, its horizontal offset
+//! within a pixel, in quarters, and whether it's slanted or thickened to stand
+//! in for an italic or bold face.
 //!
 //! ## Eviction
 //!
-//! The cache has a budget in bytes. When a new glyph would take it past the
-//! budget, the glyphs used longest ago are dropped until it's back to three
-//! quarters of the budget, a batch at a time so it seldom sorts. A glyph
-//! dropped and needed again is rasterized again, pixel for pixel the same.
+//! The cache has a budget in bytes. When a new glyph would take the cache past
+//! the budget, the cache drops the glyphs used longest ago, until it holds at
+//! most three quarters of the budget with the new glyph. Dropping a batch at a
+//! time means it seldom has to sort the glyphs by age. A glyph that's dropped
+//! and needed again is rasterized again, with the same pixels.
 //!
-//! A glyph's pixels are copied into each text's image as the text is baked,
-//! so nothing on screen uses the cache: any glyph can be dropped at any time,
-//! and [`GlyphCache::clear`] drops them all.
+//! A text's image gets its own copy of each glyph's pixels when the text is
+//! baked. Nothing on screen depends on the cache, so any glyph can be dropped
+//! at any time, and [`GlyphCache::clear`] drops them all.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// What each glyph costs beyond its pixels: its key, its place and the map's
-/// own bookkeeping, roughly.
+/// A rough count of the bytes each glyph costs beyond its pixels. It covers
+/// the glyph's key, its position and size, and the map's own bookkeeping.
 const ENTRY_OVERHEAD: usize = 64;
 
 /// Everything that changes a glyph's pixels.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct GlyphKey {
-    /// The font file's id, and the font's index within it.
+    /// The font file's id. The font's index within the file is `index`.
     pub font: u64,
     pub index: u32,
     pub glyph: u32,
     /// The size in pixels, as `f32` bits.
     pub size_bits: u32,
-    /// The font's variation coordinates; empty for a font that doesn't vary.
+    /// The font's variation coordinates. This is empty for a font that doesn't
+    /// vary.
     pub coords: Box<[i16]>,
-    /// Which quarter of a pixel the glyph starts at, across: 0 to 3.
+    /// The glyph's horizontal offset within a pixel, in quarters of a pixel,
+    /// from 0 to 3.
     pub quarter: u8,
-    /// Whether the glyph is slanted, standing in for an italic face.
+    /// Whether the glyph is slanted to stand in for an italic face.
     pub slanted: bool,
-    /// Whether the glyph is thickened, standing in for a bold face.
+    /// Whether the glyph is thickened to stand in for a bold face.
     pub emboldened: bool,
 }
 
-/// A rasterized glyph: its coverage, and where it sits from its pen position,
-/// y down.
+/// A rasterized glyph's coverage, and where the glyph sits relative to its pen
+/// position, with y pointing down.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CachedGlyph {
     pub left: i32,
@@ -55,26 +61,26 @@ pub(crate) struct CachedGlyph {
 }
 
 struct Entry {
-    /// `None` for a glyph with no pixels, such as a space, so it isn't
-    /// rasterized again either.
+    /// `None` for a glyph with no pixels, such as a space. Keeping it means
+    /// the glyph isn't rasterized again.
     glyph: Option<CachedGlyph>,
     last_used: u64,
     bytes: usize,
 }
 
-/// Glyphs' coverage by [`GlyphKey`], dropping those used longest ago past a
-/// budget in bytes. See the module docs.
+/// A cache of glyphs' coverage by [`GlyphKey`]. Past a budget in bytes, it
+/// drops the glyphs used longest ago. See the module docs.
 pub(crate) struct GlyphCache {
     entries: HashMap<GlyphKey, Entry>,
     bytes: usize,
     budget: usize,
-    /// Counts lookups, so each entry records when it was last used.
+    /// Counts lookups. Each entry records the count at its last use.
     clock: u64,
 }
 
 impl GlyphCache {
-    /// An empty cache that keeps up to `budget` bytes of glyphs. A budget of
-    /// 0 keeps none.
+    /// Creates an empty cache that keeps up to `budget` bytes of glyphs. A
+    /// budget of 0 keeps none.
     pub fn new(budget: usize) -> Self {
         Self {
             entries: HashMap::new(),
@@ -84,8 +90,8 @@ impl GlyphCache {
         }
     }
 
-    /// The glyph for `key`: from the cache, or from `rasterize`, which is then
-    /// kept if it fits the budget.
+    /// Returns the glyph for `key`, from the cache if it's there. Otherwise
+    /// this calls `rasterize` and keeps the result if it fits the budget.
     pub fn get_or_rasterize(
         &mut self,
         key: GlyphKey,
@@ -135,8 +141,8 @@ impl GlyphCache {
         }
     }
 
-    /// Changes the budget, dropping the glyphs used longest ago if the cache
-    /// holds more than the new one.
+    /// Changes the budget. If the cache holds more than the new budget, it
+    /// drops the glyphs used longest ago until it fits.
     pub fn set_budget(&mut self, budget: usize) {
         self.budget = budget;
         if self.bytes > budget {
@@ -150,12 +156,12 @@ impl GlyphCache {
         self.bytes = 0;
     }
 
-    /// The bytes the cache holds, counted as eviction counts them.
+    /// Returns the bytes the cache holds, counted as eviction counts them.
     pub fn bytes(&self) -> usize {
         self.bytes
     }
 
-    /// The number of glyphs the cache holds.
+    /// Returns the number of glyphs the cache holds.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -178,7 +184,7 @@ mod tests {
         }
     }
 
-    /// A glyph of `size` bytes of coverage.
+    // Returns a glyph with `size` bytes of coverage.
     fn glyph(size: usize) -> Option<CachedGlyph> {
         Some(CachedGlyph {
             left: 0,
@@ -189,7 +195,7 @@ mod tests {
         })
     }
 
-    /// Each entry is 36 bytes of pixels and 64 of overhead: 100 in all.
+    // Each entry costs 36 bytes of pixels and 64 bytes of overhead, 100 in all.
     const ENTRY: usize = 36 + ENTRY_OVERHEAD;
 
     #[test]
@@ -229,8 +235,8 @@ mod tests {
         }
     }
 
-    // Past the budget, the glyphs used longest ago go first: a glyph used
-    // again stays, while those around it from the same time go.
+    // Past the budget, the glyphs used longest ago go first. A glyph that is
+    // used again stays, while the glyphs added around the same time as it go.
     #[test]
     fn the_glyphs_used_longest_ago_are_dropped_first() {
         let mut cache = GlyphCache::new(10 * ENTRY);

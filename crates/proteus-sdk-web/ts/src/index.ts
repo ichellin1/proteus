@@ -643,11 +643,12 @@ export class Handle {
 
   /**
    * Sets this component's style for `state`, such as its hover style, or
-   * removes it with `undefined`, while the app runs. If the component is in
-   * that state now, it changes to the new style over its style timing, as it
-   * would entering the state. A button that shows it's chosen, for example,
-   * removes its hover style, so the pointer leaves it as it is, and sets it
-   * again when it's no longer chosen.
+   * removes it with `undefined`, while the app runs.
+   *
+   * If the component is in that state now, it changes to the new style over
+   * its style timing, as it would entering the state. A button that shows
+   * it's chosen, for example, removes its hover style so that hovering it
+   * changes nothing, and sets the style again when it's no longer chosen.
    *
    * @throws If `style` isn't a valid {@link StyleOverride}.
    */
@@ -1172,11 +1173,12 @@ export class ProteusApp {
   }
 
   /**
-   * Empties the glyph cache, to free its memory, such as when the page is
-   * hidden: the host drops every cached glyph before it next prepares text.
-   * Text already on screen isn't affected; text prepared afterwards draws its
-   * glyphs again. The cache's size is the config's
-   * `resources.glyphCacheBytes`.
+   * Empties the glyph cache to free its memory, such as when the page is
+   * hidden.
+   *
+   * The host drops every cached glyph before it next bakes text. Text already
+   * on screen isn't affected. Text baked afterwards draws its glyphs again.
+   * The config's `resources.glyphCacheBytes` sets the cache's size.
    *
    * @example
    * ```ts
@@ -1190,16 +1192,16 @@ export class ProteusApp {
   }
 
   /**
-   * Loads a TTF or OTF font, and returns the family name inside it, which texts name in
-   * `family` to be drawn in it. A font of a family already loaded adds a face to it, such as its
-   * italic.
+   * Loads a TTF or OTF font, and returns the family name inside it. Texts name that family in
+   * `family` to be drawn in the font. A font of a family that's already loaded adds a face to
+   * the family, such as its italic.
    *
-   * Given bytes, it loads them at once. Given a promise of them, such as a download, it needs the
-   * family's name in `options`: texts in that family wait, not drawn, until it loads, or with
-   * `whileLoading: "defaultFont"` are drawn in the default font meanwhile and again once it
-   * loads. If the promise rejects, or the font's family isn't the one named, the family is
-   * marked as failed, its texts are drawn in the default font, and the returned promise
-   * rejects.
+   * Given bytes, `loadFont` loads them at once. Given a promise of bytes, such as a download, it
+   * needs the family's name in `options`. Until the font loads, texts in that family aren't
+   * drawn, or with `whileLoading: "defaultFont"` they're drawn in the default font and then
+   * again in their own. If the promise rejects, or the font's family isn't the one named, the
+   * family is marked as failed and its texts are drawn in the default font. The returned promise
+   * rejects too.
    *
    * @throws If `bytes` isn't a TTF or OTF font that can be read.
    *
@@ -1239,14 +1241,16 @@ export class ProteusApp {
   }
 
   /**
-   * Sets the app's fallback fonts: families tried, in order, for a character a text's own
-   * family lacks, before the default font, as a CSS font stack is. A character none of them has
-   * is drawn as a box, with a warning. Replaces the list; an empty one turns fallback off.
-   * Families not loaded yet are skipped until they are, and texts are drawn again as they load,
-   * or wait for them if `loadFont` was given `whileLoading: "hide"`.
+   * Sets the app's fallback fonts, the families tried in order for a character a text's own
+   * family lacks.
    *
-   * None are set by default, and each costs memory, and a download: list only the fonts the
-   * app's text needs, so what it draws is known.
+   * They're tried before the default font, as a CSS font stack is. A character none of them has
+   * is drawn as a box, with a warning. This replaces the list, and an empty list turns fallback
+   * off. A family that isn't loaded yet is skipped until it is. Texts are drawn again as the
+   * families load, or wait for them if `loadFont` was given `whileLoading: "hide"`.
+   *
+   * None are set by default. Each costs memory and a download. List only the fonts the app's
+   * text needs, so you know what it draws.
    *
    * @example
    * ```ts

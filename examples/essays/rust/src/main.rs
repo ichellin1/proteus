@@ -1,5 +1,5 @@
-//! Runs the essays example in a desktop window. In a browser, `start` in `lib.rs`
-//! runs it instead, so this is empty there.
+//! Runs the essays example in a desktop window. In a browser, `start` in
+//! `lib.rs` runs it instead, so `main` is empty there.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -9,7 +9,8 @@ fn main() {
         proteus_host_winit::RunConfig {
             title: "Essays".to_string(),
             initial_size: (1100, 760),
-            // The example's folder, where `fonts/` is, wherever it's run from.
+            // Points at the example's folder, which holds `fonts/`, wherever
+            // the app is run from.
             asset_dir: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
             proteus: essays::config(),
         },

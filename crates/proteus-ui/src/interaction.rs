@@ -425,7 +425,7 @@ impl InteractionDef {
 
 impl InteractionDef {
     /// Sets the style for `kind`, or removes it with `None`.
-    /// [`InteractionStateKind::Default`] has no style, so it's left alone.
+    /// [`InteractionStateKind::Default`] has no style, so this leaves it alone.
     pub fn set_style(&mut self, kind: InteractionStateKind, style: Option<StyleOverride>) {
         match kind {
             InteractionStateKind::Default => {}
@@ -437,9 +437,9 @@ impl InteractionDef {
     }
 }
 
-/// Asks [`interaction_style_system`] to apply an entity's current style
-/// again, since it changed while it applied: added by `proteus-sdk`'s
-/// `Handle::set_style`, and removed once the style is applied.
+/// Asks [`interaction_style_system`] to apply an entity's current style again.
+/// `proteus-sdk`'s `Handle::set_style` adds it when it changes the style that's
+/// showing, and the system removes it once the style is applied.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct Restyle;
 
@@ -553,7 +553,8 @@ pub fn interaction_style_system(
             continue;
         };
 
-        // The same style, unless it was changed while it applied.
+        // Nothing to apply if the style is the same, unless `Restyle` says the
+        // style that's showing was changed.
         if existing.current == resolved && !restyle {
             continue;
         }

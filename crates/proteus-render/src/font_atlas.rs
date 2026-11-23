@@ -7,64 +7,65 @@
 //!
 //! ## Shaping
 //!
-//! Shaping turns characters into glyphs placed by the font's own rules: it
-//! applies the font's kerning, which pulls pairs such as "AV" closer, joins
-//! ligatures, places accents on their letters, and joins the letters of
+//! Shaping turns characters into glyphs placed by the font's own rules. It
+//! applies the font's kerning, which pulls pairs such as "AV" closer. It also
+//! joins ligatures, places accents on their letters, and joins the letters of
 //! scripts that need it. Each glyph is placed to a quarter of a pixel, so text
 //! is as wide as its font designs it, at every size and display scale.
 //!
 //! ## The glyph cache
 //!
-//! Each glyph's coverage is kept after it's rasterized, so the glyphs texts
-//! share are rasterized once. The cache drops the glyphs used longest ago past
-//! a budget in bytes, [`DEFAULT_GLYPH_CACHE_BYTES`] unless
-//! [`FontAtlas::set_glyph_cache_budget`] changes it, and
-//! [`FontAtlas::clear_glyph_cache`] drops them all. Text already baked keeps
-//! its pixels: they're in the atlas, not the cache.
+//! Each glyph's coverage is kept after it's rasterized, so a glyph that
+//! several texts share is rasterized once. Past a budget in bytes, the cache
+//! drops the glyphs used longest ago. The budget is
+//! [`DEFAULT_GLYPH_CACHE_BYTES`] unless [`FontAtlas::set_glyph_cache_budget`]
+//! changes it. [`FontAtlas::clear_glyph_cache`] drops every glyph. Text already
+//! baked keeps its pixels, since they're in the atlas, not the cache.
 //!
 //! ## Lines
 //!
-//! A [`TextLayout`] says how to lay a text out: its size and letter spacing,
-//! the width its lines wrap at, how they align, their height, and how many are
-//! shown, ending in an ellipsis or clipped past the last. Lines are broken in
+//! A [`TextLayout`] says how to lay a text out. It sets the text's size and
+//! letter spacing, the width its lines wrap at, how they align, their height,
+//! and how many are shown. A text with more lines than that ends in an
+//! ellipsis or is clipped after the last line shown. Lines are broken in
 //! logical pixels and scaled as they're rasterized, so a text breaks at the
 //! same words at every display scale.
 //!
 //! An ellipsis is laid out with the text, so it wraps as words do. The text
-//! keeps as much of itself as fits in its maximum number of lines with the
-//! ellipsis after it, cut between clusters, so never inside a character; an
+//! keeps as much of itself as fits, with the ellipsis after it, in its maximum
+//! number of lines. It's cut between clusters, so never inside a character. An
 //! ellipsis wider than a line takes lines of its own. An ellipsis too long to
 //! fit on its own is clipped, with a warning.
 //!
 //! ## Text as a texture
 //!
 //! The whole text becomes one image, at its size in pixels:
-//! - red, green and blue are 255 everywhere, so the text can take any color;
-//! - alpha is each pixel's glyph coverage, antialiased.
+//! - Red, green and blue are 255 everywhere, so the text can take any color.
+//! - Alpha is each pixel's glyph coverage, antialiased.
 //!
-//! The text is then drawn like any other texture: it transitions, takes a
+//! The text is then drawn like any other texture. It transitions, takes a
 //! color, and is clipped by rounded corners, with no special handling.
 //!
 //! ## Fonts
 //!
 //! A [`FontAtlas`] has a default font, and any others loaded with
-//! [`FontAtlas::load_font`], each under the family name inside it. A
-//! character a text's family lacks is looked for in the fallback families,
-//! in order, set with [`FontAtlas::set_fallbacks`], then in the default font;
-//! one none of them has is drawn as the family's missing-glyph box, a
-//! rectangle, and reported in [`RasterizedGlyphs::missing`]. A text
-//! names a family, or takes the default, and asks for a weight and italic; a
-//! family that lacks the weight uses its nearest, as in CSS. A family with no
-//! italic face is slanted, and one with no bold face is thickened. No system
+//! [`FontAtlas::load_font`], each under the family name inside it. A text names
+//! a family, or takes the default, and asks for a weight and italic. A family
+//! that lacks the weight uses its nearest, as in CSS. A family with no italic
+//! face is slanted, and one with no bold face is thickened.
+//!
+//! A character a text's family lacks is looked for in the fallback families
+//! set with [`FontAtlas::set_fallbacks`], in order, then in the default font. A
+//! character none of them has is drawn as the text's family's missing-glyph
+//! box, a rectangle, and reported in [`RasterizedGlyphs::missing`]. No system
 //! font is ever used.
 //!
 //! ## The embedded font
 //!
 //! With the `embedded-font` feature, on by default, [`EMBEDDED_FONT_BYTES`] is
 //! Inter (SIL Open Font License 1.1), variable in weight and optical size,
-//! from Google Fonts. A text in it that sets no weight is drawn at 700, bold,
-//! as the static Inter Bold embedded before it was. Without the feature,
-//! [`FontAtlas::empty`] has no font until one is loaded.
+//! from Google Fonts. A text in it that sets no weight is drawn at 700, bold.
+//! Without the feature, [`FontAtlas::empty`] has no font until one is loaded.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -97,39 +98,40 @@ const EMBEDDED_DEFAULT_WEIGHT: u16 = 700;
 /// The slant of a synthesized italic, in degrees.
 const SYNTHESIZED_SLANT: f32 = 14.0;
 
-/// How many positions within a pixel a glyph can start at, across: a glyph
-/// is rasterized at the nearest quarter of a pixel to where it's placed.
+/// The number of horizontal positions within a pixel a glyph can start at. A
+/// glyph is rasterized at the nearest quarter of a pixel to where it's placed.
 const SUBPIXEL_STEPS: f32 = 4.0;
 
-/// The glyph cache's budget unless [`FontAtlas::set_glyph_cache_budget`]
-/// changes it: 4 MiB, from about 5,000 glyphs at 48 pixels to 25,000 at 16.
+/// The glyph cache's budget, 4 MiB, unless
+/// [`FontAtlas::set_glyph_cache_budget`] changes it. It holds from about 5,000
+/// glyphs at 48 pixels to 25,000 at 16.
 pub const DEFAULT_GLYPH_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // TextLayout
 // ---------------------------------------------------------------------------
 
-/// Where a text's lines sit across its box: its wrap width, or its widest
-/// line without one.
+/// Where a text's lines sit across its box. The box is as wide as the wrap
+/// width, or as the widest line without one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextAlign {
-    /// Against the start of the box: the left, for left-to-right text.
+    /// Against the start of the box. That's the left for left-to-right text.
     #[default]
     Start,
     /// In the middle of the box.
     Center,
-    /// Against the end of the box: the right, for left-to-right text.
+    /// Against the end of the box. That's the right for left-to-right text.
     End,
 }
 
 /// How a text with more lines than its maximum ends.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TextOverflow {
-    /// With this text after the last line shown: "…", the default, or one of
-    /// the app's own, such as `" more"`. "…" is drawn as "..." in a font that
-    /// has no "…".
+    /// Ends with this text after the last line shown. The default is "…", and
+    /// an app can set its own, such as `" more"`. "…" is drawn as "..." in a
+    /// font that has no "…".
     Ellipsis(String),
-    /// With the lines past the last shown left out, and no mark.
+    /// Leaves out the lines past the last shown, and adds no mark.
     Clip,
 }
 
@@ -139,44 +141,47 @@ impl Default for TextOverflow {
     }
 }
 
-/// The ellipsis a text ends in unless it sets its own: "…".
+/// The ellipsis, "…", that a text ends in unless it sets its own.
 pub const DEFAULT_ELLIPSIS: &str = "\u{2026}";
 
-/// How to lay a text out, in logical pixels: everything but its font. Made
-/// with [`TextLayout::new`], with the fields it doesn't set changed after.
+/// How to lay a text out, in logical pixels, from its size and font to how its
+/// lines wrap and end. Make one with [`TextLayout::new`], then change the
+/// fields it leaves at their defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextLayout<'a> {
     /// The text. A `\n` starts a new line.
     pub content: &'a str,
     /// The font's size.
     pub size_px: f32,
-    /// Extra space between characters; negative tightens them.
+    /// The extra space between characters. A negative value tightens them.
     pub letter_spacing_px: f32,
     /// The width lines wrap at. `None` breaks lines only at `\n`.
     pub wrap_width: Option<f32>,
     /// Where lines sit across the text's box.
     pub align: TextAlign,
     /// The distance from one line's baseline to the next, as a multiple of
-    /// the size, as CSS's unitless `line-height` is. `None` is the font's own
+    /// the size, like CSS's unitless `line-height`. `None` uses the font's own
     /// line spacing.
     pub line_height: Option<f32>,
     /// The most lines shown. `None` shows them all.
     pub max_lines: Option<u32>,
-    /// What ends a text with more lines than `max_lines`: an ellipsis, or
-    /// `None` to clip.
+    /// The ellipsis that ends a text with more lines than `max_lines`. `None`
+    /// clips the text instead.
     pub ellipsis: Option<&'a str>,
-    /// The font family. `None`, or a family not loaded, is the default font.
+    /// The font family. `None`, or a family that isn't loaded, uses the
+    /// default font.
     pub family: Option<&'a str>,
-    /// The weight, from 100 to 900: 400 is regular and 700 bold. `None` is
-    /// the font's own, or 700 in the embedded font.
+    /// The weight, from 100 to 900, where 400 is regular and 700 is bold.
+    /// `None` uses the font's own, or 700 in the embedded font.
     pub weight: Option<u16>,
     /// Whether the text is italic.
     pub italic: bool,
 }
 
 impl<'a> TextLayout<'a> {
-    /// `content` at `size_px`, on lines broken only at `\n`, aligned to the
-    /// start, at the font's line spacing, with no maximum number of lines.
+    /// Creates a [`TextLayout`] for `content` at `size_px`. Its lines break
+    /// only at `\n`, align to the start, and use the font's line spacing, with
+    /// no maximum number of lines.
     pub fn new(content: &'a str, size_px: f32) -> Self {
         Self {
             content,
@@ -211,8 +216,8 @@ pub struct RasterizedGlyphs {
     /// RGBA pixels, `width * height * 4` bytes. Alpha is the glyph coverage,
     /// not premultiplied.
     pub rgba_pixels: Vec<u8>,
-    /// The characters no font had, drawn as the font's missing-glyph box, in
-    /// the order they first appear, each once.
+    /// The characters no font had, each once, in the order they first appear.
+    /// Each is drawn as the font's missing-glyph box.
     pub missing: Vec<char>,
 }
 
@@ -220,10 +225,10 @@ pub struct RasterizedGlyphs {
 // FontAtlas
 // ---------------------------------------------------------------------------
 
-/// Lays out and rasterizes text in one font, on the CPU. It doesn't allocate
-/// atlas space (see the module docs).
+/// A collection of fonts that lays out and rasterizes text on the CPU. It
+/// doesn't allocate atlas space (see the module docs).
 ///
-/// One is enough for an app: the renderer owns one and uses it for all text.
+/// One is enough for an app. The renderer owns one and uses it for all text.
 /// Call [`rasterize_text`] for each string and size, allocate a main-atlas
 /// region for the result with `TextureRegistry::register_static`, then upload
 /// it with `QuadPipeline::write_to_main_atlas`.
@@ -239,13 +244,13 @@ pub struct FontAtlas {
     embedded_family: Option<String>,
     /// Every family loaded.
     families: HashSet<String>,
-    /// Whether the default font has "…", so it can end a text.
+    /// Whether the default font has "…", for ending a text with it.
     has_ellipsis: bool,
     /// Whether the warning that there's no font to draw in was logged.
     warned_no_font: bool,
     /// The fallback families, in the order they're tried.
     fallbacks: Vec<String>,
-    /// The characters no font had that a warning has been logged for.
+    /// The characters no font had, for which a warning has been logged.
     warned_missing: HashSet<char>,
     glyphs: GlyphCache,
 }
@@ -255,8 +260,8 @@ pub struct FontAtlas {
 #[error("not a TTF or OTF font that can be read: {0}")]
 pub struct FontError(String);
 
-/// The family name inside a TTF or OTF font, as [`FontAtlas::load_font`]
-/// would file it under, without loading it into an atlas.
+/// Returns the family name inside a TTF or OTF font, the one
+/// [`FontAtlas::load_font`] files it under, without loading it into an atlas.
 ///
 /// # Errors
 ///
@@ -265,8 +270,8 @@ pub fn font_family_name(font_bytes: &[u8]) -> Result<String, FontError> {
     FontAtlas::empty().load_font(font_bytes)
 }
 
-/// The characters in the first `line_count` lines of `layout`, laid out from
-/// `content`, that no font had: each once, in order.
+/// Returns the characters in the first `line_count` lines of `layout`, which
+/// was laid out from `content`, that no font had. Each appears once, in order.
 fn missing_chars(layout: &Layout<()>, line_count: usize, content: &str) -> Vec<char> {
     let mut missing = Vec::new();
     for line in layout.lines().take(line_count) {
@@ -286,7 +291,7 @@ fn missing_chars(layout: &Layout<()>, line_count: usize, content: &str) -> Vec<c
     missing
 }
 
-/// Whether the font has "…", so it can end a text.
+/// Returns whether the font has "…", for ending a text with it.
 fn has_ellipsis(font_bytes: &[u8]) -> bool {
     swash::FontRef::from_index(font_bytes, 0)
         .is_some_and(|font| font.charmap().map('\u{2026}') != 0)
@@ -295,8 +300,8 @@ fn has_ellipsis(font_bytes: &[u8]) -> bool {
 /// A text laid out within its maximum number of lines.
 struct Fitted {
     layout: Layout<()>,
-    /// How many of the layout's lines are drawn: fewer than it has when the
-    /// text is clipped.
+    /// How many of the layout's lines are drawn. That's fewer than the layout
+    /// has when the text is clipped.
     line_count: usize,
     /// What was laid out in place of the text when it ends in an ellipsis.
     content: Option<String>,
@@ -304,8 +309,8 @@ struct Fitted {
 
 /// A glyph rasterized for one text, before it's drawn into the text's image.
 struct PlacedGlyph {
-    /// The left and top of its pixels, from the text's pen start and its first
-    /// line's baseline, in whole pixels.
+    /// The left and top of its pixels, in whole pixels, measured from the
+    /// text's pen start and its first line's baseline.
     left: i32,
     top: i32,
     width: u32,
@@ -342,11 +347,12 @@ impl FontAtlas {
     }
 
     /// Creates a [`FontAtlas`] with no font, which draws no text until one is
-    /// loaded with [`FontAtlas::load_font`]; the first becomes the default.
+    /// loaded with [`FontAtlas::load_font`]. The first font loaded becomes the
+    /// default.
     pub fn empty() -> Self {
         Self {
             fonts: FontContext {
-                // Only the fonts given here: never the system's.
+                // Only the fonts given here are used, never the system's.
                 collection: Collection::new(CollectionOptions {
                     shared: false,
                     system_fonts: false,
@@ -367,9 +373,9 @@ impl FontAtlas {
     }
 
     /// Adds the TTF or OTF font in `font_bytes`, and returns the family name
-    /// inside it, which texts name to use it. A font of a family already
-    /// loaded adds a face to it, such as its italic. The first font loaded
-    /// into an [`empty`](Self::empty) atlas becomes its default.
+    /// inside it. Texts use the font by naming that family. A font whose family
+    /// is already loaded adds a face to it, such as an italic. The first font
+    /// loaded into an [`empty`](Self::empty) atlas becomes its default.
     ///
     /// # Errors
     ///
@@ -383,19 +389,19 @@ impl FontAtlas {
         Ok(family)
     }
 
-    /// Sets the fallback families, tried in order for a character a text's
-    /// own family lacks, before the default font. A family not loaded yet is
-    /// skipped until it is. See the module docs.
+    /// Sets the fallback families. For a character a text's own family lacks,
+    /// they're tried in order, before the default font. A family that isn't
+    /// loaded yet is skipped until it is. See the module docs.
     pub fn set_fallbacks(&mut self, families: &[String]) {
         self.fallbacks = families.to_vec();
     }
 
-    /// Whether a font of `family` has been loaded.
+    /// Returns whether a font of `family` has been loaded.
     pub fn has_family(&self, family: &str) -> bool {
         self.families.contains(family)
     }
 
-    /// The default font's family name, or `None` with no font at all.
+    /// Returns the default font's family name, or `None` with no font at all.
     pub fn default_family(&self) -> Option<&str> {
         self.default_family.as_deref()
     }
@@ -411,21 +417,21 @@ impl FontAtlas {
         Ok(family)
     }
 
-    /// Sets the most bytes of glyphs the glyph cache keeps, dropping those
-    /// used longest ago if it holds more. 0 keeps none, so every glyph is
-    /// rasterized each time it's baked. See the module docs.
+    /// Sets the most bytes of glyphs the glyph cache keeps, and drops the
+    /// glyphs used longest ago if it holds more. A budget of 0 keeps none, so
+    /// every glyph is rasterized each time it's baked. See the module docs.
     pub fn set_glyph_cache_budget(&mut self, bytes: usize) {
         self.glyphs.set_budget(bytes);
     }
 
     /// Drops every glyph from the glyph cache, to free its memory. Texts
-    /// baked after it rasterize their glyphs again.
+    /// baked afterward rasterize their glyphs again.
     pub fn clear_glyph_cache(&mut self) {
         self.glyphs.clear();
     }
 
-    /// The glyph cache's size: the glyphs it holds, and their bytes, counted
-    /// as the budget counts them.
+    /// Returns the glyph cache's size as the number of glyphs it holds and
+    /// their bytes, counted as the budget counts them.
     pub fn glyph_cache_size(&self) -> (usize, usize) {
         (self.glyphs.len(), self.glyphs.bytes())
     }
@@ -433,10 +439,11 @@ impl FontAtlas {
     /// Lays `text` out at `size_px`, with `letter_spacing_px` of extra space
     /// between glyphs (`0.0` for the font's normal spacing), and rasterizes it
     /// into an RGBA pixel buffer. A `\n` starts a new line. The image spans
-    /// the glyphs' ink, so it has no padding after the last glyph. The same as
-    /// [`FontAtlas::rasterize`] with a [`TextLayout::new`] and a scale of 1.
+    /// the glyphs' ink, so it has no padding after the last glyph. This is the
+    /// same as [`FontAtlas::rasterize`] with a [`TextLayout::new`] and a scale
+    /// of 1.
     ///
-    /// Returns `None` if `text` draws no pixels: it's empty, or only
+    /// Returns `None` if `text` draws no pixels, because it's empty or only
     /// whitespace.
     pub fn rasterize_text(
         &mut self,
@@ -450,14 +457,15 @@ impl FontAtlas {
     }
 
     /// Lays `text` out and rasterizes it into an RGBA pixel buffer, at `scale`
-    /// pixels per logical pixel, as a bake at the display's scale is. Lines
-    /// break where they would at a scale of 1. See the module docs.
+    /// pixels per logical pixel, the way a bake at the display's scale does.
+    /// Lines break where they would at a scale of 1. See the module docs.
     ///
-    /// The image is the text's box: as wide as its wrap width, or without one
-    /// its widest line's ink, and from the top of its first line to the bottom
-    /// of its last, widened where ink reaches past it.
+    /// The image is the text's box. It's as wide as the wrap width, or as the
+    /// widest line's ink without one, and as tall as from the top of the first
+    /// line to the bottom of the last. Ink that reaches past the box widens the
+    /// image.
     ///
-    /// Returns `None` if `text` draws no pixels: it's empty, or only
+    /// Returns `None` if `text` draws no pixels, because it's empty or only
     /// whitespace.
     pub fn rasterize(&mut self, text: &TextLayout, scale: f32) -> Option<RasterizedGlyphs> {
         if text.content.is_empty() {
@@ -479,8 +487,8 @@ impl FontAtlas {
             content,
         } = self.fit(text, scale);
 
-        // The image's height: from the top of the first line to the bottom of
-        // the last shown, each part rounded up on its own, so that the
+        // The image's height runs from the top of the first line to the bottom
+        // of the last shown. Each part is rounded up on its own, so the
         // baseline sits on a whole pixel and descenders are never cut off.
         let first = *layout.lines().next()?.metrics();
         let last = *layout.lines().nth(line_count - 1)?.metrics();
@@ -493,11 +501,11 @@ impl FontAtlas {
 
         let glyphs = self.rasterize_glyphs(&layout, first.baseline, line_count);
 
-        // The image's width: the wrap width, if there is one, widened to the
-        // ink where it reaches past it; without one, from the leftmost ink, or
-        // the pen's start if that's further left, to the rightmost ink. A
-        // glyph's ink can reach left of the pen, as Inter's "j" does, or past
-        // its own advance.
+        // The image's width is the wrap width, if there is one, widened to
+        // take in ink that reaches past it. Without a wrap width, it runs from
+        // the leftmost ink, or the pen's start if that's further left, to the
+        // rightmost ink. A glyph's ink can reach left of the pen, as Inter's
+        // "j" does, or past its own advance.
         let box_width = text.wrap_width.map_or(0, |w| (w * scale).ceil() as i32);
         let min_left = glyphs.iter().map(|g| g.left).min()?.min(0);
         let max_right = glyphs
@@ -582,8 +590,8 @@ impl FontAtlas {
             ellipsis
         };
 
-        // Where the text can be cut: between clusters, so never inside a
-        // character, up to the end of the last line shown.
+        // The places the text can be cut, up to the end of the last line
+        // shown. They're between clusters, so never inside a character.
         let end = full.lines().nth(max - 1).map_or(0, |l| l.text_range().end);
         let mut cuts: Vec<usize> = full
             .lines()
@@ -604,8 +612,9 @@ impl FontAtlas {
                 format!("{head}{ellipsis}")
             }
         };
-        // The longest cut whose text and ellipsis fit in `max` lines. A
-        // shorter cut never takes more lines, so a binary search finds it.
+        // Lays out the text cut at `cut`, with the ellipsis, and returns it if
+        // it fits in `max` lines. A binary search finds the longest cut that
+        // fits, since a shorter cut never takes more lines.
         let fits = |atlas: &mut Self, cut: usize| {
             let content = with_ellipsis(cut);
             let layout = atlas.lay_out(&content, text, scale);
@@ -642,7 +651,7 @@ impl FontAtlas {
     /// Shapes `content` in `text`'s style, breaks it into lines, and aligns
     /// them, at `scale`.
     fn lay_out(&mut self, content: &str, text: &TextLayout, scale: f32) -> Layout<()> {
-        // The text's family if it's loaded, and the default otherwise. A
+        // Uses the text's family if it's loaded, and the default otherwise. A
         // text in the embedded font that sets no weight is bold.
         let family = text
             .family
@@ -653,13 +662,14 @@ impl FontAtlas {
         let weight = text.weight.or_else(|| {
             (self.embedded_family.as_ref() == Some(&family)).then_some(EMBEDDED_DEFAULT_WEIGHT)
         });
-        // Sizes in logical pixels, scaled by parley; fractional positions,
-        // rounded when the glyphs are rasterized.
+        // Sizes are in logical pixels, and parley scales them. Positions are
+        // fractional, and rounded when the glyphs are rasterized.
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, scale, false);
-        // The text's family, then the fallbacks, in order, then the default
-        // font, each tried in turn for a character the ones before it lack.
+        // The stack is the text's family, then the fallbacks in order, then
+        // the default font. Each is tried in turn for a character the ones
+        // before it lack.
         let mut stack = vec![family.clone()];
         let loaded = self.fallbacks.iter().filter(|f| self.families.contains(*f));
         for name in loaded.chain(&self.default_family) {
@@ -688,7 +698,7 @@ impl FontAtlas {
         // than running out of the box.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
         let mut layout = builder.build(content);
-        // Set before breaking lines, which aligns them.
+        // Set before breaking lines, because breaking lines aligns them.
         let alignment = match text.align {
             TextAlign::Start => Alignment::Start,
             TextAlign::Center => Alignment::Center,
@@ -699,9 +709,9 @@ impl FontAtlas {
         layout
     }
 
-    /// Rasterizes every glyph in the first `line_count` lines of `layout`,
-    /// placed relative to the pen's start and the first line's baseline, at
-    /// `baseline`.
+    /// Rasterizes every glyph in the first `line_count` lines of `layout`.
+    /// Each is placed relative to the pen's start and the first line's
+    /// baseline, which is at `baseline`.
     fn rasterize_glyphs(
         &mut self,
         layout: &Layout<()>,
@@ -733,15 +743,16 @@ impl FontAtlas {
                     .hint(false)
                     .normalized_coords(coords.iter())
                     .build();
-                // A face standing in for one the family lacks: slanted for
-                // italic, thickened for bold, by about a thirtieth of its
-                // size.
+                // A face standing in for one the family lacks is slanted for
+                // italic and thickened for bold. The thickening is about a
+                // thirtieth of the font size.
                 let synthesis = run.synthesis();
                 let slant = synthesis.skew().map(|_| SYNTHESIZED_SLANT);
                 let embolden = synthesis.embolden().then(|| run.font_size() / 30.0);
                 for g in glyph_run.positioned_glyphs() {
-                    // Across, to the nearest quarter pixel; down, to the
-                    // nearest pixel, so lines sit on whole pixels.
+                    // Horizontally, a glyph is placed to the nearest quarter
+                    // pixel. Vertically, it's placed to the nearest pixel, so
+                    // lines sit on whole pixels.
                     let x = (g.x * SUBPIXEL_STEPS).round() / SUBPIXEL_STEPS;
                     let pen_x = x.floor();
                     let pen_y = (g.y - baseline).round();
@@ -802,7 +813,8 @@ mod tests {
         FontAtlas::with_embedded_font()
     }
 
-    /// The columns with any coverage, as a range: where the ink is across.
+    // Returns the range of columns that have any coverage, which is where the
+    // ink is.
     fn ink_columns(g: &RasterizedGlyphs) -> std::ops::Range<u32> {
         let has_ink =
             |x: u32| (0..g.height).any(|y| g.rgba_pixels[((y * g.width + x) * 4 + 3) as usize] > 0);
@@ -811,8 +823,9 @@ mod tests {
         first..last + 1
     }
 
-    // A glyph whose ink starts left of the pen, like Inter's "j", keeps its
-    // left edge: the image starts at its ink, not at the pen.
+    // A glyph whose ink starts left of the pen, like Inter's "j", must keep
+    // its left edge. The image starts at the ink, not at the pen, or the glyph
+    // is clipped.
     #[test]
     fn a_glyph_with_a_negative_left_bearing_isnt_clipped() {
         let mut fa = atlas();
@@ -839,9 +852,10 @@ mod tests {
         assert!(lowest + 1 < g.height, "room is left below the lowest ink");
     }
 
-    // The font's kerning pulls "A" and "V" together: laid out, "AV" advances
-    // less than the font's advances for "A" and "V" added up, which is how
-    // text was spaced before it was shaped.
+    // The font's kerning must pull "A" and "V" together. Laid out, "AV"
+    // advances less than the font's advances for "A" and "V" added up.
+    // Spacing each glyph by its own advance, with no shaping, misses the
+    // kerning.
     #[test]
     fn kerning_pulls_a_pair_together() {
         let mut fa = atlas();
@@ -849,7 +863,7 @@ mod tests {
             .lay_out("AV", &TextLayout::new("AV", 64.0), 1.0)
             .full_width();
 
-        // At the weight the text is drawn at.
+        // Uses the weight the text is drawn at.
         let font = swash::FontRef::from_index(EMBEDDED_FONT_BYTES, 0).unwrap();
         let coords: Vec<i16> = font
             .variations()
@@ -865,9 +879,10 @@ mod tests {
         );
     }
 
-    // Text measures the same in logical pixels at every display scale, so it
-    // lays out the same on every display. Glyph advances rounded up to whole
-    // pixels made a line wider at a scale of 1 than at 2.
+    // A line must be the same width in logical pixels at every display scale,
+    // or text wraps differently on different displays. Rounding each glyph's
+    // advance up to a whole pixel breaks this, making a line wider at a scale
+    // of 1 than at 2.
     #[test]
     fn a_line_is_as_wide_at_every_scale() {
         let mut fa = atlas();
@@ -986,9 +1001,8 @@ mod tests {
         );
     }
 
-    // Baking a text again rasterizes nothing new: its glyphs are cached. A
-    // glyph another text shares is cached too, where it starts at the same
-    // quarter of a pixel.
+    // Baking a text again must rasterize nothing new, since its glyphs are
+    // cached.
     #[test]
     fn baking_a_text_again_adds_nothing_to_the_glyph_cache() {
         let mut fa = atlas();
@@ -999,8 +1013,9 @@ mod tests {
         assert_eq!(fa.glyph_cache_size(), after_first);
     }
 
-    // The cache changes how often glyphs are rasterized, never the pixels:
-    // with it, without it, and after it's cleared, a text is the same.
+    // The cache must change only how often glyphs are rasterized, never the
+    // pixels. A text is the same with the cache, without it, and after it's
+    // cleared.
     #[test]
     fn cached_glyphs_draw_the_same_pixels() {
         let text = "The quick brown fox, office -> waffle";
@@ -1039,7 +1054,7 @@ mod tests {
         text
     }
 
-    /// The columns of `g` from the left that have no ink.
+    // Returns how many columns from the left have no ink.
     fn left_margin(g: &RasterizedGlyphs) -> u32 {
         ink_columns(g).start
     }
@@ -1058,8 +1073,8 @@ mod tests {
         assert_eq!(g.width, 200);
     }
 
-    // Lines are broken in logical pixels, so the same words start each line at
-    // every display scale.
+    // Lines must break in logical pixels, or different words start each line
+    // at different display scales.
     #[test]
     fn text_breaks_at_the_same_words_at_every_scale() {
         let mut fa = atlas();
@@ -1160,14 +1175,14 @@ mod tests {
         let head = content.trim_end_matches('\u{2026}');
         assert!(PARAGRAPH.starts_with(head));
         assert!(!head.ends_with(' '), "no space before the ellipsis");
-        // A word more wouldn't have fitted.
+        // One more word wouldn't have fitted.
         let next = PARAGRAPH[head.len()..].trim_start();
         let one_more = next.split(' ').next().unwrap();
         let longer = format!("{head} {one_more}\u{2026}");
         assert!(fa.lay_out(&longer, &text, 1.0).len() > 2);
     }
 
-    // The app's own ellipsis is used, and wraps onto a line of its own when it
+    // The app's own ellipsis is used. It wraps onto a line of its own when it
     // doesn't fit beside the text.
     #[test]
     fn an_ellipsis_wider_than_a_line_wraps_onto_its_own() {
@@ -1241,7 +1256,8 @@ mod tests {
         assert_eq!(fa.fit(&text, 1.0).content, None);
     }
 
-    /// Lora, roman and italic, variable from 400 to 700: a second family.
+    // Lora, roman and italic, is a second family. It's variable from 400 to
+    // 700.
     use proteus_test_fonts::{SECOND_FAMILY as LORA, SECOND_FAMILY_ITALIC as LORA_ITALIC};
 
     fn pixels(fa: &mut FontAtlas, text: &TextLayout) -> RasterizedGlyphs {
@@ -1272,8 +1288,8 @@ mod tests {
         assert_eq!(pixels(&mut fa, &text).rgba_pixels, inter.rgba_pixels);
     }
 
-    // A text that sets no weight is bold in the embedded font, as before it
-    // was variable, and weights from one variable font differ.
+    // A text that sets no weight is bold in the embedded font, and the weights
+    // of one variable font differ from each other.
     #[test]
     fn weights_come_from_the_variable_font() {
         let mut fa = atlas();
@@ -1293,7 +1309,8 @@ mod tests {
         );
     }
 
-    // A weight a family doesn't have uses its nearest: Lora goes to 700.
+    // A weight a family doesn't have uses its nearest. Lora has no 900, so it
+    // uses 700.
     #[test]
     fn a_missing_weight_uses_the_nearest() {
         let mut fa = atlas();
@@ -1307,8 +1324,8 @@ mod tests {
         assert_eq!(bold.width, black.width);
     }
 
-    // Italic uses a family's italic face, and slants the upright one when the
-    // family has none, as Inter here doesn't.
+    // Italic uses a family's italic face. When the family has none, as Inter
+    // here, it slants the upright face.
     #[test]
     fn italic_uses_the_italic_face_or_slants() {
         let mut fa = atlas();
@@ -1331,12 +1348,12 @@ mod tests {
         );
     }
 
-    /// Crimson Pro, a third family, and Noto Serif Devanagari, for a script
-    /// Inter lacks.
+    // Crimson Pro is a third family. Noto Serif Devanagari is for a script
+    // Inter lacks.
     use proteus_test_fonts::{DEVANAGARI, THIRD_FAMILY as CRIMSON};
 
-    // A script no loaded font has is drawn as boxes, and reported; with a
-    // fallback font that has it, it's drawn in that.
+    // A script no loaded font has is drawn as boxes and reported. With a
+    // fallback font that has it, the script is drawn in that font.
     #[test]
     fn a_fallback_font_draws_a_script_the_font_lacks() {
         let mut fa = atlas();
@@ -1344,7 +1361,7 @@ mod tests {
         let boxes = pixels(&mut fa, &text);
         assert_eq!(boxes.missing, vec!['न', 'म', 'स', '्', 'त', 'े']);
 
-        // Named before it's loaded, it's skipped until it is.
+        // A fallback named before it's loaded is skipped until it is.
         fa.set_fallbacks(&["Noto Serif Devanagari".to_owned()]);
         assert!(!pixels(&mut fa, &text).missing.is_empty());
 
@@ -1354,9 +1371,9 @@ mod tests {
         assert_ne!(drawn.rgba_pixels, boxes.rgba_pixels);
     }
 
-    // The fallbacks are tried, in order, before the default font: Lora lacks
-    // "ĸ" and these letters, which Crimson Pro and Inter both have, and
-    // Crimson Pro draws them.
+    // The fallbacks are tried in order, before the default font. Lora lacks
+    // "ĸ" and these letters, and Crimson Pro and Inter both have them. With
+    // Crimson Pro as the fallback, it draws them.
     #[test]
     fn the_fallbacks_come_before_the_default_font() {
         let mut fa = atlas();
@@ -1364,7 +1381,7 @@ mod tests {
         fa.load_font(CRIMSON).unwrap();
         let mut text = TextLayout::new("ĸǅǆǈǉǋǌ", 48.0);
         text.weight = Some(400);
-        // The glyph's ink width tells which font drew it; the line's height
+        // The ink's width tells which font drew the glyphs. The line's height
         // is the text's own family's either way.
         let mut in_family = |fa: &mut FontAtlas, family: &'static str| {
             text.family = Some(family);

@@ -1,4 +1,4 @@
-//! Text: a line of text drawn on an entity, or more where it has a `\n`.
+//! Text drawn on an entity, in one line or, where it has a `\n`, more.
 //!
 //! ```text
 //! Text { content, size_px }      declared on an entity
@@ -22,9 +22,9 @@
 //!
 //! ## Text larger than an atlas page
 //!
-//! Text is one line, or more where it has a `\n`, with no length limit. Text
-//! wider or taller than an atlas page ([`AtlasConfig::page_size`], 2048
-//! pixels by default) is clipped to the page, with a warning: the part that
+//! Text has no length limit, and is one line or, where it has a `\n`, more.
+//! Text wider or taller than an atlas page ([`AtlasConfig::page_size`], 2048
+//! pixels by default) is clipped to the page, with a warning. The part that
 //! fits is drawn at its normal size, and the rest is cut off.
 //!
 //! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
@@ -38,15 +38,16 @@ use proteus_render::{TextLayout, DEFAULT_ELLIPSIS};
 // Text component
 // ---------------------------------------------------------------------------
 
-/// Text to draw on an entity: one line, or more where it has a `\n`.
+/// Text to draw on an entity, in one line or, where it has a `\n`, more.
 ///
 /// The renderer rasterizes it into the main atlas and adds a [`BakedText`].
 /// Changing a field afterwards has no effect until the `BakedText` is
-/// removed; `proteus-sdk`'s `Handle::set_text` does both. Text larger than an
-/// atlas page is clipped; see the [module docs](self).
+/// removed. `proteus-sdk`'s `Handle::set_text` does both. Text larger than an
+/// atlas page is clipped. See the [module docs](self).
 ///
-/// Its lines can wrap at a width, align within it, take a line height, and
-/// stop at a number of lines, ending in an ellipsis or clipped:
+/// A text's lines can wrap at a width, align within that width, take a line
+/// height, and stop at a number of lines, either with an ellipsis or clipped.
+/// This example uses all of them:
 ///
 /// ```
 /// # use proteus_ui::{Text, TextAlign};
@@ -72,38 +73,39 @@ pub struct Text {
     ///
     /// [`FontAtlas::rasterize_text`]: proteus_render::FontAtlas::rasterize_text
     pub letter_spacing_px: f32,
-    /// The width lines wrap at, in logical pixels, and the width of the text's
-    /// box, which its lines align within. `None`, the default, breaks lines
-    /// only at `\n`, and the box is as wide as the widest line. A word wider
-    /// than the wrap width breaks between characters.
+    /// The width lines wrap at, in logical pixels. This is also the width of
+    /// the text's box, and lines align within the box. `None`, the default,
+    /// breaks lines only at `\n`, and the box is as wide as the widest line. A
+    /// word wider than the wrap width breaks between characters.
     pub wrap_width: Option<f32>,
-    /// Where lines sit across the text's box. [`TextAlign::Start`] by default.
-    /// The text's anchor places the box on its entity.
+    /// Where lines sit across the text's box. The default is
+    /// [`TextAlign::Start`]. The text's anchor places the box on the entity.
     pub align: TextAlign,
     /// The distance from one line's baseline to the next, as a multiple of
-    /// the size, as CSS's unitless `line-height` is. `None`, the default, is
+    /// the size, like CSS's unitless `line-height`. `None`, the default, uses
     /// the font's own line spacing.
     pub line_height: Option<f32>,
     /// The most lines shown. `None`, the default, shows them all.
     pub max_lines: Option<u32>,
-    /// How text with more lines than `max_lines` ends: with an ellipsis, "…"
-    /// by default, or clipped. An ellipsis wraps as words do, and the text
-    /// keeps as much of itself as fits with it; one too long to fit in
-    /// `max_lines` on its own is clipped, with a warning.
+    /// How text with more lines than `max_lines` ends. It ends with an
+    /// ellipsis, "…" by default, or is clipped. An ellipsis wraps as words do,
+    /// and the text keeps as much of itself as fits with the ellipsis. An
+    /// ellipsis too long to fit in `max_lines` on its own is clipped, with a
+    /// warning.
     pub overflow: TextOverflow,
-    /// The font family, such as `"Lora"`, from a font the app has loaded.
+    /// The font family, such as `"Lora"`, of a font the app has loaded.
     /// `None`, the default, is the app's default font. A family the app has
     /// said it will load waits, or is drawn in the default font meanwhile, as
-    /// [`Fonts::expect`] says; one never loaded is drawn in the default font,
-    /// with a warning.
+    /// [`Fonts::expect`] says. A family that was never loaded is drawn in the
+    /// default font, with a warning.
     pub family: Option<String>,
-    /// The weight, from 100 to 900: 400 is regular and 700 bold. A family
-    /// without the weight uses its nearest, and one with no bold face is
-    /// thickened. `None`, the default, is the font's own weight, or 700, bold,
-    /// in the embedded font.
+    /// The weight, from 100 to 900, where 400 is regular and 700 is bold. A
+    /// family without that weight uses the nearest weight it has, and a family
+    /// with no bold face is thickened. `None`, the default, uses the font's own
+    /// weight, or 700, bold, in the embedded font.
     pub weight: Option<u16>,
-    /// Whether the text is italic: in the family's italic face, or slanted if
-    /// it has none. Off by default.
+    /// Whether the text is italic. It uses the family's italic face, or is
+    /// slanted if the family has none. The default is false.
     pub italic: bool,
 }
 
@@ -126,8 +128,8 @@ impl Text {
         }
     }
 
-    /// Wraps lines at `width` logical pixels, which is also the width of the
-    /// text's box. See [`Text::wrap_width`].
+    /// Wraps lines at `width` logical pixels, and makes `width` the width of
+    /// the text's box. See [`Text::wrap_width`].
     pub fn with_wrap_width(mut self, width: f32) -> Self {
         self.wrap_width = Some(width);
         self
@@ -139,22 +141,22 @@ impl Text {
         self
     }
 
-    /// Sets the distance between baselines, as a multiple of the size: `1.5`
-    /// is one and a half times the size.
+    /// Sets the distance between baselines, as a multiple of the size, so
+    /// `1.5` is one and a half times the size.
     pub fn with_line_height(mut self, multiple: f32) -> Self {
         self.line_height = Some(multiple);
         self
     }
 
-    /// Shows at most `lines` lines, ending in the text's overflow: an
-    /// ellipsis, "…" by default, or clipped.
+    /// Shows at most `lines` lines. Text with more lines ends as
+    /// [`Text::overflow`] says, in an ellipsis, "…" by default, or clipped.
     pub fn with_max_lines(mut self, lines: u32) -> Self {
         self.max_lines = Some(lines);
         self
     }
 
-    /// Ends text with more lines than its maximum in `ellipsis`, such as
-    /// `" more"`, rather than "…".
+    /// Ends the text in `ellipsis`, such as `" more"`, rather than "…", if it
+    /// has more lines than its maximum.
     pub fn with_ellipsis(mut self, ellipsis: impl Into<String>) -> Self {
         self.overflow = TextOverflow::Ellipsis(ellipsis.into());
         self
@@ -172,7 +174,7 @@ impl Text {
         self
     }
 
-    /// Sets the weight, from 100 to 900: 400 is regular and 700 bold.
+    /// Sets the weight, from 100 to 900, where 400 is regular and 700 is bold.
     pub fn with_weight(mut self, weight: u16) -> Self {
         self.weight = Some(weight);
         self
@@ -184,7 +186,7 @@ impl Text {
         self
     }
 
-    /// How the renderer lays this text out.
+    /// Returns how the renderer lays this text out.
     pub fn layout(&self) -> TextLayout<'_> {
         TextLayout {
             content: &self.content,
@@ -260,35 +262,36 @@ pub struct BakedText {
 /// How a text in a font that's still loading is drawn meanwhile.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WhileLoading {
-    /// Not at all, until the font loads, or fails and the default font is
-    /// used. The default, since a text that changes font once drawn looks
-    /// like a mistake.
+    /// Not drawn at all until the font loads, or fails and the default font is
+    /// used. This is the default, since a text that changes font once it's
+    /// drawn looks like a mistake.
     #[default]
     Hide,
-    /// In the default font, and again in its own once it loads, for an app
-    /// that would rather show something at once.
+    /// Drawn in the default font, and drawn again in the text's own font once
+    /// that loads. This suits an app that would rather show something at once.
     DefaultFont,
 }
 
 /// What's known of a font family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FontStatus {
-    /// The app said it will load it; its texts are drawn as it says.
+    /// The app said it will load a font of the family. Its texts are drawn as
+    /// the [`WhileLoading`] value says.
     Expected(WhileLoading),
-    /// Loaded: its texts are drawn in it.
+    /// A font of the family has loaded. Its texts are drawn in it.
     Loaded,
-    /// Its load failed: its texts are drawn in the default font.
+    /// The load failed. Texts in the family are drawn in the default font.
     Failed,
 }
 
-/// The fonts an app has loaded, or said it will, by family. `proteus-sdk`'s
-/// `Proteus::load_font`, `expect_font` and `font_failed` change it, and the
-/// renderer adds each font loaded before it next bakes text.
+/// The fonts an app has loaded, or said it will load, by family.
+/// `proteus-sdk`'s `Proteus::load_font`, `expect_font` and `font_failed`
+/// change it. Before the renderer next bakes text, it adds each font loaded.
 #[derive(Resource, Debug, Default)]
 pub struct Fonts {
     status: std::collections::HashMap<String, FontStatus>,
-    /// Fonts loaded that the renderer hasn't added yet: their bytes and
-    /// family.
+    /// Fonts loaded that the renderer hasn't added yet, each as its bytes and
+    /// its family.
     pending: Vec<(std::sync::Arc<[u8]>, String)>,
     /// The families a warning has been logged for.
     warned: std::collections::HashSet<String>,
@@ -297,8 +300,8 @@ pub struct Fonts {
     /// Whether the fallback families changed since the renderer last took
     /// them.
     fallbacks_changed: bool,
-    /// Counts every change, so the renderer can tell when to try texts that
-    /// wait for a font again.
+    /// Counts every change. The renderer uses it to tell when texts that wait
+    /// for a font should try again.
     version: u64,
 }
 
@@ -333,32 +336,33 @@ impl Fonts {
         }
     }
 
-    /// Sets the fallback families: tried in order for a character a text's
-    /// own family lacks, before the default font.
+    /// Sets the fallback families. They're tried in order for a character a
+    /// text's own family lacks, before the default font.
     pub fn set_fallbacks(&mut self, families: Vec<String>) {
         self.fallbacks = families;
         self.fallbacks_changed = true;
         self.version += 1;
     }
 
-    /// The fallback families, in the order they're tried.
+    /// Returns the fallback families, in the order they're tried.
     pub fn fallbacks(&self) -> &[String] {
         &self.fallbacks
     }
 
-    /// The fallback families if they changed since the last call, for the
-    /// renderer.
+    /// Returns the fallback families if they changed since the last call, or
+    /// `None`. This is for the renderer.
     pub fn take_fallbacks(&mut self) -> Option<Vec<String>> {
         std::mem::take(&mut self.fallbacks_changed).then(|| self.fallbacks.clone())
     }
 
-    /// A number that changes whenever a font is expected, loaded or failed,
-    /// or the fallbacks change.
+    /// Returns a number that changes whenever a font is expected, loaded or
+    /// failed, or the fallbacks change.
     pub fn version(&self) -> u64 {
         self.version
     }
 
-    /// What's known of `family`: `None` if it was never expected or loaded.
+    /// Returns what's known of `family`, or `None` if it was never expected,
+    /// loaded or failed.
     pub fn status(&self, family: &str) -> Option<FontStatus> {
         self.status.get(family).copied()
     }
@@ -368,21 +372,22 @@ impl Fonts {
         std::mem::take(&mut self.pending)
     }
 
-    /// Whether this is the first time `family` is warned about, so each
-    /// family's warning is logged once.
+    /// Returns whether this is the first time `family` is warned about, so
+    /// each family's warning is logged once.
     pub fn first_warning(&mut self, family: &str) -> bool {
         self.warned.insert(family.to_owned())
     }
 }
 
-/// Marks a text drawn with characters no font had, as boxes, so it's baked
-/// again when a font loads or the fallbacks change.
+/// Marks a text drawn with boxes for characters no font had. The text is
+/// baked again when a font loads or the fallbacks change.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct MissingGlyphs;
 
-/// Marks a text waiting, not drawn, for a fallback font that's expected with
-/// [`WhileLoading::Hide`], since it has characters only a font still to load
-/// might have. Removed when what's known of the fonts changes.
+/// Marks a text that waits, not drawn, for a fallback font that's expected
+/// with [`WhileLoading::Hide`]. The text has characters that only a font still
+/// to load might have. The renderer removes the marker when what's known of
+/// the fonts changes.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct WaitsForFont;
 
