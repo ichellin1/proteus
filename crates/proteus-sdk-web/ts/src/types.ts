@@ -133,13 +133,79 @@ export interface LoadFontOptions {
  * Text, starting a new line at each `\n`. The host bakes it the next time it renders a
  * frame. Text wider or taller than an atlas page (2048 pixels by default) is clipped to it, with
  * a warning.
+ *
+ * It's given as `content`, a string, or as `spans`, parts with styles of their own, but not both.
+ *
+ * @example
+ * ```ts
+ * const byline: TextSpec = {
+ *   spans: [
+ *     { content: "Mary Wollstonecraft", weight: 600 },
+ *     { content: "\n1792", sizePx: 12, color: colorFrom("#6b6676") },
+ *   ],
+ *   sizePx: 14,
+ * };
+ * ```
  */
-export interface TextSpec {
-  /** The text. A `\n` starts a new line. */
+export type TextSpec = TextOptions &
+  (
+    | {
+        /** The text. A `\n` starts a new line. */
+        content: string;
+        /** Not set when the text is `content`. */
+        spans?: undefined;
+      }
+    | {
+        /** The text's spans, in order. Each takes whatever it doesn't set from the text. */
+        spans: SpanSpec[];
+        /** Not set when the text is `spans`. */
+        content?: undefined;
+      }
+  );
+
+/**
+ * A part of a text with a style of its own, such as a bold word. Anything a span doesn't set
+ * comes from its text.
+ */
+export interface SpanSpec {
+  /** The span's text. A `\n` starts a new line. */
   content: string;
+  /** The font family, such as `"Lora"`. Omit it for the text's family. */
+  family?: string;
+  /** The weight, from 100 to 900, where 400 is regular and 700 is bold. Omit it for the text's. */
+  weight?: number;
+  /** Whether the span is italic. Omit it for the text's style. */
+  italic?: boolean;
+  /** Font size in pixels. Omit it for the text's size. */
+  sizePx?: number;
+  /**
+   * The span's color. Omit it for the text's color. A text with a colored span is baked in its
+   * colors: see {@link TextOptions.color}.
+   */
+  color?: Color;
+  /**
+   * Where the span sits up or down in its line, as CSS's `vertical-align` says. `"baseline"`,
+   * the default, is on the text's baseline. `"middle"` centers it on the middle of the text's
+   * lowercase letters, which suits an icon beside text. `"super"` and `"sub"` are the font's
+   * superscript and subscript positions, at the span's own size. A number raises it by that
+   * many pixels, or lowers it if it's negative. A span moved up or down makes its line taller
+   * if it needs the room.
+   */
+  verticalAlign?: "baseline" | "middle" | "super" | "sub" | number;
+}
+
+/** The settings of a {@link TextSpec}, whether its text is `content` or `spans`. */
+export interface TextOptions {
   /** Font size in pixels. */
   sizePx: number;
-  /** Defaults to opaque white — set a dark value for light backgrounds. */
+  /**
+   * The text's color. Defaults to opaque white, so set a dark value for light backgrounds.
+   *
+   * It's applied as the text is drawn, so it can change at no cost. A text with a colored span
+   * is baked in its colors instead, with the spans that set none in this color, and only the
+   * color's alpha is applied as it's drawn. Changing its red, green or blue bakes it again, which
+   * costs about as much as setting the text again. Fading it with alpha or opacity costs nothing.
+   */
   color?: Color;
   /** Extra tracking between glyphs, in pixels. Default `0`. */
   letterSpacingPx?: number;
@@ -178,15 +244,18 @@ export interface TextSpec {
   italic?: boolean;
   /**
    * How text with more lines than `maxLines` ends. `{ ellipsis: "…" }`, the default, ends it
-   * with an ellipsis, which can be any text, such as `" more"`. `"clip"` cuts it off. An
-   * ellipsis wraps as words do, and the text keeps as much of itself as fits with the ellipsis.
-   * An ellipsis too long to fit in `maxLines` on its own is clipped, with a warning.
+   * with an ellipsis, which can be any text, such as `" more"`, or spans. `"clip"` cuts it off.
+   * An ellipsis wraps as words do, and the text keeps as much of itself as fits with the
+   * ellipsis. An ellipsis too long to fit in `maxLines` on its own is clipped, with a warning.
    */
   overflow?:
     | "clip"
     | {
-        /** The text that ends the last line shown, such as `"…"` or `" more"`. */
-        ellipsis: string;
+        /**
+         * What ends the last line shown, such as `"…"` or `" more"`. A string is in the text's
+         * own style. Spans have styles of their own.
+         */
+        ellipsis: string | SpanSpec[];
       };
 }
 

@@ -13,7 +13,7 @@ use bevy_ecs::world::World;
 use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, TextureId};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{
-    BakeScale, BakedImage, BakedText, EffectiveVisibility, FontStatus, Fonts, Image,
+    BakeScale, BakedColor, BakedImage, BakedText, EffectiveVisibility, FontStatus, Fonts, Image,
     ImageTextureRef, MissingGlyphs, Text, TextTextureRef, Visibility, WaitsForFont, WhileLoading,
 };
 
@@ -103,18 +103,25 @@ pub(crate) fn bake_pending_text(
     // at its logical size.
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     for (entity, text) in pending {
-        let Some(in_default_font) = font_choice(world, font_atlas, &text) else {
-            // The text's font is still loading, so the text waits and isn't
-            // drawn.
+        // A text waits, not drawn, while a font it or one of its spans names
+        // is still loading. A family that isn't in the font atlas is drawn in
+        // the default font.
+        let families = text.layout().families();
+        let choices: Vec<_> = families
+            .iter()
+            .map(|family| font_choice(world, font_atlas, family))
+            .collect();
+        if choices.contains(&None) {
             continue;
-        };
-        let layout = || {
-            let mut layout = text.layout();
-            if in_default_font {
-                layout.family = None;
-            }
-            layout
-        };
+        }
+        if !text.content.is_empty() && !text.spans.is_empty() {
+            log::warn!(
+                "the text of entity {entity:?} has both content, {:?}, and spans: its spans are \
+                 drawn. Give it one or the other",
+                text.content,
+            );
+        }
+        let layout = || text.layout();
         let mut scale = bake_scale;
         let mut glyphs = font_atlas.rasterize(&layout(), scale);
         // Too large for a page at the bake scale: rasterized again, at the
@@ -142,6 +149,14 @@ pub(crate) fn bake_pending_text(
         if missing && waits_for_fallback(world) {
             world.entity_mut(entity).insert(WaitsForFont);
             continue;
+        }
+        // A text baked in its colors is baked again when its color changes.
+        if text.is_colored() {
+            world
+                .entity_mut(entity)
+                .insert(BakedColor(text.color.truncate()));
+        } else {
+            world.entity_mut(entity).remove::<BakedColor>();
         }
         if missing {
             world.entity_mut(entity).insert(MissingGlyphs);
@@ -219,13 +234,11 @@ fn waits_for_fallback(world: &World) -> bool {
     })
 }
 
-/// Returns whether `text` is drawn in the default font rather than in its own
-/// family, or `None` if the text waits, not drawn, for its family to load. See
-/// [`Fonts`]. A family that failed or was never loaded is warned about once.
-fn font_choice(world: &mut World, font_atlas: &FontAtlas, text: &Text) -> Option<bool> {
-    let Some(family) = &text.family else {
-        return Some(false);
-    };
+/// Returns whether a text in `family` is drawn in the default font rather
+/// than in that family, or `None` if the text waits, not drawn, for the family
+/// to load. See [`Fonts`]. A family that failed or was never loaded is warned
+/// about once.
+fn font_choice(world: &mut World, font_atlas: &FontAtlas, family: &str) -> Option<bool> {
     if font_atlas.has_family(family) {
         return Some(false);
     }

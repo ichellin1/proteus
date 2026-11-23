@@ -13,15 +13,18 @@ draws is known to be covered.
 
 Each essay has a card. The year is aligned to the end of the card's column. The title wraps onto
 at most two lines and ends in "…". The opening is spaced at a line height of 1.45 and stops
-after five lines, ending in an ellipsis of its own. The source is clipped after two lines. The
-third card's ellipsis is longer than a line, so it takes a line of its own.
+after five lines, ending in an ellipsis of its own. The source is clipped after two lines, and
+the titles in it are italic. The second card's ellipsis is bold, in the accent color, with an
+arrow from Material Icons after it. The third card's ellipsis is longer than a line, so it takes
+a line of its own.
 
-A card opens into its essay (1→1). The essay has a two-line byline split with `\n`, an opening
-that wraps at the column's width, a centered pull quote, and the source in full. While an essay
-is open, a toolbar at the top sets its body's size, alignment, bold and italic, line height and
-font, as a text editor's does. The toolbar's icons are Material Icons, a font whose ligatures
-turn an icon's name into the icon. A chosen button stays in the accent color under the pointer,
-since `set_style` removes its hover style.
+A card opens into its essay (1→1). The essay has a two-line byline split with `\n`, with the
+author in a heavier weight and the year smaller and muted. It has an opening that wraps at the
+column's width, a centered pull quote ending in a superscript dagger, and the source in full,
+starting with the same dagger. While an essay is open, a toolbar at the top sets its body's
+size, alignment, bold and italic, line height and font, as a text editor's does. The toolbar's
+icons are Material Icons, a font whose ligatures turn an icon's name into the icon. A chosen
+button stays in the accent color under the pointer, since `set_style` removes its hover style.
 
 The essays are set in Lora, a serif loaded from [`fonts/`](./fonts), with its italic for the
 pull quotes. Titles are the built-in Inter at weight 800, and years are at weight 500. Bylines
@@ -44,7 +47,7 @@ Noto Serif Devanagari is from Google Fonts, under the SIL Open Font License. The
 in [`fonts/OFL-NotoSerifDevanagari.txt`](./fonts/OFL-NotoSerifDevanagari.txt).
 
 Not shown yet: a weight a font doesn't have, a character no font has (which is drawn as a box),
-mixed styles within a text, measuring text, and components within a line of text.
+measuring text, and components within a line of text.
 
 Techniques worth copying are described at the top of each version's source:
 [`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).

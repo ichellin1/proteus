@@ -365,23 +365,34 @@ ellipsis.
   `with_ellipsis` still takes a string. `TextOverflow` is new in v0.4.0, so nothing breaks. An
   ellipsis given as a string takes the text's own style, as CSS's does. The cut can fall inside
   a span, never inside a character.
+- **Decided (2026-11-23), after the user's review: a span can move up or down,** with a
+  vertical alignment, as CSS's `vertical-align` does: `Middle`, centered on the x-height, for an
+  icon beside text; `Super` and `Sub`, the font's superscript and subscript positions; and
+  `Raise`, by logical pixels, or down when negative. parley lays it out, and a moved span makes
+  its line taller if it needs the room, so it never overlaps the lines around it. Moving a span
+  sideways isn't added: without moving the text after it, it overlaps its neighbours, and with
+  it, it's spacing, which a space or letter spacing gives.
 - **Decided (2026-11-23): the essays example shows each case once.** The open essay's byline
   sets the author's weight, and the year smaller and muted. Each card's source has the
-  edition's title in italic. The cards' "read more →" ellipsis is in the accent color, its
-  arrow from Material Icons. The titles keep the plain "…", in the text's own style. A text
+  edition's title in italic. The cards' "read more →" ellipsis is bold, in the accent color, its
+  arrow from Material Icons centered with `Middle`. A pull quote ends in a superscript dagger,
+  and the source in the essay starts with one. `Raise` is covered by tests only. The titles keep the plain "…", in the text's own style. A text
   with both `content` and spans is covered by tests only.
-- [ ] `Span` and `Text::rich` in Rust, `spans` on `TextSpec` in TypeScript, with weight,
+- [x] `Span` and `Text::rich` in Rust, `spans` on `TextSpec` in TypeScript, with weight,
   italic, size, color and family; ellipsis spans in both.
-- [ ] Colored spans baked in color and drawn untinted, apart from the text's alpha; a text
+- [x] Colored spans baked in color and drawn untinted, apart from the text's alpha; a text
   baked again when its color changes.
-- [ ] Tests: each span style, and a span that sets nothing; mixed sizes on one line; a colored
+- [x] A span's vertical alignment, `Middle`, `Super`, `Sub` and `Raise`, in Rust and
+  TypeScript, with tests that each moves the span, that a moved span makes its line taller, and
+  that `Raise` scales with the display.
+- [x] Tests: each span style, and a span that sets nothing; mixed sizes on one line; a colored
   span beside an uncolored one; a text with no colored span baking the same pixels as before; a
   span at half alpha; the text's alpha fading a colored text without a bake; opacity from the
   component and a parent on a colored and a plain text alike; recoloring a colored text; an
   ellipsis cut inside a span, and ellipsis spans; a span in a family still loading; `content`
   and spans together; the TypeScript fields and their bad values.
-- [ ] The essays example's cases, in Rust and TypeScript.
-- [ ] The content guide's text section, with the cost of recoloring a colored text;
+- [x] The essays example's cases, in Rust and TypeScript.
+- [x] The content guide's text section, with the cost of recoloring a colored text;
   ARCHITECTURE's text as a texture; the release notes.
 
 ### Step 8 — Measuring text

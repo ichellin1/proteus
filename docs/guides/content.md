@@ -38,7 +38,9 @@ const title = app.component({
 
 - **Size** is in pixels. The text isn't shrunk to fit the component, or wrapped at its width:
   it wraps at a width of its own.
-- **Color** defaults to white. Its alpha is multiplied by the component's opacity.
+- **Color** defaults to white. Its alpha is multiplied by the component's opacity. Changing it
+  costs nothing, unless the text has a colored span; see
+  [Styles within a text](#styles-within-a-text).
 - **Letter spacing** adds space between characters, in pixels; a negative value tightens it.
 - **The font** is the app's default font, Inter, built into Proteus, bold unless the text sets
   a weight. A text can name another family the app has loaded, a weight and italic; see
@@ -253,6 +255,86 @@ app.setFallbackFonts(["Noto Serif Devanagari"]);
   one color. A black-and-white emoji font, such as Noto Emoji, works as a fallback.
 
 The [essays example](../../examples/essays) draws an essay in Hindi with a fallback font.
+
+### Styles within a text
+
+A text can mix styles, as spans. A span is a part of the text with a weight, italic, size, color,
+family or vertical alignment of its own, and takes whatever it doesn't set from the text.
+
+#### Rust
+
+```rust
+# use proteus_sdk::glam::Vec4;
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Span, Text};
+# let mut app = Proteus::new();
+let ink = Vec4::new(0.14, 0.13, 0.17, 1.0);
+let muted = Vec4::new(0.42, 0.4, 0.46, 1.0);
+let byline = app.component(
+    ComponentSpec::new(QuadState::default()).text(
+        Text::rich(
+            [
+                Span::new("Mary Wollstonecraft").with_weight(600),
+                Span::new("\n1792").with_size(12.0).with_color(muted),
+            ],
+            14.0,
+        )
+        .with_color(ink),
+    ),
+);
+```
+
+#### TypeScript
+
+```ts
+import { colorFrom } from "proteus-sdk";
+
+const byline = app.component({
+  geometry: app.get(card)!.geometry,
+  text: {
+    spans: [
+      { content: "Mary Wollstonecraft", weight: 600 },
+      { content: "\n1792", sizePx: 12, color: colorFrom("#6b6676") },
+    ],
+    sizePx: 14,
+    color: colorFrom("#24212b"),
+  },
+});
+```
+
+- **A span can set** a weight, italic, a size, a color and a family. In Rust, `bold()` is a
+  weight of 700. A span that sets nothing is in the text's own style.
+- **A text is its content or its spans, not both.** In Rust, a text with both draws its spans,
+  with a warning. In TypeScript, `TextSpec` takes `content` or `spans`, and an object with both
+  throws.
+- **Spans of different sizes share a line,** which is as tall as its largest span needs.
+- **A span can move up or down,** as CSS's `vertical-align` does. `Middle` centers it on the
+  text's lowercase letters, which suits an icon: an icon font centers its icons between its
+  ascender and descender, so they sit high beside text otherwise. `Super` and `Sub` are the
+  font's superscript and subscript positions, at the span's own size. `Raise` moves it by
+  logical pixels, up, or down if negative. In TypeScript, `verticalAlign` is `"middle"`,
+  `"super"`, `"sub"` or a number. A moved span makes its line taller if it needs the room.
+- **A span's family counts as the text's.** While a font a span names is still loading, the
+  whole text waits, or is drawn in the default font, as a text in that family would be.
+- **An ellipsis can be spans:** `with_ellipsis_spans` in Rust, and `overflow: { ellipsis: [...] }`
+  in TypeScript. An ellipsis given as a string is in the text's own style, not the style of the
+  span it cuts.
+
+#### Colored spans
+
+A text is drawn as one image, and the GPU tints that image with one color. A text with no
+colored span is baked white, and its color is the tint, so changing the color costs nothing.
+One tint can't draw two colors, so a text with a colored span is baked in its colors, with the
+spans that set none in the text's color. Its alpha, and the component's opacity, are still
+applied as it's drawn, so fading it costs nothing.
+
+Changing the red, green or blue of a text with a colored span bakes it again, which costs about
+as much as setting the text again. Measured natively at a display scale of 2, that's about
+0.03 ms for a short label, 0.12 ms for a line of 80 characters, and 0.6 ms for a five-line
+paragraph, in each frame the color changes. To animate a text's color, give it no colored span.
+
+The [essays example](../../examples/essays) sets a byline's weight, size and color, a source's
+titles in italic, a superscript footnote mark after each pull quote, and a card's ellipsis in
+bold in the accent color, with an icon from an icon font centered on the text.
 
 ### Changing text
 

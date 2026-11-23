@@ -88,8 +88,8 @@ pub use navigation::{
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{
-    BakedText, ClearGlyphCache, FontStatus, Fonts, MissingGlyphs, Text, TextAlign, TextOverflow,
-    WaitsForFont, WhileLoading,
+    BakedColor, BakedText, ClearGlyphCache, FontStatus, Fonts, MissingGlyphs, Span, Text,
+    TextAlign, TextOverflow, VerticalAlign, WaitsForFont, WhileLoading,
 };
 pub use texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 pub use topology::{

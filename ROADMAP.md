@@ -60,7 +60,7 @@ done in PLANNING, when it comes up, and its scope can change then.
 - Multiple fonts: a font per text, several weights of one family, and falling back to another
   font for characters the first doesn't have. The embedded font becomes variable Inter, and
   optional.
-- Inline styles: bold, italic, size and color mixed within one text.
+- Inline styles: bold, italic, size, color and font mixed within one text.
 - Measuring text before it's drawn, which the layout system in v0.6.0 needs.
 - Inline boxes: a component within a line of text, flowing with it as it wraps.
 - A text example, and the demo's Text panel showing each new feature.

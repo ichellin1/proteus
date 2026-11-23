@@ -14,7 +14,10 @@
 //! ```
 //!
 //! Glyphs are rasterized white, with their coverage in the alpha channel, and
-//! drawn in `Text::color`.
+//! drawn in `Text::color`, so the color can change at no cost. A text with a
+//! colored [`Span`] is rasterized in its colors instead, since one image takes
+//! one tint, and only the text's alpha applies as it's drawn. Changing such a
+//! text's color bakes it again. See [`Text::color`].
 //!
 //! During a transition, the text moves and scales with the entity like any
 //! other texture. A label is usually a child entity of the component it
@@ -30,9 +33,9 @@
 //! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
 
 use bevy_ecs::prelude::*;
-use glam::Vec4;
-pub use proteus_render::{TextAlign, TextOverflow};
-use proteus_render::{TextLayout, DEFAULT_ELLIPSIS};
+use glam::{Vec3, Vec4};
+use proteus_render::TextLayout;
+pub use proteus_render::{Span, TextAlign, TextOverflow, VerticalAlign};
 
 // ---------------------------------------------------------------------------
 // Text component
@@ -42,8 +45,9 @@ use proteus_render::{TextLayout, DEFAULT_ELLIPSIS};
 ///
 /// The renderer rasterizes it into the main atlas and adds a [`BakedText`].
 /// Changing a field afterwards has no effect until the `BakedText` is
-/// removed. `proteus-sdk`'s `Handle::set_text` does both. Text larger than an
-/// atlas page is clipped. See the [module docs](self).
+/// removed, apart from [`Text::color`]. `proteus-sdk`'s `Handle::set_text` does
+/// both. Text larger than an atlas page is clipped. See the
+/// [module docs](self).
 ///
 /// A text's lines can wrap at a width, align within that width, take a line
 /// height, and stop at a number of lines, either with an ellipsis or clipped.
@@ -58,14 +62,42 @@ use proteus_render::{TextLayout, DEFAULT_ELLIPSIS};
 ///     .with_max_lines(3)
 ///     .with_ellipsis(" more");
 /// ```
+///
+/// A text can mix styles, as [`Span`]s. Each span takes whatever it doesn't
+/// set from the text:
+///
+/// ```
+/// # use glam::Vec4;
+/// # use proteus_ui::{Span, Text};
+/// let muted = Vec4::new(0.4, 0.4, 0.45, 1.0);
+/// let byline = Text::rich(
+///     [
+///         Span::new("Mary Wollstonecraft").with_weight(600),
+///         Span::new("\n1792").with_size(12.0).with_color(muted),
+///     ],
+///     14.0,
+/// );
+/// ```
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct Text {
-    /// The text. Any character the font has can be used.
+    /// The text. Any character the font has can be used. A text with
+    /// [`Text::spans`] draws them instead, and leaves this empty.
     pub content: String,
+    /// The text's spans, in order, each a part of it with a style of its own.
+    /// Empty, the default, draws [`Text::content`]. A text with both draws the
+    /// spans, with a warning.
+    pub spans: Vec<Span>,
     /// Font size in pixels.
     pub size_px: f32,
     /// The text's color, RGBA. Defaults to opaque white. Its alpha is
     /// multiplied by the entity's opacity.
+    ///
+    /// It's applied as the text is drawn, so it can change at no cost. A text
+    /// with a colored span is baked in its colors instead, with the spans that
+    /// set none in this color, and only its alpha is applied as it's drawn.
+    /// Changing its red, green or blue bakes it again, which costs about as
+    /// much as setting the text again. Fading it with alpha or opacity costs
+    /// nothing.
     pub color: Vec4,
     /// Extra space between characters, in pixels. `0.0`, the default, is the
     /// font's normal spacing; negative values tighten it. See
@@ -88,7 +120,8 @@ pub struct Text {
     /// The most lines shown. `None`, the default, shows them all.
     pub max_lines: Option<u32>,
     /// How text with more lines than `max_lines` ends. It ends with an
-    /// ellipsis, "…" by default, or is clipped. An ellipsis wraps as words do,
+    /// ellipsis, "…" by default, or is clipped. An ellipsis can be spans. One
+    /// given as a string is in the text's own style. An ellipsis wraps as words do,
     /// and the text keeps as much of itself as fits with the ellipsis. An
     /// ellipsis too long to fit in `max_lines` on its own is clipped, with a
     /// warning.
@@ -114,6 +147,7 @@ impl Text {
     pub fn new(content: impl Into<String>, size_px: f32) -> Self {
         Self {
             content: content.into(),
+            spans: Vec::new(),
             size_px,
             color: Vec4::ONE,
             letter_spacing_px: 0.0,
@@ -121,10 +155,19 @@ impl Text {
             align: TextAlign::Start,
             line_height: None,
             max_lines: None,
-            overflow: TextOverflow::Ellipsis(DEFAULT_ELLIPSIS.to_owned()),
+            overflow: TextOverflow::default(),
             family: None,
             weight: None,
             italic: false,
+        }
+    }
+
+    /// Creates text in opaque white made of `spans`, at `size_px` where a span
+    /// sets no size of its own.
+    pub fn rich(spans: impl IntoIterator<Item = Span>, size_px: f32) -> Self {
+        Self {
+            spans: spans.into_iter().collect(),
+            ..Self::new("", size_px)
         }
     }
 
@@ -156,9 +199,17 @@ impl Text {
     }
 
     /// Ends the text in `ellipsis`, such as `" more"`, rather than "…", if it
-    /// has more lines than its maximum.
+    /// has more lines than its maximum. The ellipsis is in the text's own
+    /// style.
     pub fn with_ellipsis(mut self, ellipsis: impl Into<String>) -> Self {
-        self.overflow = TextOverflow::Ellipsis(ellipsis.into());
+        self.overflow = TextOverflow::Ellipsis(vec![Span::new(ellipsis)]);
+        self
+    }
+
+    /// Ends the text in `spans`, such as a link-colored `" more"`, if it has
+    /// more lines than its maximum.
+    pub fn with_ellipsis_spans(mut self, spans: impl IntoIterator<Item = Span>) -> Self {
+        self.overflow = TextOverflow::Ellipsis(spans.into_iter().collect());
         self
     }
 
@@ -190,6 +241,8 @@ impl Text {
     pub fn layout(&self) -> TextLayout<'_> {
         TextLayout {
             content: &self.content,
+            spans: &self.spans,
+            color: self.color,
             size_px: self.size_px,
             letter_spacing_px: self.letter_spacing_px,
             wrap_width: self.wrap_width,
@@ -197,13 +250,35 @@ impl Text {
             line_height: self.line_height,
             max_lines: self.max_lines,
             ellipsis: match &self.overflow {
-                TextOverflow::Ellipsis(e) => Some(e),
+                TextOverflow::Ellipsis(spans) => Some(spans),
                 TextOverflow::Clip => None,
             },
             family: self.family.as_deref(),
             weight: self.weight,
             italic: self.italic,
         }
+    }
+
+    /// Returns whether a span of the text or of its ellipsis sets a color, so
+    /// the text is baked in its colors. See [`Text::color`].
+    pub fn is_colored(&self) -> bool {
+        self.layout().is_colored()
+    }
+
+    /// Returns the color the text's image is tinted with as it's drawn. That's
+    /// its color, or, for a text baked in its colors, white at its alpha.
+    pub fn tint(&self) -> Vec4 {
+        if self.is_colored() {
+            Vec4::ONE.with_w(self.color.w)
+        } else {
+            self.color
+        }
+    }
+
+    /// Returns whether the text, one of its spans or its ellipsis names
+    /// `family`.
+    pub fn uses_family(&self, family: &str) -> bool {
+        self.layout().families().contains(&family)
     }
 
     /// Sets the text's color.
@@ -254,6 +329,13 @@ pub struct BakedText {
     /// The text's size in pixels, which is the size it is drawn at.
     pub pixel_size: [f32; 2],
 }
+
+/// The color a text with a colored span was baked with, added beside its
+/// [`BakedText`]. When the text's red, green or blue no longer match, the
+/// renderer bakes it again, since its spans that set no color are in it. See
+/// [`Text::color`].
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct BakedColor(pub Vec3);
 
 // ---------------------------------------------------------------------------
 // Fonts
@@ -428,6 +510,50 @@ mod tests {
         let dark = Vec4::new(0.1, 0.1, 0.1, 1.0);
         let t = Text::new("Hi", 16.0).with_color(dark);
         assert_eq!(t.color, dark);
+    }
+
+    #[test]
+    fn rich_text_is_its_spans() {
+        let text = Text::rich([Span::new("Hello "), Span::new("world").bold()], 16.0);
+        assert_eq!(text.content, "");
+        assert_eq!(text.spans[1].weight, Some(700));
+        assert_eq!(text.layout().spans.len(), 2);
+    }
+
+    // An ellipsis given as a string is one span that sets nothing, so it's in
+    // the text's own style.
+    #[test]
+    fn an_ellipsis_is_a_string_or_spans() {
+        let text = Text::new("Hi", 16.0).with_ellipsis(" more");
+        assert_eq!(
+            text.overflow,
+            TextOverflow::Ellipsis(vec![Span::new(" more")])
+        );
+        let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        let text = Text::new("Hi", 16.0).with_ellipsis_spans([Span::new(" more").with_color(red)]);
+        assert!(text.is_colored(), "an ellipsis's color counts");
+    }
+
+    // A plain text is tinted in its color. A text with a colored span is
+    // baked in its colors, so it's tinted white at its alpha.
+    #[test]
+    fn a_colored_text_is_tinted_white_at_its_alpha() {
+        let blue = Vec4::new(0.0, 0.0, 1.0, 0.5);
+        assert_eq!(Text::new("Hi", 16.0).with_color(blue).tint(), blue);
+        let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        let colored = Text::rich([Span::new("Hi").with_color(red)], 16.0).with_color(blue);
+        assert_eq!(colored.tint(), Vec4::new(1.0, 1.0, 1.0, 0.5));
+    }
+
+    #[test]
+    fn a_text_uses_its_spans_families() {
+        let text = Text::rich([Span::new("a").with_family("Lora")], 16.0)
+            .with_family("Inter")
+            .with_ellipsis_spans([Span::new("b").with_family("Material Icons")]);
+        assert!(text.uses_family("Inter"));
+        assert!(text.uses_family("Lora"));
+        assert!(text.uses_family("Material Icons"));
+        assert!(!text.uses_family("Crimson Pro"));
     }
 
     #[test]

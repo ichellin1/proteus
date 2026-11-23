@@ -314,7 +314,7 @@ pub(crate) fn push_entity_instances(
 
     // The text, with no shadow or glow: the background already has them.
     if let Some(b) = world.get::<BakedText>(e) {
-        let text_color = world.get::<Text>(e).map(|t| t.color).unwrap_or(Vec4::ONE);
+        let text_color = world.get::<Text>(e).map(Text::tint).unwrap_or(Vec4::ONE);
         let mut text_qs = qs.clone();
         text_qs.color = text_color;
         // Size the text quad to the text, not to the whole entity.

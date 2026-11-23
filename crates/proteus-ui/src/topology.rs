@@ -477,7 +477,7 @@ pub(crate) fn gather_bake_instances(
 
     if let Some(b) = baked_text {
         let mut text_qs = qs.clone();
-        text_qs.color = text.map(|t| t.color).unwrap_or(Vec4::ONE);
+        text_qs.color = text.map(Text::tint).unwrap_or(Vec4::ONE);
         // Sized and squared off like the text overlay in collect.rs.
         text_qs.size = b.pixel_size.into();
         text_qs.corner_radius = 0.0;

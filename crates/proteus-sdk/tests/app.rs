@@ -469,6 +469,55 @@ fn opacity_cascades_to_descendants_through_the_sdk() {
     );
 }
 
+// A text is drawn at its component's opacity times its parents', whether
+// it's baked white and tinted or baked in its colors. A text with a colored
+// span is tinted white at the text's alpha, and a plain one in its color.
+#[test]
+fn opacity_and_the_texts_alpha_apply_to_colored_and_plain_text_alike() {
+    use proteus_render::TextureId;
+    use proteus_sdk::Span;
+    use proteus_ui::{BakedText, TextTextureRef};
+
+    let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+    let blue = Vec4::new(0.0, 0.0, 1.0, 0.5);
+    let plain = Text::new("Plain", 16.0).with_color(blue);
+    let colored =
+        Text::rich([Span::new("Col"), Span::new("ored").with_color(red)], 16.0).with_color(blue);
+    for (text, tint) in [(plain, blue), (colored, Vec4::new(1.0, 1.0, 1.0, 0.5))] {
+        let mut app = Proteus::new();
+        let label = app.component(
+            ComponentSpec::new(quad_at(0.0, 0.0))
+                .opacity(0.5)
+                .text(text),
+        );
+        app.component(
+            ComponentSpec::new(quad_at(0.0, 0.0))
+                .opacity(0.5)
+                .child(label),
+        );
+        // A stand-in for what the host's bake adds, at a size no quad has.
+        app.world_mut().entity_mut(label.id()).insert((
+            BakedText {
+                uv_offset: [0.0, 0.0],
+                uv_scale: [0.1, 0.1],
+                page: 0,
+                pixel_size: [37.0, 19.0],
+            },
+            TextTextureRef(TextureId::default()),
+        ));
+        app.tick(0.0);
+        app.refresh_cascades();
+
+        let instances = proteus_ui::collect_instances(app.world_mut());
+        let drawn = instances
+            .iter()
+            .find(|i| i.size == [37.0, 19.0])
+            .expect("the text is drawn");
+        assert!((drawn.opacity - 0.25).abs() < 1e-6, "{}", drawn.opacity);
+        assert_eq!(drawn.color, tint.to_array());
+    }
+}
+
 #[test]
 fn a_childs_opacity_does_not_affect_its_parent() {
     let mut app = Proteus::new();

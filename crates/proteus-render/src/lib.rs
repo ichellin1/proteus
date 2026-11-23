@@ -27,8 +27,8 @@ pub mod transition_atlas;
 #[cfg(feature = "embedded-font")]
 pub use font_atlas::EMBEDDED_FONT_BYTES;
 pub use font_atlas::{
-    font_family_name, FontAtlas, FontError, RasterizedGlyphs, TextAlign, TextLayout, TextOverflow,
-    DEFAULT_ELLIPSIS, DEFAULT_GLYPH_CACHE_BYTES,
+    default_ellipsis, font_family_name, FontAtlas, FontError, RasterizedGlyphs, Span, TextAlign,
+    TextLayout, TextOverflow, VerticalAlign, DEFAULT_ELLIPSIS, DEFAULT_GLYPH_CACHE_BYTES,
 };
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{
