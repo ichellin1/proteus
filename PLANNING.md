@@ -249,7 +249,7 @@ file of its own in the TypeScript package.
   misspelled. TypeScript's `loadFont` does all three from a promise, with the family named. An
   expected family that never loads or fails keeps its texts hidden; there's no timeout.
 - **Decided (2026-11-19): fonts are queued, and the renderer adds them,** since the renderer
-  lays text out until step 7 moves fonts to where the SDK can reach them. `load_font` checks the
+  lays text out until step 8 moves fonts to where the SDK can reach them. `load_font` checks the
   bytes and returns the family name at once.
 - **Decided (2026-11-19): a text that sets no weight is bold in the embedded Inter,** as the
   static Inter Bold was, and in the font's own weight in an app's own default font, so neither
@@ -314,22 +314,46 @@ them has.
   drawn again when one loads.
 - [x] The essays example's Hindi essay, and the content guide's Fallback section.
 
-### Step 6 — Inline styles
+### Step 6 — Clearer comments
+
+The comments this release added, rewritten to read well: about 1,100 lines in the crates and
+the examples since v0.3.0, and the essays example's README. Many drop their verbs, chain clauses
+with colons and semicolons, or stack asides, so they're hard to read. The guides are left to
+step 12, which rewrites them under the same rules.
+
+- **Decided (2026-11-19): the rules come first,** so the later steps follow them too. A short
+  part of CONTRIBUTING's "Writing comments and docs" says what makes a comment read well, each
+  rule with a before and after from the code, approved before anything is rewritten.
+- **Decided (2026-11-19): a subagent rewrites the comments, given only the rules,** with a
+  fresh context rather than the habits of the session that wrote them. Two models rewrite the
+  same file first, and the human picks the one that does the rest.
+- **Decided (2026-11-23): Sonnet rewrites the comments.** Opus changed more of them, but the
+  human preferred Sonnet's rewrites. Its brief adds what its trial missed: short one-line
+  docs, functions' docs starting with a verb, and claims kept exactly as wide as the code.
+- **Decided (2026-11-19): only comments change.** A script checks that every changed line is a
+  comment, and each doc comment keeps its one-sentence first line and its links.
+- [x] The rules in CONTRIBUTING, approved.
+- [x] Two models' rewrites of `font_atlas.rs`, and the human's pick: Sonnet.
+- [ ] Every comment in scope rewritten, a few files at a time, each batch reviewed.
+- [ ] fmt, Clippy, docs, `check-comments` and the tests pass, and the script finds only
+  comment lines changed.
+
+### Step 7 — Inline styles
 
 Spans with their own weight, style, size and color, in Rust and TypeScript, and spans in an
 ellipsis.
 
-### Step 7 — Measuring text
+### Step 8 — Measuring text
 
 `measure_text`, in Rust and TypeScript, returning the same size the text is baked at.
 
-### Step 8 — Inline boxes
+### Step 9 — Inline boxes
 
 A space kept in a line of text for a component, which sits there as a child of the text's
 component, flowing with the text as it wraps, in Rust and TypeScript; and a component in an
 ellipsis.
 
-### Step 9 — Images as raw pixels
+### Step 10 — Images as raw pixels
 
 An image given as RGBA pixels and their size, rather than as a PNG or JPEG file, so an app that
 draws its own pixels, such as on a browser canvas, skips encoding a file for Proteus to decode
@@ -357,12 +381,12 @@ and premultiplying on upload.
 - [ ] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
   baking, and the release notes.
 
-### Step 10 — The demo's Text panel
+### Step 11 — The demo's Text panel
 
 The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
 number of lines, fonts and weights, fallback, mixed styles and inline boxes.
 
-### Step 11 — Docs
+### Step 12 — Docs
 
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.
