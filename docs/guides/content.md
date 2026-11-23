@@ -106,17 +106,22 @@ The [essays example](../../examples/essays) shows each of these once, in both la
 
 ### Fonts
 
-An app loads a font from its file's bytes, and texts name its family to be drawn in it. Loading
-a second file of the same family, such as its italic, adds it to the family.
+An app loads a font from its file's bytes, and texts name its family to be drawn in it. There's
+no name to give when loading: the file is the font, and `load_font` returns the family name
+written inside it. Loading a second file of the same family, such as its italic, adds it to the
+family.
 
 #### Rust
 
-```rust
+```rust,no_run
 # use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text};
 # let mut app = Proteus::new();
-# let bytes: Vec<u8> = Vec::new();
-// `bytes` holds a TTF or OTF file, such as from `std::fs::read`.
+// The font is its file: here, Lora, a TTF file read at run time.
+let bytes = std::fs::read("fonts/Lora-Variable.ttf")?;
+// Or built into the program, which works on the web too:
+// let bytes = include_bytes!("fonts/Lora-Variable.ttf");
 match app.load_font(bytes) {
+    // `family` is "Lora", the name inside the file.
     Ok(family) => {
         app.component(ComponentSpec::new(QuadState::default()).text(
             Text::new("Chapter one", 28.0)
@@ -127,6 +132,7 @@ match app.load_font(bytes) {
     }
     Err(e) => eprintln!("can't read the font: {e}"),
 }
+# Ok::<(), std::io::Error>(())
 ```
 
 #### TypeScript
@@ -152,15 +158,37 @@ family is coming, so its texts aren't drawn in one font and then another:
 
 #### Rust
 
+Tell Proteus the family is coming, and start the download, in `setup`. Load the font when it
+arrives:
+
 ```rust
-# use proteus_sdk::{Proteus, WhileLoading};
-# let mut app = Proteus::new();
-app.expect_font("Lora", WhileLoading::Hide);
-// Later, once the download has finished, or failed:
-# let downloaded: Option<Vec<u8>> = None;
-let loaded = downloaded.map(|bytes| app.load_font(bytes));
-if !matches!(loaded, Some(Ok(_))) {
-    app.font_failed("Lora");
+use proteus_runtime::{App, FetchId, Frame};
+use proteus_sdk::WhileLoading;
+
+struct Reader {
+    lora: Option<FetchId>,
+}
+
+impl App for Reader {
+    fn setup(&mut self, f: &mut Frame) {
+        // The family is named here, before its file arrives, so its texts wait for it.
+        f.proteus.expect_font("Lora", WhileLoading::Hide);
+        self.lora = Some(f.fetch_async("https://example.com/fonts/Lora-Variable.ttf"));
+    }
+
+    fn update(&mut self, f: &mut Frame, _dt: f32) {
+        for (id, bytes) in f.poll_fetches() {
+            if Some(id) != self.lora {
+                continue;
+            }
+            // `None` means the download failed; the host logs why.
+            let loaded = bytes.map(|bytes| f.proteus.load_font(bytes));
+            if !matches!(loaded, Some(Ok(_))) {
+                // Its texts stop waiting, and are drawn in the default font.
+                f.proteus.font_failed("Lora");
+            }
+        }
+    }
 }
 ```
 
@@ -190,14 +218,16 @@ the font's missing-glyph box, a rectangle, with a warning naming it.
 
 #### Rust
 
-```rust
+```rust,no_run
 # use proteus_sdk::Proteus;
 # let mut app = Proteus::new();
-# let devanagari: Vec<u8> = Vec::new();
-// `devanagari` holds Noto Serif Devanagari, a TTF file.
-if app.load_font(devanagari).is_ok() {
-    app.set_fallback_fonts(["Noto Serif Devanagari"]);
+// Noto Serif Devanagari, a TTF file read at run time.
+let devanagari = std::fs::read("fonts/NotoSerifDevanagari-Variable.ttf")?;
+// The family name inside the file is the one to list.
+if let Ok(family) = app.load_font(devanagari) {
+    app.set_fallback_fonts([family]);
 }
+# Ok::<(), std::io::Error>(())
 ```
 
 #### TypeScript
@@ -256,14 +286,15 @@ from the component is stretched to fit, unless it is cropped.
 
 #### Rust
 
-```rust
+```rust,no_run
 # use proteus_sdk::{ComponentSpec, Image, Proteus, QuadState};
 # let mut app = Proteus::new();
-# let bytes: Vec<u8> = Vec::new();
-// `bytes` holds a PNG or JPEG file, such as from `std::fs::read`.
+// A PNG or JPEG file, read at run time.
+let bytes = std::fs::read("photo.jpg")?;
 let photo = app.component(
     ComponentSpec::new(QuadState::default()).image(Image::new(bytes).with_max_side(800)),
 );
+# Ok::<(), std::io::Error>(())
 ```
 
 #### TypeScript
@@ -328,19 +359,20 @@ bytes with `load_texture`, or from raw pixels with `bake_texture`:
 
 #### Rust
 
-```rust
+```rust,no_run
 # use proteus_sdk::{ComponentSpec, Proteus, QuadState, TextureRequest};
 # let mut app = Proteus::new();
 # let (left, right) = (
 #     app.component(ComponentSpec::new(QuadState::default())),
 #     app.component(ComponentSpec::new(QuadState::default())),
 # );
-# let bytes: Vec<u8> = Vec::new();
+// A PNG or JPEG file, read at run time.
+let bytes = std::fs::read("photo.jpg")?;
 if let Some(texture) = app.load_texture(&bytes, TextureRequest::default()) {
     left.set_texture(&mut app, texture)?;
     right.set_texture(&mut app, texture)?;
 }
-# Ok::<(), proteus_sdk::HandleError>(())
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 #### TypeScript

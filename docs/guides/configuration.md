@@ -134,16 +134,19 @@ unless the app gives its own. Other fonts are loaded while the app runs; see
 
 #### Rust
 
-```rust
+```rust,no_run
 # use proteus_runtime::ProteusConfig;
 # use proteus_runtime::config::FontSource;
-# let bytes: Vec<u8> = Vec::new();
 let mut config = ProteusConfig::web();
-// `bytes` holds a TTF or OTF file, such as from `std::fs::read`.
+// The font is its file: here, Lora, a TTF file read at run time.
+let bytes = std::fs::read("fonts/Lora-Variable.ttf")?;
+// Or built into the program, which works on the web too:
+// let bytes = include_bytes!("fonts/Lora-Variable.ttf");
 match FontSource::from_bytes(bytes) {
     Ok(font) => config.text.default_font = font,
     Err(e) => eprintln!("can't read the font: {e}"),
 }
+# Ok::<(), std::io::Error>(())
 ```
 
 #### TypeScript
