@@ -181,6 +181,11 @@ Not yet placed in a release. Unordered within each area.
   the whole app.
 - Color emoji, and other fonts with colored glyphs. Text is baked as white with coverage in
   alpha, tinted by its color, apart from colored spans.
+- Span colors on the GPU, so a span's color, or the color of a text with colored spans, can
+  change or animate without baking the text again. Each pixel would store its span rather than
+  its color, and the text's span colors would go to the GPU with it. v0.4.0 bakes colored spans
+  into the text's image, and bakes it again when they change. An edge case, so an app would
+  choose it in its config, keeping baked colors as the default.
 
 ### Images, textures and memory
 
