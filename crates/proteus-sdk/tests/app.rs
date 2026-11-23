@@ -666,6 +666,60 @@ fn hover_style_resolves_and_applies() {
     assert_eq!(data.geometry.color, Vec4::new(0.0, 1.0, 0.0, 1.0));
 }
 
+// A style changed while the app runs: removed while it shows, the component
+// goes back to its declared geometry under the pointer; set again, it shows;
+// and changed while it shows, the new one applies.
+#[test]
+fn set_style_changes_a_style_while_it_shows() {
+    let mut app = Proteus::new();
+    let grey = Vec4::new(0.5, 0.5, 0.5, 1.0);
+    let violet = Vec4::new(0.5, 0.3, 0.9, 1.0);
+    let base = quad_at(100.0, 100.0);
+    let button = app.component(ComponentSpec::new(base.clone()).hover(StyleOverride {
+        color: Some(grey),
+        ..Default::default()
+    }));
+    let color = |app: &Proteus| app.get(button).unwrap().geometry.color;
+    app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
+    app.tick(1.0);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(color(&app), grey, "hovered");
+
+    button
+        .set_style(&mut app, proteus_sdk::InteractionStateKind::Hover, None)
+        .unwrap();
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(color(&app), base.color, "no hover style: as declared");
+
+    let style = StyleOverride {
+        color: Some(violet),
+        ..Default::default()
+    };
+    button
+        .set_style(
+            &mut app,
+            proteus_sdk::InteractionStateKind::Hover,
+            Some(style),
+        )
+        .unwrap();
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(color(&app), violet, "the new style, while still hovered");
+
+    // Away and back: the style set is the one hover uses.
+    app.pointer_moved(Some(Vec2::new(900.0, 900.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(color(&app), base.color);
+    app.pointer_moved(Some(Vec2::new(100.0, 100.0)));
+    app.tick(1.0);
+    app.tick(1.0);
+    assert_eq!(color(&app), violet);
+}
+
 // Hovering a component again while its glow is still fading back from the
 // last hover: the glow it rests at is still the one it had before any hover,
 // not the half-faded one, so leaving it fades the glow all the way out.

@@ -1,0 +1,13 @@
+[package]
+name = "proteus-test-fonts"
+description = "Fonts for Proteus's own tests: families besides the built-in Inter, a real italic face, and a script Inter lacks. Never published; the crates that use it take it as a dev-dependency only."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+# The code; the fonts are under the SIL Open Font License, in fonts/.
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]

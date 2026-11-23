@@ -781,6 +781,44 @@ impl Handle {
         Ok(())
     }
 
+    /// Sets this component's interaction style for `state`, such as its hover
+    /// style, or removes it with `None`, while the app runs. If the component
+    /// is in that state now, it changes to the new style over its style
+    /// timing, as it would entering the state. A button that shows it's
+    /// chosen, for example, removes its hover style, so the pointer leaves it
+    /// as it is, and sets it again when it's no longer chosen.
+    /// [`InteractionStateKind::Default`] has no style: it's the declared
+    /// geometry, so setting it does nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`HandleError::EntityNotFound`] if this component no longer exists.
+    ///
+    /// [`InteractionStateKind::Default`]: proteus_ui::InteractionStateKind::Default
+    pub fn set_style(
+        &self,
+        app: &mut Proteus,
+        state: proteus_ui::InteractionStateKind,
+        style: Option<proteus_ui::StyleOverride>,
+    ) -> Result<(), HandleError> {
+        let mut entity = entity_mut(app, self.0, "set_style")?;
+        match entity.get_mut::<proteus_ui::InteractionDef>() {
+            Some(mut def) => def.set_style(state, style),
+            None => {
+                let mut def = proteus_ui::InteractionDef::default();
+                def.set_style(state, style);
+                entity.insert(def);
+            }
+        }
+        let showing = entity
+            .get::<proteus_ui::InteractionState>()
+            .is_some_and(|s| s.current == state);
+        if showing {
+            entity.insert(proteus_ui::Restyle);
+        }
+        Ok(())
+    }
+
     /// Sets whether this component accepts input while transitioning. `None`
     /// restores the default, where a transitioning component ignores input.
     /// See [`ComponentSpec::transition_interaction`](crate::ComponentSpec::transition_interaction).

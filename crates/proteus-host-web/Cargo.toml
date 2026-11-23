@@ -15,6 +15,12 @@ readme = "README.md"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["embedded-font"]
+# Inter, built in as the default font: see proteus-runtime's feature. The
+# TypeScript SDK's build leaves it out, and fetches the font as a file.
+embedded-font = ["proteus-runtime/embedded-font"]
+
 [dependencies]
 # proteus-runtime for running a Rust app (`run`); it re-exports wgpu and
 # glam at the versions it builds against. proteus-sdk-web for running a

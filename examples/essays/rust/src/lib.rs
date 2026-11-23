@@ -1,20 +1,49 @@
 //! A reading app, the same app as the TypeScript essays example.
 //!
-//! A row of cards, one for each of three public-domain essays. Each card's
+//! A row of cards, one for each of four public-domain essays. Each card's
 //! year is aligned to the end of its column; its title wraps onto at most two
 //! lines, ending in "…"; its opening is spaced at a line height of 1.45 and
 //! stops after five lines, ending in an ellipsis of the card's own; and its
 //! source is clipped after two lines. A card opens into its essay (1→1), whose
 //! byline is two lines split with a `\n`, whose opening wraps at the column's
-//! width, and whose pull quote is centered. While an essay is open, the
-//! buttons at the top change its alignment and line height.
+//! width, and whose pull quote is centered. While an essay is open, a
+//! toolbar at the top sets its body's size, alignment, bold and italic, line
+//! height and font, as a text editor's does.
 //!
 //! The essays are Mary Wollstonecraft's "A Vindication of the Rights of
 //! Woman" (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis
 //! Stevenson's "An Apology for Idlers" (1877), from their Project Gutenberg
-//! editions, each cited where it's shown.
+//! editions, and Bharatendu Harishchandra's "भारतवर्ष की उन्नति कैसे हो सकती
+//! है?" ("How can India progress?", 1884), in Hindi, from Hindi Wikisource,
+//! each cited where it's shown. None of the essays' fonts has Hindi's script,
+//! Devanagari: it's drawn by the app's fallback font, Noto Serif Devanagari.
+//!
+//! The essays are set in Lora, a serif built in from `fonts/`, with its
+//! italic for the pull quotes; titles are Inter at 800 and years at 500, from
+//! the built-in variable font; bylines are Inter slanted, since Inter's
+//! italic isn't loaded; and the buttons and sources are Inter with no weight
+//! set, bold. The toolbar's icons are Material Icons, a font too, and its
+//! last button sets the body in Crimson Pro, downloaded when it's first
+//! chosen.
 //!
 //! Techniques worth copying:
+//!   - A font's file is loaded once with `load_font`, which returns its
+//!     family's name, and texts name the family. Lora's italic is loaded the
+//!     same way, and joins its family.
+//!   - A font that's downloaded later is expected first, with `expect_font`.
+//!     Crimson Pro is expected with `WhileLoading::DefaultFont`, so its button
+//!     and the body show the default font until it arrives, then swap to it;
+//!     `update` fetches it with the host's `fetch_async`, then calls
+//!     `load_font`, or `font_failed` if the fetch fails.
+//!   - A fallback font is named once, for the whole app, with
+//!     `set_fallback_fonts`: a character a text's font lacks is looked for
+//!     there, then in the default font. Only the fonts the text needs are
+//!     listed, so what's drawn is known.
+//!   - An icon font's ligatures turn a name, such as "format_bold", into its
+//!     icon: the toolbar's icons are text in Material Icons.
+//!   - A chosen button, or one toggled on, has its hover style removed with
+//!     `set_style`, so it stays in the accent color under the pointer, and
+//!     gets it back when it's no longer chosen.
 //!   - Text is placed by its component's anchor: with an anchor of (0, 0),
 //!     the text's top-left corner is at the component's position. A card's
 //!     texts are small children, placed from the card's top-left corner.
@@ -29,17 +58,19 @@
 //!   - Changing a text's alignment or line height means setting it again:
 //!     `set_text` replaces it, and the host lays it out again.
 //!
-//! Not shown here: fonts and weights, other scripts, mixed styles within a
-//! text, measuring text, and components within a line of text.
+//! Not shown here: a weight a font doesn't have, a character no font has,
+//! drawn as a box, mixed styles within a text, measuring text, and components
+//! within a line of text.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-use proteus_runtime::{App, Frame, ProteusConfig};
+use proteus_runtime::{App, FetchId, Frame, ProteusConfig};
 use proteus_sdk::glam::{Vec2, Vec3, Vec4};
 use proteus_sdk::{
-    ComponentSpec, Easing, Handle, InputDevices, Proteus, QuadState, StyleOverride, Text,
-    TextAlign, TextOverflow, TransitionChannel, TransitionConfig,
+    ComponentSpec, Easing, Handle, InputDevices, InteractionStateKind, Proteus, QuadState,
+    StyleOverride, Text, TextAlign, TextOverflow, TransitionChannel, TransitionConfig,
+    WhileLoading,
 };
 
 const BACKGROUND: Vec4 = rgb(0x1d1b26);
@@ -82,7 +113,7 @@ struct Essay {
     source: &'static str,
 }
 
-const ESSAYS: [Essay; 3] = [
+const ESSAYS: [Essay; 4] = [
     Essay {
         year: "1792",
         title: "A Vindication of the Rights of Woman: with Strictures on Political and \
@@ -129,11 +160,47 @@ const ESSAYS: [Essay; 3] = [
         source: "From \u{201c}An Apology for Idlers\u{201d} by Robert Louis Stevenson (1877), \
             in \u{201c}Virginibus Puerisque\u{201d}, Project Gutenberg eBook #386. Public domain.",
     },
+    Essay {
+        year: "1884",
+        title: "भारतवर्ष की उन्नति कैसे हो सकती है?",
+        author: "भारतेन्दु हरिश्चंद्र",
+        // In Hindi, which none of the essays' fonts has: every character is
+        // drawn by the fallback font, Noto Serif Devanagari.
+        opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
+        more: " आगे पढ़ें",
+        quote: "\u{201c}हमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u{201d}",
+        source: "From \u{201c}भारतवर्ष की उन्नति कैसे हो सकती है?\u{201d} by Bharatendu Harishchandra (1884), in \u{201c}Bharatendu Samagra\u{201d} (1987), Hindi Wikisource. Public domain.",
+    },
 ];
 
-const CARD_SIZE: Vec2 = Vec2::new(320.0, 300.0);
+/// The family the essays are set in, and its two files, from Google Fonts
+/// under the SIL Open Font License; see `fonts/OFL-Lora.txt`.
+const LORA: &str = "Lora";
+const LORA_UPRIGHT: &[u8] = include_bytes!("../../fonts/Lora-Variable.ttf");
+const LORA_ITALIC: &[u8] = include_bytes!("../../fonts/Lora-Italic-Variable.ttf");
+
+/// The second family the body can be set in, from Google Fonts under the SIL
+/// Open Font License; see `fonts/OFL-CrimsonPro.txt`. Its file isn't loaded until
+/// it's first chosen, from the app's assets: `fonts/` beside `rust/`. It has
+/// no italic file, so its italic is slanted.
+const CRIMSON: &str = "Crimson Pro";
+const CRIMSON_FILE: &str = "fonts/CrimsonPro-Variable.ttf";
+
+/// The toolbar's icons: Google's Material Icons, a font whose ligatures turn
+/// an icon's name, such as "format_bold", into its glyph. Apache License 2.0;
+/// see `fonts/LICENSE-MaterialIcons.txt`.
+const ICONS: &str = "Material Icons";
+
+/// The fallback font, for the Hindi essay: Noto Serif Devanagari, from Google
+/// Fonts under the SIL Open Font License; see
+/// `fonts/OFL-NotoSerifDevanagari.txt`.
+const DEVANAGARI: &str = "Noto Serif Devanagari";
+const DEVANAGARI_FONT: &[u8] = include_bytes!("../../fonts/NotoSerifDevanagari-Variable.ttf");
+const ICONS_FONT: &[u8] = include_bytes!("../../fonts/MaterialIcons-Regular.ttf");
+
+const CARD_SIZE: Vec2 = Vec2::new(245.0, 300.0);
 const CARD_Y: f32 = -20.0;
-const CARD_SPACING: f32 = 350.0;
+const CARD_SPACING: f32 = 265.0;
 const CARD_PADDING: f32 = 20.0;
 const CARD_COLUMN: f32 = CARD_SIZE.x - 2.0 * CARD_PADDING;
 
@@ -142,31 +209,33 @@ const PANEL_Y: f32 = -40.0;
 const PANEL_PADDING: f32 = 40.0;
 const PANEL_COLUMN: f32 = PANEL_SIZE.x - 2.0 * PANEL_PADDING;
 
-/// How far the title sits from the window's left edge, and the settings bar
-/// from its right edge.
+/// How far the title sits from the window's left edge, and the toolbar from
+/// its right edge.
 const MARGIN: f32 = 40.0;
 const TITLE_TOP: f32 = 362.0;
-/// The middle of the title's line, where the settings bar is centered.
+/// The middle of the title's line, where the toolbar is centered.
 const BAR_Y: f32 = TITLE_TOP - 19.0;
-const SETTING_SIZE: Vec2 = Vec2::new(64.0, 30.0);
-/// From one setting's button to the next.
-const SETTING_STEP: f32 = SETTING_SIZE.x + 6.0;
-/// The widths of the settings' labels, and the gap between the two settings.
-const ALIGN_LABEL: f32 = 50.0;
-const LINE_HEIGHT_LABEL: f32 = 90.0;
-const SETTINGS_GAP: f32 = 24.0;
-/// The settings bar's width: each label and its three buttons, and the gap.
-const BAR_WIDTH: f32 =
-    ALIGN_LABEL + LINE_HEIGHT_LABEL + 2.0 * (2.0 * SETTING_STEP + SETTING_SIZE.x) + SETTINGS_GAP;
+const TOOL_SIZE: Vec2 = Vec2::new(34.0, 30.0);
+/// The gap between a group's buttons, and between groups.
+const TOOL_GAP: f32 = 4.0;
+const GROUP_GAP: f32 = 14.0;
 
-/// The alignments the body can take, with their buttons' labels.
+/// The body's sizes: the icon's size on its button, and the body's.
+const SIZES: [(f32, f32); 3] = [(14.0, 15.0), (18.0, 17.0), (22.0, 20.0)];
+/// The body's alignments, with their icons.
 const ALIGNS: [(&str, TextAlign); 3] = [
-    ("Start", TextAlign::Start),
-    ("Center", TextAlign::Center),
-    ("End", TextAlign::End),
+    ("format_align_left", TextAlign::Start),
+    ("format_align_center", TextAlign::Center),
+    ("format_align_right", TextAlign::End),
 ];
-/// The line heights the body can take.
-const LINE_HEIGHTS: [f32; 3] = [1.2, 1.5, 1.8];
+/// The body's line heights, with their icons.
+const SPACINGS: [(&str, f32); 3] = [
+    ("density_small", 1.2),
+    ("density_medium", 1.5),
+    ("density_large", 1.8),
+];
+/// The families the body can be set in.
+const FAMILIES: [&str; 2] = [LORA, CRIMSON];
 
 /// The engine settings both entry points use.
 pub fn config() -> ProteusConfig {
@@ -176,13 +245,37 @@ pub fn config() -> ProteusConfig {
     config
 }
 
-/// The essays app. It does all its work in callbacks, set up in `setup`.
+/// The essays app. Its callbacks do most of its work; `update` downloads
+/// Crimson Pro once it's first chosen.
 #[derive(Default)]
-pub struct Essays;
+pub struct Essays {
+    ui: Option<Rc<Ui>>,
+    /// Crimson Pro's download, once started.
+    crimson: Option<FetchId>,
+}
 
 impl App for Essays {
     fn setup(&mut self, f: &mut Frame) {
-        build(f.proteus, f.viewport.logical_size.x);
+        self.ui = Some(build(f.proteus, f.viewport.logical_size.x));
+    }
+
+    fn update(&mut self, f: &mut Frame, _dt: f32) {
+        let Some(ui) = &self.ui else {
+            return;
+        };
+        if ui.crimson_wanted.get() && self.crimson.is_none() {
+            self.crimson = Some(f.fetch_async(CRIMSON_FILE));
+        }
+        for (id, bytes) in f.poll_fetches() {
+            if Some(id) != self.crimson {
+                continue;
+            }
+            // Loaded, its texts are drawn in it; failed, in the default font.
+            let loaded = bytes.map(|bytes| f.proteus.load_font(bytes));
+            if !matches!(loaded, Some(Ok(_))) {
+                f.proteus.font_failed(CRIMSON);
+            }
+        }
     }
 }
 
@@ -231,6 +324,7 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
             left,
             top,
             Text::new(essay.year, 13.0)
+                .with_weight(500)
                 .with_color(MUTED)
                 .with_wrap_width(CARD_COLUMN)
                 .with_align(TextAlign::End),
@@ -240,15 +334,19 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
             left,
             top - 24.0,
             Text::new(essay.title, 22.0)
+                .with_weight(800)
                 .with_color(INK)
                 .with_wrap_width(CARD_COLUMN)
                 .with_max_lines(2),
         ),
         // At most five lines, ending in the card's own ellipsis.
+        // Below two lines of title in any of the scripts, Hindi's being the
+        // tallest.
         text_at(
             left,
-            top - 86.0,
+            top - 104.0,
             Text::new(essay.opening, 15.0)
+                .with_family(LORA)
                 .with_color(INK)
                 .with_wrap_width(CARD_COLUMN)
                 .with_line_height(1.45)
@@ -292,11 +390,37 @@ impl EssayView {
     }
 }
 
-/// How the body is set: the settings bar's choices.
+/// How the body is set: the toolbar's choices.
 #[derive(Clone, Copy, PartialEq)]
 struct Settings {
+    size: usize,
     align: usize,
-    line_height: usize,
+    bold: bool,
+    italic: bool,
+    spacing: usize,
+    family: usize,
+}
+
+/// The toolbar's buttons, by group.
+struct Toolbar {
+    sizes: Vec<Handle>,
+    aligns: Vec<Handle>,
+    bold: Handle,
+    italic: Handle,
+    spacings: Vec<Handle>,
+    families: Vec<Handle>,
+}
+
+impl Toolbar {
+    fn all(&self) -> Vec<Handle> {
+        let mut all = Vec::new();
+        all.extend(&self.sizes);
+        all.extend(&self.aligns);
+        all.extend([self.bold, self.italic]);
+        all.extend(&self.spacings);
+        all.extend(&self.families);
+        all
+    }
 }
 
 /// What the callbacks share.
@@ -305,25 +429,32 @@ struct Ui {
     card_texts: Vec<Vec<Handle>>,
     panel: Handle,
     essay: EssayView,
-    /// The settings bar's labels and buttons, shown while an essay is open.
-    bar: Vec<Handle>,
-    align_buttons: Vec<Handle>,
-    line_height_buttons: Vec<Handle>,
+    /// The toolbar, shown while an essay is open.
+    tools: Toolbar,
     channel: TransitionChannel,
     /// The essay open, or opening.
     open: Cell<Option<usize>>,
     settings: Cell<Settings>,
+    /// Whether Crimson Pro has been chosen, so `update` downloads it.
+    crimson_wanted: Cell<bool>,
 }
 
 impl Ui {
-    /// The opening of essay `i`, set as the settings bar says.
+    /// The opening of essay `i`, set as the toolbar says.
     fn body(&self, i: usize) -> Text {
         let settings = self.settings.get();
-        Text::new(ESSAYS[i].opening, 17.0)
+        let text = Text::new(ESSAYS[i].opening, SIZES[settings.size].1)
+            .with_family(FAMILIES[settings.family])
+            .with_weight(if settings.bold { 700 } else { 400 })
             .with_color(INK)
             .with_wrap_width(PANEL_COLUMN)
             .with_align(ALIGNS[settings.align].1)
-            .with_line_height(LINE_HEIGHTS[settings.line_height])
+            .with_line_height(SPACINGS[settings.spacing].1);
+        if settings.italic {
+            text.italic()
+        } else {
+            text
+        }
     }
 
     /// Turns card `i` into the essay panel.
@@ -337,6 +468,7 @@ impl Ui {
         let _ = view.title.set_text(
             app,
             Text::new(essay.title, 30.0)
+                .with_weight(800)
                 .with_color(INK)
                 .with_wrap_width(PANEL_COLUMN),
         );
@@ -344,11 +476,13 @@ impl Ui {
         let byline = format!("{}\n{}", essay.author, essay.year);
         let _ = view
             .byline
-            .set_text(app, Text::new(byline, 14.0).with_color(MUTED));
+            .set_text(app, Text::new(byline, 14.0).with_color(MUTED).italic());
         let _ = view.body.set_text(app, self.body(i));
         let _ = view.quote.set_text(
             app,
             Text::new(essay.quote, 20.0)
+                .with_family(LORA)
+                .italic()
                 .with_color(ACCENT)
                 .with_wrap_width(600.0)
                 .with_align(TextAlign::Center),
@@ -369,18 +503,33 @@ impl Ui {
             return;
         };
         set_visible(app, &self.essay.all(), false);
-        set_visible(app, &self.bar, false);
+        set_visible(app, &self.tools.all(), false);
         self.channel.set(app, self.cards[i], self.panel, OPEN, true);
     }
 
-    /// Applies the settings bar's choices to its buttons and the open body.
+    /// Applies the toolbar's choices to its buttons and the open body.
     fn apply(&self, app: &mut Proteus, settings: Settings) {
         self.settings.set(settings);
-        select(app, &self.align_buttons, settings.align);
-        select(app, &self.line_height_buttons, settings.line_height);
+        let tools = &self.tools;
+        select(app, &tools.sizes, settings.size);
+        select(app, &tools.aligns, settings.align);
+        mark(app, tools.bold, settings.bold);
+        mark(app, tools.italic, settings.italic);
+        select(app, &tools.spacings, settings.spacing);
+        select(app, &tools.families, settings.family);
+        if FAMILIES[settings.family] == CRIMSON {
+            self.crimson_wanted.set(true);
+        }
         if let Some(i) = self.open.get() {
             let _ = self.essay.body.set_text(app, self.body(i));
         }
+    }
+
+    /// Changes the settings with `change`, and applies them.
+    fn change(&self, app: &mut Proteus, change: impl FnOnce(&mut Settings)) {
+        let mut settings = self.settings.get();
+        change(&mut settings);
+        self.apply(app, settings);
     }
 }
 
@@ -390,75 +539,120 @@ fn set_visible(app: &mut Proteus, handles: &[Handle], visible: bool) {
     }
 }
 
-/// A setting's button: shown in the accent color, and left alone by the
-/// pointer, while disabled, which is how the chosen one is marked.
-fn setting_button(position: Vec3, label: &str) -> ComponentSpec {
-    button(position, SETTING_SIZE, label).disabled(StyleOverride {
-        color: Some(ACCENT),
+/// A toolbar button at `x`, showing `label`: an icon, or "Aa" in a family.
+fn tool(x: f32, label: Text) -> ComponentSpec {
+    ComponentSpec::new(QuadState {
+        position: Vec3::new(x, BAR_Y, 0.0),
+        size: TOOL_SIZE,
+        corner_radius: 8.0,
+        color: BUTTON,
         ..Default::default()
     })
+    .hover(StyleOverride {
+        color: Some(BUTTON_HOVER),
+        ..Default::default()
+    })
+    .pressed(StyleOverride {
+        scale: Some(0.94),
+        ..Default::default()
+    })
+    .visible(false)
+    .text(label.with_color(WHITE))
 }
 
-/// Marks the `chosen` button of a row by disabling it, so it shows the accent
-/// color, and hovering or clicking it does nothing, since it's chosen
-/// already. The rest are enabled.
+/// A toolbar button's label, from its index in its group.
+type Label = fn(usize) -> Text;
+
+/// An icon from Material Icons, by name, at `size` pixels.
+fn icon(name: &str, size: f32) -> Text {
+    Text::new(name, size).with_family(ICONS)
+}
+
+/// Marks `button` as on, in the accent color, or off. An on button has no
+/// hover style, so the pointer leaves it as it is; off, it gets it back.
+fn mark(app: &mut Proteus, button: Handle, on: bool) {
+    let hover = (!on).then_some(StyleOverride {
+        color: Some(BUTTON_HOVER),
+        ..Default::default()
+    });
+    let _ = button.set_style(app, InteractionStateKind::Hover, hover);
+    if let Some(mut geometry) = button.declared_geometry(app) {
+        geometry.color = if on { ACCENT } else { BUTTON };
+        let _ = button.set_declared_geometry(app, geometry);
+    }
+}
+
+/// Marks the `chosen` button of a group as on, and the rest as off.
 fn select(app: &mut Proteus, buttons: &[Handle], chosen: usize) {
-    for (i, button) in buttons.iter().enumerate() {
-        let _ = button.set_disabled(app, i == chosen);
+    for (i, &button) in buttons.iter().enumerate() {
+        mark(app, button, i == chosen);
     }
 }
 
 /// Creates the app's components, for a window `width` logical pixels wide,
 /// and its callbacks, which do the rest.
 fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
-    // The title sits a margin from the window's left edge, and the settings
-    // bar, on the title's line, a margin from its right edge.
+    // Lora, upright and italic: both files are one family. The icons are a
+    // font too. Crimson Pro is coming, once it's chosen: until then, its
+    // texts are drawn in the default font, and again in it once it loads.
+    for font in [LORA_UPRIGHT, LORA_ITALIC, ICONS_FONT, DEVANAGARI_FONT] {
+        app.load_font(font).expect("the example's fonts are valid");
+    }
+    // Hindi is in none of the other fonts: a character a text's font lacks
+    // is looked for in the fallback, then in the default font.
+    app.set_fallback_fonts([DEVANAGARI]);
+    app.expect_font(CRIMSON, WhileLoading::DefaultFont);
+
+    // The title sits a margin from the window's left edge, and the toolbar,
+    // on the title's line, a margin from its right edge.
     app.component(text_at(
         -width / 2.0 + MARGIN,
         TITLE_TOP,
         Text::new("Essays", 30.0).with_color(WHITE),
     ));
 
-    // The settings bar: a label, then its buttons, for each setting. Hidden
-    // until an essay is open, since it changes only the essay.
-    let mut bar = Vec::new();
-    let mut row = |app: &mut Proteus, label: &str, x: f32, label_width: f32, labels: &[String]| {
-        bar.push(
-            app.component(
-                text_at(
-                    x,
-                    BAR_Y + 9.0,
-                    Text::new(label, 14.0)
-                        .with_color(WHITE)
-                        .with_wrap_width(label_width),
-                )
-                .visible(false),
-            ),
-        );
-        let buttons: Vec<Handle> = labels
-            .iter()
-            .enumerate()
-            .map(|(i, label)| {
-                let center = x + label_width + SETTING_SIZE.x / 2.0 + i as f32 * SETTING_STEP;
-                let position = Vec3::new(center, BAR_Y, 0.0);
-                app.component(setting_button(position, label).visible(false))
-            })
-            .collect();
-        bar.extend(&buttons);
-        buttons
+    // The toolbar: its groups, left to right, each button's label made from
+    // its index in the group. Hidden until an essay is open, since it changes
+    // only the essay.
+    let groups: [(usize, Label); 6] = [
+        (SIZES.len(), |i| icon("format_size", SIZES[i].0)),
+        (ALIGNS.len(), |i| icon(ALIGNS[i].0, 20.0)),
+        (1, |_| icon("format_bold", 20.0)),
+        (1, |_| icon("format_italic", 20.0)),
+        (SPACINGS.len(), |i| icon(SPACINGS[i].0, 20.0)),
+        (FAMILIES.len(), |i| {
+            Text::new("Aa", 17.0).with_family(FAMILIES[i])
+        }),
+    ];
+    // Bold and italic sit together, as one group.
+    let gaps = [GROUP_GAP, GROUP_GAP, TOOL_GAP, GROUP_GAP, GROUP_GAP, 0.0];
+    let width_of = |n: usize| n as f32 * TOOL_SIZE.x + (n as f32 - 1.0) * TOOL_GAP;
+    let bar_width: f32 = groups
+        .iter()
+        .zip(gaps)
+        .map(|((n, _), gap)| width_of(*n) + gap)
+        .sum();
+    let mut x = width / 2.0 - MARGIN - bar_width + TOOL_SIZE.x / 2.0;
+    let mut made: Vec<Vec<Handle>> = Vec::new();
+    for ((count, label), gap) in groups.into_iter().zip(gaps) {
+        let mut group = Vec::new();
+        for i in 0..count {
+            group.push(app.component(tool(x, label(i))));
+            x += TOOL_SIZE.x + TOOL_GAP;
+        }
+        x += gap - TOOL_GAP;
+        made.push(group);
+    }
+    let mut made = made.into_iter();
+    let mut next = || made.next().expect("one for each group");
+    let tools = Toolbar {
+        sizes: next(),
+        aligns: next(),
+        bold: next()[0],
+        italic: next()[0],
+        spacings: next(),
+        families: next(),
     };
-    let align_labels: Vec<String> = ALIGNS.iter().map(|(l, _)| l.to_string()).collect();
-    let bar_left = width / 2.0 - MARGIN - BAR_WIDTH;
-    let align_buttons = row(app, "Align", bar_left, ALIGN_LABEL, &align_labels);
-    let height_labels: Vec<String> = LINE_HEIGHTS.iter().map(|h| h.to_string()).collect();
-    let after_align = bar_left + ALIGN_LABEL + 2.0 * SETTING_STEP + SETTING_SIZE.x + SETTINGS_GAP;
-    let line_height_buttons = row(
-        app,
-        "Line height",
-        after_align,
-        LINE_HEIGHT_LABEL,
-        &height_labels,
-    );
 
     // A card for each essay, with its texts as children.
     let mut cards = Vec::new();
@@ -466,7 +660,11 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     for (i, essay) in ESSAYS.iter().enumerate() {
         let card_text = card_texts(app, essay);
         let mut spec = ComponentSpec::new(QuadState {
-            position: Vec3::new((i as f32 - 1.0) * CARD_SPACING, CARD_Y, 0.0),
+            position: Vec3::new(
+                (i as f32 - (ESSAYS.len() - 1) as f32 / 2.0) * CARD_SPACING,
+                CARD_Y,
+                0.0,
+            ),
             size: CARD_SIZE,
             corner_radius: 18.0,
             color: PAPER,
@@ -503,7 +701,8 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         title: hidden_text(app, left, top - 60.0),
         byline: hidden_text(app, left, top - 150.0),
         body: hidden_text(app, left, top - 200.0),
-        quote: hidden_text(app, -300.0, -120.0),
+        // Below the tallest body: 20 pixels at a line height of 1.8.
+        quote: hidden_text(app, -300.0, -150.0),
         source: hidden_text(app, left, -PANEL_SIZE.y / 2.0 + PANEL_PADDING + 14.0),
     };
     let mut panel_spec = ComponentSpec::new(QuadState {
@@ -525,15 +724,18 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         card_texts: texts,
         panel,
         essay,
-        bar,
-        align_buttons,
-        line_height_buttons,
+        tools,
         channel: app.transition_channel(None),
         open: Cell::new(None),
         settings: Cell::new(Settings {
+            size: 1,
             align: 0,
-            line_height: 1,
+            bold: false,
+            italic: false,
+            spacing: 1,
+            family: 0,
         }),
+        crimson_wanted: Cell::new(false),
     });
     ui.apply(app, ui.settings.get());
 
@@ -549,30 +751,29 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     let on_arrive = Rc::clone(&ui);
     panel.on_transition_complete(app, move |app| {
         set_visible(app, &on_arrive.essay.all(), true);
-        set_visible(app, &on_arrive.bar, true);
+        set_visible(app, &on_arrive.tools.all(), true);
     });
     let on_back = Rc::clone(&ui);
     ui.essay.back.on_click(app, move |app| on_back.close(app));
 
-    for (i, &button) in ui.align_buttons.iter().enumerate() {
-        let on_click = Rc::clone(&ui);
-        button.on_click(app, move |app| {
-            let settings = Settings {
-                align: i,
-                ..on_click.settings.get()
-            };
-            on_click.apply(app, settings);
-        });
+    // Each button changes one setting.
+    let on = |app: &mut Proteus, button: Handle, change: Box<dyn Fn(&mut Settings)>| {
+        let ui = Rc::clone(&ui);
+        button.on_click(app, move |app| ui.change(app, &change));
+    };
+    for (i, &button) in ui.tools.sizes.iter().enumerate() {
+        on(app, button, Box::new(move |s| s.size = i));
     }
-    for (i, &button) in ui.line_height_buttons.iter().enumerate() {
-        let on_click = Rc::clone(&ui);
-        button.on_click(app, move |app| {
-            let settings = Settings {
-                line_height: i,
-                ..on_click.settings.get()
-            };
-            on_click.apply(app, settings);
-        });
+    for (i, &button) in ui.tools.aligns.iter().enumerate() {
+        on(app, button, Box::new(move |s| s.align = i));
+    }
+    on(app, ui.tools.bold, Box::new(|s| s.bold = !s.bold));
+    on(app, ui.tools.italic, Box::new(|s| s.italic = !s.italic));
+    for (i, &button) in ui.tools.spacings.iter().enumerate() {
+        on(app, button, Box::new(move |s| s.spacing = i));
+    }
+    for (i, &button) in ui.tools.families.iter().enumerate() {
+        on(app, button, Box::new(move |s| s.family = i));
     }
     ui
 }
@@ -582,9 +783,10 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
     wasm_logger::init(wasm_logger::Config::new(log::Level::Warn));
-    // The app loads no assets.
-    let services = proteus_host_web::PreloadedHostServices::fetch("", &[]).await;
-    proteus_host_web::run(Essays, &canvas_id, config(), services).await
+    // Nothing is loaded up front. Assets are fetched from the example's
+    // folder, a level above the page, as `fonts/` is.
+    let services = proteus_host_web::PreloadedHostServices::fetch("..", &[]).await;
+    proteus_host_web::run(Essays::default(), &canvas_id, config(), services).await
 }
 
 #[cfg(test)]
@@ -612,7 +814,7 @@ mod tests {
         let ui = build(&mut app, 1100.0);
         settle(&mut app);
         assert!(
-            !visible(&app, ui.bar[0]),
+            !visible(&app, ui.tools.all()[0]),
             "the bar is hidden with no essay open"
         );
 
@@ -630,13 +832,19 @@ mod tests {
         settle(&mut app);
         assert!(visible(&app, ui.essay.body));
         assert!(visible(&app, ui.panel));
-        assert!(ui.bar.iter().all(|&h| visible(&app, h)), "the bar shows");
+        assert!(
+            ui.tools.all().iter().all(|&h| visible(&app, h)),
+            "the toolbar shows"
+        );
 
         ui.close(&mut app);
         app.tick(0.0);
         app.tick(0.1);
         assert!(!visible(&app, ui.essay.body));
-        assert!(!visible(&app, ui.bar[0]), "the bar hides with the essay");
+        assert!(
+            !visible(&app, ui.tools.all()[0]),
+            "the bar hides with the essay"
+        );
         assert!(
             !visible(&app, ui.card_texts[1][0]),
             "hidden while the card returns"
@@ -646,49 +854,103 @@ mod tests {
         assert!(!visible(&app, ui.panel));
     }
 
-    // The settings bar sets the open body's alignment and line height, and
-    // marks the chosen buttons by disabling them, so hovering them changes
-    // nothing.
+    // The toolbar sets the open body's size, alignment, weight, italic, line
+    // height and family.
     #[test]
-    fn the_settings_set_the_body() {
+    fn the_toolbar_sets_the_body() {
         let mut app = Proteus::new();
         let ui = build(&mut app, 1100.0);
         ui.open(&mut app, 0);
-        ui.apply(
-            &mut app,
-            Settings {
-                align: 1,
-                line_height: 2,
-            },
-        );
+        ui.change(&mut app, |s| {
+            s.size = 2;
+            s.align = 1;
+            s.bold = true;
+            s.italic = true;
+            s.spacing = 2;
+        });
         let body = app.world().get::<Text>(ui.essay.body.id()).unwrap();
+        assert_eq!(body.size_px, 20.0);
         assert_eq!(body.align, TextAlign::Center);
+        assert_eq!(body.weight, Some(700));
+        assert!(body.italic);
         assert_eq!(body.line_height, Some(1.8));
-        let disabled = |h: &Handle| app.get(*h).unwrap().disabled;
+        assert_eq!(body.family.as_deref(), Some(LORA));
+    }
+
+    // A chosen or toggled-on button stays in the accent color under the
+    // pointer; the others turn lighter, and a button toggled off does again.
+    #[test]
+    fn chosen_buttons_keep_their_color_under_the_pointer() {
+        let mut app = Proteus::new();
+        let ui = build(&mut app, 1100.0);
+        ui.open(&mut app, 0);
+        settle(&mut app);
+        ui.change(&mut app, |s| {
+            s.align = 2;
+            s.bold = true;
+        });
+        settle(&mut app);
+        let hovered = |app: &mut Proteus, h: Handle| {
+            let at = app.get(h).unwrap().geometry.position.truncate();
+            app.pointer_moved(Some(at));
+            settle(app);
+            app.get(h).unwrap().geometry.color
+        };
+        assert_eq!(hovered(&mut app, ui.tools.aligns[2]), ACCENT, "chosen");
+        assert_eq!(hovered(&mut app, ui.tools.bold), ACCENT, "toggled on");
         assert_eq!(
-            ui.align_buttons.iter().map(disabled).collect::<Vec<_>>(),
-            [false, true, false]
+            hovered(&mut app, ui.tools.aligns[0]),
+            BUTTON_HOVER,
+            "not chosen"
         );
+        ui.change(&mut app, |s| s.bold = false);
         assert_eq!(
-            ui.line_height_buttons
-                .iter()
-                .map(disabled)
-                .collect::<Vec<_>>(),
-            [false, false, true]
+            hovered(&mut app, ui.tools.bold),
+            BUTTON_HOVER,
+            "toggled off"
         );
     }
 
-    // The title sits a margin from the window's left edge, and the settings
-    // bar ends a margin from its right edge, centered on the title's line.
+    // Crimson Pro is downloaded only once it's chosen. Meanwhile the body is
+    // drawn in the default font, and in Crimson Pro once it loads.
     #[test]
-    fn the_bar_is_on_the_titles_line_at_the_right_margin() {
+    fn crimson_pro_loads_once_chosen() {
         let mut app = Proteus::new();
         let ui = build(&mut app, 1100.0);
-        let last = app.get(*ui.bar.last().unwrap()).unwrap().geometry;
+        assert!(!ui.crimson_wanted.get());
+        assert_eq!(
+            app.font_status(CRIMSON),
+            Some(proteus_sdk::FontStatus::Expected(WhileLoading::DefaultFont))
+        );
+        ui.open(&mut app, 1);
+        ui.change(&mut app, |s| s.family = 1);
+        assert!(ui.crimson_wanted.get(), "update downloads it now");
+        let body = app.world().get::<Text>(ui.essay.body.id()).unwrap();
+        assert_eq!(body.family.as_deref(), Some(CRIMSON));
+
+        let crimson = include_bytes!("../../fonts/CrimsonPro-Variable.ttf");
+        assert_eq!(app.load_font(crimson.as_slice()).unwrap(), CRIMSON);
+        assert_eq!(
+            app.font_status(CRIMSON),
+            Some(proteus_sdk::FontStatus::Loaded)
+        );
+    }
+
+    // The title sits a margin from the window's left edge, and the toolbar
+    // ends a margin from its right edge, centered on the title's line.
+    #[test]
+    fn the_toolbar_is_on_the_titles_line_at_the_right_margin() {
+        let mut app = Proteus::new();
+        let ui = build(&mut app, 1100.0);
+        let last = app
+            .get(*ui.tools.families.last().unwrap())
+            .unwrap()
+            .geometry;
         let right = last.position.x + last.size.x / 2.0;
         assert!((right - (550.0 - MARGIN)).abs() < 0.01, "{right}");
         assert_eq!(last.position.y, BAR_Y);
-        let label = app.get(ui.bar[0]).unwrap().geometry;
-        assert!((label.position.x - (550.0 - MARGIN - BAR_WIDTH)).abs() < 0.01);
+        let first = app.get(ui.tools.sizes[0]).unwrap().geometry;
+        let left = first.position.x - first.size.x / 2.0;
+        assert!(left > -550.0 + MARGIN + 200.0, "clear of the title: {left}");
     }
 }

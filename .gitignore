@@ -38,3 +38,6 @@ REVIEW-FINDINGS.md
 # and the API reference the Pages workflow builds into the web demo.
 crates/proteus-sdk-web/ts/.snippets/
 crates/proteus-shell-web/www/api/
+
+# The TypeScript SDK's copy of the built-in font, made by its `prebuild`.
+crates/proteus-sdk-web/ts/fonts/

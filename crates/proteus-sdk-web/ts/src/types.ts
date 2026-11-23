@@ -118,6 +118,17 @@ export interface StyleOverride {
   shadowSpread?: number;
 }
 
+/** How {@link ProteusApp.loadFont} loads a font that's still downloading. */
+export interface LoadFontOptions {
+  /** The family the font is, as texts name it, such as `"Lora"`. */
+  family: string;
+  /**
+   * How texts in the family are drawn until the font loads: `"hide"`, the default, not at all;
+   * or `"defaultFont"`, in the default font, then again in their own.
+   */
+  whileLoading?: "hide" | "defaultFont";
+}
+
 /**
  * Text: one line, or more where it has a `\n`. The host bakes it the next time it renders a
  * frame. Text wider than an atlas page (2048 pixels by default) is clipped to it, with a
@@ -147,6 +158,21 @@ export interface TextSpec {
   lineHeight?: number;
   /** The most lines shown. Omit it to show them all. */
   maxLines?: number;
+  /**
+   * The font family, such as `"Lora"`, from a font loaded with {@link ProteusApp.loadFont}.
+   * Omit it for the app's default font. A family still loading waits, or is drawn in the default
+   * font meanwhile, as `loadFont` was told; one never loaded is drawn in the default font, with a
+   * warning.
+   */
+  family?: string;
+  /**
+   * The weight, from 100 to 900: 400 is regular and 700 bold. A family without the weight uses its
+   * nearest, and one with no bold face is thickened. Omit it for the font's own weight, or 700,
+   * bold, in the built-in font.
+   */
+  weight?: number;
+  /** Whether the text is italic: in the family's italic face, or slanted if it has none. */
+  italic?: boolean;
   /**
    * How text with more lines than `maxLines` ends: `{ ellipsis: "…" }`, the default, with any
    * text, such as `" more"`; or `"clip"`. An ellipsis wraps as words do, and the text keeps as
@@ -434,9 +460,11 @@ export interface ProteusConfigOverrides {
   /** Text settings. */
   text?: {
     /**
-     * A TTF or OTF font file's bytes, used for all text, for example from a
-     * `fetch()` response. Omit it for the embedded font, Inter Bold. Bytes
-     * that aren't a font make {@link mount} throw, naming `text.font`.
+     * The default font: a TTF or OTF font file's bytes, for example from a
+     * `fetch()` response, used for every text that names no family. Omit it
+     * for the built-in font, Inter, which {@link mount} then fetches from
+     * this package's `fonts/` folder before the app starts. Bytes that aren't
+     * a font make `mount` throw, naming `text.font`.
      */
     font?: Uint8Array;
   };

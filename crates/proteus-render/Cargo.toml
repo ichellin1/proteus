@@ -27,7 +27,16 @@ bevy_ecs = { workspace = true }
 image = { workspace = true }
 slotmap = { workspace = true }
 
+[features]
+default = ["embedded-font"]
+# Inter, embedded as the default font. Without it, an app gives its own; see
+# the module docs of `font_atlas`.
+embedded-font = []
+
 [dev-dependencies]
+# Fonts for the tests of fonts, weights, italics and fallback. Not published, so
+# `cargo publish` leaves it out.
+proteus-test-fonts = { path = "../proteus-test-fonts" }
 # pollster: blocks on wgpu async init inside integration tests
 pollster = { workspace = true }
 # wgpu re-exported through proteus-render but needs explicit dev-dep for tests/

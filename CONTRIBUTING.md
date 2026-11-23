@@ -222,6 +222,60 @@ its snippets, builds each example, and lints the workflows.
   invariants, and workarounds for a specific external bug, with a link to it.
 - A `TODO` says what is missing and links a GitHub issue.
 
+### Reading well
+
+A comment is read in passing, often by someone who sees only that comment, so each sentence
+should make sense on a first read.
+
+1. **Every sentence has its verb.** Don't drop the verb and leave the reader to carry it over
+   from an earlier clause.
+
+   > Before: Loaded, its texts are drawn in it; failed, in the default font.
+   >
+   > After: If the font loads, its texts are drawn in it. If the download failed, they're drawn
+   > in the default font.
+
+2. **One idea per sentence.** Don't chain ideas with colons and semicolons; write separate
+   sentences. A colon that introduces a list is fine.
+
+   > Before: Asks [`interaction_style_system`] to apply an entity's current style again, since
+   > it changed while it applied: added by `proteus-sdk`'s `Handle::set_style`, and removed once
+   > the style is applied.
+   >
+   > After: Asks [`interaction_style_system`] to apply an entity's current style again.
+   > `proteus-sdk`'s `Handle::set_style` adds it when it changes the style that's showing, and
+   > the system removes it once the style is applied.
+
+3. **Say plainly what something is.** Don't describe it from the side, with "with its X doing
+   Y" phrases.
+
+   > Before: Whether a fallback font is expected, with its texts waiting for it: a text with
+   > characters no loaded font has might find them there.
+   >
+   > After: Whether a fallback font is expected but not loaded yet. Until it loads, a text with
+   > characters no loaded font has waits, since the fallback may have them.
+
+4. **Name things, rather than leaving "it" and "its" to be worked out.** Use plain words where
+   a squeezed phrase would need decoding.
+
+   > Before: …keyed by everything that changes them: the font, the glyph, its size in pixels,
+   > the font's variation, and which quarter of a pixel it starts at across.
+   >
+   > After: …keyed by everything that changes a glyph's pixels: the font, the glyph, its size in
+   > pixels, the font's variation, such as its weight, and its horizontal offset within a
+   > pixel, in quarters.
+
+5. **Say why a test matters, as a rule, not as a story.** Name the bug the test guards
+   against, in the present tense.
+
+   > Before: Text measures the same in logical pixels at every display scale, so it lays out
+   > the same on every display. Glyph advances rounded up to whole pixels made a line wider at
+   > a scale of 1 than at 2.
+   >
+   > After: A line must be the same width in logical pixels at every display scale, or text
+   > wraps differently on different displays. Rounding each glyph's advance up to a whole pixel
+   > breaks this, making a line wider at a scale of 1 than at 2.
+
 ### Tests
 
 - Use `//` comments, never `///`.

@@ -45,36 +45,57 @@
 //! The text is then drawn like any other texture: it transitions, takes a
 //! color, and is clipped by rounded corners, with no special handling.
 //!
-//! ## Embedded font
+//! ## Fonts
 //!
-//! [`EMBEDDED_FONT_BYTES`] is Inter Bold (SIL Open Font License 1.1), a static
-//! instance at weight 700 and optical size 14, made with `fonttools`:
-//! `fonttools varLib.instancer --update-name-table Inter-Variable.ttf wght=700 opsz=14`.
-//! To use another font, pass its bytes to [`FontAtlas::new`], which returns a
-//! [`FontError`] if they aren't a font it can read. No system font is ever
-//! used.
+//! A [`FontAtlas`] has a default font, and any others loaded with
+//! [`FontAtlas::load_font`], each under the family name inside it. A
+//! character a text's family lacks is looked for in the fallback families,
+//! in order, set with [`FontAtlas::set_fallbacks`], then in the default font;
+//! one none of them has is drawn as the family's missing-glyph box, a
+//! rectangle, and reported in [`RasterizedGlyphs::missing`]. A text
+//! names a family, or takes the default, and asks for a weight and italic; a
+//! family that lacks the weight uses its nearest, as in CSS. A family with no
+//! italic face is slanted, and one with no bold face is thickened. No system
+//! font is ever used.
+//!
+//! ## The embedded font
+//!
+//! With the `embedded-font` feature, on by default, [`EMBEDDED_FONT_BYTES`] is
+//! Inter (SIL Open Font License 1.1), variable in weight and optical size,
+//! from Google Fonts. A text in it that sets no weight is drawn at 700, bold,
+//! as the static Inter Bold embedded before it was. Without the feature,
+//! [`FontAtlas::empty`] has no font until one is loaded.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::glyph_cache::{CachedGlyph, GlyphCache, GlyphKey};
 
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache, SourceCacheOptions};
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, Layout, LayoutContext,
-    LineHeight, OverflowWrap, PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontStyle, FontWeight,
+    Layout, LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem, StyleProperty,
 };
 use swash::scale::{Render, ScaleContext, Source};
-use swash::zeno::{Format, Vector};
+use swash::zeno::{Angle, Format, Transform, Vector};
 
 // ---------------------------------------------------------------------------
 // Embedded font
 // ---------------------------------------------------------------------------
 
-/// Inter Bold TTF (static instance, see the module docs), embedded at compile time.
+/// Inter, variable in weight and optical size, embedded at compile time with
+/// the `embedded-font` feature. See the module docs.
 ///
 /// License: SIL Open Font License 1.1 (permissive, bundling allowed). See
 /// `assets/LICENSE-Inter.txt`.
-pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/Inter-Bold.ttf");
+#[cfg(feature = "embedded-font")]
+pub const EMBEDDED_FONT_BYTES: &[u8] = include_bytes!("../assets/Inter-Variable.ttf");
+
+/// The weight a text in the embedded font is drawn at when it sets none.
+const EMBEDDED_DEFAULT_WEIGHT: u16 = 700;
+
+/// The slant of a synthesized italic, in degrees.
+const SYNTHESIZED_SLANT: f32 = 14.0;
 
 /// How many positions within a pixel a glyph can start at, across: a glyph
 /// is rasterized at the nearest quarter of a pixel to where it's placed.
@@ -144,6 +165,13 @@ pub struct TextLayout<'a> {
     /// What ends a text with more lines than `max_lines`: an ellipsis, or
     /// `None` to clip.
     pub ellipsis: Option<&'a str>,
+    /// The font family. `None`, or a family not loaded, is the default font.
+    pub family: Option<&'a str>,
+    /// The weight, from 100 to 900: 400 is regular and 700 bold. `None` is
+    /// the font's own, or 700 in the embedded font.
+    pub weight: Option<u16>,
+    /// Whether the text is italic.
+    pub italic: bool,
 }
 
 impl<'a> TextLayout<'a> {
@@ -159,6 +187,9 @@ impl<'a> TextLayout<'a> {
             line_height: None,
             max_lines: None,
             ellipsis: Some(DEFAULT_ELLIPSIS),
+            family: None,
+            weight: None,
+            italic: false,
         }
     }
 }
@@ -180,6 +211,9 @@ pub struct RasterizedGlyphs {
     /// RGBA pixels, `width * height * 4` bytes. Alpha is the glyph coverage,
     /// not premultiplied.
     pub rgba_pixels: Vec<u8>,
+    /// The characters no font had, drawn as the font's missing-glyph box, in
+    /// the order they first appear, each once.
+    pub missing: Vec<char>,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,10 +233,20 @@ pub struct FontAtlas {
     fonts: FontContext,
     layout: LayoutContext<()>,
     scale: ScaleContext,
-    /// The font's family name, which each text asks parley for.
-    family: String,
-    /// Whether the font has "…", so it can end a text.
+    /// The default font's family name, or `None` with no font at all.
+    default_family: Option<String>,
+    /// The embedded font's family name, when it's the default.
+    embedded_family: Option<String>,
+    /// Every family loaded.
+    families: HashSet<String>,
+    /// Whether the default font has "…", so it can end a text.
     has_ellipsis: bool,
+    /// Whether the warning that there's no font to draw in was logged.
+    warned_no_font: bool,
+    /// The fallback families, in the order they're tried.
+    fallbacks: Vec<String>,
+    /// The characters no font had that a warning has been logged for.
+    warned_missing: HashSet<char>,
     glyphs: GlyphCache,
 }
 
@@ -211,6 +255,43 @@ pub struct FontAtlas {
 #[error("not a TTF or OTF font that can be read: {0}")]
 pub struct FontError(String);
 
+/// The family name inside a TTF or OTF font, as [`FontAtlas::load_font`]
+/// would file it under, without loading it into an atlas.
+///
+/// # Errors
+///
+/// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
+pub fn font_family_name(font_bytes: &[u8]) -> Result<String, FontError> {
+    FontAtlas::empty().load_font(font_bytes)
+}
+
+/// The characters in the first `line_count` lines of `layout`, laid out from
+/// `content`, that no font had: each once, in order.
+fn missing_chars(layout: &Layout<()>, line_count: usize, content: &str) -> Vec<char> {
+    let mut missing = Vec::new();
+    for line in layout.lines().take(line_count) {
+        for run in line.runs() {
+            for cluster in run.clusters() {
+                if cluster.is_hard_line_break() || !cluster.glyphs().any(|g| g.id == 0) {
+                    continue;
+                }
+                for c in content[cluster.text_range()].chars() {
+                    if !c.is_whitespace() && !missing.contains(&c) {
+                        missing.push(c);
+                    }
+                }
+            }
+        }
+    }
+    missing
+}
+
+/// Whether the font has "…", so it can end a text.
+fn has_ellipsis(font_bytes: &[u8]) -> bool {
+    swash::FontRef::from_index(font_bytes, 0)
+        .is_some_and(|font| font.charmap().map('\u{2026}') != 0)
+}
+
 /// A text laid out within its maximum number of lines.
 struct Fitted {
     layout: Layout<()>,
@@ -218,7 +299,6 @@ struct Fitted {
     /// text is clipped.
     line_count: usize,
     /// What was laid out in place of the text when it ends in an ellipsis.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the tests check it"))]
     content: Option<String>,
 }
 
@@ -240,41 +320,95 @@ impl FontAtlas {
     ///
     /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
     pub fn new(font_bytes: &[u8]) -> Result<Self, FontError> {
-        Self::from_blob(Blob::new(Arc::new(font_bytes.to_vec())))
+        let mut atlas = Self::empty();
+        let family = atlas.load_font(font_bytes)?;
+        atlas.has_ellipsis = has_ellipsis(font_bytes);
+        atlas.default_family = Some(family);
+        Ok(atlas)
     }
 
     /// Creates a [`FontAtlas`] for the embedded font, [`EMBEDDED_FONT_BYTES`]
-    /// (Inter Bold).
+    /// (Inter). A text in it that sets no weight is drawn at 700.
+    #[cfg(feature = "embedded-font")]
     pub fn with_embedded_font() -> Self {
-        Self::from_blob(Blob::new(Arc::new(EMBEDDED_FONT_BYTES)))
-            .expect("the embedded font is a valid TTF")
+        let mut atlas = Self::empty();
+        let family = atlas
+            .register(Blob::new(Arc::new(EMBEDDED_FONT_BYTES)))
+            .expect("the embedded font is a valid TTF");
+        atlas.has_ellipsis = has_ellipsis(EMBEDDED_FONT_BYTES);
+        atlas.embedded_family = Some(family.clone());
+        atlas.default_family = Some(family);
+        atlas
     }
 
-    fn from_blob(blob: Blob<u8>) -> Result<Self, FontError> {
-        // Only the fonts given here: never the system's.
-        let mut collection = Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: false,
-        });
-        let has_ellipsis = swash::FontRef::from_index(blob.as_ref(), 0)
-            .is_some_and(|font| font.charmap().map('\u{2026}') != 0);
-        let families = collection.register_fonts(blob, None);
-        let family = families
-            .first()
-            .and_then(|(id, _)| collection.family_name(*id))
-            .ok_or_else(|| FontError("no font family found in the bytes".into()))?
-            .to_owned();
-        Ok(Self {
+    /// Creates a [`FontAtlas`] with no font, which draws no text until one is
+    /// loaded with [`FontAtlas::load_font`]; the first becomes the default.
+    pub fn empty() -> Self {
+        Self {
             fonts: FontContext {
-                collection,
+                // Only the fonts given here: never the system's.
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
                 source_cache: SourceCache::new(SourceCacheOptions::default()),
             },
             layout: LayoutContext::new(),
             scale: ScaleContext::new(),
-            family,
-            has_ellipsis,
+            default_family: None,
+            embedded_family: None,
+            families: HashSet::new(),
+            has_ellipsis: false,
+            warned_no_font: false,
+            fallbacks: Vec::new(),
+            warned_missing: HashSet::new(),
             glyphs: GlyphCache::new(DEFAULT_GLYPH_CACHE_BYTES),
-        })
+        }
+    }
+
+    /// Adds the TTF or OTF font in `font_bytes`, and returns the family name
+    /// inside it, which texts name to use it. A font of a family already
+    /// loaded adds a face to it, such as its italic. The first font loaded
+    /// into an [`empty`](Self::empty) atlas becomes its default.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
+    pub fn load_font(&mut self, font_bytes: &[u8]) -> Result<String, FontError> {
+        let family = self.register(Blob::new(Arc::new(font_bytes.to_vec())))?;
+        if self.default_family.is_none() {
+            self.has_ellipsis = has_ellipsis(font_bytes);
+            self.default_family = Some(family.clone());
+        }
+        Ok(family)
+    }
+
+    /// Sets the fallback families, tried in order for a character a text's
+    /// own family lacks, before the default font. A family not loaded yet is
+    /// skipped until it is. See the module docs.
+    pub fn set_fallbacks(&mut self, families: &[String]) {
+        self.fallbacks = families.to_vec();
+    }
+
+    /// Whether a font of `family` has been loaded.
+    pub fn has_family(&self, family: &str) -> bool {
+        self.families.contains(family)
+    }
+
+    /// The default font's family name, or `None` with no font at all.
+    pub fn default_family(&self) -> Option<&str> {
+        self.default_family.as_deref()
+    }
+
+    fn register(&mut self, blob: Blob<u8>) -> Result<String, FontError> {
+        let families = self.fonts.collection.register_fonts(blob, None);
+        let family = families
+            .first()
+            .and_then(|(id, _)| self.fonts.collection.family_name(*id))
+            .ok_or_else(|| FontError("no font family found in the bytes".into()))?
+            .to_owned();
+        self.families.insert(family.clone());
+        Ok(family)
     }
 
     /// Sets the most bytes of glyphs the glyph cache keeps, dropping those
@@ -329,8 +463,20 @@ impl FontAtlas {
         if text.content.is_empty() {
             return None;
         }
+        if self.default_family.is_none() {
+            if !self.warned_no_font {
+                self.warned_no_font = true;
+                log::warn!(
+                    "there's no font to draw text in, so none is drawn: give the app a default \
+                     font in `text.default_font`, or load one with `load_font`"
+                );
+            }
+            return None;
+        }
         let Fitted {
-            layout, line_count, ..
+            layout,
+            line_count,
+            content,
         } = self.fit(text, scale);
 
         // The image's height: from the top of the first line to the bottom of
@@ -386,10 +532,27 @@ impl FontAtlas {
             }
         }
 
+        let missing = missing_chars(
+            &layout,
+            line_count,
+            content.as_deref().unwrap_or(text.content),
+        );
+        for &c in &missing {
+            if self.warned_missing.insert(c) {
+                log::warn!(
+                    "no font has {c:?} (U+{:04X}), in the text {:?}, so it's drawn as a box: add a \
+                     font that has it to the fallback fonts",
+                    c as u32,
+                    text.content,
+                );
+            }
+        }
+
         Some(RasterizedGlyphs {
             width,
             height: height as u32,
             rgba_pixels: rgba,
+            missing,
         })
     }
 
@@ -479,14 +642,42 @@ impl FontAtlas {
     /// Shapes `content` in `text`'s style, breaks it into lines, and aligns
     /// them, at `scale`.
     fn lay_out(&mut self, content: &str, text: &TextLayout, scale: f32) -> Layout<()> {
+        // The text's family if it's loaded, and the default otherwise. A
+        // text in the embedded font that sets no weight is bold.
+        let family = text
+            .family
+            .filter(|f| self.families.contains(*f))
+            .or(self.default_family.as_deref())
+            .unwrap_or_default()
+            .to_owned();
+        let weight = text.weight.or_else(|| {
+            (self.embedded_family.as_ref() == Some(&family)).then_some(EMBEDDED_DEFAULT_WEIGHT)
+        });
         // Sizes in logical pixels, scaled by parley; fractional positions,
         // rounded when the glyphs are rasterized.
         let mut builder = self
             .layout
             .ranged_builder(&mut self.fonts, content, scale, false);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::Single(
-            FontFamilyName::Named(self.family.as_str().into()),
-        )));
+        // The text's family, then the fallbacks, in order, then the default
+        // font, each tried in turn for a character the ones before it lack.
+        let mut stack = vec![family.clone()];
+        let loaded = self.fallbacks.iter().filter(|f| self.families.contains(*f));
+        for name in loaded.chain(&self.default_family) {
+            if !stack.contains(name) {
+                stack.push(name.clone());
+            }
+        }
+        let names: Vec<FontFamilyName<'_>> = stack
+            .into_iter()
+            .map(|name| FontFamilyName::Named(name.into()))
+            .collect();
+        builder.push_default(StyleProperty::FontFamily(FontFamily::List(names.into())));
+        if let Some(weight) = weight {
+            builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight as f32)));
+        }
+        if text.italic {
+            builder.push_default(StyleProperty::FontStyle(FontStyle::Italic));
+        }
         builder.push_default(StyleProperty::FontSize(text.size_px));
         builder.push_default(StyleProperty::LetterSpacing(text.letter_spacing_px));
         builder.push_default(StyleProperty::LineHeight(match text.line_height {
@@ -542,6 +733,12 @@ impl FontAtlas {
                     .hint(false)
                     .normalized_coords(coords.iter())
                     .build();
+                // A face standing in for one the family lacks: slanted for
+                // italic, thickened for bold, by about a thirtieth of its
+                // size.
+                let synthesis = run.synthesis();
+                let slant = synthesis.skew().map(|_| SYNTHESIZED_SLANT);
+                let embolden = synthesis.embolden().then(|| run.font_size() / 30.0);
                 for g in glyph_run.positioned_glyphs() {
                     // Across, to the nearest quarter pixel; down, to the
                     // nearest pixel, so lines sit on whole pixels.
@@ -555,11 +752,17 @@ impl FontAtlas {
                         size_bits: run.font_size().to_bits(),
                         coords: coords.clone(),
                         quarter: ((x - pen_x) * SUBPIXEL_STEPS) as u8,
+                        slanted: slant.is_some(),
+                        emboldened: embolden.is_some(),
                     };
                     let glyph = self.glyphs.get_or_rasterize(key, || {
                         let image = Render::new(&[Source::Outline])
                             .format(Format::Alpha)
                             .offset(Vector::new(x - pen_x, 0.0))
+                            .transform(slant.map(|degrees| {
+                                Transform::skew(Angle::from_degrees(degrees), Angle::ZERO)
+                            }))
+                            .embolden(embolden.unwrap_or(0.0))
                             .render(&mut scaler, g.id as u16)?;
                         let p = image.placement;
                         (p.width > 0 && p.height > 0).then(|| CachedGlyph {
@@ -646,8 +849,13 @@ mod tests {
             .lay_out("AV", &TextLayout::new("AV", 64.0), 1.0)
             .full_width();
 
+        // At the weight the text is drawn at.
         let font = swash::FontRef::from_index(EMBEDDED_FONT_BYTES, 0).unwrap();
-        let metrics = font.glyph_metrics(&[]).scale(64.0);
+        let coords: Vec<i16> = font
+            .variations()
+            .normalized_coords([(swash::tag_from_bytes(b"wght"), 700.0)])
+            .collect();
+        let metrics = font.glyph_metrics(&coords).scale(64.0);
         let advance = |c| metrics.advance_width(font.charmap().map(c));
         let unshaped = advance('A') + advance('V');
 
@@ -1031,6 +1239,173 @@ mod tests {
         let mut text = TextLayout::new("Two\nlines", 16.0);
         text.max_lines = Some(2);
         assert_eq!(fa.fit(&text, 1.0).content, None);
+    }
+
+    /// Lora, roman and italic, variable from 400 to 700: a second family.
+    use proteus_test_fonts::{SECOND_FAMILY as LORA, SECOND_FAMILY_ITALIC as LORA_ITALIC};
+
+    fn pixels(fa: &mut FontAtlas, text: &TextLayout) -> RasterizedGlyphs {
+        fa.rasterize(text, 1.0).unwrap()
+    }
+
+    #[test]
+    fn a_loaded_font_is_named_by_its_family() {
+        let mut fa = atlas();
+        assert_eq!(fa.load_font(LORA).unwrap(), "Lora");
+        assert!(fa.has_family("Lora"));
+        assert_eq!(fa.default_family(), Some("Inter"), "the default stays");
+        assert_eq!(font_family_name(LORA_ITALIC).unwrap(), "Lora");
+        assert!(font_family_name(b"not a font").is_err());
+    }
+
+    #[test]
+    fn a_text_in_a_loaded_family_is_drawn_in_it() {
+        let mut fa = atlas();
+        fa.load_font(LORA).unwrap();
+        let mut text = TextLayout::new("Hamburgefonstiv", 32.0);
+        let inter = pixels(&mut fa, &text);
+        text.family = Some("Lora");
+        let lora = pixels(&mut fa, &text);
+        assert_ne!(inter.rgba_pixels, lora.rgba_pixels);
+        // A family that isn't loaded is the default.
+        text.family = Some("Garamond");
+        assert_eq!(pixels(&mut fa, &text).rgba_pixels, inter.rgba_pixels);
+    }
+
+    // A text that sets no weight is bold in the embedded font, as before it
+    // was variable, and weights from one variable font differ.
+    #[test]
+    fn weights_come_from_the_variable_font() {
+        let mut fa = atlas();
+        let mut text = TextLayout::new("Hamburgefonstiv", 32.0);
+        let unset = pixels(&mut fa, &text);
+        text.weight = Some(700);
+        assert_eq!(pixels(&mut fa, &text).rgba_pixels, unset.rgba_pixels);
+        text.weight = Some(100);
+        let thin = pixels(&mut fa, &text);
+        text.weight = Some(900);
+        let black = pixels(&mut fa, &text);
+        assert!(
+            thin.width < black.width,
+            "{} thin, {} black",
+            thin.width,
+            black.width
+        );
+    }
+
+    // A weight a family doesn't have uses its nearest: Lora goes to 700.
+    #[test]
+    fn a_missing_weight_uses_the_nearest() {
+        let mut fa = atlas();
+        fa.load_font(LORA).unwrap();
+        let mut text = TextLayout::new("Hamburgefonstiv", 32.0);
+        text.family = Some("Lora");
+        text.weight = Some(700);
+        let bold = pixels(&mut fa, &text);
+        text.weight = Some(900);
+        let black = pixels(&mut fa, &text);
+        assert_eq!(bold.width, black.width);
+    }
+
+    // Italic uses a family's italic face, and slants the upright one when the
+    // family has none, as Inter here doesn't.
+    #[test]
+    fn italic_uses_the_italic_face_or_slants() {
+        let mut fa = atlas();
+        fa.load_font(LORA).unwrap();
+        fa.load_font(LORA_ITALIC).unwrap();
+        let mut text = TextLayout::new("Hamburgefonstiv", 32.0);
+        text.family = Some("Lora");
+        let upright = pixels(&mut fa, &text);
+        text.italic = true;
+        let italic = pixels(&mut fa, &text);
+        assert_ne!(upright.width, italic.width, "Lora Italic is its own design");
+
+        let mut inter = TextLayout::new("IIII", 32.0);
+        let straight = pixels(&mut fa, &inter);
+        inter.italic = true;
+        let slanted = pixels(&mut fa, &inter);
+        assert!(
+            slanted.width > straight.width,
+            "a slant widens straight strokes"
+        );
+    }
+
+    /// Crimson Pro, a third family, and Noto Serif Devanagari, for a script
+    /// Inter lacks.
+    use proteus_test_fonts::{DEVANAGARI, THIRD_FAMILY as CRIMSON};
+
+    // A script no loaded font has is drawn as boxes, and reported; with a
+    // fallback font that has it, it's drawn in that.
+    #[test]
+    fn a_fallback_font_draws_a_script_the_font_lacks() {
+        let mut fa = atlas();
+        let text = TextLayout::new("Hello नमस्ते", 32.0);
+        let boxes = pixels(&mut fa, &text);
+        assert_eq!(boxes.missing, vec!['न', 'म', 'स', '्', 'त', 'े']);
+
+        // Named before it's loaded, it's skipped until it is.
+        fa.set_fallbacks(&["Noto Serif Devanagari".to_owned()]);
+        assert!(!pixels(&mut fa, &text).missing.is_empty());
+
+        assert_eq!(fa.load_font(DEVANAGARI).unwrap(), "Noto Serif Devanagari");
+        let drawn = pixels(&mut fa, &text);
+        assert!(drawn.missing.is_empty());
+        assert_ne!(drawn.rgba_pixels, boxes.rgba_pixels);
+    }
+
+    // The fallbacks are tried, in order, before the default font: Lora lacks
+    // "ĸ" and these letters, which Crimson Pro and Inter both have, and
+    // Crimson Pro draws them.
+    #[test]
+    fn the_fallbacks_come_before_the_default_font() {
+        let mut fa = atlas();
+        fa.load_font(LORA).unwrap();
+        fa.load_font(CRIMSON).unwrap();
+        let mut text = TextLayout::new("ĸǅǆǈǉǋǌ", 48.0);
+        text.weight = Some(400);
+        // The glyph's ink width tells which font drew it; the line's height
+        // is the text's own family's either way.
+        let mut in_family = |fa: &mut FontAtlas, family: &'static str| {
+            text.family = Some(family);
+            ink_columns(&pixels(fa, &text)).len()
+        };
+        let crimson = in_family(&mut fa, "Crimson Pro");
+        let inter = in_family(&mut fa, "Inter");
+        assert_ne!(crimson, inter);
+
+        assert_eq!(
+            in_family(&mut fa, "Lora"),
+            inter,
+            "no fallbacks: the default font"
+        );
+        fa.set_fallbacks(&["Crimson Pro".to_owned()]);
+        assert_eq!(in_family(&mut fa, "Lora"), crimson, "the fallback first");
+    }
+
+    // A character no font has is drawn as a box, not left out.
+    #[test]
+    fn a_character_no_font_has_is_drawn_as_a_box() {
+        let mut fa = atlas();
+        let ab = pixels(&mut fa, &TextLayout::new("ab", 32.0));
+        let with_box = pixels(&mut fa, &TextLayout::new("a中b", 32.0));
+        assert_eq!(with_box.missing, vec!['中']);
+        assert!(with_box.width > ab.width + 10, "room for the box");
+        let ink = |g: &RasterizedGlyphs| g.rgba_pixels.chunks(4).filter(|p| p[3] > 0).count();
+        assert!(ink(&with_box) > ink(&ab), "the box is drawn");
+    }
+
+    #[test]
+    fn an_empty_atlas_draws_nothing_until_a_font_is_loaded() {
+        let mut fa = FontAtlas::empty();
+        assert!(fa.rasterize_text("Hello", 16.0, 0.0).is_none());
+        assert_eq!(fa.load_font(LORA).unwrap(), "Lora");
+        assert_eq!(
+            fa.default_family(),
+            Some("Lora"),
+            "the first font is the default"
+        );
+        assert!(fa.rasterize_text("Hello", 16.0, 0.0).is_some());
     }
 
     #[test]

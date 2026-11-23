@@ -24,9 +24,11 @@ pub mod static_texture;
 pub mod texture_registry;
 pub mod transition_atlas;
 
+#[cfg(feature = "embedded-font")]
+pub use font_atlas::EMBEDDED_FONT_BYTES;
 pub use font_atlas::{
-    FontAtlas, FontError, RasterizedGlyphs, TextAlign, TextLayout, TextOverflow, DEFAULT_ELLIPSIS,
-    DEFAULT_GLYPH_CACHE_BYTES, EMBEDDED_FONT_BYTES,
+    font_family_name, FontAtlas, FontError, RasterizedGlyphs, TextAlign, TextLayout, TextOverflow,
+    DEFAULT_ELLIPSIS, DEFAULT_GLYPH_CACHE_BYTES,
 };
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{

@@ -44,7 +44,7 @@ jobs:
       - name: Check comments
         # Paths are added as each crate is brought up to CONTRIBUTING.md's
         # comment rules.
-        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs examples benches checks Cargo.toml
+        run: scripts/check-comments.sh crates/proteus-sdk crates/proteus-sdk-web crates/proteus-ui crates/proteus-runtime crates/proteus-gpu crates/proteus-host-winit crates/proteus-host-web crates/proteus-render crates/proteus-demo crates/proteus-shell-native crates/proteus-shell-web crates/proteus-docs crates/proteus-test-fonts examples benches checks Cargo.toml
 
       - name: Clippy
         # proteus-shell-web / proteus-host-web are wasm32-only
@@ -203,7 +203,9 @@ jobs:
         # wasm-pack output (ts/pkg-host) alongside proteus-sdk-web's own
         # (ts/pkg). ARCHITECTURE.md's TypeScript section explains why
         # bundling two separate wasm modules into one npm package is sound.
-        run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host
+        # Without the built-in font: the package ships it as a file, fetched
+        # only when an app sets no font of its own.
+        run: wasm-pack build crates/proteus-host-web --target bundler --out-dir ../proteus-sdk-web/ts/pkg-host -- --no-default-features
 
       - name: Install Node toolchain
         uses: actions/setup-node@v4

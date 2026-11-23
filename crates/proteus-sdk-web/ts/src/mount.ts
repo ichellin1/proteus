@@ -71,10 +71,33 @@ export async function mount(
   canvasId: string,
   opts: MountOptions,
 ): Promise<void> {
+  const config = opts.config ?? {};
+  // The built-in font, Inter, isn't in the wasm: it's a file of this package,
+  // fetched only when the app gives no default font of its own.
+  const font = config.text?.font ?? (await builtInFont());
   await wasmMount(
     canvasId,
     (rawApp: WasmApp) => opts.setup(new ProteusApp(rawApp)),
     opts.update ? (dt: number) => opts.update?.(dt) : undefined,
-    opts.config ?? null,
+    { ...config, text: { ...config.text, font } },
   );
+}
+
+/**
+ * Fetches the built-in font, Inter, from this package's `fonts/`, which a
+ * bundler such as Vite copies to the app's output, as it does an image the
+ * app's own code refers to with `new URL(…, import.meta.url)`.
+ *
+ * @throws if the font can't be fetched.
+ */
+async function builtInFont(): Promise<Uint8Array> {
+  const url = new URL("../fonts/Inter-Variable.ttf", import.meta.url);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(
+      `proteus-sdk: the built-in font couldn't be fetched from ${url} (${response.status}). ` +
+        "Serve the package's fonts/ folder with the app, or set config.text.font.",
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
 }

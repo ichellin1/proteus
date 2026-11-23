@@ -76,7 +76,7 @@ pub use input::{
 pub use instance_cache::{InstanceCache, InstanceChanges};
 pub use interaction::{
     effect_transition_system, interaction_style_system, EffectTransition, EffectValues,
-    InteractionDef, InteractionState, InteractionStateKind, RestingEffects, StyleOverride,
+    InteractionDef, InteractionState, InteractionStateKind, RestingEffects, Restyle, StyleOverride,
     StyleTiming, STYLE_TRANSITION_CONFIG,
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyInput, KeyRepeat, KeyState, Modifiers, NamedKey};
@@ -87,7 +87,10 @@ pub use navigation::{
 };
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
-pub use text::{BakedText, ClearGlyphCache, Text, TextAlign, TextOverflow};
+pub use text::{
+    BakedText, ClearGlyphCache, FontStatus, Fonts, MissingGlyphs, Text, TextAlign, TextOverflow,
+    WaitsForFont, WhileLoading,
+};
 pub use texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 pub use topology::{
     slice_corners, ActiveGroupTransition, ChildConfigs, GroupSource, GroupTarget, MergeLayout,

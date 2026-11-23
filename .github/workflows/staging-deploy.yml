@@ -92,7 +92,7 @@ jobs:
         run: |
           wasm-pack build crates/proteus-sdk-web --target bundler --out-dir ts/pkg
           wasm-pack build crates/proteus-host-web --target bundler \
-            --out-dir ../proteus-sdk-web/ts/pkg-host
+            --out-dir ../proteus-sdk-web/ts/pkg-host -- --no-default-features
           (cd crates/proteus-sdk-web/ts && npm ci && npm run build)
           wasm-pack build benches/browser/rust --target bundler
           cd benches/browser

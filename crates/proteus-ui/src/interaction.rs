@@ -423,6 +423,26 @@ impl InteractionDef {
     }
 }
 
+impl InteractionDef {
+    /// Sets the style for `kind`, or removes it with `None`.
+    /// [`InteractionStateKind::Default`] has no style, so it's left alone.
+    pub fn set_style(&mut self, kind: InteractionStateKind, style: Option<StyleOverride>) {
+        match kind {
+            InteractionStateKind::Default => {}
+            InteractionStateKind::Hover => self.hover = style,
+            InteractionStateKind::Pressed => self.pressed = style,
+            InteractionStateKind::Focused => self.focused = style,
+            InteractionStateKind::Disabled => self.disabled = style,
+        }
+    }
+}
+
+/// Asks [`interaction_style_system`] to apply an entity's current style
+/// again, since it changed while it applied: added by `proteus-sdk`'s
+/// `Handle::set_style`, and removed once the style is applied.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct Restyle;
+
 // ---------------------------------------------------------------------------
 // InteractionState component
 // ---------------------------------------------------------------------------
@@ -469,6 +489,7 @@ type InteractionStyleQuery<'w, 's> = Query<
             Option<&'static RestingEffects>,
             Option<&'static StyleTiming>,
             Option<&'static EffectTransition>,
+            Has<Restyle>,
         ),
     ),
 >;
@@ -491,9 +512,12 @@ pub fn interaction_style_system(
 ) {
     let navigating = *mode == InputMode::Navigating;
     for (entity, quad_state, def, existing, lifecycle, disabled, effects) in query.iter() {
-        let (glow, border, shadow, resting, timing, changing) = effects;
+        let (glow, border, shadow, resting, timing, changing, restyle) = effects;
         if matches!(lifecycle, Some(Lifecycle::Transitioning)) {
             continue;
+        }
+        if restyle {
+            commands.entity(entity).remove::<Restyle>();
         }
 
         let declared = existing
@@ -529,7 +553,8 @@ pub fn interaction_style_system(
             continue;
         };
 
-        if existing.current == resolved {
+        // The same style, unless it was changed while it applied.
+        if existing.current == resolved && !restyle {
             continue;
         }
 

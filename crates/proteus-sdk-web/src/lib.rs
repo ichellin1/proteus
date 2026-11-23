@@ -962,6 +962,45 @@ impl ProteusApp {
         Ok(())
     }
 
+    /// Calls [`Proteus::load_font`](sdk::Proteus::load_font): returns the
+    /// family name, or throws if the bytes aren't a font.
+    #[wasm_bindgen(js_name = loadFont)]
+    pub fn load_font(&mut self, bytes: Vec<u8>) -> Result<String, JsValue> {
+        self.0
+            .borrow_mut()
+            .load_font(bytes)
+            .map_err(|e| crate::js_error(&e.to_string()))
+    }
+
+    /// Calls [`Proteus::expect_font`](sdk::Proteus::expect_font).
+    /// `while_loading` is `"hide"` or `"defaultFont"`; throws otherwise.
+    #[wasm_bindgen(js_name = expectFont)]
+    pub fn expect_font(&mut self, family: String, while_loading: &str) -> Result<(), JsValue> {
+        let while_loading = match while_loading {
+            "hide" => sdk::WhileLoading::Hide,
+            "defaultFont" => sdk::WhileLoading::DefaultFont,
+            other => {
+                return Err(crate::js_error(&format!(
+                    "invalid whileLoading {other:?}: expected \"hide\" or \"defaultFont\""
+                )))
+            }
+        };
+        self.0.borrow_mut().expect_font(family, while_loading);
+        Ok(())
+    }
+
+    /// Calls [`Proteus::set_fallback_fonts`](sdk::Proteus::set_fallback_fonts).
+    #[wasm_bindgen(js_name = setFallbackFonts)]
+    pub fn set_fallback_fonts(&mut self, families: Vec<String>) {
+        self.0.borrow_mut().set_fallback_fonts(families);
+    }
+
+    /// Calls [`Proteus::font_failed`](sdk::Proteus::font_failed).
+    #[wasm_bindgen(js_name = fontFailed)]
+    pub fn font_failed(&mut self, family: String) {
+        self.0.borrow_mut().font_failed(family);
+    }
+
     /// Calls [`Proteus::clear_glyph_cache`](sdk::Proteus::clear_glyph_cache).
     #[wasm_bindgen(js_name = clearGlyphCache)]
     pub fn clear_glyph_cache(&mut self) {
@@ -1167,6 +1206,41 @@ impl ProteusApp {
             .0
             .devices(&self.0.borrow())
             .map(dto::input_device_names)
+    }
+
+    /// Calls [`Handle::set_style`](sdk::Handle::set_style). `state` is
+    /// `"hover"`, `"pressed"`, `"focused"` or `"disabled"`, and `style` a
+    /// style override, or `undefined` to remove it; throws otherwise.
+    #[wasm_bindgen(js_name = setStyle)]
+    pub fn set_style(
+        &mut self,
+        handle: &Handle,
+        state: &str,
+        style: JsValue,
+    ) -> Result<(), JsValue> {
+        let state = match state {
+            "hover" => sdk::InteractionStateKind::Hover,
+            "pressed" => sdk::InteractionStateKind::Pressed,
+            "focused" => sdk::InteractionStateKind::Focused,
+            "disabled" => sdk::InteractionStateKind::Disabled,
+            other => {
+                return Err(crate::js_error(&format!(
+                    "invalid state {other:?}: expected \"hover\", \"pressed\", \"focused\" or \
+                     \"disabled\""
+                )))
+            }
+        };
+        let style = if style.is_undefined() || style.is_null() {
+            None
+        } else {
+            let dto: dto::StyleOverrideDto = serde_wasm_bindgen::from_value(style)
+                .map_err(|e| crate::js_error(&format!("invalid style: {e}")))?;
+            Some((&dto).into())
+        };
+        handle
+            .0
+            .set_style(&mut self.0.borrow_mut(), state, style)
+            .map_err(handle_err)
     }
 
     /// Calls [`Handle::set_disabled`](sdk::Handle::set_disabled).

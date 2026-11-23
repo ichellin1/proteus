@@ -176,6 +176,9 @@ Not yet placed in a release. Unordered within each area.
 - Justified text, aligned to both edges of its width.
 - Text that wraps again when its component changes size. v0.4.0's text wraps at a width set on
   the text.
+- A fallback list for each text or family, beside the app's own, so that, say, a serif text
+  falls back to a serif Devanagari font and a sans text to a sans one. v0.4.0 has one list for
+  the whole app.
 - Color emoji, and other fonts with colored glyphs. Text is baked as white with coverage in
   alpha, tinted by its color, apart from colored spans.
 

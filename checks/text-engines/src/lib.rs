@@ -25,7 +25,7 @@ pub use cases::{Align, Case, Face, Span};
 pub mod fonts {
     /// The static Inter Bold Proteus embeds today.
     pub static INTER_BOLD: &[u8] =
-        include_bytes!("../../../crates/proteus-render/assets/Inter-Bold.ttf");
+        include_bytes!("../Inter-Bold.ttf");
     /// Inter, variable in weight and optical size.
     #[cfg(feature = "all-fonts")]
     pub static INTER: &[u8] = include_bytes!("../fonts/Inter[opsz,wght].ttf");

@@ -455,18 +455,19 @@ impl Default for TransitionDefaults {
 /// Text settings.
 #[derive(Debug, Clone)]
 pub struct TextConfig {
-    /// The font all text is drawn in: the embedded Inter Bold, or your own,
-    /// from [`FontSource::from_bytes`].
+    /// The default font, which every text that names no family is drawn in:
+    /// the embedded Inter, or your own, from [`FontSource::from_bytes`].
     pub default_font: FontSource,
-    /// A default text size in pixels. Not read yet: every text sets its own
-    /// size.
-    pub default_size_px: f32,
 }
 
 /// Where a font comes from.
 #[derive(Debug, Clone)]
 pub enum FontSource {
-    /// Inter Bold, embedded in Proteus.
+    /// Inter, built into Proteus with the `embedded-font` feature, on by
+    /// default. A text in it that sets no weight is bold. Without the
+    /// feature, there's no default font, and text draws nothing until the app
+    /// loads one with `Proteus::load_font`; the first it loads becomes the
+    /// default.
     Embedded,
     /// A TTF or OTF font file's bytes. Prefer [`FontSource::from_bytes`],
     /// which checks them. Bytes that turn out not to be a font are logged as
@@ -494,7 +495,6 @@ impl Default for TextConfig {
     fn default() -> Self {
         Self {
             default_font: FontSource::Embedded,
-            default_size_px: 16.0,
         }
     }
 }
