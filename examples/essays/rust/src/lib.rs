@@ -3,11 +3,13 @@
 //! The app shows a row of cards, one for each of four public-domain essays.
 //! Each card's year is aligned to the end of its column. Its title wraps onto
 //! at most two lines and ends in "…". Its opening is spaced at a line height of
-//! 1.45, stops after five lines, and ends in an ellipsis of the card's own. Its
-//! source is clipped after two lines.
+//! 1.45, stops after five lines, and ends in an ellipsis of the card's own. The
+//! second card's ellipsis is bold, in the accent color, with an arrow after it. Its
+//! source is clipped after two lines, and the titles in it are italic.
 //!
 //! A card opens into its essay (1→1). The essay's byline is two lines, split
-//! with a `\n`. Its opening wraps at the column's width, and its pull quote is
+//! with a `\n`, with the author in a heavier weight and the year smaller and
+//! muted. Its opening wraps at the column's width, and its pull quote is
 //! centered. While an essay is open, a toolbar at the top sets its body's size,
 //! alignment, bold and italic, line height and font, as a text editor's does.
 //!
@@ -59,10 +61,24 @@
 //!     when it arrives.
 //!   - Changing a text's alignment or line height means setting it again.
 //!     `set_text` replaces the text, and the host lays it out again.
+//!   - A text can mix styles, as spans made with `Text::rich`. Each span takes
+//!     whatever it doesn't set from the text. The byline sets the author's
+//!     weight and the year's size and color, and a source's titles are italic.
+//!   - An ellipsis can be spans too. The second card's "read more" is bold, in
+//!     the accent color, with an arrow from Material Icons. An icon font
+//!     centers its icons between its ascender and descender, so they sit high
+//!     beside text. `VerticalAlign::Middle` centers the arrow on the text's
+//!     lowercase letters instead.
+//!   - A span can sit above or below the baseline. Each pull quote ends in a
+//!     dagger raised with `VerticalAlign::Super`, and the source in the essay
+//!     starts with one. An ellipsis given as a
+//!     string, such as the first card's "…", is in the text's own style.
+//!   - A text with a colored span is baked in its colors, so changing its color
+//!     bakes it again. A plain text's color, and any text's alpha, cost nothing
+//!     to change.
 //!
 //! Not shown here: a weight a font doesn't have, a character no font has (which
-//! is drawn as a box), mixed styles within a text, measuring text, and
-//! components within a line of text.
+//! is drawn as a box), measuring text, and components within a line of text.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -70,9 +86,9 @@ use std::rc::Rc;
 use proteus_runtime::{App, FetchId, Frame, ProteusConfig};
 use proteus_sdk::glam::{Vec2, Vec3, Vec4};
 use proteus_sdk::{
-    ComponentSpec, Easing, Handle, InputDevices, InteractionStateKind, Proteus, QuadState,
+    ComponentSpec, Easing, Handle, InputDevices, InteractionStateKind, Proteus, QuadState, Span,
     StyleOverride, Text, TextAlign, TextOverflow, TransitionChannel, TransitionConfig,
-    WhileLoading,
+    VerticalAlign, WhileLoading,
 };
 
 const BACKGROUND: Vec4 = rgb(0x1d1b26);
@@ -110,11 +126,34 @@ struct Essay {
     /// The ellipsis that ends the opening on the card when it runs past five
     /// lines.
     more: &'static str,
+    /// An icon from Material Icons after the ellipsis, which puts both in the
+    /// accent color.
+    more_icon: Option<&'static str>,
     /// A line from later in the essay.
     quote: &'static str,
-    /// Where the text is from. The card clips it to two lines, and the essay
+    /// Where the text is from, in parts that alternate between plain text and
+    /// titles, which are italic. The card clips it to two lines, and the essay
     /// shows it in full.
-    source: &'static str,
+    source: &'static [&'static str],
+}
+
+/// The mark that ties a pull quote to its source, a dagger, raised as a
+/// footnote mark is.
+fn footnote_mark() -> Span {
+    Span::new("\u{2020}").with_vertical_align(VerticalAlign::Super)
+}
+
+/// Returns an essay's source as spans, with its titles in italic.
+fn source_spans(essay: &Essay) -> Vec<Span> {
+    let part = |(i, part): (usize, &&str)| {
+        let span = Span::new(*part);
+        if i % 2 == 1 {
+            span.italic()
+        } else {
+            span
+        }
+    };
+    essay.source.iter().enumerate().map(part).collect()
 }
 
 const ESSAYS: [Essay; 4] = [
@@ -129,9 +168,13 @@ const ESSAYS: [Essay; 4] = [
             nature has made a great difference between man and man, or that the \
             civilization, which has hitherto taken place in the world, has been very partial.",
         more: "\u{2026}",
+        more_icon: None,
         quote: "\u{201c}I do not wish them to have power over men; but over themselves.\u{201d}",
-        source: "From \u{201c}A Vindication of the Rights of Woman\u{201d} by Mary \
-            Wollstonecraft (1792), Project Gutenberg eBook #3420. Public domain.",
+        source: &[
+            "From ",
+            "A Vindication of the Rights of Woman",
+            " by Mary Wollstonecraft (1792), Project Gutenberg eBook #3420. Public domain.",
+        ],
     },
     Essay {
         year: "1862",
@@ -143,10 +186,14 @@ const ESSAYS: [Essay; 4] = [
             wish to make an extreme statement, if so I may make an emphatic one, for there \
             are enough champions of civilization: the minister and the school committee and \
             every one of you will take care of that.",
-        more: " read more",
+        more: " read more ",
+        more_icon: Some("arrow_forward"),
         quote: "\u{201c}In Wildness is the preservation of the World.\u{201d}",
-        source: "From \u{201c}Walking\u{201d} by Henry David Thoreau (1862), Project \
-            Gutenberg eBook #1022. Public domain.",
+        source: &[
+            "From ",
+            "Walking",
+            " by Henry David Thoreau (1862), Project Gutenberg eBook #1022. Public domain.",
+        ],
     },
     Essay {
         year: "1877",
@@ -159,10 +206,16 @@ const ESSAYS: [Essay; 4] = [
             on and enjoy in the meanwhile, savours a little of bravado and gasconade. And yet \
             this should not be.",
         more: " \u{2014} continue reading the whole essay inside",
+        more_icon: None,
         quote: "\u{201c}Extreme busyness, whether at school or college, kirk or market, is a \
             symptom of deficient vitality.\u{201d}",
-        source: "From \u{201c}An Apology for Idlers\u{201d} by Robert Louis Stevenson (1877), \
-            in \u{201c}Virginibus Puerisque\u{201d}, Project Gutenberg eBook #386. Public domain.",
+        source: &[
+            "From ",
+            "An Apology for Idlers",
+            " by Robert Louis Stevenson (1877), in ",
+            "Virginibus Puerisque",
+            ", Project Gutenberg eBook #386. Public domain.",
+        ],
     },
     Essay {
         year: "1884",
@@ -172,8 +225,15 @@ const ESSAYS: [Essay; 4] = [
         // the fallback font, Noto Serif Devanagari, draws every character.
         opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
         more: " आगे पढ़ें",
+        more_icon: None,
         quote: "\u{201c}हमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u{201d}",
-        source: "From \u{201c}भारतवर्ष की उन्नति कैसे हो सकती है?\u{201d} by Bharatendu Harishchandra (1884), in \u{201c}Bharatendu Samagra\u{201d} (1987), Hindi Wikisource. Public domain.",
+        source: &[
+            "From ",
+            "भारतवर्ष की उन्नति कैसे हो सकती है?",
+            " by Bharatendu Harishchandra (1884), in ",
+            "Bharatendu Samagra",
+            " (1987), Hindi Wikisource. Public domain.",
+        ],
     },
 ];
 
@@ -319,6 +379,25 @@ fn button(position: Vec3, size: Vec2, label: &str) -> ComponentSpec {
     .text(Text::new(label, 14.0).with_color(WHITE))
 }
 
+/// Returns how the opening on `essay`'s card ends: in its ellipsis, in the
+/// opening's own style, or, with an icon, in bold in the accent color with the
+/// icon after it.
+fn card_ellipsis(essay: &Essay) -> TextOverflow {
+    let Some(icon) = essay.more_icon else {
+        return TextOverflow::Ellipsis(vec![Span::new(essay.more)]);
+    };
+    TextOverflow::Ellipsis(vec![
+        Span::new(essay.more).bold().with_color(ACCENT),
+        // An icon sits high beside text, since the icon font centers it
+        // between its ascender and descender. `Middle` centers it on the
+        // text's lowercase letters instead.
+        Span::new(icon)
+            .with_family(ICONS)
+            .with_color(ACCENT)
+            .with_vertical_align(VerticalAlign::Middle),
+    ])
+}
+
 /// Creates a card's texts for `essay`, in reading order.
 fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
     let left = -CARD_SIZE.x / 2.0 + CARD_PADDING;
@@ -357,14 +436,14 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_wrap_width(CARD_COLUMN)
                 .with_line_height(1.45)
                 .with_max_lines(5)
-                .with_ellipsis(essay.more),
+                .with_overflow(card_ellipsis(essay)),
         ),
         // The source takes at most two lines at the foot of the card, and is
         // clipped with no mark.
         text_at(
             left,
             -CARD_SIZE.y / 2.0 + CARD_PADDING + 30.0,
-            Text::new(essay.source, 12.0)
+            Text::rich(source_spans(essay), 12.0)
                 .with_color(MUTED)
                 .with_wrap_width(CARD_COLUMN)
                 .with_max_lines(2)
@@ -479,24 +558,35 @@ impl Ui {
                 .with_color(INK)
                 .with_wrap_width(PANEL_COLUMN),
         );
-        // The byline is two lines, split with a `\n`.
-        let byline = format!("{}\n{}", essay.author, essay.year);
-        let _ = view
-            .byline
-            .set_text(app, Text::new(byline, 14.0).with_color(MUTED).italic());
+        // The byline is two lines, split with a `\n`: the author in a heavier
+        // weight, and the year smaller and muted.
+        let byline = Text::rich(
+            [
+                Span::new(essay.author).with_weight(600),
+                Span::new(format!("\n{}", essay.year))
+                    .with_size(12.0)
+                    .with_color(MUTED),
+            ],
+            14.0,
+        );
+        let _ = view.byline.set_text(app, byline.with_color(INK).italic());
         let _ = view.body.set_text(app, self.body(i));
         let _ = view.quote.set_text(
             app,
-            Text::new(essay.quote, 20.0)
-                .with_family(LORA)
-                .italic()
-                .with_color(ACCENT)
-                .with_wrap_width(600.0)
-                .with_align(TextAlign::Center),
+            Text::rich(
+                [Span::new(essay.quote), footnote_mark().with_size(14.0)],
+                20.0,
+            )
+            .with_family(LORA)
+            .italic()
+            .with_color(ACCENT)
+            .with_wrap_width(600.0)
+            .with_align(TextAlign::Center),
         );
+        let mark = [footnote_mark(), Span::new(" ")];
         let _ = view.source.set_text(
             app,
-            Text::new(essay.source, 12.0)
+            Text::rich(mark.into_iter().chain(source_spans(essay)), 12.0)
                 .with_color(MUTED)
                 .with_wrap_width(PANEL_COLUMN),
         );
@@ -921,6 +1011,49 @@ mod tests {
             hovered(&mut app, ui.tools.bold),
             BUTTON_HOVER,
             "toggled off"
+        );
+    }
+
+    // The open essay's byline sets the author's weight, and the year smaller
+    // and muted. The pull quote ends in a superscript dagger, and the source
+    // starts with one, and its titles are italic. The second card's ellipsis
+    // is bold, in the accent color, with an icon centered on the text after
+    // it. The first's is the plain "…", in the opening's own style.
+    #[test]
+    fn bylines_sources_and_ellipses_mix_styles() {
+        let mut app = Proteus::new();
+        let ui = build(&mut app, 1100.0);
+        ui.open(&mut app, 0);
+        let text = |app: &Proteus, handle: Handle| app.world().get::<Text>(handle.id()).cloned();
+        let byline = text(&app, ui.essay.byline).unwrap();
+        assert_eq!(byline.spans[0].weight, Some(600));
+        assert_eq!(byline.spans[1].size_px, Some(12.0));
+        assert_eq!(byline.spans[1].color, Some(MUTED));
+        assert!(byline.italic);
+
+        let quote = text(&app, ui.essay.quote).unwrap();
+        assert_eq!(quote.spans[1].vertical_align, VerticalAlign::Super);
+        let source = text(&app, ui.essay.source).unwrap();
+        assert_eq!(source.spans[0].vertical_align, VerticalAlign::Super);
+        assert_eq!(
+            source.spans[3].content,
+            "A Vindication of the Rights of Woman"
+        );
+        assert_eq!(source.spans[3].italic, Some(true));
+        assert_eq!(source.spans[2].italic, None);
+
+        // A card's texts are the year, the title, the opening and the source.
+        let opening = |i: usize| text(&app, ui.card_texts[i][2]).unwrap();
+        let TextOverflow::Ellipsis(more) = opening(1).overflow else {
+            panic!("ends in an ellipsis");
+        };
+        assert_eq!(more[0].color, Some(ACCENT));
+        assert_eq!(more[0].weight, Some(700));
+        assert_eq!(more[1].family.as_deref(), Some(ICONS));
+        assert_eq!(more[1].vertical_align, VerticalAlign::Middle);
+        assert_eq!(
+            opening(0).overflow,
+            TextOverflow::Ellipsis(vec![Span::new("\u{2026}")])
         );
     }
 

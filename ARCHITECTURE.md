@@ -247,13 +247,17 @@ Proteus bakes three kinds of thing:
 - **Text and images**, by `Renderer::render` before collecting instances. Text is laid out
   and shaped with parley, which applies the font's kerning and places each glyph to a quarter
   of a pixel, and its glyphs are rasterized on the CPU with swash, each text to one image,
-  white with the glyphs' coverage in alpha, so it can take any color. A glyph cache keeps each
+  white with the glyphs' coverage in alpha, so it can take any color as it's drawn. A text
+  with a span that sets a color is baked in its spans' colors instead, and drawn tinted only
+  by its alpha. `BakedColor` keeps the color it was baked with, and a change to it bakes the
+  text again. A glyph cache keeps each
   glyph's pixels after they're rasterized, dropping those used longest ago past
   `resources.glyph_cache_bytes`, so the glyphs texts share are rasterized once. Text is in the
   default font, Inter with the `embedded-font` feature, or a family the app has loaded with
   `Proteus::load_font`, which queues the font in the `Fonts` resource for the renderer to add
   before it next bakes. A text whose family is expected but not loaded waits, or is drawn in the
-  default font and baked again once it loads, as the app chose. A character the text's family
+  default font and baked again once it loads, as the app chose. A span's family counts as the
+  text's. A character the text's family
   lacks is looked for in the app's fallback fonts, in order, then the default font; one none has
   is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font loads. Images are decoded with the `image` crate. Both go into the main
   atlas. With `resources.lazy_load`, a component's text or image waits until it is visible.
@@ -529,6 +533,8 @@ These are known shortcomings, each planned to be addressed in a future release:
   with its pieces' own, rather than one curve that changes size.
 - Text doesn't justify its lines, or wrap again when its component changes size: it wraps at a
   width of its own.
+- Changing the color of a text with a colored span bakes it again, since its image is drawn with
+  one tint. A plain text's color, and any text's alpha, change at no cost.
 - One video at a time.
 - No text input: no text field, cursor or selection, and no input methods for composing text.
   A key's text arrives in its event, for an app to use itself.

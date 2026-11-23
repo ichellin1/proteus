@@ -5,11 +5,13 @@
  * The app shows a row of cards, one for each of four public-domain essays.
  * Each card's year is aligned to the end of its column. Its title wraps onto at
  * most two lines and ends in "…". Its opening is spaced at a line height of
- * 1.45, stops after five lines, and ends in an ellipsis of the card's own. Its
- * source is clipped after two lines.
+ * 1.45, stops after five lines, and ends in an ellipsis of the card's own. The
+ * second card's ellipsis is bold, in the accent color, with an arrow after it. Its
+ * source is clipped after two lines, and the titles in it are italic.
  *
  * A card opens into its essay (1→1). The essay's byline is two lines, split
- * with a `\n`. Its opening wraps at the column's width, and its pull quote is
+ * with a `\n`, with the author in a heavier weight and the year smaller and
+ * muted. Its opening wraps at the column's width, and its pull quote is
  * centered. While an essay is open, a toolbar at the top sets its body's size,
  * alignment, bold and italic, line height and font, as a text editor's does.
  *
@@ -59,14 +61,28 @@
  *     when it arrives.
  *   - Changing a text's alignment or line height means setting it again.
  *     `setText` replaces the text, and the host lays it out again.
+ *   - A text can mix styles, given as `spans` rather than `content`. Each span
+ *     takes whatever it doesn't set from the text. The byline sets the author's
+ *     weight and the year's size and color, and a source's titles are italic.
+ *   - An ellipsis can be spans too. The second card's "read more" is bold, in
+ *     the accent color, with an arrow from Material Icons. An icon font
+ *     centers its icons between its ascender and descender, so they sit high
+ *     beside text. `verticalAlign: "middle"` centers the arrow on the text's
+ *     lowercase letters instead.
+ *   - A span can sit above or below the baseline. Each pull quote ends in a
+ *     dagger raised with `verticalAlign: "super"`, and the source in the essay
+ *     starts with one. An ellipsis given as a
+ *     string, such as the first card's "…", is in the text's own style.
+ *   - A text with a colored span is baked in its colors, so changing its color
+ *     bakes it again. A plain text's color, and any text's alpha, cost nothing
+ *     to change.
  *
  * Not shown here: a weight a font doesn't have, a character no font has (which
- * is drawn as a box), mixed styles within a text, measuring text, and
- * components within a line of text.
+ * is drawn as a box), measuring text, and components within a line of text.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
-import type { Color, ComponentSpec, Geometry, Handle, ProteusApp, TextSpec } from "proteus-sdk";
+import type { Color, ComponentSpec, Geometry, Handle, ProteusApp, SpanSpec, TextSpec } from "proteus-sdk";
 
 const BACKGROUND = colorFrom("#1d1b26");
 const PAPER = colorFrom("#f4f1ea");
@@ -90,10 +106,23 @@ interface Essay {
   opening: string;
   /** The ellipsis that ends the opening on the card when it runs past five lines. */
   more: string;
+  /** An icon from Material Icons after the ellipsis, which puts both in the accent color. */
+  moreIcon?: string;
   /** A line from later in the essay. */
   quote: string;
-  /** Where the text is from. The card clips it to two lines, and the essay shows it in full. */
-  source: string;
+  /**
+   * Where the text is from, in parts that alternate between plain text and titles, which are
+   * italic. The card clips it to two lines, and the essay shows it in full.
+   */
+  source: string[];
+}
+
+/** The mark that ties a pull quote to its source, a dagger, raised as a footnote mark is. */
+const FOOTNOTE_MARK: SpanSpec = { content: "\u2020", verticalAlign: "super" };
+
+/** Returns an essay's source as spans, with its titles in italic. */
+function sourceSpans(essay: Essay): SpanSpec[] {
+  return essay.source.map((content, i) => (i % 2 === 1 ? { content, italic: true } : { content }));
 }
 
 const ESSAYS: Essay[] = [
@@ -109,9 +138,11 @@ const ESSAYS: Essay[] = [
       "in the world, has been very partial.",
     more: "…",
     quote: "“I do not wish them to have power over men; but over themselves.”",
-    source:
-      "From “A Vindication of the Rights of Woman” by Mary Wollstonecraft (1792), " +
-      "Project Gutenberg eBook #3420. Public domain.",
+    source: [
+      "From ",
+      "A Vindication of the Rights of Woman",
+      " by Mary Wollstonecraft (1792), Project Gutenberg eBook #3420. Public domain.",
+    ],
   },
   {
     year: "1862",
@@ -123,9 +154,10 @@ const ESSAYS: Essay[] = [
       "parcel of Nature, rather than a member of society. I wish to make an extreme statement, " +
       "if so I may make an emphatic one, for there are enough champions of civilization: the " +
       "minister and the school committee and every one of you will take care of that.",
-    more: " read more",
+    more: " read more ",
+    moreIcon: "arrow_forward",
     quote: "“In Wildness is the preservation of the World.”",
-    source: "From “Walking” by Henry David Thoreau (1862), Project Gutenberg eBook #1022. Public domain.",
+    source: ["From ", "Walking", " by Henry David Thoreau (1862), Project Gutenberg eBook #1022. Public domain."],
   },
   {
     year: "1877",
@@ -141,9 +173,13 @@ const ESSAYS: Essay[] = [
     quote:
       "“Extreme busyness, whether at school or college, kirk or market, is a symptom of " +
       "deficient vitality.”",
-    source:
-      "From “An Apology for Idlers” by Robert Louis Stevenson (1877), in " +
-      "“Virginibus Puerisque”, Project Gutenberg eBook #386. Public domain.",
+    source: [
+      "From ",
+      "An Apology for Idlers",
+      " by Robert Louis Stevenson (1877), in ",
+      "Virginibus Puerisque",
+      ", Project Gutenberg eBook #386. Public domain.",
+    ],
   },
   {
     year: "1884",
@@ -154,7 +190,13 @@ const ESSAYS: Essay[] = [
     opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
     more: " आगे पढ़ें",
     quote: "\u201cहमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u201d",
-    source: "From “भारतवर्ष की उन्नति कैसे हो सकती है?” by Bharatendu Harishchandra (1884), in “Bharatendu Samagra” (1987), Hindi Wikisource. Public domain.",
+    source: [
+      "From ",
+      "भारतवर्ष की उन्नति कैसे हो सकती है?",
+      " by Bharatendu Harishchandra (1884), in ",
+      "Bharatendu Samagra",
+      " (1987), Hindi Wikisource. Public domain.",
+    ],
   },
 ];
 
@@ -321,6 +363,22 @@ function select(buttons: Handle[], chosen: number): void {
   buttons.forEach((b, i) => mark(b, i === chosen));
 }
 
+/**
+ * Returns how the opening on `essay`'s card ends: in its ellipsis, in the opening's own style,
+ * or, with an icon, in bold in the accent color with the icon after it.
+ */
+function cardEllipsis(essay: Essay): string | SpanSpec[] {
+  if (essay.moreIcon === undefined) {
+    return essay.more;
+  }
+  return [
+    { content: essay.more, weight: 700, color: ACCENT },
+    // An icon sits high beside text, since the icon font centers it between its ascender and
+    // descender. `"middle"` centers it on the text's lowercase letters instead.
+    { content: essay.moreIcon, family: ICONS, color: ACCENT, verticalAlign: "middle" },
+  ];
+}
+
 /** Creates a card's texts for `essay`, in reading order. */
 function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
   const left = -CARD_WIDTH / 2 + CARD_PADDING;
@@ -340,11 +398,11 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
       wrapWidth: CARD_COLUMN,
       lineHeight: 1.45,
       maxLines: 5,
-      overflow: { ellipsis: essay.more },
+      overflow: { ellipsis: cardEllipsis(essay) },
     }),
     // The source takes at most two lines at the foot of the card, and is clipped with no mark.
     textAt(left, -CARD_HEIGHT / 2 + CARD_PADDING + 30, {
-      content: essay.source,
+      spans: sourceSpans(essay),
       sizePx: 12,
       color: MUTED,
       wrapWidth: CARD_COLUMN,
@@ -475,11 +533,33 @@ function main(app: ProteusApp, canvasWidth: number): void {
     open = i;
     const essay = ESSAYS[i];
     title.setText({ content: essay.title, sizePx: 30, weight: 800, color: INK, wrapWidth: PANEL_COLUMN });
-    // The byline is two lines, split with a `\n`.
-    byline.setText({ content: `${essay.author}\n${essay.year}`, sizePx: 14, color: MUTED, italic: true });
+    // The byline is two lines, split with a `\n`: the author in a heavier weight, and the year
+    // smaller and muted.
+    byline.setText({
+      spans: [
+        { content: essay.author, weight: 600 },
+        { content: `\n${essay.year}`, sizePx: 12, color: MUTED },
+      ],
+      sizePx: 14,
+      color: INK,
+      italic: true,
+    });
     body.setText(bodyText(i));
-    quote.setText({ content: essay.quote, sizePx: 20, family: LORA, italic: true, color: ACCENT, wrapWidth: 600, align: "center" });
-    source.setText({ content: essay.source, sizePx: 12, color: MUTED, wrapWidth: PANEL_COLUMN });
+    quote.setText({
+      spans: [{ content: essay.quote }, { ...FOOTNOTE_MARK, sizePx: 14 }],
+      sizePx: 20,
+      family: LORA,
+      italic: true,
+      color: ACCENT,
+      wrapWidth: 600,
+      align: "center",
+    });
+    source.setText({
+      spans: [FOOTNOTE_MARK, { content: " " }, ...sourceSpans(essay)],
+      sizePx: 12,
+      color: MUTED,
+      wrapWidth: PANEL_COLUMN,
+    });
     setVisible(cardContents[i], false);
     channel.set(panel, cards[i], OPEN, true);
   }

@@ -60,7 +60,7 @@ done in PLANNING, when it comes up, and its scope can change then.
 - Multiple fonts: a font per text, several weights of one family, and falling back to another
   font for characters the first doesn't have. The embedded font becomes variable Inter, and
   optional.
-- Inline styles: bold, italic, size and color mixed within one text.
+- Inline styles: bold, italic, size, color and font mixed within one text.
 - Measuring text before it's drawn, which the layout system in v0.6.0 needs.
 - Inline boxes: a component within a line of text, flowing with it as it wraps.
 - A text example, and the demo's Text panel showing each new feature.
@@ -181,6 +181,11 @@ Not yet placed in a release. Unordered within each area.
   the whole app.
 - Color emoji, and other fonts with colored glyphs. Text is baked as white with coverage in
   alpha, tinted by its color, apart from colored spans.
+- Span colors on the GPU, so a span's color, or the color of a text with colored spans, can
+  change or animate without baking the text again. Each pixel would store its span rather than
+  its color, and the text's span colors would go to the GPU with it. v0.4.0 bakes colored spans
+  into the text's image, and bakes it again when they change. An edge case, so an app would
+  choose it in its config, keeping baked colors as the default.
 
 ### Images, textures and memory
 

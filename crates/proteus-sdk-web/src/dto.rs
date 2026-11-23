@@ -18,7 +18,9 @@ use proteus_sdk::{
     KeyRepeat, KeyState, Modifiers, QuadState, StyleOverride, TransitionConfig, TransitionData,
     TransitionDropped,
 };
-use proteus_ui::{Border, DropShadow, Glow, Image, Text, TextAlign, TextOverflow};
+use proteus_ui::{
+    Border, DropShadow, Glow, Image, Span, Text, TextAlign, TextOverflow, VerticalAlign,
+};
 
 /// Reads a field given as `undefined` or `null` as its default, as if it had
 /// been left out. serde's `default` only covers a missing key, but TypeScript
@@ -211,10 +213,32 @@ impl From<&StyleOverrideDto> for StyleOverride {
 // Text / Image / Border / Glow / DropShadow
 // ---------------------------------------------------------------------------
 
+/// A `TextSpec`, checked to have either `content` or `spans`.
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "TextFields")]
+pub struct TextDto(TextFields);
+
+impl TryFrom<TextFields> for TextDto {
+    type Error = String;
+
+    fn try_from(fields: TextFields) -> Result<Self, String> {
+        match (&fields.content, &fields.spans) {
+            (Some(_), Some(_)) => {
+                Err("a TextSpec has both `content` and `spans`: give it one or the other".into())
+            }
+            (None, None) => Err("a TextSpec needs `content` or `spans`".into()),
+            _ => Ok(Self(fields)),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TextDto {
-    pub content: String,
+pub struct TextFields {
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub spans: Option<Vec<SpanDto>>,
     pub size_px: f32,
     #[serde(default)]
     pub color: Option<ColorDto>,
@@ -248,12 +272,83 @@ pub enum TextAlignDto {
 }
 
 /// How text with more lines than its maximum ends, given as `"clip"` or as
-/// `{ ellipsis: "…" }`, with any text in place of the `…`.
+/// `{ ellipsis: "…" }`, where the ellipsis is any text or spans.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TextOverflowDto {
     Keyword(TextOverflowKeyword),
-    Ellipsis { ellipsis: String },
+    Ellipsis { ellipsis: EllipsisDto },
+}
+
+/// An ellipsis, given as a string, in the text's own style, or as spans.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum EllipsisDto {
+    Text(String),
+    Spans(Vec<SpanDto>),
+}
+
+/// A span: TypeScript's `SpanSpec`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpanDto {
+    pub content: String,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub weight: Option<u16>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub size_px: Option<f32>,
+    #[serde(default)]
+    pub color: Option<ColorDto>,
+    #[serde(default)]
+    pub vertical_align: Option<VerticalAlignDto>,
+}
+
+/// A span's vertical alignment, given as `"baseline"`, `"middle"`, `"super"`
+/// or `"sub"`, or as a number of pixels to raise it by.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(untagged)]
+pub enum VerticalAlignDto {
+    Keyword(VerticalAlignKeyword),
+    Raise(f32),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VerticalAlignKeyword {
+    Baseline,
+    Middle,
+    Super,
+    Sub,
+}
+
+impl From<&SpanDto> for Span {
+    fn from(d: &SpanDto) -> Self {
+        Self {
+            content: d.content.clone(),
+            family: d.family.clone(),
+            weight: d.weight,
+            italic: d.italic,
+            size_px: d.size_px,
+            color: d.color.map(|c| glam::Vec4::new(c.r, c.g, c.b, c.a)),
+            vertical_align: match d.vertical_align {
+                None | Some(VerticalAlignDto::Keyword(VerticalAlignKeyword::Baseline)) => {
+                    VerticalAlign::Baseline
+                }
+                Some(VerticalAlignDto::Keyword(VerticalAlignKeyword::Middle)) => {
+                    VerticalAlign::Middle
+                }
+                Some(VerticalAlignDto::Keyword(VerticalAlignKeyword::Super)) => {
+                    VerticalAlign::Super
+                }
+                Some(VerticalAlignDto::Keyword(VerticalAlignKeyword::Sub)) => VerticalAlign::Sub,
+                Some(VerticalAlignDto::Raise(px)) => VerticalAlign::Raise(px),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -263,9 +358,12 @@ pub enum TextOverflowKeyword {
 }
 
 impl From<&TextDto> for Text {
-    fn from(d: &TextDto) -> Self {
-        let mut text =
-            Text::new(d.content.clone(), d.size_px).with_letter_spacing(d.letter_spacing_px);
+    fn from(TextDto(d): &TextDto) -> Self {
+        let mut text = match &d.spans {
+            Some(spans) => Text::rich(spans.iter().map(Span::from), d.size_px),
+            None => Text::new(d.content.clone().unwrap_or_default(), d.size_px),
+        }
+        .with_letter_spacing(d.letter_spacing_px);
         if let Some(c) = &d.color {
             text = text.with_color(glam::Vec4::new(c.r, c.g, c.b, c.a));
         }
@@ -287,7 +385,10 @@ impl From<&TextDto> for Text {
                 text.overflow = TextOverflow::Clip;
             }
             Some(TextOverflowDto::Ellipsis { ellipsis }) => {
-                text.overflow = TextOverflow::Ellipsis(ellipsis.clone());
+                text.overflow = TextOverflow::Ellipsis(match ellipsis {
+                    EllipsisDto::Text(ellipsis) => vec![Span::new(ellipsis)],
+                    EllipsisDto::Spans(spans) => spans.iter().map(Span::from).collect(),
+                });
             }
             None => {}
         }
@@ -1150,6 +1251,63 @@ mod tests {
     }
 
     #[test]
+    fn text_with_spans() {
+        let text = |json: &str| serde_json::from_str::<TextDto>(json).map(|d| Text::from(&d));
+        let red = glam::Vec4::new(1.0, 0.0, 0.0, 1.0);
+        let rich = text(
+            r#"{"spans": [{"content": "Hello "},
+                {"content": "world", "weight": 700, "italic": true, "sizePx": 20,
+                 "family": "Lora", "color": {"r": 1, "g": 0, "b": 0, "a": 1}}],
+                "sizePx": 16, "maxLines": 1,
+                "overflow": {"ellipsis": [{"content": " more", "color": {"r": 1, "g": 0, "b": 0, "a": 1}}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            rich,
+            Text::rich(
+                [
+                    Span::new("Hello "),
+                    Span::new("world")
+                        .bold()
+                        .italic()
+                        .with_size(20.0)
+                        .with_family("Lora")
+                        .with_color(red),
+                ],
+                16.0
+            )
+            .with_max_lines(1)
+            .with_ellipsis_spans([Span::new(" more").with_color(red)])
+        );
+        // `undefined`, which reads as `null`, is the same as leaving it out.
+        let plain = text(r#"{"content": "Hi", "spans": null, "sizePx": 16}"#).unwrap();
+        assert_eq!(plain, Text::new("Hi", 16.0));
+
+        let both = text(r#"{"content": "Hi", "spans": [{"content": "Hi"}], "sizePx": 16}"#);
+        assert!(both.unwrap_err().to_string().contains("both"));
+        assert!(text(r#"{"sizePx": 16}"#).is_err(), "neither");
+        assert!(
+            text(r#"{"spans": [{"weight": 700}], "sizePx": 16}"#).is_err(),
+            "no content"
+        );
+        assert!(text(r#"{"spans": [{"content": "a", "italic": "yes"}], "sizePx": 16}"#).is_err());
+
+        let align = |value: &str| {
+            let json = format!(
+                r#"{{"spans": [{{"content": "a", "verticalAlign": {value}}}], "sizePx": 16}}"#
+            );
+            text(&json).map(|t| t.spans[0].vertical_align)
+        };
+        assert_eq!(align(r#""middle""#).unwrap(), VerticalAlign::Middle);
+        assert_eq!(align(r#""super""#).unwrap(), VerticalAlign::Super);
+        assert_eq!(align(r#""sub""#).unwrap(), VerticalAlign::Sub);
+        assert_eq!(align(r#""baseline""#).unwrap(), VerticalAlign::Baseline);
+        assert_eq!(align("null").unwrap(), VerticalAlign::Baseline);
+        assert_eq!(align("-3").unwrap(), VerticalAlign::Raise(-3.0));
+        assert!(align(r#""top""#).is_err());
+    }
+
+    #[test]
     fn action_names() {
         let mut map = KeyMap::default();
         let search = Action::App(map.define_action("search"));
@@ -1189,7 +1347,7 @@ mod tests {
             "a component is visible unless it says otherwise"
         );
         assert!(!spec.start_disabled);
-        assert_eq!(spec.text.unwrap().letter_spacing_px, 0.0);
+        assert_eq!(spec.text.unwrap().0.letter_spacing_px, 0.0);
 
         let request: TextureRequestDto = serde_json::from_str(r#"{"eternal": null}"#).unwrap();
         assert!(!request.eternal);

@@ -202,6 +202,28 @@ impl Renderer {
         self.draw(proteus, target);
     }
 
+    /// Bakes again each text with a colored span whose color's red, green or
+    /// blue changed since it was baked, since its spans that set no color are
+    /// in that color. See `proteus_ui::Text::color`.
+    fn rebake_recolored_text(&mut self, world: &mut bevy_ecs::world::World) {
+        let recolored: Vec<_> = world
+            .query::<(
+                bevy_ecs::entity::Entity,
+                &proteus_ui::Text,
+                &proteus_ui::BakedColor,
+            )>()
+            .iter(world)
+            .filter(|(_, text, baked)| text.color.truncate() != baked.0)
+            .map(|(entity, _, _)| entity)
+            .collect();
+        for entity in recolored {
+            // Releases the old texture; see `proteus_ui::texture_ref`.
+            world
+                .entity_mut(entity)
+                .remove::<(BakedText, TextTextureRef, proteus_ui::BakedColor)>();
+        }
+    }
+
     /// Adds the fonts the app has loaded since the last frame to the font
     /// atlas. Texts in those families that were drawn in the default font
     /// meanwhile are baked again, and so are texts drawn with boxes for
@@ -256,9 +278,7 @@ impl Renderer {
                     bevy_ecs::query::Has<proteus_ui::MissingGlyphs>,
                 ), bevy_ecs::query::With<BakedText>>()
                 .iter(world)
-                .filter(|(_, text, missing)| {
-                    *missing || text.family.as_deref() == Some(family.as_str())
-                })
+                .filter(|(_, text, missing)| *missing || text.uses_family(&family))
                 .map(|(entity, _, _)| entity)
                 .collect();
             for entity in drawn {
@@ -292,6 +312,7 @@ impl Renderer {
             self.font_atlas.clear_glyph_cache();
         }
         self.add_loaded_fonts(world);
+        self.rebake_recolored_text(world);
         let lazy_load = self.config.resources.lazy_load;
         bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue, lazy_load);
         bake::bake_pending_images(
@@ -866,6 +887,117 @@ mod tests {
         scene.frame();
         assert!(baked(&scene, &label).is_some());
         assert!(!has_boxes(&scene, &label), "drawn again, in the fallback");
+    }
+
+    // A text waits while a font one of its spans names is still loading, as
+    // a text in that font does, and is drawn once it loads.
+    #[test]
+    fn a_text_waits_for_its_spans_expected_font() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        scene
+            .proteus
+            .expect_font("Lora", proteus_sdk::WhileLoading::Hide);
+        let text = Text::rich(
+            [
+                proteus_ui::Span::new("In Inter, "),
+                proteus_ui::Span::new("in Lora").with_family("Lora"),
+            ],
+            24.0,
+        );
+        let label = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(text));
+        scene.frame();
+        assert_eq!(baked(&scene, &label), None, "not drawn while Lora loads");
+        scene.proteus.load_font(LORA).unwrap();
+        scene.frame();
+        assert!(baked(&scene, &label).is_some(), "drawn once Lora loads");
+    }
+
+    // A text with both content and spans draws its spans.
+    #[test]
+    fn a_text_with_content_and_spans_draws_its_spans() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        let spans = [proteus_ui::Span::new("Spans")];
+        let mut both = Text::rich(spans.clone(), 24.0);
+        both.content = "A much longer content".to_owned();
+        let both = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(both));
+        let only = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(Text::rich(spans, 24.0)));
+        scene.frame();
+        assert_eq!(baked(&scene, &both), baked(&scene, &only));
+    }
+
+    // Changing the red, green or blue of a text with a colored span bakes it
+    // again, since its spans that set no color are baked in it. Changing its
+    // alpha doesn't, and neither does changing a plain text's color, since
+    // those are applied as the text is drawn.
+    #[test]
+    fn recoloring_a_colored_text_bakes_it_again() {
+        let Some(mut scene) = Scene::new(ProteusConfig::default()) else {
+            return;
+        };
+        let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        let colored = Text::rich(
+            [
+                proteus_ui::Span::new("Col"),
+                proteus_ui::Span::new("ored").with_color(red),
+            ],
+            24.0,
+        );
+        let colored = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(colored));
+        let plain = scene
+            .proteus
+            .component(ComponentSpec::new(QuadState::default()).text(Text::new("Plain", 24.0)));
+        scene.frame();
+        let texture = |scene: &Scene, handle: &Handle| {
+            scene
+                .proteus
+                .world()
+                .get::<TextTextureRef>(handle.id())
+                .map(|t| t.0)
+        };
+        let set_color = |scene: &mut Scene, handle: &Handle, color: Vec4| {
+            let world = scene.proteus.world_mut();
+            world.get_mut::<Text>(handle.id()).unwrap().color = color;
+        };
+        let (colored_before, plain_before) = (texture(&scene, &colored), texture(&scene, &plain));
+        assert!(colored_before.is_some() && plain_before.is_some());
+
+        let faded = Vec4::new(1.0, 1.0, 1.0, 0.5);
+        set_color(&mut scene, &colored, faded);
+        set_color(&mut scene, &plain, faded);
+        scene.frame();
+        assert_eq!(texture(&scene, &colored), colored_before, "alpha: no bake");
+        assert_eq!(texture(&scene, &plain), plain_before);
+
+        let blue = Vec4::new(0.0, 0.0, 1.0, 0.5);
+        set_color(&mut scene, &colored, blue);
+        set_color(&mut scene, &plain, blue);
+        scene.frame();
+        let colored_after = texture(&scene, &colored);
+        assert!(colored_after.is_some(), "baked again");
+        assert_ne!(colored_after, colored_before, "in a new texture");
+        assert_eq!(
+            texture(&scene, &plain),
+            plain_before,
+            "a plain text is tinted"
+        );
+        let baked_color = scene
+            .proteus
+            .world()
+            .get::<proteus_ui::BakedColor>(colored.id())
+            .copied();
+        assert_eq!(baked_color, Some(proteus_ui::BakedColor(blue.truncate())));
     }
 
     #[test]

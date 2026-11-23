@@ -37,14 +37,27 @@
 //! ellipsis wider than a line takes lines of its own. An ellipsis too long to
 //! fit on its own is clipped, with a warning.
 //!
+//! ## Spans
+//!
+//! A text can be made of [`Span`]s, each a part of it with a style of its own,
+//! such as a bold word. A span takes whatever it doesn't set from its text.
+//! An ellipsis can be spans too.
+//!
 //! ## Text as a texture
 //!
-//! The whole text becomes one image, at its size in pixels:
+//! The whole text becomes one image, at its size in pixels. A text with no
+//! colored span is white:
 //! - Red, green and blue are 255 everywhere, so the text can take any color.
 //! - Alpha is each pixel's glyph coverage, antialiased.
 //!
-//! The text is then drawn like any other texture. It transitions, takes a
-//! color, and is clipped by rounded corners, with no special handling.
+//! The renderer tints it with the text's color as it draws it, so the color
+//! can change without baking the text again. One image takes one tint, so a
+//! text with a colored span is drawn in its colors instead. Each span is in its
+//! own color, or in the text's color if it sets none, and its alpha is
+//! multiplied by its color's alpha. See [`TextLayout::is_colored`].
+//!
+//! The text is then drawn like any other texture. It transitions, and is
+//! clipped by rounded corners, with no special handling.
 //!
 //! ## Fonts
 //!
@@ -67,8 +80,12 @@
 //! from Google Fonts. A text in it that sets no weight is drawn at 700, bold.
 //! Without the feature, [`FontAtlas::empty`] has no font until one is loaded.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::ops::Range;
+use std::sync::{Arc, LazyLock};
+
+use glam::Vec4;
 
 use crate::glyph_cache::{CachedGlyph, GlyphCache, GlyphKey};
 
@@ -125,32 +142,142 @@ pub enum TextAlign {
 }
 
 /// How a text with more lines than its maximum ends.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TextOverflow {
-    /// Ends with this text after the last line shown. The default is "…", and
-    /// an app can set its own, such as `" more"`. "…" is drawn as "..." in a
-    /// font that has no "…".
-    Ellipsis(String),
+    /// Ends with these spans after the last line shown. The default is "…",
+    /// and an app can set its own, such as `" more"`. An ellipsis made of one
+    /// span that sets nothing is in the text's own style. "…" is drawn as
+    /// "..." in a font that has no "…".
+    Ellipsis(Vec<Span>),
     /// Leaves out the lines past the last shown, and adds no mark.
     Clip,
 }
 
 impl Default for TextOverflow {
     fn default() -> Self {
-        Self::Ellipsis(DEFAULT_ELLIPSIS.to_owned())
+        Self::Ellipsis(default_ellipsis().to_vec())
     }
 }
 
 /// The ellipsis, "…", that a text ends in unless it sets its own.
 pub const DEFAULT_ELLIPSIS: &str = "\u{2026}";
 
+/// Returns the ellipsis a text ends in unless it sets its own, "…" in the
+/// text's own style.
+pub fn default_ellipsis() -> &'static [Span] {
+    static ELLIPSIS: LazyLock<[Span; 1]> = LazyLock::new(|| [Span::new(DEFAULT_ELLIPSIS)]);
+    &*ELLIPSIS
+}
+
+/// A part of a text with a style of its own, such as a bold word. Anything a
+/// span doesn't set comes from its text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Span {
+    /// The span's text. A `\n` starts a new line.
+    pub content: String,
+    /// The font family, such as `"Lora"`. `None` takes the text's family.
+    pub family: Option<String>,
+    /// The weight, from 100 to 900, where 400 is regular and 700 is bold.
+    /// `None` takes the text's weight.
+    pub weight: Option<u16>,
+    /// Whether the span is italic. `None` takes the text's style.
+    pub italic: Option<bool>,
+    /// The font size, in logical pixels. `None` takes the text's size.
+    pub size_px: Option<f32>,
+    /// The span's color, RGBA. `None` takes the text's color. A text with a
+    /// colored span is baked in its colors. See the module docs.
+    pub color: Option<Vec4>,
+    /// Where the span sits up or down in its line. The default is on the
+    /// baseline.
+    pub vertical_align: VerticalAlign,
+}
+
+/// Where a span sits up or down in its line, as CSS's `vertical-align` says. A
+/// span moved up or down makes its line taller if it needs the room, so it
+/// never overlaps the lines around it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum VerticalAlign {
+    /// On the text's baseline.
+    #[default]
+    Baseline,
+    /// Centered on the middle of the text's lowercase letters, its x-height.
+    /// Suits an icon beside text.
+    Middle,
+    /// Raised to the font's superscript position, such as for a footnote mark.
+    /// The span's size isn't changed.
+    Super,
+    /// Lowered to the font's subscript position, such as for the 2 in H₂O. The
+    /// span's size isn't changed.
+    Sub,
+    /// Raised by this many logical pixels, or lowered if it's negative.
+    Raise(f32),
+}
+
+impl Span {
+    /// Creates a span of `content` that sets nothing, so it's in its text's
+    /// style.
+    pub fn new(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Sets the font family, such as `"Lora"`.
+    pub fn with_family(mut self, family: impl Into<String>) -> Self {
+        self.family = Some(family.into());
+        self
+    }
+
+    /// Sets the weight, from 100 to 900, where 400 is regular and 700 is bold.
+    pub fn with_weight(mut self, weight: u16) -> Self {
+        self.weight = Some(weight);
+        self
+    }
+
+    /// Makes the span bold, a weight of 700.
+    pub fn bold(self) -> Self {
+        self.with_weight(700)
+    }
+
+    /// Makes the span italic.
+    pub fn italic(mut self) -> Self {
+        self.italic = Some(true);
+        self
+    }
+
+    /// Sets the font size, in logical pixels.
+    pub fn with_size(mut self, size_px: f32) -> Self {
+        self.size_px = Some(size_px);
+        self
+    }
+
+    /// Sets the span's color, RGBA.
+    pub fn with_color(mut self, color: Vec4) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// Sets where the span sits up or down in its line.
+    pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
+        self.vertical_align = align;
+        self
+    }
+}
+
 /// How to lay a text out, in logical pixels, from its size and font to how its
 /// lines wrap and end. Make one with [`TextLayout::new`], then change the
 /// fields it leaves at their defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextLayout<'a> {
-    /// The text. A `\n` starts a new line.
+    /// The text. A `\n` starts a new line. Unused when `spans` has any.
     pub content: &'a str,
+    /// The text's spans, in order. When there are any, they're the text, and
+    /// `content` is unused.
+    pub spans: &'a [Span],
+    /// The color of spans that set none, in a text with a colored span. See
+    /// [`TextLayout::is_colored`].
+    pub color: Vec4,
     /// The font's size.
     pub size_px: f32,
     /// The extra space between characters. A negative value tightens them.
@@ -167,7 +294,7 @@ pub struct TextLayout<'a> {
     pub max_lines: Option<u32>,
     /// The ellipsis that ends a text with more lines than `max_lines`. `None`
     /// clips the text instead.
-    pub ellipsis: Option<&'a str>,
+    pub ellipsis: Option<&'a [Span]>,
     /// The font family. `None`, or a family that isn't loaded, uses the
     /// default font.
     pub family: Option<&'a str>,
@@ -185,17 +312,47 @@ impl<'a> TextLayout<'a> {
     pub fn new(content: &'a str, size_px: f32) -> Self {
         Self {
             content,
+            spans: &[],
+            color: Vec4::ONE,
             size_px,
             letter_spacing_px: 0.0,
             wrap_width: None,
             align: TextAlign::Start,
             line_height: None,
             max_lines: None,
-            ellipsis: Some(DEFAULT_ELLIPSIS),
+            ellipsis: Some(default_ellipsis()),
             family: None,
             weight: None,
             italic: false,
         }
+    }
+
+    /// Returns whether a span of the text or of its ellipsis sets a color.
+    /// Such a text is baked in its colors, with spans that set none in
+    /// [`TextLayout::color`]. Any other text is baked white, for the renderer to
+    /// tint.
+    pub fn is_colored(&self) -> bool {
+        self.spans
+            .iter()
+            .chain(self.ellipsis.into_iter().flatten())
+            .any(|span| span.color.is_some())
+    }
+
+    /// Returns the families the text and its spans name, including its
+    /// ellipsis's spans, each once.
+    pub fn families(&self) -> Vec<&'a str> {
+        let mut families: Vec<&'a str> = Vec::new();
+        let spans = self.spans.iter().chain(self.ellipsis.into_iter().flatten());
+        for family in self
+            .family
+            .into_iter()
+            .chain(spans.filter_map(|s| s.family.as_deref()))
+        {
+            if !families.contains(&family) {
+                families.push(family);
+            }
+        }
+        families
     }
 }
 
@@ -213,8 +370,10 @@ pub struct RasterizedGlyphs {
     pub width: u32,
     /// Height of the rasterized text image in pixels.
     pub height: u32,
-    /// RGBA pixels, `width * height * 4` bytes. Alpha is the glyph coverage,
-    /// not premultiplied.
+    /// RGBA pixels, `width * height * 4` bytes, not premultiplied. A text with
+    /// no colored span is white, with each pixel's glyph coverage in alpha. A
+    /// text with one is in its spans' colors, with the coverage multiplied by
+    /// each color's alpha. See [`TextLayout::is_colored`].
     pub rgba_pixels: Vec<u8>,
     /// The characters no font had, each once, in the order they first appear.
     /// Each is drawn as the font's missing-glyph box.
@@ -236,7 +395,7 @@ pub struct RasterizedGlyphs {
 /// [`rasterize_text`]: FontAtlas::rasterize_text
 pub struct FontAtlas {
     fonts: FontContext,
-    layout: LayoutContext<()>,
+    layout: LayoutContext<Rgba8>,
     scale: ScaleContext,
     /// The default font's family name, or `None` with no font at all.
     default_family: Option<String>,
@@ -272,7 +431,7 @@ pub fn font_family_name(font_bytes: &[u8]) -> Result<String, FontError> {
 
 /// Returns the characters in the first `line_count` lines of `layout`, which
 /// was laid out from `content`, that no font had. Each appears once, in order.
-fn missing_chars(layout: &Layout<()>, line_count: usize, content: &str) -> Vec<char> {
+fn missing_chars(layout: &Layout<Rgba8>, line_count: usize, content: &str) -> Vec<char> {
     let mut missing = Vec::new();
     for line in layout.lines().take(line_count) {
         for run in line.runs() {
@@ -297,14 +456,88 @@ fn has_ellipsis(font_bytes: &[u8]) -> bool {
         .is_some_and(|font| font.charmap().map('\u{2026}') != 0)
 }
 
+/// A color as 8-bit RGBA, not premultiplied: the brush parley lays each part
+/// of a text out with, so each glyph knows its color.
+type Rgba8 = [u8; 4];
+
+/// Returns `color` as 8-bit RGBA, each channel clamped to 0 to 1 first.
+fn rgba8(color: Vec4) -> Rgba8 {
+    let c = (color.clamp(Vec4::ZERO, Vec4::ONE) * 255.0).round();
+    [c.x as u8, c.y as u8, c.z as u8, c.w as u8]
+}
+
+/// A text's content, with the byte range of each span in it.
+struct Styled<'a> {
+    content: Cow<'a, str>,
+    spans: Vec<(Range<usize>, &'a Span)>,
+}
+
+impl<'a> Styled<'a> {
+    /// Joins `spans` into one content, or takes `content` if there are none.
+    fn new(content: &'a str, spans: &'a [Span]) -> Self {
+        if spans.is_empty() {
+            return Self {
+                content: Cow::Borrowed(content),
+                spans: Vec::new(),
+            };
+        }
+        let mut joined = String::new();
+        let mut ranges = Vec::with_capacity(spans.len());
+        for span in spans {
+            let start = joined.len();
+            joined.push_str(&span.content);
+            ranges.push((start..joined.len(), span));
+        }
+        Self {
+            content: Cow::Owned(joined),
+            spans: ranges,
+        }
+    }
+
+    /// Returns the first `len` bytes, with the spans cut to fit them, and
+    /// `tail` after them.
+    fn cut_then(&self, len: usize, tail: &Styled<'a>) -> Styled<'a> {
+        let mut content = self.content[..len].to_owned();
+        content.push_str(&tail.content);
+        let head = self
+            .spans
+            .iter()
+            .filter(|(range, _)| range.start < len)
+            .map(|(range, span)| (range.start..range.end.min(len), *span));
+        let tail_spans = tail
+            .spans
+            .iter()
+            .map(|(range, span)| (range.start + len..range.end + len, *span));
+        Styled {
+            content: Cow::Owned(content),
+            spans: head.chain(tail_spans).collect(),
+        }
+    }
+
+    /// Returns the text without its leading whitespace.
+    fn trim_start(&self) -> Styled<'a> {
+        let skip = self.content.len() - self.content.trim_start().len();
+        Styled {
+            content: Cow::Owned(self.content[skip..].to_owned()),
+            spans: self
+                .spans
+                .iter()
+                .filter(|(range, _)| range.end > skip)
+                .map(|(range, span)| (range.start.max(skip) - skip..range.end - skip, *span))
+                .collect(),
+        }
+    }
+}
+
 /// A text laid out within its maximum number of lines.
 struct Fitted {
-    layout: Layout<()>,
+    layout: Layout<Rgba8>,
     /// How many of the layout's lines are drawn. That's fewer than the layout
     /// has when the text is clipped.
     line_count: usize,
-    /// What was laid out in place of the text when it ends in an ellipsis.
-    content: Option<String>,
+    /// What was laid out: the text, or its spans joined, or, when it ends in
+    /// an ellipsis, as much of that as fits with the ellipsis after it.
+    content: String,
 }
 
 /// A glyph rasterized for one text, before it's drawn into the text's image.
@@ -316,6 +549,8 @@ struct PlacedGlyph {
     width: u32,
     height: u32,
     coverage: Arc<[u8]>,
+    /// The color it's drawn in.
+    color: Rgba8,
 }
 
 impl FontAtlas {
@@ -468,7 +703,12 @@ impl FontAtlas {
     /// Returns `None` if `text` draws no pixels, because it's empty or only
     /// whitespace.
     pub fn rasterize(&mut self, text: &TextLayout, scale: f32) -> Option<RasterizedGlyphs> {
-        if text.content.is_empty() {
+        let empty = if text.spans.is_empty() {
+            text.content.is_empty()
+        } else {
+            text.spans.iter().all(|span| span.content.is_empty())
+        };
+        if empty {
             return None;
         }
         if self.default_family.is_none() {
@@ -518,8 +758,9 @@ impl FontAtlas {
             return None;
         }
 
-        // White, with each glyph's coverage in alpha. Where glyphs overlap,
-        // the greater coverage wins.
+        // Each glyph in its color, with its coverage times the color's alpha in
+        // alpha. Where glyphs overlap, the greater alpha wins. A text with no
+        // colored span is white, with the coverage in alpha.
         let mut rgba = vec![0u8; (width * height as u32 * 4) as usize];
         for g in &glyphs {
             for gy in 0..g.height as i32 {
@@ -534,24 +775,23 @@ impl FontAtlas {
                         continue;
                     }
                     let i = ((py as u32 * width + px as u32) * 4) as usize;
-                    rgba[i..i + 3].fill(255);
-                    rgba[i + 3] = rgba[i + 3].max(coverage);
+                    let alpha = ((coverage as u32 * g.color[3] as u32 + 127) / 255) as u8;
+                    if alpha > rgba[i + 3] {
+                        rgba[i..i + 3].copy_from_slice(&g.color[..3]);
+                        rgba[i + 3] = alpha;
+                    }
                 }
             }
         }
 
-        let missing = missing_chars(
-            &layout,
-            line_count,
-            content.as_deref().unwrap_or(text.content),
-        );
+        let missing = missing_chars(&layout, line_count, &content);
         for &c in &missing {
             if self.warned_missing.insert(c) {
                 log::warn!(
                     "no font has {c:?} (U+{:04X}), in the text {:?}, so it's drawn as a box: add a \
                      font that has it to the fallback fonts",
                     c as u32,
-                    text.content,
+                    content,
                 );
             }
         }
@@ -568,27 +808,37 @@ impl FontAtlas {
     /// an ellipsis replaces the end of what fits, or the lines past it are
     /// left out.
     fn fit(&mut self, text: &TextLayout, scale: f32) -> Fitted {
-        let full = self.lay_out(text.content, text, scale);
+        let styled = Styled::new(text.content, text.spans);
+        let full = self.lay_out(&styled, text, scale);
         let line_count = full.len();
         let fitted = |layout, line_count, content| Fitted {
             layout,
             line_count,
             content,
         };
+        let whole = || styled.content.clone().into_owned();
         let Some(max) = text.max_lines.map(|n| n.max(1) as usize) else {
-            return fitted(full, line_count, None);
+            return fitted(full, line_count, whole());
         };
         if line_count <= max {
-            return fitted(full, line_count, None);
+            return fitted(full, line_count, whole());
         }
         let Some(ellipsis) = text.ellipsis else {
-            return fitted(full, max, None);
+            return fitted(full, max, whole());
         };
-        let ellipsis = if ellipsis == DEFAULT_ELLIPSIS && !self.has_ellipsis {
-            "..."
-        } else {
-            ellipsis
+        // "…" is drawn as "..." in a font that has no "…", in the same style.
+        let dots;
+        let ellipsis = match ellipsis {
+            [only] if only.content == DEFAULT_ELLIPSIS && !self.has_ellipsis => {
+                dots = [Span {
+                    content: "...".to_owned(),
+                    ..only.clone()
+                }];
+                &dots[..]
+            }
+            _ => ellipsis,
         };
+        let ellipsis = Styled::new("", ellipsis);
 
         // The places the text can be cut, up to the end of the last line
         // shown. They're between clusters, so never inside a character.
@@ -605,32 +855,33 @@ impl FontAtlas {
         cuts.dedup();
 
         let with_ellipsis = |cut: usize| {
-            let head = text.content[..cut].trim_end();
-            if head.is_empty() {
-                ellipsis.trim_start().to_owned()
+            let head = styled.content[..cut].trim_end().len();
+            if head == 0 {
+                ellipsis.trim_start()
             } else {
-                format!("{head}{ellipsis}")
+                styled.cut_then(head, &ellipsis)
             }
         };
         // Lays out the text cut at `cut`, with the ellipsis, and returns it if
         // it fits in `max` lines. A binary search finds the longest cut that
         // fits, since a shorter cut never takes more lines.
         let fits = |atlas: &mut Self, cut: usize| {
-            let content = with_ellipsis(cut);
-            let layout = atlas.lay_out(&content, text, scale);
-            (layout.len() <= max).then_some((layout, content))
+            let cut = with_ellipsis(cut);
+            let layout = atlas.lay_out(&cut, text, scale);
+            (layout.len() <= max).then(|| (layout, cut.content.into_owned()))
         };
         let Some(mut best) = fits(self, cuts[0]) else {
             log::warn!(
-                "the ellipsis {ellipsis:?} of the text {:?} needs more than its {max} line(s) \
-                 on its own, at a wrap width of {:?}, so it's clipped: raise its maximum number \
-                 of lines, widen its wrap width, or shorten its ellipsis",
-                text.content,
+                "the ellipsis {:?} of the text {:?} needs more than its {max} line(s) on its \
+                 own, at a wrap width of {:?}, so it's clipped: raise its maximum number of \
+                 lines, widen its wrap width, or shorten its ellipsis",
+                ellipsis.content,
+                styled.content,
                 text.wrap_width,
             );
-            let content = ellipsis.trim_start().to_owned();
-            let layout = self.lay_out(&content, text, scale);
-            return fitted(layout, max, Some(content));
+            let alone = ellipsis.trim_start();
+            let layout = self.lay_out(&alone, text, scale);
+            return fitted(layout, max, alone.content.into_owned());
         };
         let (mut low, mut high) = (0, cuts.len() - 1);
         while low < high {
@@ -645,43 +896,74 @@ impl FontAtlas {
         }
         let (layout, content) = best;
         let line_count = layout.len();
-        fitted(layout, line_count, Some(content))
+        fitted(layout, line_count, content)
     }
 
-    /// Shapes `content` in `text`'s style, breaks it into lines, and aligns
-    /// them, at `scale`.
-    fn lay_out(&mut self, content: &str, text: &TextLayout, scale: f32) -> Layout<()> {
-        // Uses the text's family if it's loaded, and the default otherwise. A
-        // text in the embedded font that sets no weight is bold.
-        let family = text
-            .family
+    /// Returns the font stack for a text or span in `family`, and the weight
+    /// it's drawn at. The stack is the family, then the fallbacks in order,
+    /// then the default font. Each is tried in turn for a character the ones
+    /// before it lack. A family that isn't loaded is left out, so the default
+    /// font draws it. A text in the embedded font that sets no weight is bold.
+    fn font_stack(
+        &self,
+        family: Option<&str>,
+        weight: Option<u16>,
+    ) -> (FontFamily<'static>, Option<u16>) {
+        let family = family
             .filter(|f| self.families.contains(*f))
             .or(self.default_family.as_deref())
             .unwrap_or_default()
             .to_owned();
-        let weight = text.weight.or_else(|| {
+        let weight = weight.or_else(|| {
             (self.embedded_family.as_ref() == Some(&family)).then_some(EMBEDDED_DEFAULT_WEIGHT)
         });
-        // Sizes are in logical pixels, and parley scales them. Positions are
-        // fractional, and rounded when the glyphs are rasterized.
-        let mut builder = self
-            .layout
-            .ranged_builder(&mut self.fonts, content, scale, false);
-        // The stack is the text's family, then the fallbacks in order, then
-        // the default font. Each is tried in turn for a character the ones
-        // before it lack.
-        let mut stack = vec![family.clone()];
+        let mut stack = vec![family];
         let loaded = self.fallbacks.iter().filter(|f| self.families.contains(*f));
         for name in loaded.chain(&self.default_family) {
             if !stack.contains(name) {
                 stack.push(name.clone());
             }
         }
-        let names: Vec<FontFamilyName<'_>> = stack
+        let names: Vec<FontFamilyName<'static>> = stack
             .into_iter()
             .map(|name| FontFamilyName::Named(name.into()))
             .collect();
-        builder.push_default(StyleProperty::FontFamily(FontFamily::List(names.into())));
+        (FontFamily::List(names.into()), weight)
+    }
+
+    /// Shapes `styled` in `text`'s style, with each span's own, breaks it into
+    /// lines, and aligns them, at `scale`.
+    fn lay_out(&mut self, styled: &Styled, text: &TextLayout, scale: f32) -> Layout<Rgba8> {
+        let (stack, weight) = self.font_stack(text.family, text.weight);
+        // Each span that sets a family or a weight gets its own stack and
+        // weight. One that sets neither takes the text's.
+        let span_fonts: Vec<_> = styled
+            .spans
+            .iter()
+            .map(|(_, span)| {
+                (span.family.is_some() || span.weight.is_some()).then(|| {
+                    self.font_stack(
+                        span.family.as_deref().or(text.family),
+                        span.weight.or(text.weight),
+                    )
+                })
+            })
+            .collect();
+        // A text with no colored span is white, for the renderer to tint. In
+        // one with a colored span, a span that sets no color is in the text's,
+        // and the text's alpha is left to the renderer.
+        let brush = if text.is_colored() {
+            rgba8(text.color.with_w(1.0))
+        } else {
+            [255; 4]
+        };
+
+        // Sizes are in logical pixels, and parley scales them. Positions are
+        // fractional, and rounded when the glyphs are rasterized.
+        let mut builder =
+            self.layout
+                .ranged_builder(&mut self.fonts, &styled.content, scale, false);
+        builder.push_default(StyleProperty::FontFamily(stack));
         if let Some(weight) = weight {
             builder.push_default(StyleProperty::FontWeight(FontWeight::new(weight as f32)));
         }
@@ -694,10 +976,47 @@ impl FontAtlas {
             Some(multiple) => LineHeight::FontSizeRelative(multiple),
             None => LineHeight::MetricsRelative(1.0),
         }));
+        builder.push_default(StyleProperty::Brush(brush));
         // A word wider than the wrap width breaks between characters, rather
         // than running out of the box.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
-        let mut layout = builder.build(content);
+        for ((range, span), font) in styled.spans.iter().zip(span_fonts) {
+            if let Some((stack, weight)) = font {
+                builder.push(StyleProperty::FontFamily(stack), range.clone());
+                // A span with no weight is drawn at its font's own.
+                let weight = weight.map_or(FontWeight::NORMAL, |w| FontWeight::new(w as f32));
+                builder.push(StyleProperty::FontWeight(weight), range.clone());
+            }
+            if let Some(italic) = span.italic {
+                let style = if italic {
+                    FontStyle::Italic
+                } else {
+                    FontStyle::Normal
+                };
+                builder.push(StyleProperty::FontStyle(style), range.clone());
+            }
+            if let Some(size_px) = span.size_px {
+                builder.push(StyleProperty::FontSize(size_px), range.clone());
+            }
+            if let Some(color) = span.color {
+                builder.push(StyleProperty::Brush(rgba8(color)), range.clone());
+            }
+            let align = match span.vertical_align {
+                VerticalAlign::Baseline => None,
+                VerticalAlign::Middle => Some(parley::VerticalAlign::MIDDLE),
+                VerticalAlign::Super => Some(parley::VerticalAlign::SUPER),
+                VerticalAlign::Sub => Some(parley::VerticalAlign::SUB),
+                // A length in logical pixels, which parley scales.
+                VerticalAlign::Raise(px) => Some(parley::VerticalAlign::new(
+                    parley::AlignmentBaseline::Baseline,
+                    parley::BaselineShift::Length(px),
+                )),
+            };
+            if let Some(align) = align {
+                builder.push(StyleProperty::VerticalAlign(align), range.clone());
+            }
+        }
+        let mut layout = builder.build(&styled.content);
         // Set before breaking lines, because breaking lines aligns them.
         let alignment = match text.align {
             TextAlign::Start => Alignment::Start,
@@ -714,7 +1033,7 @@ impl FontAtlas {
     /// baseline, which is at `baseline`.
     fn rasterize_glyphs(
         &mut self,
-        layout: &Layout<()>,
+        layout: &Layout<Rgba8>,
         baseline: f32,
         line_count: usize,
     ) -> Vec<PlacedGlyph> {
@@ -724,6 +1043,7 @@ impl FontAtlas {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
                 };
+                let color = glyph_run.style().brush;
                 let run = glyph_run.run();
                 let font = run.font();
                 let Some(font_ref) =
@@ -793,6 +1113,7 @@ impl FontAtlas {
                         width: glyph.width,
                         height: glyph.height,
                         coverage: glyph.coverage,
+                        color,
                     });
                 }
             }
@@ -860,7 +1181,7 @@ mod tests {
     fn kerning_pulls_a_pair_together() {
         let mut fa = atlas();
         let shaped = fa
-            .lay_out("AV", &TextLayout::new("AV", 64.0), 1.0)
+            .lay_out(&Styled::new("AV", &[]), &TextLayout::new("AV", 64.0), 1.0)
             .full_width();
 
         // Uses the weight the text is drawn at.
@@ -1155,7 +1476,7 @@ mod tests {
         text.ellipsis = None;
         let fitted = fa.fit(&text, 1.0);
         assert_eq!(fitted.line_count, 2);
-        assert_eq!(fitted.content, None);
+        assert_eq!(fitted.content, text.content, "clipped, not changed");
         let two = fa.rasterize(&text, 1.0).unwrap();
         let one_line = all.height as f32 / fa.fit(&wrapped(200.0), 1.0).line_count as f32;
         assert!((two.height as f32 - 2.0 * one_line).abs() <= 2.0);
@@ -1170,7 +1491,7 @@ mod tests {
         text.max_lines = Some(2);
         let fitted = fa.fit(&text, 1.0);
         assert_eq!(fitted.line_count, 2);
-        let content = fitted.content.unwrap();
+        let content = fitted.content;
         assert!(content.ends_with('\u{2026}'), "{content:?}");
         let head = content.trim_end_matches('\u{2026}');
         assert!(PARAGRAPH.starts_with(head));
@@ -1179,7 +1500,7 @@ mod tests {
         let next = PARAGRAPH[head.len()..].trim_start();
         let one_more = next.split(' ').next().unwrap();
         let longer = format!("{head} {one_more}\u{2026}");
-        assert!(fa.lay_out(&longer, &text, 1.0).len() > 2);
+        assert!(fa.lay_out(&Styled::new(&longer, &[]), &text, 1.0).len() > 2);
     }
 
     // The app's own ellipsis is used. It wraps onto a line of its own when it
@@ -1190,9 +1511,10 @@ mod tests {
         let mut text = TextLayout::new(PARAGRAPH, 16.0);
         text.wrap_width = Some(90.0);
         text.max_lines = Some(3);
-        text.ellipsis = Some(" read the whole article");
+        let ellipsis = [Span::new(" read the whole article")];
+        text.ellipsis = Some(&ellipsis);
         let fitted = fa.fit(&text, 1.0);
-        let content = fitted.content.unwrap();
+        let content = fitted.content;
         assert!(content.ends_with(" read the whole article"), "{content:?}");
         assert!(
             content.len() > " read the whole article".len(),
@@ -1208,9 +1530,10 @@ mod tests {
         let mut text = TextLayout::new(PARAGRAPH, 16.0);
         text.wrap_width = Some(60.0);
         text.max_lines = Some(1);
-        text.ellipsis = Some(" read the whole article");
+        let ellipsis = [Span::new(" read the whole article")];
+        text.ellipsis = Some(&ellipsis);
         let fitted = fa.fit(&text, 1.0);
-        assert_eq!(fitted.content.as_deref(), Some("read the whole article"));
+        assert_eq!(fitted.content, "read the whole article");
         assert_eq!(fitted.line_count, 1);
         assert!(fa.rasterize(&text, 1.0).is_some());
     }
@@ -1226,7 +1549,7 @@ mod tests {
         text.max_lines = Some(2);
         for width in [97.0, 100.0, 103.0, 106.0, 109.0] {
             text.wrap_width = Some(width);
-            let content = fa.fit(&text, 1.0).content.unwrap();
+            let content = fa.fit(&text, 1.0).content;
             let head = content.trim_end_matches('\u{2026}');
             assert!(
                 head.ends_with('\u{301}') || !head.ends_with('e'),
@@ -1241,10 +1564,11 @@ mod tests {
         fa.has_ellipsis = false;
         let mut text = wrapped(200.0);
         text.max_lines = Some(1);
-        let content = fa.fit(&text, 1.0).content.unwrap();
+        let content = fa.fit(&text, 1.0).content;
         assert!(content.ends_with("..."), "{content:?}");
-        text.ellipsis = Some(" more");
-        let content = fa.fit(&text, 1.0).content.unwrap();
+        let more = [Span::new(" more")];
+        text.ellipsis = Some(&more);
+        let content = fa.fit(&text, 1.0).content;
         assert!(content.ends_with(" more"), "the app's own ellipsis is kept");
     }
 
@@ -1253,7 +1577,7 @@ mod tests {
         let mut fa = atlas();
         let mut text = TextLayout::new("Two\nlines", 16.0);
         text.max_lines = Some(2);
-        assert_eq!(fa.fit(&text, 1.0).content, None);
+        assert_eq!(fa.fit(&text, 1.0).content, "Two\nlines");
     }
 
     // Lora, roman and italic, is a second family. It's variable from 400 to
@@ -1429,5 +1753,284 @@ mod tests {
     fn bytes_that_arent_a_font_are_an_error() {
         assert!(FontAtlas::new(b"not a font").is_err());
         assert!(FontAtlas::new(&[]).is_err());
+    }
+
+    // Spans.
+
+    const RED: Vec4 = Vec4::new(1.0, 0.0, 0.0, 1.0);
+    const BLUE: Vec4 = Vec4::new(0.0, 0.0, 1.0, 1.0);
+
+    // Returns how much ink an image has: the sum of its alpha.
+    fn ink(g: &RasterizedGlyphs) -> u64 {
+        g.rgba_pixels.chunks(4).map(|p| p[3] as u64).sum()
+    }
+
+    // Returns the colors of the pixels with any ink, each once.
+    fn colors(g: &RasterizedGlyphs) -> Vec<[u8; 3]> {
+        let mut colors: Vec<[u8; 3]> = Vec::new();
+        for p in g.rgba_pixels.chunks(4).filter(|p| p[3] > 0) {
+            let rgb = [p[0], p[1], p[2]];
+            if !colors.contains(&rgb) {
+                colors.push(rgb);
+            }
+        }
+        colors
+    }
+
+    // Spans that set nothing take everything from the text, so they draw the
+    // same pixels as the text's content would.
+    #[test]
+    fn spans_that_set_nothing_draw_as_the_text_does() {
+        let mut fa = atlas();
+        let plain = pixels(&mut fa, &TextLayout::new("Hello world", 24.0));
+        let spans = [Span::new("Hello "), Span::new("world")];
+        let mut text = TextLayout::new("", 24.0);
+        text.spans = &spans;
+        assert_eq!(pixels(&mut fa, &text).rgba_pixels, plain.rgba_pixels);
+        assert!(!text.is_colored());
+    }
+
+    // A span's weight, italic, size and family each change its glyphs, and
+    // only its own.
+    #[test]
+    fn a_span_sets_its_own_weight_italic_size_and_family() {
+        let mut fa = atlas();
+        fa.load_font(LORA).unwrap();
+        let draw = |fa: &mut FontAtlas, span: Span| {
+            let spans = [Span::new("Hamburge "), span];
+            let mut text = TextLayout::new("", 32.0);
+            text.family = Some("Lora");
+            text.spans = &spans;
+            pixels(fa, &text)
+        };
+        let plain = draw(&mut fa, Span::new("fonstiv"));
+        let bold = draw(&mut fa, Span::new("fonstiv").bold());
+        assert!(ink(&bold) > ink(&plain), "bold has more ink");
+        let italic = draw(&mut fa, Span::new("fonstiv").italic());
+        assert_ne!(italic.rgba_pixels, plain.rgba_pixels, "italic");
+        let large = draw(&mut fa, Span::new("fonstiv").with_size(48.0));
+        assert!(
+            large.height > plain.height && large.width > plain.width,
+            "larger"
+        );
+        let inter = draw(&mut fa, Span::new("fonstiv").with_family("Inter"));
+        assert_ne!(inter.rgba_pixels, plain.rgba_pixels, "in another family");
+
+        // The span's text before it is unchanged: its first columns match.
+        let left = |g: &RasterizedGlyphs| -> Vec<u8> {
+            (0..g.height.min(plain.height))
+                .flat_map(|y| {
+                    let row = (y * g.width * 4) as usize;
+                    g.rgba_pixels[row..row + 40 * 4].to_vec()
+                })
+                .collect()
+        };
+        assert_eq!(left(&bold), left(&plain), "the first span is unchanged");
+    }
+
+    // Spans of different sizes share a line, which is as tall as the largest
+    // needs.
+    #[test]
+    fn spans_of_different_sizes_share_a_line() {
+        let mut fa = atlas();
+        let spans = [Span::new("small "), Span::new("Large").with_size(48.0)];
+        let mut text = TextLayout::new("", 16.0);
+        text.spans = &spans;
+        assert_eq!(fa.fit(&text, 1.0).line_count, 1);
+        let small = pixels(&mut fa, &TextLayout::new("small Large", 16.0));
+        assert!(pixels(&mut fa, &text).height > small.height * 2);
+    }
+
+    // In a text with a colored span, each span is drawn in its own color, and
+    // one that sets none in the text's color. A text with no colored span is
+    // white, for the renderer to tint.
+    #[test]
+    fn a_colored_span_is_drawn_in_its_color_and_the_rest_in_the_texts() {
+        let mut fa = atlas();
+        let spans = [Span::new("ab "), Span::new("cd").with_color(RED)];
+        let mut text = TextLayout::new("", 32.0);
+        text.spans = &spans;
+        text.color = BLUE.with_w(0.5);
+        assert!(text.is_colored());
+        let g = pixels(&mut fa, &text);
+        assert_eq!(colors(&g), vec![[0, 0, 255], [255, 0, 0]]);
+        // The text's own alpha is left to the renderer, so its spans are
+        // baked opaque.
+        assert_eq!(g.rgba_pixels.chunks(4).map(|p| p[3]).max(), Some(255));
+
+        let plain = [Span::new("ab "), Span::new("cd")];
+        text.spans = &plain;
+        assert!(!text.is_colored());
+        assert_eq!(colors(&pixels(&mut fa, &text)), vec![[255, 255, 255]]);
+    }
+
+    // A span's alpha multiplies its coverage, so a span at half alpha is
+    // baked at half the alpha of an opaque one.
+    #[test]
+    fn a_spans_alpha_multiplies_its_coverage() {
+        let mut fa = atlas();
+        let draw = |fa: &mut FontAtlas, alpha: f32| {
+            let spans = [Span::new("Hamburgefonstiv").with_color(RED.with_w(alpha))];
+            let mut text = TextLayout::new("", 32.0);
+            text.spans = &spans;
+            pixels(fa, &text)
+        };
+        let opaque = draw(&mut fa, 1.0);
+        let half = draw(&mut fa, 0.5);
+        // Alpha 0.5 is 128 of 255.
+        for (o, h) in opaque.rgba_pixels.chunks(4).zip(half.rgba_pixels.chunks(4)) {
+            let expected = (o[3] as u32 * 128 + 127) / 255;
+            assert_eq!(h[3] as u32, expected, "{o:?} {h:?}");
+        }
+    }
+
+    // The text is cut inside a span, and the spans before the cut keep their
+    // style.
+    #[test]
+    fn an_ellipsis_can_cut_inside_a_span() {
+        let mut fa = atlas();
+        let spans = [Span::new("Short. "), Span::new(PARAGRAPH).with_color(RED)];
+        let mut text = TextLayout::new("", 16.0);
+        text.spans = &spans;
+        text.wrap_width = Some(200.0);
+        text.max_lines = Some(2);
+        let fitted = fa.fit(&text, 1.0);
+        assert!(
+            fitted.content.starts_with("Short. Proteus"),
+            "{:?}",
+            fitted.content
+        );
+        assert!(fitted.content.ends_with('\u{2026}'), "{:?}", fitted.content);
+        assert_eq!(fitted.line_count, 2);
+        let g = pixels(&mut fa, &text);
+        assert!(
+            colors(&g).contains(&[255, 0, 0]),
+            "the cut span keeps its color"
+        );
+    }
+
+    // An ellipsis of spans is drawn in their style. A plain one, such as the
+    // default "…", is in the text's own style, not the style of the span it
+    // follows.
+    #[test]
+    fn an_ellipsis_of_spans_is_drawn_in_their_style() {
+        let mut fa = atlas();
+        let spans = [Span::new(PARAGRAPH).with_color(RED)];
+        let mut text = TextLayout::new("", 16.0);
+        text.spans = &spans;
+        text.color = BLUE;
+        text.wrap_width = Some(200.0);
+        text.max_lines = Some(1);
+        // Returns the color of the last glyph laid out, which is the
+        // ellipsis's.
+        let last_color = |fa: &mut FontAtlas, text: &TextLayout| {
+            let fitted = fa.fit(text, 1.0);
+            let line = fitted.layout.lines().next().unwrap();
+            line.items()
+                .filter_map(|item| match item {
+                    PositionedLayoutItem::GlyphRun(run) => Some(run.style().brush),
+                    _ => None,
+                })
+                .last()
+                .unwrap()
+        };
+        assert_eq!(
+            last_color(&mut fa, &text),
+            [0, 0, 255, 255],
+            "the text's color"
+        );
+
+        let more = [Span::new(" more")
+            .with_color(Vec4::new(0.0, 1.0, 0.0, 1.0))
+            .bold()];
+        text.ellipsis = Some(&more);
+        assert_eq!(
+            last_color(&mut fa, &text),
+            [0, 255, 0, 255],
+            "the ellipsis's color"
+        );
+        let content = fa.fit(&text, 1.0).content;
+        assert!(content.ends_with(" more"), "{content:?}");
+
+        // An ellipsis's colored span makes the text colored on its own.
+        let plain = [Span::new(PARAGRAPH)];
+        text.spans = &plain;
+        assert!(text.is_colored());
+    }
+
+    // The families a text names include its spans' and its ellipsis's, each
+    // once, for knowing which fonts it waits for.
+    #[test]
+    fn a_texts_families_include_its_spans() {
+        let spans = [
+            Span::new("a").with_family("Lora"),
+            Span::new("b").with_family("Inter"),
+            Span::new("c").with_family("Lora"),
+        ];
+        let icons = [Span::new("arrow").with_family("Material Icons")];
+        let mut text = TextLayout::new("", 16.0);
+        text.family = Some("Inter");
+        text.spans = &spans;
+        text.ellipsis = Some(&icons);
+        assert_eq!(text.families(), vec!["Inter", "Lora", "Material Icons"]);
+    }
+
+    // Returns how far `span`, drawn in red after a blue "x", sits above the
+    // "x", in pixels: the rows between the bottoms of their ink. Both are "x",
+    // so on the same baseline they're level.
+    fn raised_by(fa: &mut FontAtlas, align: VerticalAlign, scale: f32) -> i32 {
+        let spans = [
+            Span::new("x").with_color(BLUE),
+            Span::new("x").with_color(RED).with_vertical_align(align),
+        ];
+        let mut text = TextLayout::new("", 24.0);
+        text.spans = &spans;
+        let g = fa.rasterize(&text, scale).unwrap();
+        let bottom = |rgb: [u8; 3]| {
+            g.rgba_pixels
+                .chunks(4)
+                .enumerate()
+                .filter(|(_, p)| p[3] > 128 && p[..3] == rgb)
+                .map(|(i, _)| i as i32 / g.width as i32)
+                .max()
+                .unwrap()
+        };
+        bottom([0, 0, 255]) - bottom([255, 0, 0])
+    }
+
+    // Each vertical alignment moves the span: up for superscript and a
+    // positive raise, down for subscript, and to the x-height's middle for
+    // `Middle`. A raise is in logical pixels, so it's twice as many pixels at a
+    // display scale of 2.
+    #[test]
+    fn a_spans_vertical_alignment_moves_it() {
+        let mut fa = atlas();
+        assert_eq!(raised_by(&mut fa, VerticalAlign::Baseline, 1.0), 0);
+        assert!(raised_by(&mut fa, VerticalAlign::Super, 1.0) > 0, "super");
+        assert!(raised_by(&mut fa, VerticalAlign::Sub, 1.0) < 0, "sub");
+        assert_ne!(raised_by(&mut fa, VerticalAlign::Middle, 1.0), 0, "middle");
+        assert_eq!(raised_by(&mut fa, VerticalAlign::Raise(4.0), 1.0), 4);
+        assert_eq!(raised_by(&mut fa, VerticalAlign::Raise(-4.0), 1.0), -4);
+        assert_eq!(raised_by(&mut fa, VerticalAlign::Raise(4.0), 2.0), 8);
+    }
+
+    // A span moved up or down makes its line taller, so it never overlaps the
+    // lines around it.
+    #[test]
+    fn a_moved_span_makes_its_line_taller() {
+        let mut fa = atlas();
+        let height = |fa: &mut FontAtlas, align: VerticalAlign| {
+            let spans = [
+                Span::new("Hamburge"),
+                Span::new("fonstiv").with_vertical_align(align),
+            ];
+            let mut text = TextLayout::new("", 24.0);
+            text.spans = &spans;
+            pixels(fa, &text).height
+        };
+        let level = height(&mut fa, VerticalAlign::Baseline);
+        assert!(height(&mut fa, VerticalAlign::Raise(10.0)) >= level + 10);
+        assert!(height(&mut fa, VerticalAlign::Raise(-10.0)) >= level + 10);
+        assert!(height(&mut fa, VerticalAlign::Super) > level);
     }
 }
