@@ -104,7 +104,8 @@ pub(crate) fn bake_pending_text(
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     for (entity, text) in pending {
         let Some(in_default_font) = font_choice(world, font_atlas, &text) else {
-            // Its font is still loading: it waits, not drawn.
+            // The text's font is still loading, so the text waits and isn't
+            // drawn.
             continue;
         };
         let layout = || {
@@ -133,10 +134,10 @@ pub(crate) fn bake_pending_text(
                 glyphs = font_atlas.rasterize(&layout(), scale);
             }
         }
-        // Characters no font has: the text waits if a fallback font that
-        // might have them is still loading and its texts wait for it, and
-        // otherwise is drawn with boxes, and marked so it's baked again when
-        // a font loads.
+        // When no font has some of the text's characters, and a fallback that
+        // might have them is expected with `WhileLoading::Hide`, the text
+        // waits. Otherwise it's drawn with boxes for those characters, and
+        // marked so it's baked again when a font loads.
         let missing = glyphs.as_ref().is_some_and(|g| !g.missing.is_empty());
         if missing && waits_for_fallback(world) {
             world.entity_mut(entity).insert(WaitsForFont);
@@ -206,8 +207,9 @@ pub(crate) fn bake_pending_text(
     }
 }
 
-/// Whether a fallback font is expected, with its texts waiting for it: a text
-/// with characters no loaded font has might find them there.
+/// Returns whether a fallback font is expected with [`WhileLoading::Hide`] and
+/// not loaded yet. Until it loads, a text with characters no loaded font has
+/// waits, since the fallback may have them.
 fn waits_for_fallback(world: &World) -> bool {
     world.get_resource::<Fonts>().is_some_and(|fonts| {
         fonts
@@ -217,8 +219,8 @@ fn waits_for_fallback(world: &World) -> bool {
     })
 }
 
-/// Whether `text` is drawn in the default font rather than its own family,
-/// or `None` if it waits, not drawn, for its family to load. See
+/// Returns whether `text` is drawn in the default font rather than in its own
+/// family, or `None` if the text waits, not drawn, for its family to load. See
 /// [`Fonts`]. A family that failed or was never loaded is warned about once.
 fn font_choice(world: &mut World, font_atlas: &FontAtlas, text: &Text) -> Option<bool> {
     let Some(family) = &text.family else {
@@ -237,8 +239,8 @@ fn font_choice(world: &mut World, font_atlas: &FontAtlas, text: &Text) -> Option
             }
             Some(true)
         }
-        // Loaded, but not added to the atlas yet: the renderer adds it before
-        // the next bake, and bakes the text again.
+        // The font is loaded but not in the atlas yet. The renderer adds it
+        // before the next bake, and bakes the text again.
         Some(FontStatus::Loaded) => Some(true),
         None => {
             if fonts.first_warning(family) {

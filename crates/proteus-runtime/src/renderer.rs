@@ -40,7 +40,8 @@ use crate::viewport::Viewport;
 /// component. See the module docs.
 pub struct Renderer {
     font_atlas: proteus_render::FontAtlas,
-    /// The version of the app's `Fonts` last seen, to tell when it changed.
+    /// The version of the app's `Fonts` last seen, which tells the renderer
+    /// when the fonts have changed.
     fonts_version: u64,
     config: ProteusConfig,
     viewport: Viewport,
@@ -51,8 +52,8 @@ pub struct Renderer {
     content_version: Option<u64>,
 }
 
-/// A font atlas with the embedded font, or, without the `embedded-font`
-/// feature, with no font until the app gives one.
+/// Returns a font atlas with the embedded font. Without the `embedded-font`
+/// feature, the atlas has no font until the app gives it one.
 fn embedded_font() -> proteus_render::FontAtlas {
     #[cfg(feature = "embedded-font")]
     return proteus_render::FontAtlas::with_embedded_font();
@@ -177,8 +178,8 @@ impl Renderer {
         let world = proteus.world_mut();
         if world.resource::<BakeScale>().0 != scale {
             world.insert_resource(BakeScale(scale));
-            // Glyphs are cached by their size in pixels, so those at the old
-            // scale won't be used again.
+            // The cache is keyed by each glyph's size in pixels, so the glyphs
+            // cached at the old scale won't be used again.
             self.font_atlas.clear_glyph_cache();
             let baked: Vec<_> = world
                 .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<BakedText>>()
@@ -202,10 +203,10 @@ impl Renderer {
     }
 
     /// Adds the fonts the app has loaded since the last frame to the font
-    /// atlas, and bakes again the texts in their families that were drawn in
-    /// the default font while they loaded, and those drawn with boxes for
+    /// atlas. Texts in those families that were drawn in the default font
+    /// meanwhile are baked again, and so are texts drawn with boxes for
     /// characters no font had. A change to the fallbacks bakes every text
-    /// again, and any change to the fonts lets the texts waiting for one try
+    /// again. Any change to the fonts lets the texts waiting for a font try
     /// again.
     fn add_loaded_fonts(&mut self, world: &mut bevy_ecs::world::World) {
         let Some(mut fonts) = world.get_resource_mut::<proteus_ui::Fonts>() else {
@@ -667,8 +668,8 @@ mod tests {
         );
     }
 
-    // A wrapped text is baked as its box: its wrap width across, in logical
-    // pixels, at every scale, and its lines down.
+    // A wrapped text is baked as its whole box. The box is as wide as the wrap
+    // width in logical pixels, at every scale, and as tall as its lines.
     #[test]
     fn a_wrapped_text_is_baked_at_its_wrap_width() {
         for scale in [1.0, 2.0] {
@@ -692,10 +693,11 @@ mod tests {
         }
     }
 
-    /// Lora, a second family besides Inter.
+    // Lora, a second family besides Inter.
     use proteus_test_fonts::SECOND_FAMILY as LORA;
 
-    /// A component showing "Proteus" in Lora at 24 pixels, after a frame.
+    // Returns a scene, after a frame, with a component showing "Proteus" in
+    // Lora at 24 pixels. `prepare` runs first.
     fn lora_scene(prepare: impl FnOnce(&mut Proteus)) -> Option<(Scene, Handle)> {
         let mut scene = Scene::with_scale(ProteusConfig::default(), 1.0)?;
         prepare(&mut scene.proteus);
@@ -715,7 +717,7 @@ mod tests {
             .map(|b| b.pixel_size)
     }
 
-    /// The width "Proteus" is in Inter, the default font, at 24 pixels.
+    // Returns the width of "Proteus" in Inter, the default font, at 24 pixels.
     fn in_default_font() -> Option<f32> {
         let (scene, label) = text_scene_with("Proteus", 24.0)?;
         baked(&scene, &label).map(|size| size[0])
@@ -730,8 +732,8 @@ mod tests {
         Some((scene, label))
     }
 
-    // A text in a family the app expects waits, not drawn, and is drawn in
-    // it once it loads.
+    // A text in a family the app expects waits, without being drawn, until the
+    // family loads. Then it's drawn in that family.
     #[test]
     fn a_text_waits_for_its_expected_font() {
         let Some((mut scene, label)) =
@@ -747,8 +749,8 @@ mod tests {
         assert_ne!(Some(width), in_default_font(), "in Lora");
     }
 
-    // With `DefaultFont`, it's drawn in the default font meanwhile, and again
-    // in its own once it loads.
+    // With `DefaultFont`, a text is drawn in the default font while its font
+    // loads, and drawn again in its own font once that loads.
     #[test]
     fn a_text_can_show_the_default_font_while_its_font_loads() {
         let Some((mut scene, label)) =
@@ -782,7 +784,7 @@ mod tests {
         assert_eq!(baked(&scene, &label).map(|s| s[0]), default, "never loaded");
     }
 
-    /// Noto Serif Devanagari, for Hindi, which Inter lacks.
+    // Noto Serif Devanagari, a font for Hindi, which Inter can't draw.
     use proteus_test_fonts::DEVANAGARI;
     const HINDI: &str = "नमस्ते";
 
@@ -804,7 +806,8 @@ mod tests {
             .is_some()
     }
 
-    // With no fallback, Hindi is drawn as boxes; with one, in it.
+    // With no fallback font, Hindi is drawn as boxes. With a fallback font
+    // that has it, Hindi is drawn in that font.
     #[test]
     fn a_fallback_font_draws_what_the_font_lacks() {
         let Some((scene, label)) = hindi_scene(|_| {}) else {
@@ -821,8 +824,9 @@ mod tests {
         assert!(!has_boxes(&scene, &label));
     }
 
-    // A text with characters only an expected fallback might have waits for
-    // it, while a text the loaded fonts cover is drawn at once.
+    // A text with characters that only an expected fallback might have waits
+    // for the fallback, and is drawn in it once it loads. A text the loaded
+    // fonts cover is drawn at once.
     #[test]
     fn a_text_waits_for_an_expected_fallback() {
         let Some((mut scene, label)) = hindi_scene(|app| {
@@ -844,8 +848,8 @@ mod tests {
         assert!(!has_boxes(&scene, &label));
     }
 
-    // With `DefaultFont`, it's drawn at once with boxes, and again in the
-    // fallback once it loads.
+    // With `DefaultFont`, a text is drawn at once, with boxes for the
+    // characters it lacks, and drawn again in the fallback once that loads.
     #[test]
     fn a_text_with_boxes_is_drawn_again_when_a_fallback_loads() {
         let Some((mut scene, label)) = hindi_scene(|app| {
@@ -871,8 +875,8 @@ mod tests {
         assert_eq!(app.font_status("Lora"), None);
     }
 
-    // Glyphs are cached by their size in pixels, so a new scale empties the
-    // cache, and the text baked at it fills it again.
+    // Glyphs are cached by their size in pixels, so a new display scale
+    // empties the cache. The text baked at the new scale then fills it again.
     #[test]
     fn a_new_display_scale_empties_the_glyph_cache() {
         let Some((mut scene, _label)) = text_scene(1.0, ProteusConfig::default()) else {
@@ -888,8 +892,8 @@ mod tests {
         assert!(scene.renderer.font_atlas.glyph_cache_size().0 > 0);
     }
 
-    // `Proteus::clear_glyph_cache` empties it before the next bake, and text
-    // already baked keeps drawing.
+    // `Proteus::clear_glyph_cache` empties the glyph cache before the next
+    // bake. Text that's already baked stays as it was.
     #[test]
     fn clear_glyph_cache_empties_it_and_baked_text_stays() {
         let Some((mut scene, label)) = text_scene(1.0, ProteusConfig::default()) else {
