@@ -1,66 +1,68 @@
 /**
- * Proteus TypeScript SDK example: a reading app, the same app as the Rust
- * essays example.
+ * Proteus TypeScript SDK example: a reading app, the same as the Rust essays
+ * example.
  *
- * A row of cards, one for each of four public-domain essays. Each card's
- * year is aligned to the end of its column; its title wraps onto at most two
- * lines, ending in "…"; its opening is spaced at a line height of 1.45 and
- * stops after five lines, ending in an ellipsis of the card's own; and its
- * source is clipped after two lines. A card opens into its essay (1→1), whose
- * byline is two lines split with a `\n`, whose opening wraps at the column's
- * width, and whose pull quote is centered. While an essay is open, a toolbar
- * at the top sets its body's size, alignment, bold and italic, line height
- * and font, as a text editor's does.
+ * The app shows a row of cards, one for each of four public-domain essays.
+ * Each card's year is aligned to the end of its column. Its title wraps onto at
+ * most two lines and ends in "…". Its opening is spaced at a line height of
+ * 1.45, stops after five lines, and ends in an ellipsis of the card's own. Its
+ * source is clipped after two lines.
+ *
+ * A card opens into its essay (1→1). The essay's byline is two lines, split
+ * with a `\n`. Its opening wraps at the column's width, and its pull quote is
+ * centered. While an essay is open, a toolbar at the top sets its body's size,
+ * alignment, bold and italic, line height and font, as a text editor's does.
  *
  * The essays are Mary Wollstonecraft's "A Vindication of the Rights of Woman"
  * (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis Stevenson's
  * "An Apology for Idlers" (1877), from their Project Gutenberg editions, and
  * Bharatendu Harishchandra's "भारतवर्ष की उन्नति कैसे हो सकती है?" ("How can
- * India progress?", 1884), in Hindi, from Hindi Wikisource, each cited where
- * it's shown. None of the essays' fonts has Hindi's script, Devanagari: it's
- * drawn by the app's fallback font, Noto Serif Devanagari.
+ * India progress?", 1884), in Hindi, from Hindi Wikisource. Each is cited where
+ * it's shown. None of the essays' fonts has Hindi's script, Devanagari. The
+ * app's fallback font, Noto Serif Devanagari, draws it.
  *
- * The essays are set in Lora, a serif downloaded from `fonts/`, with its
- * italic for the pull quotes; titles are Inter at 800 and years at 500, from
- * the built-in variable font; bylines are Inter slanted, since Inter's italic
- * isn't loaded; and the buttons and sources are Inter with no weight set,
- * bold. The toolbar's icons are Material Icons, a font too, and its last
- * button sets the body in Crimson Pro, downloaded when it's first chosen.
+ * The essays are set in Lora, a serif downloaded from `fonts/`, with its italic
+ * for the pull quotes. Titles are Inter at weight 800 and years at 500, from
+ * the built-in variable font. Bylines are Inter slanted, since Inter's italic
+ * isn't loaded. Buttons and sources are Inter with no weight set, so they're
+ * bold. The toolbar's icons are Material Icons, which is also a font. The
+ * toolbar's last button sets the body in Crimson Pro, which is downloaded when
+ * it's first chosen.
  *
  * Techniques worth copying:
  *   - A font that's downloaded is given to `loadFont` as a promise, with its
- *     family's name: texts in Lora wait, not drawn, until it arrives, rather
- *     than change font once drawn. Lora's italic joins the same family.
- *   - A font downloaded only when it's needed is still named to `loadFont`
- *     at the start, with a promise settled once it's fetched: Crimson Pro,
- *     with `whileLoading: "defaultFont"`, so its button and the body show the
- *     default font until it arrives, then swap to it.
+ *     family's name. Texts in Lora aren't drawn until the font arrives, so they
+ *     never change font once drawn. Lora's italic joins the same family.
+ *   - A font that's downloaded only when needed is still named to `loadFont` at
+ *     the start, with a promise that's settled once it's fetched. Crimson Pro
+ *     works this way, with `whileLoading: "defaultFont"`, so its button and the
+ *     body show the default font until it arrives, then swap to it.
  *   - A fallback font is named once, for the whole app, with
- *     `setFallbackFonts`: a character a text's font lacks is looked for there,
+ *     `setFallbackFonts`. A character a text's font lacks is looked for there,
  *     then in the default font. Only the fonts the text needs are listed, so
- *     what's drawn is known.
+ *     every character drawn is known to be covered.
  *   - An icon font's ligatures turn a name, such as "format_bold", into its
- *     icon: the toolbar's icons are text in Material Icons.
+ *     icon. The toolbar's icons are text in Material Icons.
  *   - A chosen button, or one toggled on, has its hover style removed with
- *     `setStyle`, so it stays in the accent color under the pointer, and gets
- *     it back when it's no longer chosen.
- *   - Text is placed by its component's anchor: with an anchor of (0, 0), the
+ *     `setStyle`. It then stays in the accent color under the pointer, and gets
+ *     its hover style back when it's no longer chosen.
+ *   - Text is placed by its component's anchor. With an anchor of (0, 0), the
  *     text's top-left corner is at the component's position. A card's texts
  *     are small children, placed from the card's top-left corner.
- *   - A wrap width is the text's box: lines align within it, and the box
+ *   - A wrap width is the text's box. Lines align within it, and the box
  *     doesn't change size when the words do, so the year, aligned to the end,
  *     lines up with the card's right edge whatever it says.
- *   - An ellipsis wider than a line takes lines of its own: the third card's
- *     opening ends in a whole sentence.
- *   - Texts are hidden while their card or the essay changes shape, and shown
- *     when it arrives, since children move with their parent but don't
- *     stretch with it.
- *   - Changing a text's alignment or line height means setting it again:
- *     `setText` replaces it, and the host lays it out again.
+ *   - An ellipsis wider than a line takes lines of its own, as the third
+ *     card's does.
+ *   - Texts are hidden while their card or the essay changes shape, since
+ *     children move with their parent but don't stretch with it. They're shown
+ *     when it arrives.
+ *   - Changing a text's alignment or line height means setting it again.
+ *     `setText` replaces the text, and the host lays it out again.
  *
- * Not shown here: a weight a font doesn't have, a character no font has,
- * drawn as a box, mixed styles within a text, measuring text, and components
- * within a line of text.
+ * Not shown here: a weight a font doesn't have, a character no font has (which
+ * is drawn as a box), mixed styles within a text, measuring text, and
+ * components within a line of text.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
@@ -71,7 +73,7 @@ const PAPER = colorFrom("#f4f1ea");
 const INK = colorFrom("#24212b");
 const MUTED = colorFrom("#6b6676");
 const ACCENT = colorFrom("#7a5fb0");
-/** A button, light enough to stand out from the background. */
+/** The color of a button, light enough to stand out from the background. */
 const BUTTON = colorFrom("#4d4a58");
 const BUTTON_HOVER = colorFrom("#5f5c6a");
 const WHITE = colorFrom("#ffffff");
@@ -79,18 +81,18 @@ const CLEAR: Color = { r: 0, g: 0, b: 0, a: 0 };
 
 const OPEN = { duration: 0.45, easing: "easeOutCubic" } as const;
 
-/** An essay: what its card shows, and what it opens into. */
+/** An essay's texts, as its card shows them and as they appear once it's open. */
 interface Essay {
   year: string;
   title: string;
   author: string;
-  /** Its first sentences, from its Project Gutenberg edition. */
+  /** The essay's first sentences, from the edition `source` cites. */
   opening: string;
-  /** What ends the opening on the card when it runs past five lines. */
+  /** The ellipsis that ends the opening on the card when it runs past five lines. */
   more: string;
   /** A line from later in the essay. */
   quote: string;
-  /** Where the text is from: two lines on the card, in full in the essay. */
+  /** Where the text is from. The card clips it to two lines, and the essay shows it in full. */
   source: string;
 }
 
@@ -147,8 +149,8 @@ const ESSAYS: Essay[] = [
     year: "1884",
     title: "भारतवर्ष की उन्नति कैसे हो सकती है?",
     author: "भारतेन्दु हरिश्चंद्र",
-    // In Hindi, which none of the essays' fonts has: every character is drawn
-    // by the fallback font, Noto Serif Devanagari.
+    // This essay is in Devanagari, which none of the essays' fonts has, so the
+    // fallback font, Noto Serif Devanagari, draws every character.
     opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
     more: " आगे पढ़ें",
     quote: "\u201cहमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u201d",
@@ -157,29 +159,29 @@ const ESSAYS: Essay[] = [
 ];
 
 /**
- * The family the essays are set in, from two files in `fonts/`, from Google
- * Fonts under the SIL Open Font License; see `fonts/OFL-Lora.txt`.
+ * The family the essays are set in, from two files in `fonts/`. They're from
+ * Google Fonts under the SIL Open Font License, in `fonts/OFL-Lora.txt`.
  */
 const LORA = "Lora";
 /**
- * The second family the body can be set in, from Google Fonts under the SIL
- * Open Font License; see `fonts/OFL-CrimsonPro.txt`. Downloaded when it's first
- * chosen. It has no italic file, so its italic is slanted.
+ * The second family the body can be set in. It's from Google Fonts under the
+ * SIL Open Font License, in `fonts/OFL-CrimsonPro.txt`. The app downloads it
+ * when it's first chosen. It has no italic file, so its italic is slanted.
  */
 const CRIMSON = "Crimson Pro";
 /**
- * The toolbar's icons: Google's Material Icons, a font whose ligatures turn an
- * icon's name, such as "format_bold", into its glyph. Apache License 2.0; see
- * `fonts/LICENSE-MaterialIcons.txt`.
+ * The toolbar's icon font, Google's Material Icons. Its ligatures turn an
+ * icon's name, such as "format_bold", into its glyph. It's under the Apache
+ * License 2.0, in `fonts/LICENSE-MaterialIcons.txt`.
  */
 const ICONS = "Material Icons";
 /**
- * The fallback font, for the Hindi essay: Noto Serif Devanagari, from Google
- * Fonts under the SIL Open Font License; see `fonts/OFL-NotoSerifDevanagari.txt`.
+ * The fallback font for the Hindi essay, Noto Serif Devanagari. It's from Google
+ * Fonts under the SIL Open Font License, in `fonts/OFL-NotoSerifDevanagari.txt`.
  */
 const DEVANAGARI = "Noto Serif Devanagari";
 
-/** A font file from the example's `fonts/` folder. */
+/** Downloads a font file from the example's `fonts/` folder. */
 function fontFile(file: string): Promise<ArrayBuffer> {
   return fetch(new URL(`../../fonts/${file}`, import.meta.url)).then((r) =>
     r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${file}: ${r.status}`)),
@@ -210,7 +212,7 @@ const TOOL_HEIGHT = 30;
 const TOOL_GAP = 4;
 const GROUP_GAP = 14;
 
-/** The body's sizes: the icon's size on its button, and the body's. */
+/** The body's sizes. Each pair is the size of a button's icon, then the size of the body's text. */
 const SIZES = [
   [14, 15],
   [18, 17],
@@ -231,7 +233,7 @@ const SPACINGS = [
 /** The families the body can be set in. */
 const FAMILIES = [LORA, CRIMSON];
 
-/** How the body is set: the toolbar's choices. */
+/** The toolbar's choices for how the body is set. */
 interface Settings {
   size: number;
   align: number;
@@ -241,7 +243,7 @@ interface Settings {
   family: number;
 }
 
-/** Geometry for a box of the given size at `(x, y, z)`, placed by `anchor`. */
+/** Returns the geometry of a box of the given size at `(x, y, z)`, placed by `anchor`. */
 function box(
   x: number,
   y: number,
@@ -264,8 +266,8 @@ function box(
 }
 
 /**
- * A component that only shows `text`, with the text's top-left corner at
- * `(x, y)`, relative to the parent it's given to.
+ * Creates a component that only shows `text`, with the text's top-left corner
+ * at `(x, y)`, relative to the parent it's given to.
  */
 function textAt(x: number, y: number, text: TextSpec, visible = true): ComponentSpec {
   return {
@@ -276,7 +278,7 @@ function textAt(x: number, y: number, text: TextSpec, visible = true): Component
   };
 }
 
-/** A small button, with its label, lighter on hover. */
+/** Creates a small button showing `label`, which turns lighter on hover. */
 function button(x: number, y: number, width: number, height: number, label: string, visible = true): ComponentSpec {
   return {
     geometry: box(x, y, 0, width, height, BUTTON, height / 2),
@@ -287,7 +289,7 @@ function button(x: number, y: number, width: number, height: number, label: stri
   };
 }
 
-/** A toolbar button at `x`, showing `label`: an icon, or "Aa" in a family. */
+/** Creates a toolbar button at `x` showing `label`, which is an icon or "Aa" in a family. */
 function tool(x: number, label: TextSpec): ComponentSpec {
   return {
     geometry: box(x, BAR_Y, 0, TOOL_WIDTH, TOOL_HEIGHT, BUTTON, 8),
@@ -298,14 +300,15 @@ function tool(x: number, label: TextSpec): ComponentSpec {
   };
 }
 
-/** An icon from Material Icons, by name, at `sizePx`. */
+/** Returns an icon from Material Icons, by name, at `sizePx`. */
 function icon(name: string, sizePx: number): TextSpec {
   return { content: name, sizePx, family: ICONS };
 }
 
 /**
  * Marks `button` as on, in the accent color, or off. An on button has no hover
- * style, so the pointer leaves it as it is; off, it gets it back.
+ * style, so the pointer leaves it as it is. An off button gets its hover style
+ * back.
  */
 function mark(button: Handle, on: boolean): void {
   button.setStyle("hover", on ? undefined : { color: BUTTON_HOVER });
@@ -318,17 +321,17 @@ function select(buttons: Handle[], chosen: number): void {
   buttons.forEach((b, i) => mark(b, i === chosen));
 }
 
-/** A card's texts, in reading order. */
+/** Creates a card's texts for `essay`, in reading order. */
 function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
   const left = -CARD_WIDTH / 2 + CARD_PADDING;
   const top = CARD_HEIGHT / 2 - CARD_PADDING;
   const specs: ComponentSpec[] = [
-    // Aligned to the end of the column, so it lines up with the card's right edge.
+    // The year is aligned to the end of the column, so it lines up with the card's right edge.
     textAt(left, top, { content: essay.year, sizePx: 13, weight: 500, color: MUTED, wrapWidth: CARD_COLUMN, align: "end" }),
-    // At most two lines, ending in the default "…".
+    // The title takes at most two lines and ends in the default "…".
     textAt(left, top - 24, { content: essay.title, sizePx: 22, weight: 800, color: INK, wrapWidth: CARD_COLUMN, maxLines: 2 }),
-    // At most five lines, ending in the card's own ellipsis.
-    // Below two lines of title in any of the scripts, Hindi's being the tallest.
+    // The opening takes at most five lines and ends in the card's own ellipsis. It sits below
+    // two lines of title in any of the scripts, and Hindi's is the tallest.
     textAt(left, top - 104, {
       content: essay.opening,
       family: LORA,
@@ -339,7 +342,7 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
       maxLines: 5,
       overflow: { ellipsis: essay.more },
     }),
-    // At most two lines, at the foot of the card, clipped with no mark.
+    // The source takes at most two lines at the foot of the card, and is clipped with no mark.
     textAt(left, -CARD_HEIGHT / 2 + CARD_PADDING + 30, {
       content: essay.source,
       sizePx: 12,
@@ -353,22 +356,22 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
 }
 
 function main(app: ProteusApp, canvasWidth: number): void {
-  // Lora, upright and italic, and the icons, downloaded: both of Lora's files
-  // are one family, and texts in either font wait for it.
+  // Lora's two files, upright and italic, and the icons are downloaded. Lora's files are one
+  // family. Texts in Lora or the icons aren't drawn until their font arrives.
   for (const file of ["Lora-Variable.ttf", "Lora-Italic-Variable.ttf"]) {
     app.loadFont(fontFile(file), { family: LORA }).catch((e: unknown) => console.warn(e));
   }
   app.loadFont(fontFile("MaterialIcons-Regular.ttf"), { family: ICONS }).catch((e: unknown) => console.warn(e));
-  // Hindi is in none of the other fonts: a character a text's font lacks is
-  // looked for in the fallback, then in the default font. Its texts wait for
-  // it, as Lora's do.
+  // None of the other fonts has Hindi. A character a text's font lacks is looked for in the
+  // fallback font, then in the default font. Texts wait for the fallback font, as they do for
+  // Lora.
   app.loadFont(fontFile("NotoSerifDevanagari-Variable.ttf"), { family: DEVANAGARI }).catch((e: unknown) =>
     console.warn(e),
   );
   app.setFallbackFonts([DEVANAGARI]);
-  // Crimson Pro is coming, but isn't downloaded until it's first chosen: the
-  // promise is settled then. Meanwhile, its texts are drawn in the default
-  // font, and again in it once it loads.
+  // Crimson Pro isn't downloaded until it's first chosen, and the promise is settled then.
+  // Until then, texts in it are drawn in the default font, and they're drawn in Crimson Pro
+  // once it loads.
   let fetchCrimson = () => {};
   const crimson = new Promise<ArrayBuffer>((resolve, reject) => {
     fetchCrimson = () => {
@@ -378,13 +381,13 @@ function main(app: ProteusApp, canvasWidth: number): void {
   });
   app.loadFont(crimson, { family: CRIMSON, whileLoading: "defaultFont" }).catch((e: unknown) => console.warn(e));
 
-  // The title sits a margin from the canvas's left edge, and the toolbar, on
-  // the title's line, a margin from its right edge.
+  // The title sits a margin from the canvas's left edge. The toolbar sits on the title's line,
+  // a margin from the canvas's right edge.
   app.component(textAt(-canvasWidth / 2 + MARGIN, TITLE_TOP, { content: "Essays", sizePx: 30, color: WHITE }));
 
-  // The toolbar: its groups, left to right, each button's label made from its
-  // index in the group. Hidden until an essay is open, since it changes only
-  // the essay. Bold and italic sit together, as one group.
+  // The toolbar's groups run left to right, and each button's label is made from the button's
+  // index in its group. The toolbar is hidden until an essay is open, since it changes only the
+  // essay. Bold and italic sit together, as one group.
   const groups: [number, (i: number) => TextSpec, number][] = [
     [SIZES.length, (i) => icon("format_size", SIZES[i][0]), GROUP_GAP],
     [ALIGNS.length, (i) => icon(ALIGNS[i][0], 20), GROUP_GAP],
@@ -408,7 +411,7 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const [sizeButtons, alignButtons, [boldButton], [italicButton], spacingButtons, familyButtons] = made;
   const toolbar = made.flat();
 
-  // A card for each essay, with its texts as children.
+  // One card for each essay, with its texts as children.
   const cards: Handle[] = [];
   const cardContents: Handle[][] = [];
   ESSAYS.forEach((essay, i) => {
@@ -423,9 +426,9 @@ function main(app: ProteusApp, canvasWidth: number): void {
     cardContents.push(texts);
   });
 
-  // The essay panel, over the cards. It takes the pointer, so a click on the
-  // open essay doesn't reach the cards under it, but not the keyboard, so it's
-  // never a stop for focus.
+  // The essay panel sits over the cards. It takes the pointer, so a click on the open essay
+  // doesn't reach the cards under it. It doesn't take the keyboard, so it's never a stop for
+  // focus.
   const left = -PANEL_WIDTH / 2 + PANEL_PADDING;
   const top = PANEL_HEIGHT / 2 - PANEL_PADDING;
   const hiddenText = (x: number, y: number) => app.component(textAt(x, y, { content: "", sizePx: 16 }, false));
@@ -433,7 +436,7 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const title = hiddenText(left, top - 60);
   const byline = hiddenText(left, top - 150);
   const body = hiddenText(left, top - 200);
-  // Below the tallest body: 20 pixels at a line height of 1.8.
+  // The quote sits below the tallest body, which is 20 pixels at a line height of 1.8.
   const quote = hiddenText(-300, -150);
   const source = hiddenText(left, -PANEL_HEIGHT / 2 + PANEL_PADDING + 14);
   const essayView = [title, byline, body, quote, source, back];
@@ -445,13 +448,13 @@ function main(app: ProteusApp, canvasWidth: number): void {
   });
 
   const channel = app.transitionChannel();
-  /** The essay open, or opening. */
+  /** The index of the essay that is open or opening, if any. */
   let open: number | undefined;
   const settings: Settings = { size: 1, align: 0, bold: false, italic: false, spacing: 1, family: 0 };
 
   const setVisible = (handles: Handle[], visible: boolean) => handles.forEach((h) => h.setVisible(visible));
 
-  /** The opening of essay `i`, set as the toolbar says. */
+  /** Returns the opening of essay `i`, set as the toolbar's choices say. */
   function bodyText(i: number): TextSpec {
     return {
       content: ESSAYS[i].opening,
@@ -472,7 +475,7 @@ function main(app: ProteusApp, canvasWidth: number): void {
     open = i;
     const essay = ESSAYS[i];
     title.setText({ content: essay.title, sizePx: 30, weight: 800, color: INK, wrapWidth: PANEL_COLUMN });
-    // Two lines, split with a `\n`.
+    // The byline is two lines, split with a `\n`.
     byline.setText({ content: `${essay.author}\n${essay.year}`, sizePx: 14, color: MUTED, italic: true });
     body.setText(bodyText(i));
     quote.setText({ content: essay.quote, sizePx: 20, family: LORA, italic: true, color: ACCENT, wrapWidth: 600, align: "center" });
@@ -506,7 +509,7 @@ function main(app: ProteusApp, canvasWidth: number): void {
 
   cards.forEach((card, i) => {
     card.onClick(() => openEssay(i));
-    // Back from the essay: the card's texts return once it's whole.
+    // When the card returns from the essay, its texts come back once the card is whole.
     card.onTransitionComplete(() => setVisible(cardContents[i], true));
   });
   panel.onTransitionComplete(() => {

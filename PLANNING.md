@@ -334,8 +334,8 @@ step 12, which rewrites them under the same rules.
   comment, and each doc comment keeps its one-sentence first line and its links.
 - [x] The rules in CONTRIBUTING, approved.
 - [x] Two models' rewrites of `font_atlas.rs`, and the human's pick: Sonnet.
-- [ ] Every comment in scope rewritten, a few files at a time, each batch reviewed.
-- [ ] fmt, Clippy, docs, `check-comments` and the tests pass, and the script finds only
+- [x] Every comment in scope rewritten, a few files at a time, each batch reviewed.
+- [x] fmt, Clippy, docs, `check-comments` and the tests pass, and the script finds only
   comment lines changed.
 
 ### Step 7 — Inline styles

@@ -9,7 +9,8 @@ repository.workspace = true
 publish = false
 
 [lib]
-# `cdylib` for the web build, `rlib` for the native binary in src/main.rs.
+# The `cdylib` is for the web build, and the `rlib` is for the native binary in
+# src/main.rs.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -23,7 +24,8 @@ env_logger = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 proteus-host-web = { workspace = true }
 wasm-bindgen = { workspace = true }
-# The code wasm-bindgen generates for the `async fn start` export needs it.
+# The code wasm-bindgen generates for the `async fn start` export needs this
+# crate.
 wasm-bindgen-futures = { workspace = true }
 log = { workspace = true }
 wasm-logger = { workspace = true }

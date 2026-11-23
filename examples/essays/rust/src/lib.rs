@@ -1,66 +1,68 @@
-//! A reading app, the same app as the TypeScript essays example.
+//! A reading app, the same as the TypeScript essays example.
 //!
-//! A row of cards, one for each of four public-domain essays. Each card's
-//! year is aligned to the end of its column; its title wraps onto at most two
-//! lines, ending in "…"; its opening is spaced at a line height of 1.45 and
-//! stops after five lines, ending in an ellipsis of the card's own; and its
-//! source is clipped after two lines. A card opens into its essay (1→1), whose
-//! byline is two lines split with a `\n`, whose opening wraps at the column's
-//! width, and whose pull quote is centered. While an essay is open, a
-//! toolbar at the top sets its body's size, alignment, bold and italic, line
-//! height and font, as a text editor's does.
+//! The app shows a row of cards, one for each of four public-domain essays.
+//! Each card's year is aligned to the end of its column. Its title wraps onto
+//! at most two lines and ends in "…". Its opening is spaced at a line height of
+//! 1.45, stops after five lines, and ends in an ellipsis of the card's own. Its
+//! source is clipped after two lines.
+//!
+//! A card opens into its essay (1→1). The essay's byline is two lines, split
+//! with a `\n`. Its opening wraps at the column's width, and its pull quote is
+//! centered. While an essay is open, a toolbar at the top sets its body's size,
+//! alignment, bold and italic, line height and font, as a text editor's does.
 //!
 //! The essays are Mary Wollstonecraft's "A Vindication of the Rights of
 //! Woman" (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis
 //! Stevenson's "An Apology for Idlers" (1877), from their Project Gutenberg
 //! editions, and Bharatendu Harishchandra's "भारतवर्ष की उन्नति कैसे हो सकती
-//! है?" ("How can India progress?", 1884), in Hindi, from Hindi Wikisource,
-//! each cited where it's shown. None of the essays' fonts has Hindi's script,
-//! Devanagari: it's drawn by the app's fallback font, Noto Serif Devanagari.
+//! है?" ("How can India progress?", 1884), in Hindi, from Hindi Wikisource.
+//! Each is cited where it's shown. None of the essays' fonts has Hindi's
+//! script, Devanagari. The app's fallback font, Noto Serif Devanagari, draws
+//! it.
 //!
-//! The essays are set in Lora, a serif built in from `fonts/`, with its
-//! italic for the pull quotes; titles are Inter at 800 and years at 500, from
-//! the built-in variable font; bylines are Inter slanted, since Inter's
-//! italic isn't loaded; and the buttons and sources are Inter with no weight
-//! set, bold. The toolbar's icons are Material Icons, a font too, and its
-//! last button sets the body in Crimson Pro, downloaded when it's first
-//! chosen.
+//! The essays are set in Lora, a serif built in from `fonts/`, with its italic
+//! for the pull quotes. Titles are Inter at weight 800 and years at 500, from
+//! the built-in variable font. Bylines are Inter slanted, since Inter's italic
+//! isn't loaded. Buttons and sources are Inter with no weight set, so they're
+//! bold. The toolbar's icons are Material Icons, which is also a font. The
+//! toolbar's last button sets the body in Crimson Pro, which is downloaded when
+//! it's first chosen.
 //!
 //! Techniques worth copying:
-//!   - A font's file is loaded once with `load_font`, which returns its
-//!     family's name, and texts name the family. Lora's italic is loaded the
-//!     same way, and joins its family.
+//!   - A font's file is loaded once with `load_font`, which returns the
+//!     family's name. Texts name the family. Lora's italic is loaded the same
+//!     way and joins the Lora family.
 //!   - A font that's downloaded later is expected first, with `expect_font`.
 //!     Crimson Pro is expected with `WhileLoading::DefaultFont`, so its button
-//!     and the body show the default font until it arrives, then swap to it;
-//!     `update` fetches it with the host's `fetch_async`, then calls
-//!     `load_font`, or `font_failed` if the fetch fails.
+//!     and the body show the default font until it arrives, then swap to it.
+//!     `update` fetches it with the host's `fetch_async`. It then calls
+//!     `load_font`, or `font_failed` if the fetch or the load fails.
 //!   - A fallback font is named once, for the whole app, with
-//!     `set_fallback_fonts`: a character a text's font lacks is looked for
+//!     `set_fallback_fonts`. A character a text's font lacks is looked for
 //!     there, then in the default font. Only the fonts the text needs are
-//!     listed, so what's drawn is known.
+//!     listed, so every character drawn is known to be covered.
 //!   - An icon font's ligatures turn a name, such as "format_bold", into its
-//!     icon: the toolbar's icons are text in Material Icons.
+//!     icon. The toolbar's icons are text in Material Icons.
 //!   - A chosen button, or one toggled on, has its hover style removed with
-//!     `set_style`, so it stays in the accent color under the pointer, and
-//!     gets it back when it's no longer chosen.
-//!   - Text is placed by its component's anchor: with an anchor of (0, 0),
-//!     the text's top-left corner is at the component's position. A card's
-//!     texts are small children, placed from the card's top-left corner.
-//!   - A wrap width is the text's box: lines align within it, and the box
-//!     doesn't change size when the words do, so the year, aligned to the
-//!     end, lines up with the card's right edge whatever it says.
-//!   - An ellipsis wider than a line takes lines of its own: the third card's
-//!     opening ends in a whole sentence.
-//!   - Texts are hidden while their card or the essay changes shape, and
-//!     shown when it arrives, since children move with their parent but don't
-//!     stretch with it.
-//!   - Changing a text's alignment or line height means setting it again:
-//!     `set_text` replaces it, and the host lays it out again.
+//!     `set_style`. It then stays in the accent color under the pointer, and
+//!     gets its hover style back when it's no longer chosen.
+//!   - Text is placed by its component's anchor. With an anchor of (0, 0), the
+//!     text's top-left corner is at the component's position. A card's texts
+//!     are small children, placed from the card's top-left corner.
+//!   - A wrap width is the text's box. Lines align within it, and the box
+//!     doesn't change size when the words do, so the year, aligned to the end,
+//!     lines up with the card's right edge whatever it says.
+//!   - An ellipsis wider than a line takes lines of its own, as the third
+//!     card's does.
+//!   - Texts are hidden while their card or the essay changes shape, since
+//!     children move with their parent but don't stretch with it. They're shown
+//!     when it arrives.
+//!   - Changing a text's alignment or line height means setting it again.
+//!     `set_text` replaces the text, and the host lays it out again.
 //!
-//! Not shown here: a weight a font doesn't have, a character no font has,
-//! drawn as a box, mixed styles within a text, measuring text, and components
-//! within a line of text.
+//! Not shown here: a weight a font doesn't have, a character no font has (which
+//! is drawn as a box), mixed styles within a text, measuring text, and
+//! components within a line of text.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -78,7 +80,7 @@ const PAPER: Vec4 = rgb(0xf4f1ea);
 const INK: Vec4 = rgb(0x24212b);
 const MUTED: Vec4 = rgb(0x6b6676);
 const ACCENT: Vec4 = rgb(0x7a5fb0);
-/// A button, light enough to stand out from the background.
+/// The color of a button, light enough to stand out from the background.
 const BUTTON: Vec4 = rgb(0x4d4a58);
 const BUTTON_HOVER: Vec4 = rgb(0x5f5c6a);
 const WHITE: Vec4 = rgb(0xffffff);
@@ -90,7 +92,7 @@ const OPEN: TransitionConfig = TransitionConfig {
     easing: Easing::EaseOutCubic,
 };
 
-/// An opaque color from its hex code, such as `0x7a5fb0`.
+/// Returns the opaque color for a hex code, such as `0x7a5fb0`.
 const fn rgb(hex: u32) -> Vec4 {
     let r = ((hex >> 16) & 0xff) as f32 / 255.0;
     let g = ((hex >> 8) & 0xff) as f32 / 255.0;
@@ -98,18 +100,20 @@ const fn rgb(hex: u32) -> Vec4 {
     Vec4::new(r, g, b, 1.0)
 }
 
-/// An essay: what its card shows, and what it opens into.
+/// An essay's texts, as its card shows them and as they appear once it's open.
 struct Essay {
     year: &'static str,
     title: &'static str,
     author: &'static str,
-    /// Its first sentences, from its Project Gutenberg edition.
+    /// The essay's first sentences, from the edition `source` cites.
     opening: &'static str,
-    /// What ends the opening on the card when it runs past five lines.
+    /// The ellipsis that ends the opening on the card when it runs past five
+    /// lines.
     more: &'static str,
     /// A line from later in the essay.
     quote: &'static str,
-    /// Where the text is from: two lines on the card, in full in the essay.
+    /// Where the text is from. The card clips it to two lines, and the essay
+    /// shows it in full.
     source: &'static str,
 }
 
@@ -164,8 +168,8 @@ const ESSAYS: [Essay; 4] = [
         year: "1884",
         title: "भारतवर्ष की उन्नति कैसे हो सकती है?",
         author: "भारतेन्दु हरिश्चंद्र",
-        // In Hindi, which none of the essays' fonts has: every character is
-        // drawn by the fallback font, Noto Serif Devanagari.
+        // This essay is in Devanagari, which none of the essays' fonts has, so
+        // the fallback font, Noto Serif Devanagari, draws every character.
         opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
         more: " आगे पढ़ें",
         quote: "\u{201c}हमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u{201d}",
@@ -173,26 +177,26 @@ const ESSAYS: [Essay; 4] = [
     },
 ];
 
-/// The family the essays are set in, and its two files, from Google Fonts
-/// under the SIL Open Font License; see `fonts/OFL-Lora.txt`.
+/// The family the essays are set in, and its upright and italic files. They're
+/// from Google Fonts under the SIL Open Font License, in `fonts/OFL-Lora.txt`.
 const LORA: &str = "Lora";
 const LORA_UPRIGHT: &[u8] = include_bytes!("../../fonts/Lora-Variable.ttf");
 const LORA_ITALIC: &[u8] = include_bytes!("../../fonts/Lora-Italic-Variable.ttf");
 
-/// The second family the body can be set in, from Google Fonts under the SIL
-/// Open Font License; see `fonts/OFL-CrimsonPro.txt`. Its file isn't loaded until
-/// it's first chosen, from the app's assets: `fonts/` beside `rust/`. It has
-/// no italic file, so its italic is slanted.
+/// The second family the body can be set in. It's from Google Fonts under the
+/// SIL Open Font License, in `fonts/OFL-CrimsonPro.txt`. The app loads its file
+/// from the app's assets, `fonts/` beside `rust/`, only when Crimson Pro is
+/// first chosen. It has no italic file, so its italic is slanted.
 const CRIMSON: &str = "Crimson Pro";
 const CRIMSON_FILE: &str = "fonts/CrimsonPro-Variable.ttf";
 
-/// The toolbar's icons: Google's Material Icons, a font whose ligatures turn
-/// an icon's name, such as "format_bold", into its glyph. Apache License 2.0;
-/// see `fonts/LICENSE-MaterialIcons.txt`.
+/// The toolbar's icon font, Google's Material Icons. Its ligatures turn an
+/// icon's name, such as "format_bold", into its glyph. It's under the Apache
+/// License 2.0, in `fonts/LICENSE-MaterialIcons.txt`.
 const ICONS: &str = "Material Icons";
 
-/// The fallback font, for the Hindi essay: Noto Serif Devanagari, from Google
-/// Fonts under the SIL Open Font License; see
+/// The fallback font for the Hindi essay, Noto Serif Devanagari. It's from
+/// Google Fonts under the SIL Open Font License, in
 /// `fonts/OFL-NotoSerifDevanagari.txt`.
 const DEVANAGARI: &str = "Noto Serif Devanagari";
 const DEVANAGARI_FONT: &[u8] = include_bytes!("../../fonts/NotoSerifDevanagari-Variable.ttf");
@@ -220,7 +224,8 @@ const TOOL_SIZE: Vec2 = Vec2::new(34.0, 30.0);
 const TOOL_GAP: f32 = 4.0;
 const GROUP_GAP: f32 = 14.0;
 
-/// The body's sizes: the icon's size on its button, and the body's.
+/// The body's sizes. Each pair is the size of a button's icon, then the size of
+/// the body's text.
 const SIZES: [(f32, f32); 3] = [(14.0, 15.0), (18.0, 17.0), (22.0, 20.0)];
 /// The body's alignments, with their icons.
 const ALIGNS: [(&str, TextAlign); 3] = [
@@ -237,7 +242,7 @@ const SPACINGS: [(&str, f32); 3] = [
 /// The families the body can be set in.
 const FAMILIES: [&str; 2] = [LORA, CRIMSON];
 
-/// The engine settings both entry points use.
+/// Returns the engine settings both entry points use.
 pub fn config() -> ProteusConfig {
     let mut config = ProteusConfig::web();
     config.render.clear_color = BACKGROUND.as_dvec4().to_array();
@@ -245,12 +250,12 @@ pub fn config() -> ProteusConfig {
     config
 }
 
-/// The essays app. Its callbacks do most of its work; `update` downloads
+/// The essays app. Its callbacks do most of the work. `update` downloads
 /// Crimson Pro once it's first chosen.
 #[derive(Default)]
 pub struct Essays {
     ui: Option<Rc<Ui>>,
-    /// Crimson Pro's download, once started.
+    /// The fetch downloading Crimson Pro, once it has started.
     crimson: Option<FetchId>,
 }
 
@@ -270,7 +275,8 @@ impl App for Essays {
             if Some(id) != self.crimson {
                 continue;
             }
-            // Loaded, its texts are drawn in it; failed, in the default font.
+            // If the font loads, its texts are drawn in it. If the fetch or the
+            // load fails, they're drawn in the default font.
             let loaded = bytes.map(|bytes| f.proteus.load_font(bytes));
             if !matches!(loaded, Some(Ok(_))) {
                 f.proteus.font_failed(CRIMSON);
@@ -279,8 +285,8 @@ impl App for Essays {
     }
 }
 
-/// A component that only shows `text`, with the text's top-left corner at
-/// `(x, y)`, relative to the parent it's given to.
+/// Creates a component that only shows `text`, with the text's top-left corner
+/// at `(x, y)`, relative to the parent it's given to.
 fn text_at(x: f32, y: f32, text: Text) -> ComponentSpec {
     ComponentSpec::new(QuadState {
         position: Vec3::new(x, y, 0.0),
@@ -293,7 +299,7 @@ fn text_at(x: f32, y: f32, text: Text) -> ComponentSpec {
     .text(text)
 }
 
-/// A small button, with its label, lighter on hover.
+/// Creates a small button showing `label`, which turns lighter on hover.
 fn button(position: Vec3, size: Vec2, label: &str) -> ComponentSpec {
     ComponentSpec::new(QuadState {
         position,
@@ -313,13 +319,13 @@ fn button(position: Vec3, size: Vec2, label: &str) -> ComponentSpec {
     .text(Text::new(label, 14.0).with_color(WHITE))
 }
 
-/// A card's texts, in reading order.
+/// Creates a card's texts for `essay`, in reading order.
 fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
     let left = -CARD_SIZE.x / 2.0 + CARD_PADDING;
     let top = CARD_SIZE.y / 2.0 - CARD_PADDING;
     let specs = [
-        // Aligned to the end of the column, so it lines up with the card's
-        // right edge.
+        // The year is aligned to the end of the column, so it lines up with the
+        // card's right edge.
         text_at(
             left,
             top,
@@ -329,7 +335,7 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_wrap_width(CARD_COLUMN)
                 .with_align(TextAlign::End),
         ),
-        // At most two lines, ending in the default "…".
+        // The title takes at most two lines and ends in the default "…".
         text_at(
             left,
             top - 24.0,
@@ -339,9 +345,9 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_wrap_width(CARD_COLUMN)
                 .with_max_lines(2),
         ),
-        // At most five lines, ending in the card's own ellipsis.
-        // Below two lines of title in any of the scripts, Hindi's being the
-        // tallest.
+        // The opening takes at most five lines and ends in the card's own
+        // ellipsis. It sits below two lines of title in any of the scripts,
+        // and Hindi's is the tallest.
         text_at(
             left,
             top - 104.0,
@@ -353,7 +359,8 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_max_lines(5)
                 .with_ellipsis(essay.more),
         ),
-        // At most two lines, at the foot of the card, clipped with no mark.
+        // The source takes at most two lines at the foot of the card, and is
+        // clipped with no mark.
         text_at(
             left,
             -CARD_SIZE.y / 2.0 + CARD_PADDING + 30.0,
@@ -367,7 +374,7 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
     specs.into_iter().map(|spec| app.component(spec)).collect()
 }
 
-/// The open essay's texts and its back button.
+/// The open essay's texts and back button.
 struct EssayView {
     title: Handle,
     byline: Handle,
@@ -390,7 +397,7 @@ impl EssayView {
     }
 }
 
-/// How the body is set: the toolbar's choices.
+/// The toolbar's choices for how the body is set.
 #[derive(Clone, Copy, PartialEq)]
 struct Settings {
     size: usize,
@@ -432,15 +439,15 @@ struct Ui {
     /// The toolbar, shown while an essay is open.
     tools: Toolbar,
     channel: TransitionChannel,
-    /// The essay open, or opening.
+    /// The index of the essay that is open or opening, if any.
     open: Cell<Option<usize>>,
     settings: Cell<Settings>,
-    /// Whether Crimson Pro has been chosen, so `update` downloads it.
+    /// Whether Crimson Pro has been chosen. `update` downloads it once it has.
     crimson_wanted: Cell<bool>,
 }
 
 impl Ui {
-    /// The opening of essay `i`, set as the toolbar says.
+    /// Returns the opening of essay `i`, set as the toolbar's choices say.
     fn body(&self, i: usize) -> Text {
         let settings = self.settings.get();
         let text = Text::new(ESSAYS[i].opening, SIZES[settings.size].1)
@@ -472,7 +479,7 @@ impl Ui {
                 .with_color(INK)
                 .with_wrap_width(PANEL_COLUMN),
         );
-        // Two lines, split with a `\n`.
+        // The byline is two lines, split with a `\n`.
         let byline = format!("{}\n{}", essay.author, essay.year);
         let _ = view
             .byline
@@ -539,7 +546,8 @@ fn set_visible(app: &mut Proteus, handles: &[Handle], visible: bool) {
     }
 }
 
-/// A toolbar button at `x`, showing `label`: an icon, or "Aa" in a family.
+/// Creates a toolbar button at `x` showing `label`, which is an icon or "Aa" in
+/// a family.
 fn tool(x: f32, label: Text) -> ComponentSpec {
     ComponentSpec::new(QuadState {
         position: Vec3::new(x, BAR_Y, 0.0),
@@ -560,16 +568,17 @@ fn tool(x: f32, label: Text) -> ComponentSpec {
     .text(label.with_color(WHITE))
 }
 
-/// A toolbar button's label, from its index in its group.
+/// A toolbar button's label, made from the button's index in its group.
 type Label = fn(usize) -> Text;
 
-/// An icon from Material Icons, by name, at `size` pixels.
+/// Returns an icon from Material Icons, by name, at `size` pixels.
 fn icon(name: &str, size: f32) -> Text {
     Text::new(name, size).with_family(ICONS)
 }
 
-/// Marks `button` as on, in the accent color, or off. An on button has no
-/// hover style, so the pointer leaves it as it is; off, it gets it back.
+/// Marks `button` as on, in the accent color, or off. An on button has no hover
+/// style, so the pointer leaves it as it is. An off button gets its hover style
+/// back.
 fn mark(app: &mut Proteus, button: Handle, on: bool) {
     let hover = (!on).then_some(StyleOverride {
         color: Some(BUTTON_HOVER),
@@ -589,31 +598,32 @@ fn select(app: &mut Proteus, buttons: &[Handle], chosen: usize) {
     }
 }
 
-/// Creates the app's components, for a window `width` logical pixels wide,
-/// and its callbacks, which do the rest.
+/// Creates the app's components for a window `width` logical pixels wide. The
+/// app's callbacks do the rest.
 fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
-    // Lora, upright and italic: both files are one family. The icons are a
-    // font too. Crimson Pro is coming, once it's chosen: until then, its
-    // texts are drawn in the default font, and again in it once it loads.
+    // Lora's two files, upright and italic, are one family. The icons are in a
+    // font too. Crimson Pro is loaded later, once it's chosen. Until then,
+    // texts in it are drawn in the default font, and they're drawn in Crimson
+    // Pro once it loads.
     for font in [LORA_UPRIGHT, LORA_ITALIC, ICONS_FONT, DEVANAGARI_FONT] {
         app.load_font(font).expect("the example's fonts are valid");
     }
-    // Hindi is in none of the other fonts: a character a text's font lacks
-    // is looked for in the fallback, then in the default font.
+    // None of the other fonts has Hindi. A character a text's font lacks is
+    // looked for in the fallback font, then in the default font.
     app.set_fallback_fonts([DEVANAGARI]);
     app.expect_font(CRIMSON, WhileLoading::DefaultFont);
 
-    // The title sits a margin from the window's left edge, and the toolbar,
-    // on the title's line, a margin from its right edge.
+    // The title sits a margin from the window's left edge. The toolbar sits on
+    // the title's line, a margin from the window's right edge.
     app.component(text_at(
         -width / 2.0 + MARGIN,
         TITLE_TOP,
         Text::new("Essays", 30.0).with_color(WHITE),
     ));
 
-    // The toolbar: its groups, left to right, each button's label made from
-    // its index in the group. Hidden until an essay is open, since it changes
-    // only the essay.
+    // The toolbar's groups run left to right, and each button's label is made
+    // from the button's index in its group. The toolbar is hidden until an
+    // essay is open, since it changes only the essay.
     let groups: [(usize, Label); 6] = [
         (SIZES.len(), |i| icon("format_size", SIZES[i].0)),
         (ALIGNS.len(), |i| icon(ALIGNS[i].0, 20.0)),
@@ -654,7 +664,7 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         families: next(),
     };
 
-    // A card for each essay, with its texts as children.
+    // One card for each essay, with its texts as children.
     let mut cards = Vec::new();
     let mut texts = Vec::new();
     for (i, essay) in ESSAYS.iter().enumerate() {
@@ -681,9 +691,9 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         texts.push(card_text);
     }
 
-    // The essay panel, over the cards. It takes the pointer, so a click on
-    // the open essay doesn't reach the cards under it, but not the keyboard,
-    // so it's never a stop for focus.
+    // The essay panel sits over the cards. It takes the pointer, so a click on
+    // the open essay doesn't reach the cards under it. It doesn't take the
+    // keyboard, so it's never a stop for focus.
     let left = -PANEL_SIZE.x / 2.0 + PANEL_PADDING;
     let top = PANEL_SIZE.y / 2.0 - PANEL_PADDING;
     let hidden_text = |app: &mut Proteus, x: f32, y: f32| {
@@ -701,7 +711,8 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         title: hidden_text(app, left, top - 60.0),
         byline: hidden_text(app, left, top - 150.0),
         body: hidden_text(app, left, top - 200.0),
-        // Below the tallest body: 20 pixels at a line height of 1.8.
+        // The quote sits below the tallest body, which is 20 pixels at a line
+        // height of 1.8.
         quote: hidden_text(app, -300.0, -150.0),
         source: hidden_text(app, left, -PANEL_SIZE.y / 2.0 + PANEL_PADDING + 14.0),
     };
@@ -742,7 +753,8 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     for (i, &card) in ui.cards.iter().enumerate() {
         let on_click = Rc::clone(&ui);
         card.on_click(app, move |app| on_click.open(app, i));
-        // Back from the essay: the card's texts return once it's whole.
+        // When the card returns from the essay, its texts come back once the
+        // card is whole.
         let on_arrive = Rc::clone(&ui);
         card.on_transition_complete(app, move |app| {
             set_visible(app, &on_arrive.card_texts[i], true);
@@ -783,8 +795,8 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
     wasm_logger::init(wasm_logger::Config::new(log::Level::Warn));
-    // Nothing is loaded up front. Assets are fetched from the example's
-    // folder, a level above the page, as `fonts/` is.
+    // Nothing is loaded up front. Assets are fetched from the example's folder,
+    // which holds `fonts/` and is a level above the page.
     let services = proteus_host_web::PreloadedHostServices::fetch("..", &[]).await;
     proteus_host_web::run(Essays::default(), &canvas_id, config(), services).await
 }
@@ -793,7 +805,7 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
 mod tests {
     use super::*;
 
-    /// Runs `app` until every transition has ended.
+    // Ticks `app` for long enough that every transition has ended.
     fn settle(app: &mut Proteus) {
         for _ in 0..4 {
             app.tick(0.0);
@@ -805,8 +817,8 @@ mod tests {
         app.get(handle).unwrap().visible
     }
 
-    // Opening an essay shows its texts and the settings bar only once the
-    // panel has arrived, and going back shows the card's texts once the card
+    // Opening an essay must show its texts and the toolbar only once the panel
+    // has arrived. Going back must show the card's texts only once the card
     // has.
     #[test]
     fn texts_show_once_their_component_arrives() {
@@ -854,8 +866,8 @@ mod tests {
         assert!(!visible(&app, ui.panel));
     }
 
-    // The toolbar sets the open body's size, alignment, weight, italic, line
-    // height and family.
+    // The toolbar sets the open body's size, alignment, weight, italic and line
+    // height, and leaves its family as Lora.
     #[test]
     fn the_toolbar_sets_the_body() {
         let mut app = Proteus::new();
@@ -878,7 +890,8 @@ mod tests {
     }
 
     // A chosen or toggled-on button stays in the accent color under the
-    // pointer; the others turn lighter, and a button toggled off does again.
+    // pointer. The other buttons turn lighter, and a button toggled off turns
+    // lighter again.
     #[test]
     fn chosen_buttons_keep_their_color_under_the_pointer() {
         let mut app = Proteus::new();
@@ -911,8 +924,9 @@ mod tests {
         );
     }
 
-    // Crimson Pro is downloaded only once it's chosen. Meanwhile the body is
-    // drawn in the default font, and in Crimson Pro once it loads.
+    // Crimson Pro is downloaded only once it's chosen, and the body is then
+    // set in it. Until the font loads, it's expected with
+    // `WhileLoading::DefaultFont`. Once it loads, its status is `Loaded`.
     #[test]
     fn crimson_pro_loads_once_chosen() {
         let mut app = Proteus::new();
@@ -936,8 +950,8 @@ mod tests {
         );
     }
 
-    // The title sits a margin from the window's left edge, and the toolbar
-    // ends a margin from its right edge, centered on the title's line.
+    // The toolbar ends a margin from the window's right edge, centered on the
+    // title's line, and it stays clear of the title.
     #[test]
     fn the_toolbar_is_on_the_titles_line_at_the_right_margin() {
         let mut app = Proteus::new();
