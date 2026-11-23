@@ -692,8 +692,8 @@ mod tests {
         }
     }
 
-    /// Lora, the family the essays example loads.
-    const LORA: &[u8] = include_bytes!("../../../examples/essays/fonts/Lora-Variable.ttf");
+    /// Lora, a second family besides Inter.
+    use proteus_test_fonts::SECOND_FAMILY as LORA;
 
     /// A component showing "Proteus" in Lora at 24 pixels, after a frame.
     fn lora_scene(prepare: impl FnOnce(&mut Proteus)) -> Option<(Scene, Handle)> {
@@ -782,9 +782,8 @@ mod tests {
         assert_eq!(baked(&scene, &label).map(|s| s[0]), default, "never loaded");
     }
 
-    /// Noto Serif Devanagari, the fallback the essays example uses for Hindi.
-    const DEVANAGARI: &[u8] =
-        include_bytes!("../../../examples/essays/fonts/NotoSerifDevanagari-Variable.ttf");
+    /// Noto Serif Devanagari, for Hindi, which Inter lacks.
+    use proteus_test_fonts::DEVANAGARI;
     const HINDI: &str = "नमस्ते";
 
     fn hindi_scene(prepare: impl FnOnce(&mut Proteus)) -> Option<(Scene, Handle)> {

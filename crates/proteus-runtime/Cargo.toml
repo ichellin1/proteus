@@ -35,6 +35,9 @@ log = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# Fonts for the tests of fonts, weights, italics and fallback. Not published, so
+# `cargo publish` leaves it out.
+proteus-test-fonts = { path = "../proteus-test-fonts" }
 serde_json = { workspace = true }
 # GPU-backed test for `Frame::play_video`/`stop_video`'s registry bookkeeping —
 # same headless-device pattern `proteus-sdk`'s and `proteus-ui`'s own GPU tests

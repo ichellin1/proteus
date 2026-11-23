@@ -1241,11 +1241,8 @@ mod tests {
         assert_eq!(fa.fit(&text, 1.0).content, None);
     }
 
-    /// Lora, roman and italic, variable from 400 to 700: a second family, as
-    /// the essays example loads it.
-    const LORA: &[u8] = include_bytes!("../../../examples/essays/fonts/Lora-Variable.ttf");
-    const LORA_ITALIC: &[u8] =
-        include_bytes!("../../../examples/essays/fonts/Lora-Italic-Variable.ttf");
+    /// Lora, roman and italic, variable from 400 to 700: a second family.
+    use proteus_test_fonts::{SECOND_FAMILY as LORA, SECOND_FAMILY_ITALIC as LORA_ITALIC};
 
     fn pixels(fa: &mut FontAtlas, text: &TextLayout) -> RasterizedGlyphs {
         fa.rasterize(text, 1.0).unwrap()
@@ -1334,9 +1331,9 @@ mod tests {
         );
     }
 
-    const CRIMSON: &[u8] = include_bytes!("../../../examples/essays/fonts/CrimsonPro-Variable.ttf");
-    const DEVANAGARI: &[u8] =
-        include_bytes!("../../../examples/essays/fonts/NotoSerifDevanagari-Variable.ttf");
+    /// Crimson Pro, a third family, and Noto Serif Devanagari, for a script
+    /// Inter lacks.
+    use proteus_test_fonts::{DEVANAGARI, THIRD_FAMILY as CRIMSON};
 
     // A script no loaded font has is drawn as boxes, and reported; with a
     // fallback font that has it, it's drawn in that.

@@ -2428,6 +2428,7 @@ dependencies = [
  "log",
  "parley",
  "pollster",
+ "proteus-test-fonts",
  "slotmap",
  "swash",
  "thiserror 2.0.18",
@@ -2446,6 +2447,7 @@ dependencies = [
  "proteus-gpu",
  "proteus-render",
  "proteus-sdk",
+ "proteus-test-fonts",
  "proteus-ui",
  "serde",
  "serde_json",
@@ -2511,6 +2513,10 @@ dependencies = [
  "wasm-logger",
  "web-sys",
 ]
+
+[[package]]
+name = "proteus-test-fonts"
+version = "0.3.0"
 
 [[package]]
 name = "proteus-ui"
