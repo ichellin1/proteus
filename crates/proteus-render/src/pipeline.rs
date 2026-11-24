@@ -771,7 +771,7 @@ impl QuadPipeline {
 
     /// Writes a rectangle of RGBA pixels into one page of `main_atlas`.
     ///
-    /// Use this to upload pixels produced by [`FontAtlas::rasterize_text`] or
+    /// Use this to upload pixels produced by [`TextRasterizer::rasterize`] or
     /// [`crate::decode_image`], after registering their region via
     /// [`crate::TextureRegistry::register_static`] — pass the [`crate::MainAtlasPlacement`]
     /// [`crate::TextureRegistry::main_atlas_region`] returns straight through, so the page and
@@ -781,13 +781,13 @@ impl QuadPipeline {
     /// `width * height * 4` bytes. Premultiplied in place (a local copy) before
     /// upload — see [`crate::static_texture::premultiply_alpha`]'s doc comment
     /// for why `main_atlas` is stored premultiplied. Callers hand this straight
-    /// alpha exactly as `rasterize_text`/`decode_image` produce it.
+    /// alpha exactly as `rasterize`/`decode_image` produce it.
     ///
     /// # Panics
     ///
     /// Panics in debug builds if `rgba_data.len() != width * height * 4`.
     ///
-    /// [`FontAtlas::rasterize_text`]: crate::font_atlas::FontAtlas::rasterize_text
+    /// [`TextRasterizer::rasterize`]: crate::TextRasterizer::rasterize
     pub fn write_to_main_atlas(
         &self,
         queue: &wgpu::Queue,

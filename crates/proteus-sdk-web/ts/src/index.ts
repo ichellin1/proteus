@@ -1192,9 +1192,37 @@ export class ProteusApp {
   }
 
   /**
+   * Returns the size a text is drawn at, in logical pixels, without drawing it. It's the size
+   * {@link Handle.bakedTextSize} gives once the text is baked, so an app can lay out around a
+   * text before it's drawn, such as to fit a button to its label.
+   *
+   * The size is rounded up to whole pixels at the display's scale, as the text is when it's
+   * drawn, so on a display of another scale it can differ by under a pixel. Measure again when
+   * the scale changes.
+   *
+   * Returns `undefined` while the text waits for a font it names, loaded with
+   * `whileLoading: "hide"`, since it isn't drawn yet. With `whileLoading: "defaultFont"`, it's
+   * the size in the default font, as drawn meanwhile. An empty text is zero.
+   *
+   * @throws If `text` isn't a valid {@link TextSpec}.
+   *
+   * @example
+   * ```ts
+   * const label: TextSpec = { content: "Back", sizePx: 16 };
+   * const size = app.measureText(label);
+   * // A button fitted to its label, with 12 pixels each side.
+   * const width = size ? size.width + 24 : 96;
+   * ```
+   */
+  measureText(text: TextSpec): Size | undefined {
+    return this.wasmApp.measureText(text) as Size | undefined;
+  }
+
+  /**
    * Loads a TTF or OTF font, and returns the family name inside it. Texts name that family in
    * `family` to be drawn in the font. A font of a family that's already loaded adds a face to
-   * the family, such as its italic.
+   * the family, such as its italic. It can be measured with {@link ProteusApp.measureText} at
+   * once.
    *
    * Given bytes, `loadFont` loads them at once. Given a promise of bytes, such as a download, it
    * needs the family's name in `options`. Until the font loads, texts in that family aren't

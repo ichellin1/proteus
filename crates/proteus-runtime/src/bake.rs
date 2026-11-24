@@ -10,11 +10,11 @@ use std::sync::Arc;
 use bevy_ecs::prelude::{Entity, Without};
 use bevy_ecs::world::World;
 
-use proteus_render::{decode_image, resize_to_fit, FontAtlas, QuadPipeline, TextureId};
+use proteus_render::{decode_image, resize_to_fit, QuadPipeline, TextRasterizer, TextureId};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{
-    BakeScale, BakedColor, BakedImage, BakedText, EffectiveVisibility, FontStatus, Fonts, Image,
-    ImageTextureRef, MissingGlyphs, Text, TextTextureRef, Visibility, WaitsForFont, WhileLoading,
+    BakeScale, BakedColor, BakedImage, BakedText, EffectiveVisibility, Fonts, Image,
+    ImageTextureRef, MissingGlyphs, Text, TextTextureRef, Visibility, WaitsForFont,
 };
 
 use crate::services::HostServices;
@@ -72,16 +72,18 @@ pub(crate) fn bake_texture(
 }
 
 /// Rasterizes and uploads the text of every entity that has `Text` but no
-/// `BakedText` yet. With `lazy_load`, a hidden entity is skipped until it is
-/// visible.
+/// `BakedText` yet, laid out in the fonts in the world's `Fonts`. With
+/// `lazy_load`, a hidden entity is skipped until it is visible.
 ///
-/// Text wider or taller than an atlas page is clipped to the page, with a
-/// warning, and drawn at its normal size. Text that draws nothing, such as an
-/// empty string, gets a zero-size `BakedText` and no texture, so it counts as
-/// baked and isn't tried again every frame.
+/// Text too large for an atlas page at the bake scale is baked at the largest
+/// scale that fits, if that's above 1, or else clipped to the page, with a
+/// warning. `proteus_ui::measure_text` gives the same size without baking.
+/// Text that draws nothing, such as an empty string, gets a zero-size
+/// `BakedText` and no texture, so it counts as baked and isn't tried again
+/// every frame.
 pub(crate) fn bake_pending_text(
     world: &mut World,
-    font_atlas: &mut FontAtlas,
+    rasterizer: &mut TextRasterizer,
     queue: &wgpu::Queue,
     lazy_load: bool,
 ) {
@@ -98,174 +100,127 @@ pub(crate) fn bake_pending_text(
             .map(|(e, t, _, _)| (e, t.clone()))
             .collect()
     };
+    if pending.is_empty() {
+        return;
+    }
+    world.get_resource_or_insert_with(Fonts::default);
+    world.resource_scope(|world, mut fonts: bevy_ecs::world::Mut<Fonts>| {
+        for (entity, text) in pending {
+            bake_text(world, &mut fonts, rasterizer, queue, entity, &text);
+        }
+    });
+}
 
+/// Bakes `entity`'s `text`. See [`bake_pending_text`].
+fn bake_text(
+    world: &mut World,
+    fonts: &mut Fonts,
+    rasterizer: &mut TextRasterizer,
+    queue: &wgpu::Queue,
+    entity: Entity,
+    text: &Text,
+) {
+    // A text waits, not drawn, while a font it or one of its spans names is
+    // still loading. A family that isn't loaded is drawn in the default font.
+    let layout = text.layout();
+    if fonts.text_waits(&layout) {
+        return;
+    }
+    if !text.content.is_empty() && !text.spans.is_empty() {
+        log::warn!(
+            "the text of entity {entity:?} has both content, {:?}, and spans: its spans are \
+             drawn. Give it one or the other",
+            text.content,
+        );
+    }
     // Rasterized at the bake scale, so a texel is a display pixel, and drawn
     // at its logical size.
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
-    for (entity, text) in pending {
-        // A text waits, not drawn, while a font it or one of its spans names
-        // is still loading. A family that isn't in the font atlas is drawn in
-        // the default font.
-        let families = text.layout().families();
-        let choices: Vec<_> = families
-            .iter()
-            .map(|family| font_choice(world, font_atlas, family))
-            .collect();
-        if choices.contains(&None) {
-            continue;
-        }
-        if !text.content.is_empty() && !text.spans.is_empty() {
+    let max = proteus_ui::page_side(world);
+    let (glyphs, scale) = proteus_ui::fit_to_page(
+        bake_scale,
+        max,
+        |scale| rasterizer.rasterize(fonts.typesetter_mut(), &layout, scale),
+        |g| (g.width, g.height),
+    );
+    // When no font has some of the text's characters, and a fallback that
+    // might have them is expected with `WhileLoading::Hide`, the text waits.
+    // Otherwise it's drawn with boxes for those characters, and marked so it's
+    // baked again when a font loads.
+    let missing = glyphs.as_ref().is_some_and(|g| !g.missing.is_empty());
+    if missing && fonts.waits_for_fallback() {
+        world.entity_mut(entity).insert(WaitsForFont);
+        return;
+    }
+    // A text baked in its colors is baked again when its color changes.
+    if text.is_colored() {
+        world
+            .entity_mut(entity)
+            .insert(BakedColor(text.color.truncate()));
+    } else {
+        world.entity_mut(entity).remove::<BakedColor>();
+    }
+    if missing {
+        world.entity_mut(entity).insert(MissingGlyphs);
+    } else {
+        world.entity_mut(entity).remove::<MissingGlyphs>();
+    }
+    let Some(mut glyphs) = glyphs else {
+        world.entity_mut(entity).insert(BakedText {
+            uv_offset: [0.0, 0.0],
+            uv_scale: [0.0, 0.0],
+            page: 0,
+            pixel_size: [0.0, 0.0],
+        });
+        return;
+    };
+
+    let (uv, texture_id) = {
+        let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
+            return;
+        };
+        let max = pipeline.texture_registry.max_texture_side();
+        if glyphs.width > max || glyphs.height > max {
+            let (width, height) = (glyphs.width.min(max), glyphs.height.min(max));
             log::warn!(
-                "the text of entity {entity:?} has both content, {:?}, and spans: its spans are \
-                 drawn. Give it one or the other",
-                text.content,
+                "the text of entity {entity:?} is {}x{} pixels, larger than an atlas page \
+                 ({max}x{max}); it is clipped to {width}x{height}",
+                glyphs.width,
+                glyphs.height,
             );
+            glyphs.rgba_pixels = clip_rgba(&glyphs.rgba_pixels, glyphs.width, width, height);
+            glyphs.width = width;
+            glyphs.height = height;
         }
-        let layout = || text.layout();
-        let mut scale = bake_scale;
-        let mut glyphs = font_atlas.rasterize(&layout(), scale);
-        // Too large for a page at the bake scale: rasterized again, at the
-        // largest scale that fits, if that is above 1.
-        let max = world
-            .get_resource::<QuadPipeline>()
-            .map_or(u32::MAX, |p| p.texture_registry.max_texture_side());
-        if let Some(g) = &glyphs {
-            let fitted = proteus_ui::bake_scale_to_fit(
-                scale,
-                g.width as f32 / scale,
-                g.height as f32 / scale,
-                max,
-            );
-            if fitted < scale {
-                scale = fitted;
-                glyphs = font_atlas.rasterize(&layout(), scale);
-            }
-        }
-        // When no font has some of the text's characters, and a fallback that
-        // might have them is expected with `WhileLoading::Hide`, the text
-        // waits. Otherwise it's drawn with boxes for those characters, and
-        // marked so it's baked again when a font loads.
-        let missing = glyphs.as_ref().is_some_and(|g| !g.missing.is_empty());
-        if missing && waits_for_fallback(world) {
-            world.entity_mut(entity).insert(WaitsForFont);
-            continue;
-        }
-        // A text baked in its colors is baked again when its color changes.
-        if text.is_colored() {
-            world
-                .entity_mut(entity)
-                .insert(BakedColor(text.color.truncate()));
-        } else {
-            world.entity_mut(entity).remove::<BakedColor>();
-        }
-        if missing {
-            world.entity_mut(entity).insert(MissingGlyphs);
-        } else {
-            world.entity_mut(entity).remove::<MissingGlyphs>();
-        }
-        let Some(mut glyphs) = glyphs else {
-            world.entity_mut(entity).insert(BakedText {
-                uv_offset: [0.0, 0.0],
-                uv_scale: [0.0, 0.0],
-                page: 0,
-                pixel_size: [0.0, 0.0],
-            });
-            continue;
-        };
-
-        let (uv, texture_id) = {
-            let Some(mut pipeline) = world.get_resource_mut::<QuadPipeline>() else {
-                return;
-            };
-            let max = pipeline.texture_registry.max_texture_side();
-            if glyphs.width > max || glyphs.height > max {
-                let (width, height) = (glyphs.width.min(max), glyphs.height.min(max));
-                log::warn!(
-                    "the text of entity {entity:?} is {}x{} pixels, larger than an atlas page \
-                     ({max}x{max}); it is clipped to {width}x{height}",
-                    glyphs.width,
-                    glyphs.height,
-                );
-                glyphs.rgba_pixels = clip_rgba(&glyphs.rgba_pixels, glyphs.width, width, height);
-                glyphs.width = width;
-                glyphs.height = height;
-            }
-            let Some(texture_id) =
-                pipeline
-                    .texture_registry
-                    .register_static(glyphs.width, glyphs.height, false)
-            else {
-                continue;
-            };
-            let placement = pipeline
+        let Some(texture_id) =
+            pipeline
                 .texture_registry
-                .main_atlas_region(texture_id)
-                .expect("just registered");
-            pipeline.write_to_main_atlas(queue, placement, &glyphs.rgba_pixels);
-            let uv = pipeline
-                .texture_registry
-                .main_atlas_uv(texture_id)
-                .expect("just registered");
-            (uv, texture_id)
+                .register_static(glyphs.width, glyphs.height, false)
+        else {
+            return;
         };
+        let placement = pipeline
+            .texture_registry
+            .main_atlas_region(texture_id)
+            .expect("just registered");
+        pipeline.write_to_main_atlas(queue, placement, &glyphs.rgba_pixels);
+        let uv = pipeline
+            .texture_registry
+            .main_atlas_uv(texture_id)
+            .expect("just registered");
+        (uv, texture_id)
+    };
 
-        world.entity_mut(entity).insert((
-            BakedText {
-                uv_offset: uv.uv_offset,
-                uv_scale: uv.uv_scale,
-                page: uv.page,
-                // The size it's drawn at, in logical pixels.
-                pixel_size: [glyphs.width as f32 / scale, glyphs.height as f32 / scale],
-            },
-            TextTextureRef(texture_id),
-        ));
-    }
-}
-
-/// Returns whether a fallback font is expected with [`WhileLoading::Hide`] and
-/// not loaded yet. Until it loads, a text with characters no loaded font has
-/// waits, since the fallback may have them.
-fn waits_for_fallback(world: &World) -> bool {
-    world.get_resource::<Fonts>().is_some_and(|fonts| {
-        fonts
-            .fallbacks()
-            .iter()
-            .any(|family| fonts.status(family) == Some(FontStatus::Expected(WhileLoading::Hide)))
-    })
-}
-
-/// Returns whether a text in `family` is drawn in the default font rather
-/// than in that family, or `None` if the text waits, not drawn, for the family
-/// to load. See [`Fonts`]. A family that failed or was never loaded is warned
-/// about once.
-fn font_choice(world: &mut World, font_atlas: &FontAtlas, family: &str) -> Option<bool> {
-    if font_atlas.has_family(family) {
-        return Some(false);
-    }
-    let mut fonts = world.get_resource_or_insert_with(Fonts::default);
-    match fonts.status(family) {
-        Some(FontStatus::Expected(WhileLoading::Hide)) => None,
-        Some(FontStatus::Expected(WhileLoading::DefaultFont)) => Some(true),
-        Some(FontStatus::Failed) => {
-            if fonts.first_warning(family) {
-                log::warn!("the font family {family:?} failed to load: its text is drawn in the default font");
-            }
-            Some(true)
-        }
-        // The font is loaded but not in the atlas yet. The renderer adds it
-        // before the next bake, and bakes the text again.
-        Some(FontStatus::Loaded) => Some(true),
-        None => {
-            if fonts.first_warning(family) {
-                log::warn!(
-                    "no font of the family {family:?} has been loaded, or is expected: its text \
-                     is drawn in the default font. Load it with `load_font`, or say it's coming \
-                     with `expect_font`"
-                );
-            }
-            Some(true)
-        }
-    }
+    world.entity_mut(entity).insert((
+        BakedText {
+            uv_offset: uv.uv_offset,
+            uv_scale: uv.uv_scale,
+            page: uv.page,
+            // The size it's drawn at, in logical pixels.
+            pixel_size: [glyphs.width as f32 / scale, glyphs.height as f32 / scale],
+        },
+        TextTextureRef(texture_id),
+    ));
 }
 
 /// Decodes and uploads the image of every entity that has `Image` but no
@@ -379,10 +334,19 @@ mod tests {
 
     use crate::app::gpu_tests::headless_device;
 
+    // Makes the embedded font the world's default, as the renderer does.
+    fn use_embedded_font(world: &mut World) {
+        world
+            .get_resource_or_insert_with(Fonts::default)
+            .typesetter_mut()
+            .use_embedded_font();
+    }
+
     // A world with a one-page atlas of 256 × 256, so that modest content is
     // larger than a page, and with texture references counted.
     fn world_with_small_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> World {
         let mut world = World::new();
+        use_embedded_font(&mut world);
         proteus_ui::texture_ref::register_texture_ref_hooks(&mut world);
         world.insert_resource(QuadPipeline::new(
             device,
@@ -405,21 +369,70 @@ mod tests {
             return;
         };
         let mut world = world_with_small_atlas(&device, &queue);
-        let mut font_atlas = FontAtlas::with_embedded_font();
-        let unclipped = font_atlas.rasterize_text("PROTEUS", 128.0, 0.0).unwrap();
+        let mut rasterizer = TextRasterizer::new();
+        let unclipped = rasterizer
+            .rasterize_text(
+                &mut proteus_render::Typesetter::with_embedded_font(),
+                "PROTEUS",
+                128.0,
+                0.0,
+            )
+            .unwrap();
         assert!(
             unclipped.width > 256,
             "sanity: the text is wider than a page"
         );
 
-        let entity = world.spawn(Text::new("PROTEUS", 128.0)).id();
-        bake_pending_text(&mut world, &mut font_atlas, &queue, false);
+        let text = Text::new("PROTEUS", 128.0);
+        let measured = proteus_ui::measure_text(&mut world, &text);
+        let entity = world.spawn(text).id();
+        bake_pending_text(&mut world, &mut rasterizer, &queue, false);
 
         let baked = world.get::<BakedText>(entity).expect("baked, clipped");
         assert_eq!(
             baked.pixel_size,
             [256.0, unclipped.height as f32],
             "clipped to the page's width, at its normal height"
+        );
+        assert_eq!(
+            measured,
+            Some(baked.pixel_size.into()),
+            "measured as it's baked"
+        );
+    }
+
+    // At a bake scale of 2, text too large for a page is baked at the largest
+    // scale that fits, and measured at it.
+    #[test]
+    fn text_too_large_at_the_bake_scale_is_baked_and_measured_smaller() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut world = world_with_small_atlas(&device, &queue);
+        world.insert_resource(BakeScale(2.0));
+        let text = Text::new("PROTEUS", 32.0);
+        let measured = proteus_ui::measure_text(&mut world, &text);
+        let entity = world.spawn(text).id();
+        bake_pending_text(&mut world, &mut TextRasterizer::new(), &queue, false);
+
+        let baked = world.get::<BakedText>(entity).expect("baked");
+        let at_1 = TextRasterizer::new()
+            .rasterize_text(
+                &mut proteus_render::Typesetter::with_embedded_font(),
+                "PROTEUS",
+                32.0,
+                0.0,
+            )
+            .unwrap();
+        assert!(
+            at_1.width * 2 > 256 && at_1.width < 256,
+            "sanity: too wide for a page at 2, not at 1"
+        );
+        assert_eq!(
+            measured,
+            Some(baked.pixel_size.into()),
+            "measured as it's baked"
         );
     }
 
@@ -456,12 +469,7 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let entity = world.spawn((Text::new("Hi", 32.0), Image::new(png))).id();
-        bake_pending_text(
-            &mut world,
-            &mut FontAtlas::with_embedded_font(),
-            &queue,
-            false,
-        );
+        bake_pending_text(&mut world, &mut TextRasterizer::new(), &queue, false);
         let text = world.get::<TextTextureRef>(entity).unwrap().0;
         bake_pending_images(&mut world, &queue, None, false);
         let image = world.get::<ImageTextureRef>(entity).unwrap().0;
@@ -495,6 +503,7 @@ mod tests {
         };
         let mut proteus = proteus_sdk::Proteus::new();
         let world = proteus.world_mut();
+        use_embedded_font(world);
         world.insert_resource(QuadPipeline::new(
             &device,
             &queue,
@@ -503,12 +512,12 @@ mod tests {
             AtlasConfig::default(),
             DEFAULT_TRANSITION_ATLAS_SIZE,
         ));
-        let mut font_atlas = FontAtlas::with_embedded_font();
+        let mut rasterizer = TextRasterizer::new();
         let handle = proteus.component(
             proteus_sdk::ComponentSpec::new(proteus_ui::QuadState::default())
                 .text(Text::new("Hi", 32.0)),
         );
-        bake_pending_text(proteus.world_mut(), &mut font_atlas, &queue, false);
+        bake_pending_text(proteus.world_mut(), &mut rasterizer, &queue, false);
         let old = proteus
             .world()
             .get::<TextTextureRef>(handle.id())
@@ -523,7 +532,7 @@ mod tests {
         handle
             .set_text(&mut proteus, Text::new("Hello there", 32.0))
             .unwrap();
-        bake_pending_text(proteus.world_mut(), &mut font_atlas, &queue, false);
+        bake_pending_text(proteus.world_mut(), &mut rasterizer, &queue, false);
 
         let baked = proteus.world().get::<BakedText>(handle.id()).unwrap();
         assert!(baked.pixel_size[0] > old_width, "the new, longer text");
@@ -547,12 +556,7 @@ mod tests {
         let empty = world.spawn(Text::new(" ", 16.0)).id();
         let broken = world.spawn(Image::new(vec![1u8, 2, 3])).id();
 
-        bake_pending_text(
-            &mut world,
-            &mut FontAtlas::with_embedded_font(),
-            &queue,
-            false,
-        );
+        bake_pending_text(&mut world, &mut TextRasterizer::new(), &queue, false);
         bake_pending_images(&mut world, &queue, None, false);
 
         let baked = world.get::<BakedText>(empty).expect("counts as baked");

@@ -16,9 +16,10 @@ use text_engines::fd::Fontdue;
 use text_engines::parley_swash::Parley;
 use text_engines::{cases, time_workload, Case, Engine, Face, Mask, Support};
 
-/// Today's text: `proteus-render`'s `FontAtlas`, `fontdue` a character at a
-/// time, one line, in Inter Bold whatever the case asks for.
-struct Today(proteus_render::FontAtlas);
+/// Today's text: `proteus-render`'s `Typesetter` and `TextRasterizer`, in
+/// Inter Bold whatever the case asks for. This was `fontdue` a character at a
+/// time, one line, when the engines were compared.
+struct Today(proteus_render::Typesetter, proteus_render::TextRasterizer);
 
 impl Engine for Today {
     fn name(&self) -> &'static str {
@@ -46,7 +47,10 @@ impl Engine for Today {
     }
 
     fn render(&mut self, case: &Case, scale: f32) -> Mask {
-        let Some(g) = self.0.rasterize_text(&case.text(), case.size * scale, 0.0) else {
+        let Some(g) = self
+            .1
+            .rasterize_text(&mut self.0, &case.text(), case.size * scale, 0.0)
+        else {
             return Mask::default();
         };
         Mask {
@@ -98,7 +102,10 @@ fn save_sheet(path: &str, masks: &[Mask]) {
 fn main() {
     std::fs::create_dir_all("out").unwrap();
     let mut engines: Vec<Box<dyn Engine>> = vec![
-        Box::new(Today(proteus_render::FontAtlas::with_embedded_font())),
+        Box::new(Today(
+            proteus_render::Typesetter::with_embedded_font(),
+            proteus_render::TextRasterizer::new(),
+        )),
         Box::new(Fontdue::default()),
         Box::new(Cosmic::default()),
         Box::new(Parley::default()),

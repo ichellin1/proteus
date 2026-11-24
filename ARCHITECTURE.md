@@ -244,23 +244,28 @@ alpha, which keeps bilinear filtering right at antialiased edges.
 To bake is to render something into an atlas region, once, so it can be drawn as a texture.
 Proteus bakes three kinds of thing:
 
-- **Text and images**, by `Renderer::render` before collecting instances. Text is laid out
-  and shaped with parley, which applies the font's kerning and places each glyph to a quarter
-  of a pixel, and its glyphs are rasterized on the CPU with swash, each text to one image,
-  white with the glyphs' coverage in alpha, so it can take any color as it's drawn. A text
-  with a span that sets a color is baked in its spans' colors instead, and drawn tinted only
-  by its alpha. `BakedColor` keeps the color it was baked with, and a change to it bakes the
-  text again. A glyph cache keeps each
-  glyph's pixels after they're rasterized, dropping those used longest ago past
-  `resources.glyph_cache_bytes`, so the glyphs texts share are rasterized once. Text is in the
-  default font, Inter with the `embedded-font` feature, or a family the app has loaded with
-  `Proteus::load_font`, which queues the font in the `Fonts` resource for the renderer to add
-  before it next bakes. A text whose family is expected but not loaded waits, or is drawn in the
-  default font and baked again once it loads, as the app chose. A span's family counts as the
-  text's. A character the text's family
-  lacks is looked for in the app's fallback fonts, in order, then the default font; one none has
-  is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font loads. Images are decoded with the `image` crate. Both go into the main
-  atlas. With `resources.lazy_load`, a component's text or image waits until it is visible.
+- **Text and images**, by `Renderer::render` before collecting instances. Text is laid out and
+  shaped with parley, which applies the font's kerning and places each glyph to a quarter of a
+  pixel, and its glyphs are rasterized on the CPU with swash, each text to one image, white with
+  the glyphs' coverage in alpha, so it can take any color as it's drawn. A text with a span that
+  sets a color is baked in its spans' colors instead, and drawn tinted only by its alpha.
+  `BakedColor` keeps the color it was baked with, and a change to it bakes the text again. The
+  work is split in two. The app's `Fonts` resource holds the `Typesetter`, which has the fonts
+  and lays text out, so `Proteus::measure_text` gives a text's size in the fonts it's drawn in,
+  before it's drawn. The renderer holds the `TextRasterizer`, which draws each text from its
+  layout and keeps a glyph cache: each glyph's pixels after they're rasterized, dropping those
+  used longest ago past `resources.glyph_cache_bytes`, so the glyphs texts share are rasterized
+  once. Measuring and rasterizing size a text's image with one function, from the lines' heights
+  and each glyph's pixel box, which measuring works out from the glyph's outline without drawing
+  it, so the two agree. Text is in the default font, Inter with the `embedded-font` feature or
+  the config's own, which the renderer sets when it starts, before the app's `setup`, or in a
+  family the app has loaded with `Proteus::load_font`, which adds it at once. A text whose
+  family is expected but not loaded waits, or is drawn in the default font and baked again once
+  it loads, as the app chose. A span's family counts as the text's. A character the text's
+  family lacks is looked for in the app's fallback fonts, in order, then the default font; one
+  none has is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font
+  loads. Images are decoded with the `image` crate. Both go into the main atlas. With
+  `resources.lazy_load`, a component's text or image waits until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the
   component becomes a plain quad showing the image. It waits until every text and image in it

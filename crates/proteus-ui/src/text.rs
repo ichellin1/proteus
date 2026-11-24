@@ -4,7 +4,7 @@
 //! Text { content, size_px }      declared on an entity
 //!         │  the renderer finds Text without BakedText
 //!         ▼
-//! FontAtlas::rasterize_text      laid out, shaped and rasterized
+//! TextRasterizer::rasterize      laid out, shaped and rasterized
 //!         │  added to the main atlas
 //!         ▼
 //! BakedText + TextTextureRef     where the text is in the atlas
@@ -23,6 +23,12 @@
 //! other texture. A label is usually a child entity of the component it
 //! labels, positioned relative to it.
 //!
+//! ## Measuring
+//!
+//! [`measure_text`] gives a text's size before it's baked: the size its
+//! [`BakedText`] will have. The [`Typesetter`] in [`Fonts`] lays it out, with
+//! the fonts it's drawn in.
+//!
 //! ## Text larger than an atlas page
 //!
 //! Text has no length limit, and is one line or, where it has a `\n`, more.
@@ -33,9 +39,11 @@
 //! [`AtlasConfig::page_size`]: proteus_render::AtlasConfig::page_size
 
 use bevy_ecs::prelude::*;
-use glam::{Vec3, Vec4};
-use proteus_render::TextLayout;
+use glam::{Vec2, Vec3, Vec4};
+use proteus_render::{FontError, QuadPipeline, TextLayout, Typesetter};
 pub use proteus_render::{Span, TextAlign, TextOverflow, VerticalAlign};
+
+use crate::bake::{bake_scale_to_fit, BakeScale};
 
 // ---------------------------------------------------------------------------
 // Text component
@@ -100,10 +108,7 @@ pub struct Text {
     /// nothing.
     pub color: Vec4,
     /// Extra space between characters, in pixels. `0.0`, the default, is the
-    /// font's normal spacing; negative values tighten it. See
-    /// [`FontAtlas::rasterize_text`].
-    ///
-    /// [`FontAtlas::rasterize_text`]: proteus_render::FontAtlas::rasterize_text
+    /// font's normal spacing; negative values tighten it.
     pub letter_spacing_px: f32,
     /// The width lines wrap at, in logical pixels. This is also the width of
     /// the text's box, and lines align within the box. `None`, the default,
@@ -366,21 +371,24 @@ pub enum FontStatus {
     Failed,
 }
 
-/// The fonts an app has loaded, or said it will load, by family.
-/// `proteus-sdk`'s `Proteus::load_font`, `expect_font` and `font_failed`
-/// change it. Before the renderer next bakes text, it adds each font loaded.
+/// The fonts an app has loaded, and what's known of those it said it will
+/// load, by family. It holds the [`Typesetter`], so the app measures text with
+/// the fonts the renderer draws it in.
+///
+/// `proteus-sdk`'s `Proteus::load_font`, `expect_font`, `font_failed` and
+/// `set_fallback_fonts` change it, and the renderer sets the default font from
+/// its config when it starts. A font loaded is in the typesetter at once. The
+/// renderer then bakes again the texts that change.
 #[derive(Resource, Debug, Default)]
 pub struct Fonts {
+    typesetter: Typesetter,
     status: std::collections::HashMap<String, FontStatus>,
-    /// Fonts loaded that the renderer hasn't added yet, each as its bytes and
-    /// its family.
-    pending: Vec<(std::sync::Arc<[u8]>, String)>,
+    /// The families loaded since the renderer last looked, so it can bake
+    /// their texts again.
+    loaded: Vec<String>,
     /// The families a warning has been logged for.
     warned: std::collections::HashSet<String>,
-    /// The fallback families, in the order they're tried.
-    fallbacks: Vec<String>,
-    /// Whether the fallback families changed since the renderer last took
-    /// them.
+    /// Whether the fallback families changed since the renderer last looked.
     fallbacks_changed: bool,
     /// Counts every change. The renderer uses it to tell when texts that wait
     /// for a font should try again.
@@ -399,13 +407,20 @@ impl Fonts {
         }
     }
 
-    /// Adds a font of `family`, from its file's `bytes`, for the renderer to
-    /// load.
-    pub fn loaded(&mut self, family: impl Into<String>, bytes: std::sync::Arc<[u8]>) {
-        let family = family.into();
+    /// Adds the TTF or OTF font in `bytes` to the typesetter, and returns the
+    /// family name inside it. Texts in the family can be measured at once, and
+    /// the renderer bakes them again in it.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError`] if `bytes` isn't a TTF or OTF font that can be read.
+    /// Nothing changes then.
+    pub fn load(&mut self, bytes: &[u8]) -> Result<String, FontError> {
+        let family = self.typesetter.load_font(bytes)?;
         self.status.insert(family.clone(), FontStatus::Loaded);
-        self.pending.push((bytes, family));
+        self.loaded.push(family.clone());
         self.version += 1;
+        Ok(family)
     }
 
     /// Says the font of `family` failed to load, so its texts are drawn in
@@ -421,20 +436,20 @@ impl Fonts {
     /// Sets the fallback families. They're tried in order for a character a
     /// text's own family lacks, before the default font.
     pub fn set_fallbacks(&mut self, families: Vec<String>) {
-        self.fallbacks = families;
+        self.typesetter.set_fallbacks(&families);
         self.fallbacks_changed = true;
         self.version += 1;
     }
 
     /// Returns the fallback families, in the order they're tried.
     pub fn fallbacks(&self) -> &[String] {
-        &self.fallbacks
+        self.typesetter.fallbacks()
     }
 
-    /// Returns the fallback families if they changed since the last call, or
-    /// `None`. This is for the renderer.
-    pub fn take_fallbacks(&mut self) -> Option<Vec<String>> {
-        std::mem::take(&mut self.fallbacks_changed).then(|| self.fallbacks.clone())
+    /// Returns whether the fallbacks changed since the last call. This is for
+    /// the renderer, which bakes every text again when they do.
+    pub fn take_fallbacks_changed(&mut self) -> bool {
+        std::mem::take(&mut self.fallbacks_changed)
     }
 
     /// Returns a number that changes whenever a font is expected, loaded or
@@ -449,16 +464,151 @@ impl Fonts {
         self.status.get(family).copied()
     }
 
-    /// Takes the fonts loaded since the last call, for the renderer.
-    pub fn take_pending(&mut self) -> Vec<(std::sync::Arc<[u8]>, String)> {
-        std::mem::take(&mut self.pending)
+    /// Takes the families loaded since the last call. This is for the
+    /// renderer, which bakes their texts again.
+    pub fn take_loaded(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.loaded)
+    }
+
+    /// Returns the typesetter, which lays text out in the fonts.
+    pub fn typesetter(&self) -> &Typesetter {
+        &self.typesetter
+    }
+
+    /// Returns the typesetter, to lay text out, or to set the default font.
+    pub fn typesetter_mut(&mut self) -> &mut Typesetter {
+        &mut self.typesetter
+    }
+
+    /// Returns whether `text` waits, not drawn, because a family it, a span or
+    /// its ellipsis names is expected with [`WhileLoading::Hide`] and not
+    /// loaded yet. A family that failed, or was never expected or loaded, is
+    /// drawn in the default font, and warned about once.
+    pub fn text_waits(&mut self, text: &TextLayout) -> bool {
+        // Every family is looked at, so each is warned about.
+        let mut waits = false;
+        for family in text.families() {
+            waits |= self.waits_for(family);
+        }
+        waits
+    }
+
+    /// Returns whether a text in `family` waits for it to load. See
+    /// [`Fonts::text_waits`].
+    fn waits_for(&mut self, family: &str) -> bool {
+        if self.typesetter.has_family(family) {
+            return false;
+        }
+        match self.status(family) {
+            Some(FontStatus::Expected(WhileLoading::Hide)) => true,
+            Some(FontStatus::Expected(WhileLoading::DefaultFont) | FontStatus::Loaded) => false,
+            Some(FontStatus::Failed) => {
+                if self.first_warning(family) {
+                    log::warn!(
+                        "the font family {family:?} failed to load: its text is drawn in the \
+                         default font"
+                    );
+                }
+                false
+            }
+            None => {
+                if self.first_warning(family) {
+                    log::warn!(
+                        "no font of the family {family:?} has been loaded, or is expected: its \
+                         text is drawn in the default font. Load it with `load_font`, or say \
+                         it's coming with `expect_font`"
+                    );
+                }
+                false
+            }
+        }
+    }
+
+    /// Returns whether a fallback font is expected with [`WhileLoading::Hide`]
+    /// and not loaded yet. Until it loads, a text with characters no loaded
+    /// font has waits, since the fallback may have them.
+    pub fn waits_for_fallback(&self) -> bool {
+        self.fallbacks()
+            .iter()
+            .any(|family| self.status(family) == Some(FontStatus::Expected(WhileLoading::Hide)))
     }
 
     /// Returns whether this is the first time `family` is warned about, so
     /// each family's warning is logged once.
-    pub fn first_warning(&mut self, family: &str) -> bool {
+    fn first_warning(&mut self, family: &str) -> bool {
         self.warned.insert(family.to_owned())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Measuring
+// ---------------------------------------------------------------------------
+
+/// Returns the size `text` is baked at, in logical pixels, without baking it:
+/// the `pixel_size` its [`BakedText`] will have. `proteus-sdk`'s
+/// `Proteus::measure_text` calls it.
+///
+/// It's measured at the world's [`BakeScale`] and rounded up to whole pixels
+/// at that scale, as the bake rounds it, so at another scale it can differ by
+/// under a pixel. A text too large for an atlas page measures as it bakes: at
+/// the smaller scale it's baked at, or clipped to the page.
+///
+/// Returns `None` while the text waits for a font, as it isn't drawn yet: a
+/// family it names, or a fallback that may have characters no loaded font has,
+/// is expected with [`WhileLoading::Hide`]. With
+/// [`WhileLoading::DefaultFont`], it's the size in the default font, as drawn
+/// meanwhile. Also `None` with no font at all. An empty text is zero.
+pub fn measure_text(world: &mut World, text: &Text) -> Option<Vec2> {
+    let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
+    let max = page_side(world);
+    let mut fonts = world.get_resource_or_insert_with(Fonts::default);
+    let layout = text.layout();
+    if fonts.text_waits(&layout) {
+        return None;
+    }
+    fonts.typesetter().default_family()?;
+    let (size, scale) = fit_to_page(
+        bake_scale,
+        max,
+        |scale| fonts.typesetter_mut().measure(&layout, scale),
+        |size| (size.width, size.height),
+    );
+    let Some(size) = size else {
+        return Some(Vec2::ZERO);
+    };
+    if !size.missing.is_empty() && fonts.waits_for_fallback() {
+        return None;
+    }
+    Some(Vec2::new(size.width.min(max) as f32, size.height.min(max) as f32) / scale)
+}
+
+/// Returns the side of a main-atlas page in pixels, or `u32::MAX` with no
+/// renderer.
+pub fn page_side(world: &World) -> u32 {
+    world
+        .get_resource::<QuadPipeline>()
+        .map_or(u32::MAX, |p| p.texture_registry.max_texture_side())
+}
+
+/// Makes a text's image at `scale` with `make`, and returns it with the scale
+/// it's made at. One too large for a page `max` pixels on a side is made again
+/// at the largest scale that fits, if that's above 1; see
+/// [`bake_scale_to_fit`]. Baking and measuring both use it, so they agree.
+pub fn fit_to_page<T>(
+    scale: f32,
+    max: u32,
+    mut make: impl FnMut(f32) -> Option<T>,
+    size: impl Fn(&T) -> (u32, u32),
+) -> (Option<T>, f32) {
+    let made = make(scale);
+    if let Some(made) = &made {
+        let (width, height) = size(made);
+        let fitted = bake_scale_to_fit(scale, width as f32 / scale, height as f32 / scale, max);
+        if fitted < scale {
+            return (make(fitted), fitted);
+        }
+    }
+    (made, scale)
 }
 
 /// Marks a text drawn with boxes for characters no font had. The text is

@@ -39,7 +39,9 @@ use crate::viewport::Viewport;
 /// Draws a frame: bakes pending text and images, then draws every visible
 /// component. See the module docs.
 pub struct Renderer {
-    font_atlas: proteus_render::FontAtlas,
+    /// Draws each text into an image, and keeps each glyph's pixels in its
+    /// glyph cache. The fonts are in the app's `Fonts`.
+    text_rasterizer: proteus_render::TextRasterizer,
     /// The version of the app's `Fonts` last seen, which tells the renderer
     /// when the fonts have changed.
     fonts_version: u64,
@@ -52,18 +54,19 @@ pub struct Renderer {
     content_version: Option<u64>,
 }
 
-/// Returns a font atlas with the embedded font. Without the `embedded-font`
-/// feature, the atlas has no font until the app gives it one.
-fn embedded_font() -> proteus_render::FontAtlas {
+/// Makes the embedded font the default. Without the `embedded-font` feature,
+/// it does nothing, and there's no font until the app loads one.
+fn use_embedded_font(typesetter: &mut proteus_render::Typesetter) {
     #[cfg(feature = "embedded-font")]
-    return proteus_render::FontAtlas::with_embedded_font();
+    typesetter.use_embedded_font();
     #[cfg(not(feature = "embedded-font"))]
-    proteus_render::FontAtlas::empty()
+    let _ = typesetter;
 }
 
 impl Renderer {
     /// Creates the GPU resources, adds them to `proteus`'s world, sets the
-    /// projection for `viewport`, and builds the font atlas.
+    /// projection for `viewport`, and sets the app's default font from
+    /// `config`.
     ///
     /// # Panics
     ///
@@ -130,18 +133,26 @@ impl Renderer {
 
         // Use the configured font, or the embedded one. Bytes that aren't a
         // font fall back to the embedded font rather than stopping the app;
-        // `FontSource::from_bytes` lets an app catch them earlier.
-        let mut font_atlas = match &config.text.default_font {
-            FontSource::Embedded => embedded_font(),
-            FontSource::Bytes(bytes) => proteus_render::FontAtlas::new(bytes).unwrap_or_else(|e| {
-                log::error!("ProteusConfig.text.default_font: {e}; using the embedded font");
-                embedded_font()
-            }),
-        };
-        font_atlas.set_glyph_cache_budget(config.resources.glyph_cache_bytes);
+        // `FontSource::from_bytes` lets an app catch them earlier. It's set
+        // before the app's `setup`, so the app measures text in it.
+        let mut fonts = proteus
+            .world_mut()
+            .get_resource_or_insert_with(proteus_ui::Fonts::default);
+        let typesetter = fonts.typesetter_mut();
+        match &config.text.default_font {
+            FontSource::Embedded => use_embedded_font(typesetter),
+            FontSource::Bytes(bytes) => {
+                if let Err(e) = typesetter.set_default_font(bytes) {
+                    log::error!("ProteusConfig.text.default_font: {e}; using the embedded font");
+                    use_embedded_font(typesetter);
+                }
+            }
+        }
+        let mut text_rasterizer = proteus_render::TextRasterizer::new();
+        text_rasterizer.set_glyph_cache_budget(config.resources.glyph_cache_bytes);
 
         Self {
-            font_atlas,
+            text_rasterizer,
             fonts_version: 0,
             config,
             viewport,
@@ -180,7 +191,7 @@ impl Renderer {
             world.insert_resource(BakeScale(scale));
             // The cache is keyed by each glyph's size in pixels, so the glyphs
             // cached at the old scale won't be used again.
-            self.font_atlas.clear_glyph_cache();
+            self.text_rasterizer.clear_glyph_cache();
             let baked: Vec<_> = world
                 .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::query::With<BakedText>>()
                 .iter(world)
@@ -224,18 +235,17 @@ impl Renderer {
         }
     }
 
-    /// Adds the fonts the app has loaded since the last frame to the font
-    /// atlas. Texts in those families that were drawn in the default font
-    /// meanwhile are baked again, and so are texts drawn with boxes for
-    /// characters no font had. A change to the fallbacks bakes every text
-    /// again. Any change to the fonts lets the texts waiting for a font try
-    /// again.
-    fn add_loaded_fonts(&mut self, world: &mut bevy_ecs::world::World) {
+    /// Bakes again the texts the fonts the app has loaded since the last
+    /// frame change: texts in those families that were drawn in the default
+    /// font meanwhile, and texts drawn with boxes for characters no font had.
+    /// A change to the fallbacks bakes every text again. Any change to the
+    /// fonts lets the texts waiting for a font try again.
+    fn rebake_for_fonts(&mut self, world: &mut bevy_ecs::world::World) {
         let Some(mut fonts) = world.get_resource_mut::<proteus_ui::Fonts>() else {
             return;
         };
-        let loaded = fonts.take_pending();
-        let fallbacks = fonts.take_fallbacks();
+        let loaded = fonts.take_loaded();
+        let fallbacks_changed = fonts.take_fallbacks_changed();
         let version = fonts.version();
         if version != self.fonts_version {
             self.fonts_version = version;
@@ -249,8 +259,7 @@ impl Renderer {
                     .remove::<proteus_ui::WaitsForFont>();
             }
         }
-        if let Some(fallbacks) = fallbacks {
-            self.font_atlas.set_fallbacks(&fallbacks);
+        if fallbacks_changed {
             let baked: Vec<_> = world
                 .query_filtered::<bevy_ecs::entity::Entity, (
                     bevy_ecs::query::With<BakedText>,
@@ -264,13 +273,7 @@ impl Renderer {
                     .remove::<(BakedText, TextTextureRef)>();
             }
         }
-        for (bytes, family) in loaded {
-            if let Err(e) = self.font_atlas.load_font(&bytes) {
-                // `Proteus::load_font` checked the bytes, so this shouldn't
-                // happen.
-                log::error!("the font of the family {family:?} couldn't be loaded: {e}");
-                continue;
-            }
+        for family in loaded {
             let drawn: Vec<_> = world
                 .query_filtered::<(
                     bevy_ecs::entity::Entity,
@@ -309,12 +312,12 @@ impl Renderer {
             .remove_resource::<proteus_ui::ClearGlyphCache>()
             .is_some()
         {
-            self.font_atlas.clear_glyph_cache();
+            self.text_rasterizer.clear_glyph_cache();
         }
-        self.add_loaded_fonts(world);
+        self.rebake_for_fonts(world);
         self.rebake_recolored_text(world);
         let lazy_load = self.config.resources.lazy_load;
-        bake::bake_pending_text(world, &mut self.font_atlas, &gpu.queue, lazy_load);
+        bake::bake_pending_text(world, &mut self.text_rasterizer, &gpu.queue, lazy_load);
         bake::bake_pending_images(
             world,
             &gpu.queue,
@@ -714,6 +717,98 @@ mod tests {
         }
     }
 
+    // `measure_text` gives the size a text is baked at, before it's baked, at
+    // each display scale: for each kind of text a layout can make.
+    #[test]
+    fn a_text_measures_the_size_its_baked_at() {
+        use proteus_ui::{Span, TextAlign, VerticalAlign};
+        let paragraph = "A paragraph long enough to wrap onto a few lines, and then some more";
+        let texts = [
+            ("plain", Text::new("Proteus", 16.0)),
+            (
+                "wrapped and centered",
+                Text::new(paragraph, 16.0)
+                    .with_wrap_width(150.0)
+                    .with_align(TextAlign::Center),
+            ),
+            (
+                "spans of mixed sizes",
+                Text::rich(
+                    [
+                        Span::new("Big ").with_size(28.0).bold(),
+                        Span::new("and small").with_size(11.0),
+                    ],
+                    16.0,
+                ),
+            ),
+            (
+                "an ellipsis",
+                Text::new(paragraph, 16.0)
+                    .with_wrap_width(150.0)
+                    .with_max_lines(2)
+                    .with_ellipsis_spans([Span::new(" more").bold()]),
+            ),
+            ("an italic's overhang", Text::new("fly", 40.0).italic()),
+            (
+                "a vertically aligned span",
+                Text::rich(
+                    [
+                        Span::new("Note"),
+                        Span::new("1").with_vertical_align(VerticalAlign::Super),
+                        Span::new(" raised").with_vertical_align(VerticalAlign::Raise(5.0)),
+                    ],
+                    16.0,
+                ),
+            ),
+            (
+                "a colored span",
+                Text::rich(
+                    [
+                        Span::new("Red").with_color(Vec4::new(1.0, 0.0, 0.0, 1.0)),
+                        Span::new(" and plain"),
+                    ],
+                    16.0,
+                ),
+            ),
+        ];
+        for scale in [1.0, 2.0] {
+            let Some(mut scene) = Scene::with_scale(ProteusConfig::default(), scale) else {
+                return;
+            };
+            for (name, text) in &texts {
+                let measured = scene.proteus.measure_text(text);
+                let label = scene
+                    .proteus
+                    .component(ComponentSpec::new(QuadState::default()).text(text.clone()));
+                scene.frame();
+                let baked = label.baked_text_size(&scene.proteus);
+                assert!(baked.is_some_and(|size| size.x > 0.0), "{name} is baked");
+                assert_eq!(measured, baked, "{name}, at a scale of {scale}");
+            }
+        }
+    }
+
+    // A text measured at one display scale is measured again at a new one,
+    // and gives the size it's baked at there.
+    #[test]
+    fn a_text_measures_at_the_current_display_scale() {
+        let Some((mut scene, label)) = text_scene(1.0, ProteusConfig::default()) else {
+            return;
+        };
+        let text = Text::new("Proteus", 16.0);
+        assert_eq!(
+            scene.proteus.measure_text(&text),
+            label.baked_text_size(&scene.proteus)
+        );
+        scene.renderer.resize(
+            &mut scene.proteus,
+            Viewport::new(Vec2::new(64.0, 64.0), 2.0),
+        );
+        let measured = scene.proteus.measure_text(&text);
+        scene.frame();
+        assert_eq!(measured, label.baked_text_size(&scene.proteus));
+    }
+
     // Lora, a second family besides Inter.
     use proteus_test_fonts::SECOND_FAMILY as LORA;
 
@@ -764,10 +859,18 @@ mod tests {
         };
         scene.frame();
         assert_eq!(baked(&scene, &label), None, "not drawn while Lora loads");
+        let text = Text::new("Proteus", 24.0).with_family("Lora");
+        assert_eq!(scene.proteus.measure_text(&text), None, "nor measured");
         assert_eq!(scene.proteus.load_font(LORA).unwrap(), "Lora");
+        let measured = scene.proteus.measure_text(&text);
         scene.frame();
         let width = baked(&scene, &label).expect("drawn once Lora loads")[0];
         assert_ne!(Some(width), in_default_font(), "in Lora");
+        assert_eq!(
+            measured,
+            label.baked_text_size(&scene.proteus),
+            "measured in Lora as soon as it loads"
+        );
     }
 
     // With `DefaultFont`, a text is drawn in the default font while its font
@@ -1014,14 +1117,14 @@ mod tests {
         let Some((mut scene, _label)) = text_scene(1.0, ProteusConfig::default()) else {
             return;
         };
-        assert!(scene.renderer.font_atlas.glyph_cache_size().0 > 0);
+        assert!(scene.renderer.text_rasterizer.glyph_cache_size().0 > 0);
         scene.renderer.resize(
             &mut scene.proteus,
             Viewport::new(Vec2::new(64.0, 64.0), 2.0),
         );
-        assert_eq!(scene.renderer.font_atlas.glyph_cache_size(), (0, 0));
+        assert_eq!(scene.renderer.text_rasterizer.glyph_cache_size(), (0, 0));
         scene.frame();
-        assert!(scene.renderer.font_atlas.glyph_cache_size().0 > 0);
+        assert!(scene.renderer.text_rasterizer.glyph_cache_size().0 > 0);
     }
 
     // `Proteus::clear_glyph_cache` empties the glyph cache before the next
@@ -1034,7 +1137,7 @@ mod tests {
         let before = baked_text(&scene, &label);
         scene.proteus.clear_glyph_cache();
         scene.frame();
-        assert_eq!(scene.renderer.font_atlas.glyph_cache_size(), (0, 0));
+        assert_eq!(scene.renderer.text_rasterizer.glyph_cache_size(), (0, 0));
         assert!(scene
             .proteus
             .world()
@@ -1054,7 +1157,7 @@ mod tests {
         let Some((scene, _label)) = text_scene(1.0, config) else {
             return;
         };
-        assert_eq!(scene.renderer.font_atlas.glyph_cache_size(), (0, 0));
+        assert_eq!(scene.renderer.text_rasterizer.glyph_cache_size(), (0, 0));
     }
 
     #[test]

@@ -6,8 +6,8 @@
  * Each card's year is aligned to the end of its column. Its title wraps onto at
  * most two lines and ends in "…". Its opening is spaced at a line height of
  * 1.45, stops after five lines, and ends in an ellipsis of the card's own. The
- * second card's ellipsis is bold, in the accent color, with an arrow after it. Its
- * source is clipped after two lines, and the titles in it are italic.
+ * second card's ellipsis is bold, in the accent color, with an arrow after it.
+ * Its source is clipped after two lines, and the titles in it are italic.
  *
  * A card opens into its essay (1→1). The essay's byline is two lines, split
  * with a `\n`, with the author in a heavier weight and the year smaller and
@@ -71,14 +71,18 @@
  *     lowercase letters instead.
  *   - A span can sit above or below the baseline. Each pull quote ends in a
  *     dagger raised with `verticalAlign: "super"`, and the source in the essay
- *     starts with one. An ellipsis given as a
- *     string, such as the first card's "…", is in the text's own style.
+ *     starts with one. An ellipsis given as a string, such as the first card's
+ *     "…", is in the text's own style.
  *   - A text with a colored span is baked in its colors, so changing its color
  *     bakes it again. A plain text's color, and any text's alpha, cost nothing
  *     to change.
+ *   - A text can be measured before it's drawn, with `measureText`. The
+ *     essay's back button is as wide as its label, plus room each side.
  *
  * Not shown here: a weight a font doesn't have, a character no font has (which
- * is drawn as a box), measuring text, and components within a line of text.
+ * is drawn as a box), and components within a line of text. Measuring a text
+ * whose font is still loading, which gives `undefined`, and a text too large
+ * for an atlas page are covered by the Rust tests only.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
@@ -253,6 +257,8 @@ const TOOL_HEIGHT = 30;
 /** The gap between a group's buttons, and between groups. */
 const TOOL_GAP = 4;
 const GROUP_GAP = 14;
+/** The room each side of a button's label. */
+const BUTTON_PADDING = 20;
 
 /** The body's sizes. Each pair is the size of a button's icon, then the size of the body's text. */
 const SIZES = [
@@ -320,6 +326,11 @@ function textAt(x: number, y: number, text: TextSpec, visible = true): Component
   };
 }
 
+/** Returns the text on a button. */
+function buttonLabel(label: string): TextSpec {
+  return { content: label, sizePx: 14, color: WHITE };
+}
+
 /** Creates a small button showing `label`, which turns lighter on hover. */
 function button(x: number, y: number, width: number, height: number, label: string, visible = true): ComponentSpec {
   return {
@@ -327,7 +338,7 @@ function button(x: number, y: number, width: number, height: number, label: stri
     hover: { color: BUTTON_HOVER },
     pressed: { scale: 0.96 },
     visible,
-    text: { content: label, sizePx: 14, color: WHITE },
+    text: buttonLabel(label),
   };
 }
 
@@ -490,7 +501,13 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const left = -PANEL_WIDTH / 2 + PANEL_PADDING;
   const top = PANEL_HEIGHT / 2 - PANEL_PADDING;
   const hiddenText = (x: number, y: number) => app.component(textAt(x, y, { content: "", sizePx: 16 }, false));
-  const back = app.component(button(left + 85, top - 18, 170, 36, "← All essays", false));
+  // The back button fits its label, with room each side. The label is measured before it's
+  // drawn, in the default font, which is never still loading.
+  const backLabel = "← All essays";
+  const labelSize = app.measureText(buttonLabel(backLabel));
+  if (!labelSize) throw new Error("the default font is loaded");
+  const backWidth = labelSize.width + 2 * BUTTON_PADDING;
+  const back = app.component(button(left + backWidth / 2, top - 18, backWidth, 36, backLabel, false));
   const title = hiddenText(left, top - 60);
   const byline = hiddenText(left, top - 150);
   const body = hiddenText(left, top - 200);

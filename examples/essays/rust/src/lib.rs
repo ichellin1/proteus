@@ -4,8 +4,8 @@
 //! Each card's year is aligned to the end of its column. Its title wraps onto
 //! at most two lines and ends in "…". Its opening is spaced at a line height of
 //! 1.45, stops after five lines, and ends in an ellipsis of the card's own. The
-//! second card's ellipsis is bold, in the accent color, with an arrow after it. Its
-//! source is clipped after two lines, and the titles in it are italic.
+//! second card's ellipsis is bold, in the accent color, with an arrow after it.
+//! Its source is clipped after two lines, and the titles in it are italic.
 //!
 //! A card opens into its essay (1→1). The essay's byline is two lines, split
 //! with a `\n`, with the author in a heavier weight and the year smaller and
@@ -71,14 +71,18 @@
 //!     lowercase letters instead.
 //!   - A span can sit above or below the baseline. Each pull quote ends in a
 //!     dagger raised with `VerticalAlign::Super`, and the source in the essay
-//!     starts with one. An ellipsis given as a
-//!     string, such as the first card's "…", is in the text's own style.
+//!     starts with one. An ellipsis given as a string, such as the first card's
+//!     "…", is in the text's own style.
 //!   - A text with a colored span is baked in its colors, so changing its color
 //!     bakes it again. A plain text's color, and any text's alpha, cost nothing
 //!     to change.
+//!   - A text can be measured before it's drawn, with `measure_text`. The
+//!     essay's back button is as wide as its label, plus room each side.
 //!
 //! Not shown here: a weight a font doesn't have, a character no font has (which
-//! is drawn as a box), measuring text, and components within a line of text.
+//! is drawn as a box), and components within a line of text. Measuring a text
+//! whose font is still loading, which gives `None`, and a text too large for an
+//! atlas page are covered by tests only.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -283,6 +287,8 @@ const TOOL_SIZE: Vec2 = Vec2::new(34.0, 30.0);
 /// The gap between a group's buttons, and between groups.
 const TOOL_GAP: f32 = 4.0;
 const GROUP_GAP: f32 = 14.0;
+/// The room each side of a button's label.
+const BUTTON_PADDING: f32 = 20.0;
 
 /// The body's sizes. Each pair is the size of a button's icon, then the size of
 /// the body's text.
@@ -359,6 +365,11 @@ fn text_at(x: f32, y: f32, text: Text) -> ComponentSpec {
     .text(text)
 }
 
+/// Returns the text on a button.
+fn button_label(label: &str) -> Text {
+    Text::new(label, 14.0).with_color(WHITE)
+}
+
 /// Creates a small button showing `label`, which turns lighter on hover.
 fn button(position: Vec3, size: Vec2, label: &str) -> ComponentSpec {
     ComponentSpec::new(QuadState {
@@ -376,7 +387,7 @@ fn button(position: Vec3, size: Vec2, label: &str) -> ComponentSpec {
         scale: Some(0.96),
         ..Default::default()
     })
-    .text(Text::new(label, 14.0).with_color(WHITE))
+    .text(button_label(label))
 }
 
 /// Returns how the opening on `essay`'s card ends: in its ellipsis, in the
@@ -789,12 +800,20 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     let hidden_text = |app: &mut Proteus, x: f32, y: f32| {
         app.component(text_at(x, y, Text::new("", 16.0)).visible(false))
     };
+    // The back button fits its label, with room each side. The label is
+    // measured before it's drawn, in the default font, which is never still
+    // loading.
+    let back_label = "\u{2190} All essays";
+    let label_size = app
+        .measure_text(&button_label(back_label))
+        .expect("the default font is loaded");
+    let back_size = Vec2::new(label_size.x + 2.0 * BUTTON_PADDING, 36.0);
     let essay = EssayView {
         back: app.component(
             button(
-                Vec3::new(left + 85.0, top - 18.0, 0.0),
-                Vec2::new(170.0, 36.0),
-                "\u{2190} All essays",
+                Vec3::new(left + back_size.x / 2.0, top - 18.0, 0.0),
+                back_size,
+                back_label,
             )
             .visible(false),
         ),
@@ -1099,5 +1118,23 @@ mod tests {
         let first = app.get(ui.tools.sizes[0]).unwrap().geometry;
         let left = first.position.x - first.size.x / 2.0;
         assert!(left > -550.0 + MARGIN + 200.0, "clear of the title: {left}");
+    }
+
+    // The back button is as wide as its measured label, plus room each side,
+    // and starts at the panel's padding.
+    #[test]
+    fn the_back_button_fits_its_label() {
+        let mut app = Proteus::new();
+        let ui = build(&mut app, 1100.0);
+        let label = app
+            .measure_text(&button_label("\u{2190} All essays"))
+            .unwrap();
+        let back = app.get(ui.essay.back).unwrap().geometry;
+        assert_eq!(back.size.x, label.x + 2.0 * BUTTON_PADDING);
+        let left = back.position.x - back.size.x / 2.0;
+        assert!(
+            (left - (-PANEL_SIZE.x / 2.0 + PANEL_PADDING)).abs() < 0.01,
+            "{left}"
+        );
     }
 }

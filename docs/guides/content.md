@@ -357,9 +357,63 @@ score.set_text(&mut app, Text::new("12", 24.0))?;
 card.setText({ content: "12", sizePx: 24 });
 ```
 
-The text's size isn't known until the host has rendered it. `baked_text_size` returns it from
-then on, which is useful for layout that depends on the text's real width, such as a button
-sized to its label. For wrapped text, it's the wrap width across, and the lines' height down.
+Once the host has rendered a text, `baked_text_size` returns its size. For wrapped text, it's
+the wrap width across, and the lines' height down. To know the size sooner, measure the text.
+
+### Measuring text
+
+`measure_text` returns a text's size, in logical pixels, without drawing it. An app can lay out
+around a text before it's drawn, such as to fit a button to its label. It's the size the text
+is drawn at, the size `baked_text_size` returns once it is.
+
+#### Rust
+
+```rust
+# use proteus_sdk::glam::Vec2;
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text};
+# let mut app = Proteus::new();
+let label = Text::new("Back to essays", 14.0);
+// `None` only while a font the text names is still loading.
+if let Some(size) = app.measure_text(&label) {
+    // A button as wide as its label, with 20 pixels each side.
+    app.component(
+        ComponentSpec::new(QuadState {
+            size: Vec2::new(size.x + 40.0, 36.0),
+            ..Default::default()
+        })
+        .text(label),
+    );
+}
+```
+
+#### TypeScript
+
+```ts
+const label = { content: "Back to essays", sizePx: 14 };
+// `undefined` only while a font the text names is still loading.
+const size = app.measureText(label);
+if (size) {
+  // A button as wide as its label, with 20 pixels each side.
+  app.component({
+    geometry: { ...app.get(card)!.geometry, size: { width: size.width + 40, height: 36 } },
+    text: label,
+  });
+}
+```
+
+- **It includes the ink.** Measuring lays the text out as drawing does, and works out where each
+  glyph's pixels go without drawing them. Ink that reaches past the text's box, such as an
+  italic's overhang, widens it as it widens the drawn text.
+- **It's rounded to the display.** A text is drawn in whole pixels at the display's scale, so
+  it's measured that way too. On a display of another scale, it can measure under a pixel
+  differently: measure it again when the scale changes.
+- **A font that's loading.** A text in a family expected with `WhileLoading::Hide`, or
+  `whileLoading: "hide"`, measures `None`, or `undefined`, since it isn't drawn yet. With
+  `DefaultFont`, it measures in the default font, as it's drawn meanwhile. A font loaded with
+  `load_font` measures at once.
+- **The cost.** About 5 µs for a label and 25 µs for a line of 80 characters, natively, in
+  the text benchmark: half to three quarters of what drawing the text costs. The first time a
+  glyph is measured costs more, since its outline is read; its pixel box is kept after that.
 
 ## Images
 

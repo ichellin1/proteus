@@ -2464,6 +2464,7 @@ dependencies = [
  "log",
  "pollster",
  "proteus-render",
+ "proteus-test-fonts",
  "proteus-ui",
  "wgpu",
 ]
