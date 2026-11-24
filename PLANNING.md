@@ -250,7 +250,7 @@ file of its own in the TypeScript package.
   expected family that never loads or fails keeps its texts hidden; there's no timeout.
 - **Decided (2026-11-19): fonts are queued, and the renderer adds them,** since the renderer
   lays text out until step 8 moves fonts to where the SDK can reach them. `load_font` checks the
-  bytes and returns the family name at once.
+  bytes and returns the family name at once. Step 8 replaced the queue.
 - **Decided (2026-11-19): a text that sets no weight is bold in the embedded Inter,** as the
   static Inter Bold was, and in the font's own weight in an app's own default font, so neither
   changes. A weight a family lacks uses its nearest, and a missing italic or bold face is
@@ -398,6 +398,48 @@ ellipsis.
 ### Step 8 — Measuring text
 
 `measure_text`, in Rust and TypeScript, returning the same size the text is baked at.
+
+- **Decided (2026-11-23), after the user's review: the fonts move to the app, and the glyph
+  cache stays in the renderer.** `FontAtlas` did three jobs: the fonts, laying text out, and
+  caching each glyph's pixels. The first two say what a text is, so the app's `Fonts` resource
+  holds them, where the SDK reaches them; the glyph cache is pixels, so it stays in the
+  renderer beside the GPU atlases, and "atlas" means only a GPU texture. The renderer reads
+  `Fonts` from the world when it bakes, as it already reads the world. `Fonts`' queue and the
+  copying of fonts and fallbacks into the renderer go: `load_font` and `set_font_fallbacks`
+  change the fonts at once. Moving the whole `FontAtlas` was rejected: the app would have held
+  the glyph cache, and two windows at different scales would have emptied each other's.
+- **Decided (2026-11-23): the measured size is the baked size, by construction.** One function
+  works out a text's image size for both: the height from its lines, the width from each
+  glyph's pixel box. A glyph's pixel box is its outline's bounds rounded out to whole pixels,
+  as swash works it out before drawing, so measuring reads outlines and draws nothing. Tests
+  check it equals `baked_text_size` for each case, and every rasterizing test in
+  `proteus-render` checks the measured size too.
+- **Decided (2026-11-23), while building it: the typesetter keeps each glyph's pixel box once
+  measured,** two numbers a glyph and no pixels, up to 16,384 of them, about 1 MiB, then emptied.
+  Reading every outline each time made measuring cost more than rasterizing with the glyph
+  cache: 3.94 ms for the benchmark's 500 labels, against 2.28 ms with the boxes kept.
+- **Decided (2026-11-23): `Proteus::measure_text(&Text) -> Option<Vec2>` and
+  `app.measureText(spec)`, returning `{ width, height }` or `undefined`,** in logical pixels,
+  at the current display scale, as the bake rounds it. A text measured at one scale can differ
+  by under a pixel at another, so an app measures again on a new scale.
+- **Decided (2026-11-23): when it returns nothing.** A text waiting for a font expected with
+  `Hide` returns `None`; with `DefaultFont`, the default font's size, as drawn meanwhile. With
+  no font at all it returns `None`: hosts set the default font from the config before `setup`,
+  so that's only an SDK test that loads none. An empty text returns zero. A text too large for
+  an atlas page measures as it bakes: at the smaller scale it's baked at, or clipped to the page.
+- **Decided (2026-11-23): the essays example's back button is sized to its measured label,**
+  plus padding. A font still loading and a text too large for a page are covered by tests
+  only.
+- [x] `Fonts` holds the fonts and the layout; the glyph cache stays in the renderer; the queue
+  goes.
+- [x] `measure_text` in Rust and `measureText` in TypeScript.
+- [x] Tests: the measured size equals `baked_text_size` for plain, wrapped and aligned text,
+  spans of mixed sizes, an ellipsis, an italic's overhang and a vertically aligned span, at
+  scales 1 and 2; a font loaded with `load_font` measured at once, with no renderer; `Hide` and
+  `DefaultFont`; no font, an empty text and a text too large for a page; the TypeScript call.
+- [x] The essays example's back button, in Rust and TypeScript.
+- [x] The content guide's measuring, ARCHITECTURE's fonts, the release notes, and the cost of
+  measuring from the text benchmark.
 
 ### Step 9 — Inline boxes
 

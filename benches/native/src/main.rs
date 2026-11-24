@@ -59,9 +59,12 @@
 //! tiles, and [`LINES`] long lines of 16-pixel text, the nearest thing to a
 //! paragraph while text is one line. It times two things:
 //!
-//! - **Rasterizing:** `FontAtlas::rasterize_text` alone, for every text in
-//!   the workload, with no GPU: the median of [`RASTER_PASSES`] passes. This
-//!   is the part a new text engine replaces.
+//! - **Rasterizing:** `TextRasterizer::rasterize_text` alone, for every text
+//!   in the workload, with no GPU: the median of [`RASTER_PASSES`] passes.
+//!   This is the part a new text engine replaces.
+//! - **Measuring:** `Typesetter::measure` alone, for every text, as
+//!   `measure_text` does, with no GPU: the median of [`RASTER_PASSES`]
+//!   passes.
 //! - **Frames:** frames in which every text is replaced with `set_text`, so
 //!   the engine bakes all of them again, timed as the other scenes are:
 //!   rasterizing, adding each to the atlas and uploading it, then drawing.
@@ -73,7 +76,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use proteus_host_winit::DirHostServices;
-use proteus_render::FontAtlas;
+use proteus_render::{TextLayout, TextRasterizer, Typesetter};
 use proteus_runtime::glam::{Vec2, Vec3, Vec4};
 use proteus_runtime::{wgpu, App, Engine, Frame, ProteusConfig, Viewport};
 use proteus_sdk::{ComponentSpec, Easing, Handle, QuadState, Text, TransitionConfig, VideoHandle};
@@ -403,6 +406,8 @@ impl App for TextScene {
 struct TextResult {
     /// Rasterizing every text, with no GPU: the median, in milliseconds.
     raster: f64,
+    /// Measuring every text, with no GPU: the median, in milliseconds.
+    measure: f64,
     cpu: (f64, f64),
     interval: (f64, f64),
 }
@@ -416,12 +421,14 @@ fn measure_text(
 ) -> TextResult {
     let texts = workload.texts();
 
-    let mut font = FontAtlas::with_embedded_font();
+    let mut typesetter = Typesetter::with_embedded_font();
+    let mut rasterizer = TextRasterizer::new();
     let mut passes = Vec::with_capacity(RASTER_PASSES);
     for i in 0..WARM_UP.min(20) + RASTER_PASSES {
         let start = Instant::now();
         for text in &texts {
-            let glyphs = font.rasterize_text(
+            let glyphs = rasterizer.rasterize_text(
+                &mut typesetter,
                 &text.content,
                 text.size_px * scale,
                 text.letter_spacing_px * scale,
@@ -430,6 +437,18 @@ fn measure_text(
         }
         if i >= WARM_UP.min(20) {
             passes.push(start.elapsed());
+        }
+    }
+    let mut measure_passes = Vec::with_capacity(RASTER_PASSES);
+    for i in 0..WARM_UP.min(20) + RASTER_PASSES {
+        let start = Instant::now();
+        for text in &texts {
+            let mut layout = TextLayout::new(&text.content, text.size_px);
+            layout.letter_spacing_px = text.letter_spacing_px;
+            std::hint::black_box(typesetter.measure(&layout, scale));
+        }
+        if i >= WARM_UP.min(20) {
+            measure_passes.push(start.elapsed());
         }
     }
 
@@ -457,6 +476,7 @@ fn measure_text(
     );
     TextResult {
         raster: summary(&mut passes).0,
+        measure: summary(&mut measure_passes).0,
         cpu: summary(&mut cpu),
         interval: summary(&mut interval),
     }
@@ -668,18 +688,19 @@ fn main() {
     if text {
         println!("### text\n");
         println!(
-            "| Workload | Texts | Bake scale | Rasterizing (ms) | CPU median (ms) | CPU p99 (ms) \
-             | Frame interval median (ms) | Frame interval p99 (ms) |"
+            "| Workload | Texts | Bake scale | Rasterizing (ms) | Measuring (ms) | CPU median (ms) \
+             | CPU p99 (ms) | Frame interval median (ms) | Frame interval p99 (ms) |"
         );
-        println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+        println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
         for workload in [TextWorkload::Labels, TextWorkload::Lines] {
             for scale in [1.0, 2.0] {
                 let r = measure_text(&device, &queue, &view, workload, scale);
                 println!(
-                    "| {} | {} | {scale} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} |",
+                    "| {} | {} | {scale} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} |",
                     workload.name(),
                     workload.texts().len(),
                     r.raster,
+                    r.measure,
                     r.cpu.0,
                     r.cpu.1,
                     r.interval.0,

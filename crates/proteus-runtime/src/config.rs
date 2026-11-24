@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use proteus_render::{AtlasConfig, FontAtlas, FontError, QuadInstance};
+use proteus_render::{font_family_name, AtlasConfig, FontError, QuadInstance};
 use proteus_ui::{Action, Easing, KeyRepeat, TransitionConfig};
 
 // ---------------------------------------------------------------------------
@@ -487,7 +487,7 @@ impl FontSource {
     /// [`FontError`] if the bytes aren't a TTF or OTF font that can be read.
     pub fn from_bytes(bytes: impl Into<Arc<[u8]>>) -> Result<Self, FontError> {
         let bytes = bytes.into();
-        FontAtlas::new(&bytes)?;
+        font_family_name(&bytes)?;
         Ok(Self::Bytes(bytes))
     }
 }

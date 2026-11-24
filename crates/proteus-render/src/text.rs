@@ -1,9 +1,16 @@
-//! Laying out and rasterizing text, on the CPU.
+//! Laying out, measuring and rasterizing text, on the CPU.
 //!
-//! [`FontAtlas`] lays a text out with parley, which shapes it, and rasterizes
-//! its glyphs with swash into one RGBA image. The caller then allocates a
-//! main-atlas region for it with [`crate::TextureRegistry::register_static`]
-//! and uploads it with [`crate::QuadPipeline::write_to_main_atlas`].
+//! Two types share the work:
+//! - [`Typesetter`] holds the fonts. It lays a text out with parley, which
+//!   shapes it and breaks it into lines, and measures it without drawing it.
+//!   `proteus-ui`'s `Fonts` resource holds one, so the app and the renderer
+//!   use the same fonts.
+//! - [`TextRasterizer`] draws a text the typesetter lays out, rasterizing its
+//!   glyphs with swash into one RGBA image, and keeps each glyph's pixels in
+//!   its glyph cache. The renderer holds one. The caller then allocates a
+//!   main-atlas region for the image with
+//!   [`crate::TextureRegistry::register_static`] and uploads it with
+//!   [`crate::QuadPipeline::write_to_main_atlas`].
 //!
 //! ## Shaping
 //!
@@ -13,14 +20,25 @@
 //! scripts that need it. Each glyph is placed to a quarter of a pixel, so text
 //! is as wide as its font designs it, at every size and display scale.
 //!
+//! ## Measuring
+//!
+//! [`Typesetter::measure`] gives the size of the image
+//! [`TextRasterizer::rasterize`] makes, without drawing it. The image's height
+//! comes from the text's lines, and its width from each glyph's pixels. A
+//! glyph's pixels are its outline's bounds rounded out to whole pixels, as
+//! swash works them out before drawing, so measuring reads the outlines and
+//! draws nothing. One function sizes the image from the glyphs' pixels for
+//! both, so they agree.
+//!
 //! ## The glyph cache
 //!
 //! Each glyph's coverage is kept after it's rasterized, so a glyph that
 //! several texts share is rasterized once. Past a budget in bytes, the cache
 //! drops the glyphs used longest ago. The budget is
-//! [`DEFAULT_GLYPH_CACHE_BYTES`] unless [`FontAtlas::set_glyph_cache_budget`]
-//! changes it. [`FontAtlas::clear_glyph_cache`] drops every glyph. Text already
-//! baked keeps its pixels, since they're in the atlas, not the cache.
+//! [`DEFAULT_GLYPH_CACHE_BYTES`] unless
+//! [`TextRasterizer::set_glyph_cache_budget`] changes it.
+//! [`TextRasterizer::clear_glyph_cache`] drops every glyph. Text already baked
+//! keeps its pixels, since they're in the atlas, not the cache.
 //!
 //! ## Lines
 //!
@@ -61,15 +79,15 @@
 //!
 //! ## Fonts
 //!
-//! A [`FontAtlas`] has a default font, and any others loaded with
-//! [`FontAtlas::load_font`], each under the family name inside it. A text names
-//! a family, or takes the default, and asks for a weight and italic. A family
-//! that lacks the weight uses its nearest, as in CSS. A family with no italic
-//! face is slanted, and one with no bold face is thickened.
+//! A [`Typesetter`] has a default font, and any others loaded with
+//! [`Typesetter::load_font`], each under the family name inside it. A text
+//! names a family, or takes the default, and asks for a weight and italic. A
+//! family that lacks the weight uses its nearest, as in CSS. A family with no
+//! italic face is slanted, and one with no bold face is thickened.
 //!
 //! A character a text's family lacks is looked for in the fallback families
-//! set with [`FontAtlas::set_fallbacks`], in order, then in the default font. A
-//! character none of them has is drawn as the text's family's missing-glyph
+//! set with [`Typesetter::set_fallbacks`], in order, then in the default font.
+//! A character none of them has is drawn as the text's family's missing-glyph
 //! box, a rectangle, and reported in [`RasterizedGlyphs::missing`]. No system
 //! font is ever used.
 //!
@@ -78,10 +96,10 @@
 //! With the `embedded-font` feature, on by default, [`EMBEDDED_FONT_BYTES`] is
 //! Inter (SIL Open Font License 1.1), variable in weight and optical size,
 //! from Google Fonts. A text in it that sets no weight is drawn at 700, bold.
-//! Without the feature, [`FontAtlas::empty`] has no font until one is loaded.
+//! Without the feature, [`Typesetter::empty`] has no font until one is loaded.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
@@ -91,11 +109,13 @@ use crate::glyph_cache::{CachedGlyph, GlyphCache, GlyphKey};
 
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache, SourceCacheOptions};
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontStyle, FontWeight,
-    Layout, LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem, StyleProperty,
+    Alignment, AlignmentOptions, FontContext, FontData, FontFamily, FontFamilyName, FontStyle,
+    FontWeight, Layout, LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem,
+    StyleProperty,
 };
-use swash::scale::{Render, ScaleContext, Source};
-use swash::zeno::{Angle, Format, Transform, Vector};
+use swash::scale::outline::Outline;
+use swash::scale::{Render, ScaleContext, Scaler, Source};
+use swash::zeno::{self, Angle, Fill, Format, Transform, Vector};
 
 // ---------------------------------------------------------------------------
 // Embedded font
@@ -119,8 +139,12 @@ const SYNTHESIZED_SLANT: f32 = 14.0;
 /// glyph is rasterized at the nearest quarter of a pixel to where it's placed.
 const SUBPIXEL_STEPS: f32 = 4.0;
 
+/// The most glyph boxes a [`Typesetter`] keeps for measuring, about 1 MiB of
+/// them. Past it, it empties them and starts again.
+const MAX_GLYPH_BOXES: usize = 16_384;
+
 /// The glyph cache's budget, 4 MiB, unless
-/// [`FontAtlas::set_glyph_cache_budget`] changes it. It holds from about 5,000
+/// [`TextRasterizer::set_glyph_cache_budget`] changes it. It holds from about 5,000
 /// glyphs at 48 pixels to 25,000 at 16.
 pub const DEFAULT_GLYPH_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -357,10 +381,22 @@ impl<'a> TextLayout<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// RasterizedGlyphs
+// TextSize and RasterizedGlyphs
 // ---------------------------------------------------------------------------
 
-/// The pixels from one [`FontAtlas::rasterize_text`] call, with no atlas
+/// A text's size in pixels, from [`Typesetter::measure`]. It's the size
+/// [`TextRasterizer::rasterize`] makes the text's image at the same scale.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextSize {
+    /// The image's width in pixels.
+    pub width: u32,
+    /// The image's height in pixels.
+    pub height: u32,
+    /// The characters no font had, each once, in the order they first appear.
+    pub missing: Vec<char>,
+}
+
+/// The pixels from one [`TextRasterizer::rasterize`] call, with no atlas
 /// position yet. Allocate a region with
 /// [`crate::TextureRegistry::register_static`], then upload with
 /// [`crate::QuadPipeline::write_to_main_atlas`].
@@ -381,22 +417,26 @@ pub struct RasterizedGlyphs {
 }
 
 // ---------------------------------------------------------------------------
-// FontAtlas
+// Typesetter
 // ---------------------------------------------------------------------------
 
-/// A collection of fonts that lays out and rasterizes text on the CPU. It
-/// doesn't allocate atlas space (see the module docs).
+/// The fonts an app has loaded, which lays text out in them and measures it.
+/// It draws nothing: [`TextRasterizer`] draws a text from its layout. See the
+/// module docs.
 ///
-/// One is enough for an app. The renderer owns one and uses it for all text.
-/// Call [`rasterize_text`] for each string and size, allocate a main-atlas
-/// region for the result with `TextureRegistry::register_static`, then upload
-/// it with `QuadPipeline::write_to_main_atlas`.
-///
-/// [`rasterize_text`]: FontAtlas::rasterize_text
-pub struct FontAtlas {
+/// One is enough for an app. `proteus-ui`'s `Fonts` resource holds it, so the
+/// app measures text with the same fonts the renderer draws it in.
+pub struct Typesetter {
     fonts: FontContext,
     layout: LayoutContext<Rgba8>,
+    /// Reads glyph outlines, for measuring.
     scale: ScaleContext,
+    /// A glyph's outline, kept to reuse its memory.
+    outline: Outline,
+    /// Each glyph's pixels, as their left edge from the pen and their width,
+    /// once measured, or `None` for a glyph with none. A glyph measured again
+    /// isn't read again.
+    boxes: HashMap<GlyphKey, Option<(i32, u32)>>,
     /// The default font's family name, or `None` with no font at all.
     default_family: Option<String>,
     /// The embedded font's family name, when it's the default.
@@ -411,22 +451,38 @@ pub struct FontAtlas {
     fallbacks: Vec<String>,
     /// The characters no font had, for which a warning has been logged.
     warned_missing: HashSet<char>,
-    glyphs: GlyphCache,
 }
 
-/// Font bytes that [`FontAtlas::new`] couldn't read as a TTF or OTF font.
+impl std::fmt::Debug for Typesetter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Typesetter")
+            .field("default_family", &self.default_family)
+            .field("families", &self.families)
+            .field("fallbacks", &self.fallbacks)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for Typesetter {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+/// Font bytes that [`Typesetter::load_font`] couldn't read as a TTF or OTF
+/// font.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("not a TTF or OTF font that can be read: {0}")]
 pub struct FontError(String);
 
 /// Returns the family name inside a TTF or OTF font, the one
-/// [`FontAtlas::load_font`] files it under, without loading it into an atlas.
+/// [`Typesetter::load_font`] files it under, without loading it.
 ///
 /// # Errors
 ///
 /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
 pub fn font_family_name(font_bytes: &[u8]) -> Result<String, FontError> {
-    FontAtlas::empty().load_font(font_bytes)
+    Typesetter::empty().load_font(font_bytes)
 }
 
 /// Returns the characters in the first `line_count` lines of `layout`, which
@@ -540,50 +596,210 @@ struct Fitted {
     content: String,
 }
 
-/// A glyph rasterized for one text, before it's drawn into the text's image.
-struct PlacedGlyph {
-    /// The left and top of its pixels, in whole pixels, measured from the
-    /// text's pen start and its first line's baseline.
-    left: i32,
-    top: i32,
-    width: u32,
+/// A text's lines, laid out and fitted, with its image's height.
+struct Lines {
+    layout: Layout<Rgba8>,
+    /// How many of the layout's lines are drawn.
+    line_count: usize,
+    /// What was laid out. See [`Fitted::content`].
+    content: String,
+    /// Where the first line's baseline is in the layout.
+    baseline: f32,
+    /// How far the image reaches above the first line's baseline, in whole
+    /// pixels.
+    ascent_px: i32,
+    /// The image's height in pixels.
     height: u32,
-    coverage: Arc<[u8]>,
-    /// The color it's drawn in.
-    color: Rgba8,
 }
 
-impl FontAtlas {
-    /// Creates a [`FontAtlas`] for the TTF or OTF font in `font_bytes`.
+/// The glyphs of one run, a part of a line in one font, size and style,
+/// placed for one text.
+struct PlacedRun {
+    font: FontData,
+    size: f32,
+    /// The variable font's axes, such as its weight, normalized.
+    coords: Box<[i16]>,
+    /// The slant of a synthesized italic, in degrees.
+    slant: Option<f32>,
+    /// How much a synthesized bold is thickened, in pixels.
+    embolden: Option<f32>,
+    color: Rgba8,
+    glyphs: Vec<GlyphSpot>,
+}
+
+/// Where a glyph is drawn: its pen position, in whole pixels from the text's
+/// pen start and its first line's baseline, and the quarter pixel it's
+/// rasterized at.
+struct GlyphSpot {
+    id: u32,
+    pen_x: i32,
+    pen_y: i32,
+    quarter: u8,
+}
+
+impl GlyphSpot {
+    /// How far right of `pen_x` the glyph starts, in pixels.
+    fn offset(&self) -> f32 {
+        self.quarter as f32 / SUBPIXEL_STEPS
+    }
+}
+
+impl PlacedRun {
+    /// Returns a scaler for the run's font, at its size and axes, or `None`
+    /// if swash can't read the font.
+    fn scaler<'a>(&'a self, context: &'a mut ScaleContext) -> Option<Scaler<'a>> {
+        let font = swash::FontRef::from_index(self.font.data.as_ref(), self.font.index as usize)?;
+        Some(
+            context
+                .builder(font)
+                .size(self.size)
+                .hint(false)
+                .normalized_coords(self.coords.iter())
+                .build(),
+        )
+    }
+
+    /// Returns the slant of a synthesized italic as a transform.
+    fn transform(&self) -> Option<Transform> {
+        self.slant
+            .map(|degrees| Transform::skew(Angle::from_degrees(degrees), Angle::ZERO))
+    }
+
+    /// Returns the glyph cache's key for `spot`'s glyph.
+    fn key(&self, spot: &GlyphSpot) -> GlyphKey {
+        GlyphKey {
+            font: self.font.data.id(),
+            index: self.font.index,
+            glyph: spot.id,
+            size_bits: self.size.to_bits(),
+            coords: self.coords.clone(),
+            quarter: spot.quarter,
+            slanted: self.slant.is_some(),
+            emboldened: self.embolden.is_some(),
+        }
+    }
+}
+
+/// Places every glyph in the first `line_count` lines of `layout`, relative to
+/// the pen's start and the first line's baseline, which is at `baseline`.
+fn place_runs(layout: &Layout<Rgba8>, baseline: f32, line_count: usize) -> Vec<PlacedRun> {
+    let mut runs = Vec::new();
+    for line in layout.lines().take(line_count) {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
+            let run = glyph_run.run();
+            // A face standing in for one the family lacks is slanted for
+            // italic and thickened for bold. The thickening is about a
+            // thirtieth of the font size.
+            let synthesis = run.synthesis();
+            let glyphs = glyph_run
+                .positioned_glyphs()
+                .map(|g| {
+                    // Horizontally, a glyph is placed to the nearest quarter
+                    // pixel. Vertically, it's placed to the nearest pixel, so
+                    // lines sit on whole pixels.
+                    let x = (g.x * SUBPIXEL_STEPS).round() / SUBPIXEL_STEPS;
+                    let pen_x = x.floor();
+                    GlyphSpot {
+                        id: g.id,
+                        pen_x: pen_x as i32,
+                        pen_y: (g.y - baseline).round() as i32,
+                        quarter: ((x - pen_x) * SUBPIXEL_STEPS) as u8,
+                    }
+                })
+                .collect();
+            runs.push(PlacedRun {
+                font: run.font().clone(),
+                size: run.font_size(),
+                coords: run
+                    .normalized_coords()
+                    .iter()
+                    .map(|c| c.to_bits())
+                    .collect(),
+                slant: synthesis.skew().map(|_| SYNTHESIZED_SLANT),
+                embolden: synthesis.embolden().then(|| run.font_size() / 30.0),
+                color: glyph_run.style().brush,
+                glyphs,
+            });
+        }
+    }
+    runs
+}
+
+/// Returns where a glyph's pixels start, from its pen position, and how wide
+/// they are, without drawing them, or `None` for a glyph with no pixels. They
+/// are as swash places them: the glyph's outline, thickened then slanted,
+/// offset to its quarter pixel, and rounded out to whole pixels. `outline` is
+/// kept to reuse its memory.
+fn outline_box(
+    scaler: &mut Scaler,
+    outline: &mut Outline,
+    run: &PlacedRun,
+    spot: &GlyphSpot,
+) -> Option<(i32, u32)> {
+    outline.clear();
+    if !scaler.scale_outline_into(spot.id as u16, outline) {
+        return None;
+    }
+    if let Some(strength) = run.embolden {
+        outline.embolden(strength, strength);
+    }
+    if let Some(transform) = run.transform() {
+        outline.transform(&transform);
+    }
+    let bounds = zeno::bounds(outline.path(), Fill::NonZero, None);
+    let left = (bounds.min.x + spot.offset()).floor();
+    let right = (bounds.max.x + spot.offset()).ceil();
+    let height = bounds.max.y.ceil() - bounds.min.y.floor();
+    (right > left && height > 0.0).then_some((left as i32, (right - left) as u32))
+}
+
+/// Returns where a text's image starts, in pixels from the pen's start, and
+/// how wide it is, from each glyph's pixels as their left edge and width.
+/// Measuring and rasterizing both size the image with it, so they agree.
+///
+/// The image is the wrap width, if there is one, widened to take in ink that
+/// reaches past it. Without a wrap width, it runs from the leftmost ink, or the
+/// pen's start if that's further left, to the rightmost ink. A glyph's ink can
+/// reach left of the pen, as Inter's "j" does, or past its own advance.
+fn image_width(glyphs: &[(i32, u32)], wrap_width: Option<f32>, scale: f32) -> Option<(i32, u32)> {
+    let box_width = wrap_width.map_or(0, |w| (w * scale).ceil() as i32);
+    let min_left = glyphs.iter().map(|g| g.0).min()?.min(0);
+    let max_right = glyphs
+        .iter()
+        .map(|g| g.0 + g.1 as i32)
+        .max()?
+        .max(box_width);
+    let width = (max_right - min_left).max(0) as u32;
+    (width > 0).then_some((min_left, width))
+}
+
+impl Typesetter {
+    /// Creates a [`Typesetter`] for the TTF or OTF font in `font_bytes`.
     ///
     /// # Errors
     ///
     /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
     pub fn new(font_bytes: &[u8]) -> Result<Self, FontError> {
-        let mut atlas = Self::empty();
-        let family = atlas.load_font(font_bytes)?;
-        atlas.has_ellipsis = has_ellipsis(font_bytes);
-        atlas.default_family = Some(family);
-        Ok(atlas)
+        let mut typesetter = Self::empty();
+        typesetter.set_default_font(font_bytes)?;
+        Ok(typesetter)
     }
 
-    /// Creates a [`FontAtlas`] for the embedded font, [`EMBEDDED_FONT_BYTES`]
+    /// Creates a [`Typesetter`] for the embedded font, [`EMBEDDED_FONT_BYTES`]
     /// (Inter). A text in it that sets no weight is drawn at 700.
     #[cfg(feature = "embedded-font")]
     pub fn with_embedded_font() -> Self {
-        let mut atlas = Self::empty();
-        let family = atlas
-            .register(Blob::new(Arc::new(EMBEDDED_FONT_BYTES)))
-            .expect("the embedded font is a valid TTF");
-        atlas.has_ellipsis = has_ellipsis(EMBEDDED_FONT_BYTES);
-        atlas.embedded_family = Some(family.clone());
-        atlas.default_family = Some(family);
-        atlas
+        let mut typesetter = Self::empty();
+        typesetter.use_embedded_font();
+        typesetter
     }
 
-    /// Creates a [`FontAtlas`] with no font, which draws no text until one is
-    /// loaded with [`FontAtlas::load_font`]. The first font loaded becomes the
-    /// default.
+    /// Creates a [`Typesetter`] with no font, which lays out no text until one
+    /// is loaded with [`Typesetter::load_font`]. The first font loaded becomes
+    /// the default.
     pub fn empty() -> Self {
         Self {
             fonts: FontContext {
@@ -596,6 +812,8 @@ impl FontAtlas {
             },
             layout: LayoutContext::new(),
             scale: ScaleContext::new(),
+            outline: Outline::new(),
+            boxes: HashMap::new(),
             default_family: None,
             embedded_family: None,
             families: HashSet::new(),
@@ -603,14 +821,13 @@ impl FontAtlas {
             warned_no_font: false,
             fallbacks: Vec::new(),
             warned_missing: HashSet::new(),
-            glyphs: GlyphCache::new(DEFAULT_GLYPH_CACHE_BYTES),
         }
     }
 
     /// Adds the TTF or OTF font in `font_bytes`, and returns the family name
     /// inside it. Texts use the font by naming that family. A font whose family
     /// is already loaded adds a face to it, such as an italic. The first font
-    /// loaded into an [`empty`](Self::empty) atlas becomes its default.
+    /// loaded into an [`empty`](Self::empty) typesetter becomes its default.
     ///
     /// # Errors
     ///
@@ -624,11 +841,46 @@ impl FontAtlas {
         Ok(family)
     }
 
+    /// Adds the TTF or OTF font in `font_bytes` and makes it the default, in
+    /// place of any default before it. Returns the family name inside it.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError`] if `font_bytes` isn't a TTF or OTF font that can be read.
+    /// The default is then unchanged.
+    pub fn set_default_font(&mut self, font_bytes: &[u8]) -> Result<String, FontError> {
+        let family = self.register(Blob::new(Arc::new(font_bytes.to_vec())))?;
+        self.has_ellipsis = has_ellipsis(font_bytes);
+        self.default_family = Some(family.clone());
+        self.embedded_family = None;
+        Ok(family)
+    }
+
+    /// Makes the embedded font, [`EMBEDDED_FONT_BYTES`] (Inter), the default,
+    /// in place of any default before it. It's added only once.
+    #[cfg(feature = "embedded-font")]
+    pub fn use_embedded_font(&mut self) {
+        let family = match &self.embedded_family {
+            Some(family) => family.clone(),
+            None => self
+                .register(Blob::new(Arc::new(EMBEDDED_FONT_BYTES)))
+                .expect("the embedded font is a valid TTF"),
+        };
+        self.has_ellipsis = has_ellipsis(EMBEDDED_FONT_BYTES);
+        self.embedded_family = Some(family.clone());
+        self.default_family = Some(family);
+    }
+
     /// Sets the fallback families. For a character a text's own family lacks,
     /// they're tried in order, before the default font. A family that isn't
     /// loaded yet is skipped until it is. See the module docs.
     pub fn set_fallbacks(&mut self, families: &[String]) {
         self.fallbacks = families.to_vec();
+    }
+
+    /// Returns the fallback families, in the order they're tried.
+    pub fn fallbacks(&self) -> &[String] {
+        &self.fallbacks
     }
 
     /// Returns whether a font of `family` has been loaded.
@@ -652,57 +904,51 @@ impl FontAtlas {
         Ok(family)
     }
 
-    /// Sets the most bytes of glyphs the glyph cache keeps, and drops the
-    /// glyphs used longest ago if it holds more. A budget of 0 keeps none, so
-    /// every glyph is rasterized each time it's baked. See the module docs.
-    pub fn set_glyph_cache_budget(&mut self, bytes: usize) {
-        self.glyphs.set_budget(bytes);
-    }
-
-    /// Drops every glyph from the glyph cache, to free its memory. Texts
-    /// baked afterward rasterize their glyphs again.
-    pub fn clear_glyph_cache(&mut self) {
-        self.glyphs.clear();
-    }
-
-    /// Returns the glyph cache's size as the number of glyphs it holds and
-    /// their bytes, counted as the budget counts them.
-    pub fn glyph_cache_size(&self) -> (usize, usize) {
-        (self.glyphs.len(), self.glyphs.bytes())
-    }
-
-    /// Lays `text` out at `size_px`, with `letter_spacing_px` of extra space
-    /// between glyphs (`0.0` for the font's normal spacing), and rasterizes it
-    /// into an RGBA pixel buffer. A `\n` starts a new line. The image spans
-    /// the glyphs' ink, so it has no padding after the last glyph. This is the
-    /// same as [`FontAtlas::rasterize`] with a [`TextLayout::new`] and a scale
-    /// of 1.
+    /// Returns the size of the image [`TextRasterizer::rasterize`] makes of
+    /// `text` at `scale`, without drawing it. A glyph's pixels are its
+    /// outline's bounds rounded out to whole pixels, as swash works them out
+    /// before drawing, so measuring reads outlines and draws nothing.
     ///
     /// Returns `None` if `text` draws no pixels, because it's empty or only
-    /// whitespace.
-    pub fn rasterize_text(
-        &mut self,
-        text: &str,
-        size_px: f32,
-        letter_spacing_px: f32,
-    ) -> Option<RasterizedGlyphs> {
-        let mut layout = TextLayout::new(text, size_px);
-        layout.letter_spacing_px = letter_spacing_px;
-        self.rasterize(&layout, 1.0)
+    /// whitespace, or there's no font.
+    pub fn measure(&mut self, text: &TextLayout, scale: f32) -> Option<TextSize> {
+        let lines = self.lines(text, scale)?;
+        let runs = place_runs(&lines.layout, lines.baseline, lines.line_count);
+        let mut glyphs = Vec::new();
+        for run in &runs {
+            let Some(mut scaler) = run.scaler(&mut self.scale) else {
+                continue;
+            };
+            for spot in &run.glyphs {
+                let key = run.key(spot);
+                let glyph_box = match self.boxes.get(&key) {
+                    Some(glyph_box) => *glyph_box,
+                    None => {
+                        let glyph_box = outline_box(&mut scaler, &mut self.outline, run, spot);
+                        if self.boxes.len() >= MAX_GLYPH_BOXES {
+                            self.boxes.clear();
+                        }
+                        self.boxes.insert(key, glyph_box);
+                        glyph_box
+                    }
+                };
+                if let Some((left, width)) = glyph_box {
+                    glyphs.push((spot.pen_x + left, width));
+                }
+            }
+        }
+        let (_, width) = image_width(&glyphs, text.wrap_width, scale)?;
+        Some(TextSize {
+            width,
+            height: lines.height,
+            missing: missing_chars(&lines.layout, lines.line_count, &lines.content),
+        })
     }
 
-    /// Lays `text` out and rasterizes it into an RGBA pixel buffer, at `scale`
-    /// pixels per logical pixel, the way a bake at the display's scale does.
-    /// Lines break where they would at a scale of 1. See the module docs.
-    ///
-    /// The image is the text's box. It's as wide as the wrap width, or as the
-    /// widest line's ink without one, and as tall as from the top of the first
-    /// line to the bottom of the last. Ink that reaches past the box widens the
-    /// image.
-    ///
-    /// Returns `None` if `text` draws no pixels, because it's empty or only
-    /// whitespace.
-    pub fn rasterize(&mut self, text: &TextLayout, scale: f32) -> Option<RasterizedGlyphs> {
+    /// Lays `text` out and fits it, and works out its image's height. Returns
+    /// `None` for a text that draws nothing, or with no font, which is warned
+    /// about once.
+    fn lines(&mut self, text: &TextLayout, scale: f32) -> Option<Lines> {
         let empty = if text.spans.is_empty() {
             text.content.is_empty()
         } else {
@@ -738,54 +984,20 @@ impl FontAtlas {
         if height <= 0 {
             return None;
         }
+        Some(Lines {
+            layout,
+            line_count,
+            content,
+            baseline: first.baseline,
+            ascent_px,
+            height: height as u32,
+        })
+    }
 
-        let glyphs = self.rasterize_glyphs(&layout, first.baseline, line_count);
-
-        // The image's width is the wrap width, if there is one, widened to
-        // take in ink that reaches past it. Without a wrap width, it runs from
-        // the leftmost ink, or the pen's start if that's further left, to the
-        // rightmost ink. A glyph's ink can reach left of the pen, as Inter's
-        // "j" does, or past its own advance.
-        let box_width = text.wrap_width.map_or(0, |w| (w * scale).ceil() as i32);
-        let min_left = glyphs.iter().map(|g| g.left).min()?.min(0);
-        let max_right = glyphs
-            .iter()
-            .map(|g| g.left + g.width as i32)
-            .max()?
-            .max(box_width);
-        let width = (max_right - min_left).max(0) as u32;
-        if width == 0 {
-            return None;
-        }
-
-        // Each glyph in its color, with its coverage times the color's alpha in
-        // alpha. Where glyphs overlap, the greater alpha wins. A text with no
-        // colored span is white, with the coverage in alpha.
-        let mut rgba = vec![0u8; (width * height as u32 * 4) as usize];
-        for g in &glyphs {
-            for gy in 0..g.height as i32 {
-                let py = ascent_px + g.top + gy;
-                if py < 0 || py >= height {
-                    continue;
-                }
-                for gx in 0..g.width as i32 {
-                    let px = g.left - min_left + gx;
-                    let coverage = g.coverage[(gy * g.width as i32 + gx) as usize];
-                    if coverage == 0 || px < 0 || px >= width as i32 {
-                        continue;
-                    }
-                    let i = ((py as u32 * width + px as u32) * 4) as usize;
-                    let alpha = ((coverage as u32 * g.color[3] as u32 + 127) / 255) as u8;
-                    if alpha > rgba[i + 3] {
-                        rgba[i..i + 3].copy_from_slice(&g.color[..3]);
-                        rgba[i + 3] = alpha;
-                    }
-                }
-            }
-        }
-
-        let missing = missing_chars(&layout, line_count, &content);
-        for &c in &missing {
+    /// Logs a warning for each of `missing`, the characters no font had in
+    /// `content`, the first time it's drawn.
+    fn warn_missing(&mut self, missing: &[char], content: &str) {
+        for &c in missing {
             if self.warned_missing.insert(c) {
                 log::warn!(
                     "no font has {c:?} (U+{:04X}), in the text {:?}, so it's drawn as a box: add a \
@@ -795,13 +1007,6 @@ impl FontAtlas {
                 );
             }
         }
-
-        Some(RasterizedGlyphs {
-            width,
-            height: height as u32,
-            rgba_pixels: rgba,
-            missing,
-        })
     }
 
     /// Lays `text` out within its maximum number of lines. Past the maximum,
@@ -865,9 +1070,9 @@ impl FontAtlas {
         // Lays out the text cut at `cut`, with the ellipsis, and returns it if
         // it fits in `max` lines. A binary search finds the longest cut that
         // fits, since a shorter cut never takes more lines.
-        let fits = |atlas: &mut Self, cut: usize| {
+        let fits = |typesetter: &mut Self, cut: usize| {
             let cut = with_ellipsis(cut);
-            let layout = atlas.lay_out(&cut, text, scale);
+            let layout = typesetter.lay_out(&cut, text, scale);
             (layout.len() <= max).then(|| (layout, cut.content.into_owned()))
         };
         let Some(mut best) = fits(self, cuts[0]) else {
@@ -1027,95 +1232,192 @@ impl FontAtlas {
         layout.break_all_lines(text.wrap_width.map(|w| w * scale));
         layout
     }
+}
 
-    /// Rasterizes every glyph in the first `line_count` lines of `layout`.
-    /// Each is placed relative to the pen's start and the first line's
-    /// baseline, which is at `baseline`.
-    fn rasterize_glyphs(
+// ---------------------------------------------------------------------------
+// TextRasterizer
+// ---------------------------------------------------------------------------
+
+/// Draws a text a [`Typesetter`] lays out into an RGBA image, keeping each
+/// glyph's pixels in its glyph cache. It allocates no atlas space (see the
+/// module docs).
+///
+/// The renderer owns one. Call [`TextRasterizer::rasterize`] for each text,
+/// allocate a main-atlas region for the result with
+/// `TextureRegistry::register_static`, then upload it with
+/// `QuadPipeline::write_to_main_atlas`.
+pub struct TextRasterizer {
+    scale: ScaleContext,
+    glyphs: GlyphCache,
+}
+
+/// A glyph rasterized for one text, before it's drawn into the text's image.
+struct PlacedGlyph {
+    /// The left and top of its pixels, in whole pixels, measured from the
+    /// text's pen start and its first line's baseline.
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+    coverage: Arc<[u8]>,
+    /// The color it's drawn in.
+    color: Rgba8,
+}
+
+impl Default for TextRasterizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextRasterizer {
+    /// Creates a [`TextRasterizer`] with an empty glyph cache, whose budget is
+    /// [`DEFAULT_GLYPH_CACHE_BYTES`].
+    pub fn new() -> Self {
+        Self {
+            scale: ScaleContext::new(),
+            glyphs: GlyphCache::new(DEFAULT_GLYPH_CACHE_BYTES),
+        }
+    }
+
+    /// Sets the most bytes of glyphs the glyph cache keeps, and drops the
+    /// glyphs used longest ago if it holds more. A budget of 0 keeps none, so
+    /// every glyph is rasterized each time it's baked. See the module docs.
+    pub fn set_glyph_cache_budget(&mut self, bytes: usize) {
+        self.glyphs.set_budget(bytes);
+    }
+
+    /// Drops every glyph from the glyph cache, to free its memory. Texts
+    /// baked afterward rasterize their glyphs again.
+    pub fn clear_glyph_cache(&mut self) {
+        self.glyphs.clear();
+    }
+
+    /// Returns the glyph cache's size as the number of glyphs it holds and
+    /// their bytes, counted as the budget counts them.
+    pub fn glyph_cache_size(&self) -> (usize, usize) {
+        (self.glyphs.len(), self.glyphs.bytes())
+    }
+
+    /// Lays `text` out at `size_px` with `typesetter`, with
+    /// `letter_spacing_px` of extra space between glyphs (`0.0` for the font's
+    /// normal spacing), and rasterizes it into an RGBA pixel buffer. A `\n`
+    /// starts a new line. The image spans the glyphs' ink, so it has no
+    /// padding after the last glyph. This is the same as
+    /// [`TextRasterizer::rasterize`] with a [`TextLayout::new`] and a scale of
+    /// 1.
+    ///
+    /// Returns `None` if `text` draws no pixels, because it's empty or only
+    /// whitespace.
+    pub fn rasterize_text(
         &mut self,
-        layout: &Layout<Rgba8>,
-        baseline: f32,
-        line_count: usize,
-    ) -> Vec<PlacedGlyph> {
-        let mut glyphs = Vec::new();
-        for line in layout.lines().take(line_count) {
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+        typesetter: &mut Typesetter,
+        text: &str,
+        size_px: f32,
+        letter_spacing_px: f32,
+    ) -> Option<RasterizedGlyphs> {
+        let mut layout = TextLayout::new(text, size_px);
+        layout.letter_spacing_px = letter_spacing_px;
+        self.rasterize(typesetter, &layout, 1.0)
+    }
+
+    /// Lays `text` out with `typesetter` and rasterizes it into an RGBA pixel
+    /// buffer, at `scale` pixels per logical pixel, the way a bake at the
+    /// display's scale does. Lines break where they would at a scale of 1. See
+    /// the module docs.
+    ///
+    /// The image is the text's box. It's as wide as the wrap width, or as the
+    /// widest line's ink without one, and as tall as from the top of the first
+    /// line to the bottom of the last. Ink that reaches past the box widens the
+    /// image. [`Typesetter::measure`] gives its size without drawing it.
+    ///
+    /// Returns `None` if `text` draws no pixels, because it's empty or only
+    /// whitespace.
+    pub fn rasterize(
+        &mut self,
+        typesetter: &mut Typesetter,
+        text: &TextLayout,
+        scale: f32,
+    ) -> Option<RasterizedGlyphs> {
+        let lines = typesetter.lines(text, scale)?;
+        let runs = place_runs(&lines.layout, lines.baseline, lines.line_count);
+        let glyphs = self.rasterize_glyphs(&runs);
+        let boxes: Vec<_> = glyphs.iter().map(|g| (g.left, g.width)).collect();
+        let (min_left, width) = image_width(&boxes, text.wrap_width, scale)?;
+        let height = lines.height as i32;
+        let ascent_px = lines.ascent_px;
+
+        // Each glyph in its color, with its coverage times the color's alpha in
+        // alpha. Where glyphs overlap, the greater alpha wins. A text with no
+        // colored span is white, with the coverage in alpha.
+        let mut rgba = vec![0u8; (width * lines.height * 4) as usize];
+        for g in &glyphs {
+            for gy in 0..g.height as i32 {
+                let py = ascent_px + g.top + gy;
+                if py < 0 || py >= height {
                     continue;
-                };
-                let color = glyph_run.style().brush;
-                let run = glyph_run.run();
-                let font = run.font();
-                let Some(font_ref) =
-                    swash::FontRef::from_index(font.data.as_ref(), font.index as usize)
-                else {
-                    continue;
-                };
-                let coords: Box<[i16]> = run
-                    .normalized_coords()
-                    .iter()
-                    .map(|c| c.to_bits())
-                    .collect();
-                let mut scaler = self
-                    .scale
-                    .builder(font_ref)
-                    .size(run.font_size())
-                    .hint(false)
-                    .normalized_coords(coords.iter())
-                    .build();
-                // A face standing in for one the family lacks is slanted for
-                // italic and thickened for bold. The thickening is about a
-                // thirtieth of the font size.
-                let synthesis = run.synthesis();
-                let slant = synthesis.skew().map(|_| SYNTHESIZED_SLANT);
-                let embolden = synthesis.embolden().then(|| run.font_size() / 30.0);
-                for g in glyph_run.positioned_glyphs() {
-                    // Horizontally, a glyph is placed to the nearest quarter
-                    // pixel. Vertically, it's placed to the nearest pixel, so
-                    // lines sit on whole pixels.
-                    let x = (g.x * SUBPIXEL_STEPS).round() / SUBPIXEL_STEPS;
-                    let pen_x = x.floor();
-                    let pen_y = (g.y - baseline).round();
-                    let key = GlyphKey {
-                        font: font.data.id(),
-                        index: font.index,
-                        glyph: g.id,
-                        size_bits: run.font_size().to_bits(),
-                        coords: coords.clone(),
-                        quarter: ((x - pen_x) * SUBPIXEL_STEPS) as u8,
-                        slanted: slant.is_some(),
-                        emboldened: embolden.is_some(),
-                    };
-                    let glyph = self.glyphs.get_or_rasterize(key, || {
-                        let image = Render::new(&[Source::Outline])
-                            .format(Format::Alpha)
-                            .offset(Vector::new(x - pen_x, 0.0))
-                            .transform(slant.map(|degrees| {
-                                Transform::skew(Angle::from_degrees(degrees), Angle::ZERO)
-                            }))
-                            .embolden(embolden.unwrap_or(0.0))
-                            .render(&mut scaler, g.id as u16)?;
-                        let p = image.placement;
-                        (p.width > 0 && p.height > 0).then(|| CachedGlyph {
-                            left: p.left,
-                            top: -p.top,
-                            width: p.width,
-                            height: p.height,
-                            coverage: image.data.into(),
-                        })
-                    });
-                    let Some(glyph) = glyph else {
-                        continue;
-                    };
-                    glyphs.push(PlacedGlyph {
-                        left: pen_x as i32 + glyph.left,
-                        top: pen_y as i32 + glyph.top,
-                        width: glyph.width,
-                        height: glyph.height,
-                        coverage: glyph.coverage,
-                        color,
-                    });
                 }
+                for gx in 0..g.width as i32 {
+                    let px = g.left - min_left + gx;
+                    let coverage = g.coverage[(gy * g.width as i32 + gx) as usize];
+                    if coverage == 0 || px < 0 || px >= width as i32 {
+                        continue;
+                    }
+                    let i = ((py as u32 * width + px as u32) * 4) as usize;
+                    let alpha = ((coverage as u32 * g.color[3] as u32 + 127) / 255) as u8;
+                    if alpha > rgba[i + 3] {
+                        rgba[i..i + 3].copy_from_slice(&g.color[..3]);
+                        rgba[i + 3] = alpha;
+                    }
+                }
+            }
+        }
+
+        let missing = missing_chars(&lines.layout, lines.line_count, &lines.content);
+        typesetter.warn_missing(&missing, &lines.content);
+        Some(RasterizedGlyphs {
+            width,
+            height: lines.height,
+            rgba_pixels: rgba,
+            missing,
+        })
+    }
+
+    /// Rasterizes every glyph of `runs`, or takes it from the glyph cache.
+    fn rasterize_glyphs(&mut self, runs: &[PlacedRun]) -> Vec<PlacedGlyph> {
+        let mut glyphs = Vec::new();
+        for run in runs {
+            let Some(mut scaler) = run.scaler(&mut self.scale) else {
+                continue;
+            };
+            for spot in &run.glyphs {
+                let glyph = self.glyphs.get_or_rasterize(run.key(spot), || {
+                    let image = Render::new(&[Source::Outline])
+                        .format(Format::Alpha)
+                        .offset(Vector::new(spot.offset(), 0.0))
+                        .transform(run.transform())
+                        .embolden(run.embolden.unwrap_or(0.0))
+                        .render(&mut scaler, spot.id as u16)?;
+                    let p = image.placement;
+                    (p.width > 0 && p.height > 0).then(|| CachedGlyph {
+                        left: p.left,
+                        top: -p.top,
+                        width: p.width,
+                        height: p.height,
+                        coverage: image.data.into(),
+                    })
+                });
+                let Some(glyph) = glyph else {
+                    continue;
+                };
+                glyphs.push(PlacedGlyph {
+                    left: spot.pen_x + glyph.left,
+                    top: spot.pen_y + glyph.top,
+                    width: glyph.width,
+                    height: glyph.height,
+                    coverage: glyph.coverage,
+                    color: run.color,
+                });
             }
         }
         glyphs
@@ -1130,8 +1432,79 @@ impl FontAtlas {
 mod tests {
     use super::*;
 
-    fn atlas() -> FontAtlas {
-        FontAtlas::with_embedded_font()
+    /// A typesetter and a rasterizer together, as the app and the renderer
+    /// hold them. Every text it rasterizes is measured too, and must measure
+    /// the size it's rasterized at.
+    struct Kit {
+        typesetter: Typesetter,
+        rasterizer: TextRasterizer,
+    }
+
+    impl Kit {
+        fn empty() -> Self {
+            Self {
+                typesetter: Typesetter::empty(),
+                rasterizer: TextRasterizer::new(),
+            }
+        }
+
+        fn rasterize(&mut self, text: &TextLayout, scale: f32) -> Option<RasterizedGlyphs> {
+            let measured = self.typesetter.measure(text, scale);
+            let glyphs = self.rasterizer.rasterize(&mut self.typesetter, text, scale);
+            let size = glyphs.as_ref().map(|g| TextSize {
+                width: g.width,
+                height: g.height,
+                missing: g.missing.clone(),
+            });
+            assert_eq!(
+                measured, size,
+                "measured as rasterized, at a scale of {scale}"
+            );
+            glyphs
+        }
+
+        fn rasterize_text(
+            &mut self,
+            text: &str,
+            size_px: f32,
+            letter_spacing_px: f32,
+        ) -> Option<RasterizedGlyphs> {
+            let mut layout = TextLayout::new(text, size_px);
+            layout.letter_spacing_px = letter_spacing_px;
+            self.rasterize(&layout, 1.0)
+        }
+
+        fn set_glyph_cache_budget(&mut self, bytes: usize) {
+            self.rasterizer.set_glyph_cache_budget(bytes);
+        }
+
+        fn clear_glyph_cache(&mut self) {
+            self.rasterizer.clear_glyph_cache();
+        }
+
+        fn glyph_cache_size(&self) -> (usize, usize) {
+            self.rasterizer.glyph_cache_size()
+        }
+    }
+
+    impl std::ops::Deref for Kit {
+        type Target = Typesetter;
+        fn deref(&self) -> &Typesetter {
+            &self.typesetter
+        }
+    }
+
+    impl std::ops::DerefMut for Kit {
+        fn deref_mut(&mut self) -> &mut Typesetter {
+            &mut self.typesetter
+        }
+    }
+
+    fn atlas() -> Kit {
+        Kit {
+            typesetter: Typesetter::with_embedded_font(),
+            rasterizer: TextRasterizer::new(),
+        }
     }
 
     // Returns the range of columns that have any coverage, which is where the
@@ -1399,7 +1772,7 @@ mod tests {
     #[test]
     fn text_breaks_at_the_same_words_at_every_scale() {
         let mut fa = atlas();
-        let starts = |fa: &mut FontAtlas, scale| -> Vec<usize> {
+        let starts = |fa: &mut Kit, scale| -> Vec<usize> {
             let fitted = fa.fit(&wrapped(230.0), scale);
             fitted
                 .layout
@@ -1584,7 +1957,7 @@ mod tests {
     // 700.
     use proteus_test_fonts::{SECOND_FAMILY as LORA, SECOND_FAMILY_ITALIC as LORA_ITALIC};
 
-    fn pixels(fa: &mut FontAtlas, text: &TextLayout) -> RasterizedGlyphs {
+    fn pixels(fa: &mut Kit, text: &TextLayout) -> RasterizedGlyphs {
         fa.rasterize(text, 1.0).unwrap()
     }
 
@@ -1707,7 +2080,7 @@ mod tests {
         text.weight = Some(400);
         // The ink's width tells which font drew the glyphs. The line's height
         // is the text's own family's either way.
-        let mut in_family = |fa: &mut FontAtlas, family: &'static str| {
+        let mut in_family = |fa: &mut Kit, family: &'static str| {
             text.family = Some(family);
             ink_columns(&pixels(fa, &text)).len()
         };
@@ -1738,7 +2111,7 @@ mod tests {
 
     #[test]
     fn an_empty_atlas_draws_nothing_until_a_font_is_loaded() {
-        let mut fa = FontAtlas::empty();
+        let mut fa = Kit::empty();
         assert!(fa.rasterize_text("Hello", 16.0, 0.0).is_none());
         assert_eq!(fa.load_font(LORA).unwrap(), "Lora");
         assert_eq!(
@@ -1751,8 +2124,8 @@ mod tests {
 
     #[test]
     fn bytes_that_arent_a_font_are_an_error() {
-        assert!(FontAtlas::new(b"not a font").is_err());
-        assert!(FontAtlas::new(&[]).is_err());
+        assert!(Typesetter::new(b"not a font").is_err());
+        assert!(Typesetter::new(&[]).is_err());
     }
 
     // Spans.
@@ -1796,7 +2169,7 @@ mod tests {
     fn a_span_sets_its_own_weight_italic_size_and_family() {
         let mut fa = atlas();
         fa.load_font(LORA).unwrap();
-        let draw = |fa: &mut FontAtlas, span: Span| {
+        let draw = |fa: &mut Kit, span: Span| {
             let spans = [Span::new("Hamburge "), span];
             let mut text = TextLayout::new("", 32.0);
             text.family = Some("Lora");
@@ -1869,7 +2242,7 @@ mod tests {
     #[test]
     fn a_spans_alpha_multiplies_its_coverage() {
         let mut fa = atlas();
-        let draw = |fa: &mut FontAtlas, alpha: f32| {
+        let draw = |fa: &mut Kit, alpha: f32| {
             let spans = [Span::new("Hamburgefonstiv").with_color(RED.with_w(alpha))];
             let mut text = TextLayout::new("", 32.0);
             text.spans = &spans;
@@ -1923,7 +2296,7 @@ mod tests {
         text.max_lines = Some(1);
         // Returns the color of the last glyph laid out, which is the
         // ellipsis's.
-        let last_color = |fa: &mut FontAtlas, text: &TextLayout| {
+        let last_color = |fa: &mut Kit, text: &TextLayout| {
             let fitted = fa.fit(text, 1.0);
             let line = fitted.layout.lines().next().unwrap();
             line.items()
@@ -1978,7 +2351,7 @@ mod tests {
     // Returns how far `span`, drawn in red after a blue "x", sits above the
     // "x", in pixels: the rows between the bottoms of their ink. Both are "x",
     // so on the same baseline they're level.
-    fn raised_by(fa: &mut FontAtlas, align: VerticalAlign, scale: f32) -> i32 {
+    fn raised_by(fa: &mut Kit, align: VerticalAlign, scale: f32) -> i32 {
         let spans = [
             Span::new("x").with_color(BLUE),
             Span::new("x").with_color(RED).with_vertical_align(align),
@@ -2019,7 +2392,7 @@ mod tests {
     #[test]
     fn a_moved_span_makes_its_line_taller() {
         let mut fa = atlas();
-        let height = |fa: &mut FontAtlas, align: VerticalAlign| {
+        let height = |fa: &mut Kit, align: VerticalAlign| {
             let spans = [
                 Span::new("Hamburge"),
                 Span::new("fonstiv").with_vertical_align(align),

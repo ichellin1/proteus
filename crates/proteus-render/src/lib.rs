@@ -15,21 +15,15 @@
 // doesn't know this lint would otherwise reject the `allow` itself.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
-pub mod font_atlas;
 mod glyph_cache;
 pub mod main_atlas_allocator;
 pub mod mesh;
 pub mod pipeline;
 pub mod static_texture;
+pub mod text;
 pub mod texture_registry;
 pub mod transition_atlas;
 
-#[cfg(feature = "embedded-font")]
-pub use font_atlas::EMBEDDED_FONT_BYTES;
-pub use font_atlas::{
-    default_ellipsis, font_family_name, FontAtlas, FontError, RasterizedGlyphs, Span, TextAlign,
-    TextLayout, TextOverflow, VerticalAlign, DEFAULT_ELLIPSIS, DEFAULT_GLYPH_CACHE_BYTES,
-};
 pub use main_atlas_allocator::{MainAtlasAllocId, MainAtlasAllocator, MainAtlasRegion};
 pub use mesh::{
     pack_atlas_page, unpack_atlas_page, QuadInstance, QuadVertex, ATLAS_PAGE_SHIFT,
@@ -41,6 +35,13 @@ pub use pipeline::{
     DEFAULT_TRANSITION_ATLAS_SIZE, DEFAULT_VIDEO_HEIGHT, DEFAULT_VIDEO_WIDTH,
 };
 pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
+#[cfg(feature = "embedded-font")]
+pub use text::EMBEDDED_FONT_BYTES;
+pub use text::{
+    default_ellipsis, font_family_name, FontError, RasterizedGlyphs, Span, TextAlign, TextLayout,
+    TextOverflow, TextRasterizer, TextSize, Typesetter, VerticalAlign, DEFAULT_ELLIPSIS,
+    DEFAULT_GLYPH_CACHE_BYTES,
+};
 pub use texture_registry::{
     AtlasConfig, AtlasRegion, MainAtlasPlacement, MainAtlasUv, TextureId, TextureKind,
     TextureRegistry, TextureState,

@@ -604,9 +604,10 @@ impl Proteus {
     ///
     /// Texts name that family with `Text::with_family` to be drawn in the
     /// font. A font of a family that's already loaded adds a face to the
-    /// family, such as its italic or a static weight. The host adds the font
-    /// before it next draws text. Texts in the family that were drawn in the
-    /// default font while the font loaded are drawn again in it.
+    /// family, such as its italic or a static weight. The font is added at
+    /// once, so [`Proteus::measure_text`] measures text in it straight away.
+    /// Texts in the family that were drawn in the default font while the font
+    /// loaded are drawn again in it.
     ///
     /// A font that arrives later, such as from a download, can be expected
     /// first with [`Proteus::expect_font`], so its texts wait for it.
@@ -620,10 +621,7 @@ impl Proteus {
         &mut self,
         bytes: impl Into<std::sync::Arc<[u8]>>,
     ) -> Result<String, proteus_render::FontError> {
-        let bytes = bytes.into();
-        let family = proteus_render::font_family_name(&bytes)?;
-        self.fonts().loaded(family.clone(), bytes);
-        Ok(family)
+        self.fonts().load(&bytes.into())
     }
 
     /// Says a font of `family` will be loaded with [`Proteus::load_font`],
@@ -696,6 +694,37 @@ impl Proteus {
         self.world
             .world
             .get_resource_or_insert_with(proteus_ui::Fonts::default)
+    }
+
+    /// Returns the size `text` is drawn at, in logical pixels, without
+    /// drawing it. It's the size [`Handle::baked_text_size`] gives once the
+    /// text is baked, so an app can lay out around a text before it's drawn,
+    /// such as to fit a button to its label.
+    ///
+    /// The size is rounded up to whole pixels at the display's scale, as the
+    /// text is when it's drawn, so on a display of another scale it can differ
+    /// by under a pixel. Measure again when the scale changes.
+    ///
+    /// Returns `None` while the text waits for a font it names, expected with
+    /// `WhileLoading::Hide`, since it isn't drawn yet. With
+    /// `WhileLoading::DefaultFont`, it's the size in the default font, as
+    /// drawn meanwhile. Also `None` before there's any font: the host sets the
+    /// default font before `setup`, and with no host, the first font loaded
+    /// becomes the default. An empty text is zero.
+    ///
+    /// ```
+    /// use proteus_sdk::{Proteus, Text};
+    ///
+    /// /// Returns the width of a button fitted to its label, with 12 pixels
+    /// /// each side.
+    /// fn button_width(app: &mut Proteus, label: &Text) -> Option<f32> {
+    ///     Some(app.measure_text(label)?.x + 24.0)
+    /// }
+    /// ```
+    ///
+    /// [`Handle::baked_text_size`]: crate::Handle::baked_text_size
+    pub fn measure_text(&mut self, text: &proteus_ui::Text) -> Option<glam::Vec2> {
+        proteus_ui::measure_text(&mut self.world.world, text)
     }
 
     /// Empties the glyph cache to free its memory, such as when the app is

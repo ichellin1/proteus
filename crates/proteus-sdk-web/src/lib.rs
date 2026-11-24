@@ -1002,6 +1002,20 @@ impl ProteusApp {
         self.0.borrow_mut().font_failed(family);
     }
 
+    /// Calls [`Proteus::measure_text`](sdk::Proteus::measure_text). Returns
+    /// `undefined` while the text waits for a font, or with no font. Throws if
+    /// `text` isn't a `TextSpec`.
+    #[wasm_bindgen(js_name = measureText)]
+    pub fn measure_text(&mut self, text: JsValue) -> Result<JsValue, JsValue> {
+        let dto: TextDto = serde_wasm_bindgen::from_value(text)
+            .map_err(|e| crate::js_error(&format!("invalid TextSpec: {e}")))?;
+        Ok(match self.0.borrow_mut().measure_text(&(&dto).into()) {
+            Some(size) => serde_wasm_bindgen::to_value(&dto::SizeDto::from(size))
+                .unwrap_or(JsValue::UNDEFINED),
+            None => JsValue::UNDEFINED,
+        })
+    }
+
     /// Calls [`Proteus::clear_glyph_cache`](sdk::Proteus::clear_glyph_cache).
     #[wasm_bindgen(js_name = clearGlyphCache)]
     pub fn clear_glyph_cache(&mut self) {

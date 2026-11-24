@@ -1,20 +1,40 @@
-// Tests of `FontAtlas`: rasterizing text and the resulting pixels, without a
-// GPU. Atlas placement is tested in `texture_registry.rs` and
+// Tests of `Typesetter` and `TextRasterizer`: rasterizing text and the
+// resulting pixels, without a GPU. Atlas placement is tested in `texture_registry.rs` and
 // `main_atlas_allocator.rs`, and uploading in `headless_render.rs`.
 
 // A separate crate root from the library, so the lint allowance in lib.rs is
 // repeated here.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 
-use proteus_render::{FontAtlas, EMBEDDED_FONT_BYTES};
+use proteus_render::{RasterizedGlyphs, TextRasterizer, Typesetter, EMBEDDED_FONT_BYTES};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Create a `FontAtlas` backed by the embedded Inter Bold font.
-fn atlas() -> FontAtlas {
-    FontAtlas::with_embedded_font()
+// A typesetter with the embedded font, Inter, and a rasterizer.
+struct Text {
+    typesetter: Typesetter,
+    rasterizer: TextRasterizer,
+}
+
+impl Text {
+    fn rasterize_text(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        letter_spacing_px: f32,
+    ) -> Option<RasterizedGlyphs> {
+        self.rasterizer
+            .rasterize_text(&mut self.typesetter, text, size_px, letter_spacing_px)
+    }
+}
+
+fn atlas() -> Text {
+    Text {
+        typesetter: Typesetter::with_embedded_font(),
+        rasterizer: TextRasterizer::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -40,25 +60,25 @@ fn embedded_font_bytes_are_non_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// FontAtlas construction
+// Typesetter construction
 // ---------------------------------------------------------------------------
 
 #[test]
-fn font_atlas_constructs_with_embedded_font() {
+fn typesetter_constructs_with_embedded_font() {
     // Must not panic.
     let _fa = atlas();
 }
 
 #[test]
-fn font_atlas_constructs_with_custom_bytes() {
-    assert!(FontAtlas::new(EMBEDDED_FONT_BYTES).is_ok());
+fn typesetter_constructs_with_custom_bytes() {
+    assert!(Typesetter::new(EMBEDDED_FONT_BYTES).is_ok());
 }
 
 // Bytes that aren't a font are an error the caller can handle, not a panic.
 #[test]
-fn font_atlas_rejects_bytes_that_arent_a_font() {
-    assert!(FontAtlas::new(b"not a font").is_err());
-    assert!(FontAtlas::new(&[]).is_err());
+fn typesetter_rejects_bytes_that_arent_a_font() {
+    assert!(Typesetter::new(b"not a font").is_err());
+    assert!(Typesetter::new(&[]).is_err());
 }
 
 // ---------------------------------------------------------------------------

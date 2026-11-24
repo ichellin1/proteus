@@ -1,9 +1,9 @@
 //! The coverage of each glyph, kept after it's rasterized so it can be used
 //! again.
 //!
-//! [`FontAtlas`](crate::FontAtlas) rasterizes text one glyph at a time. Most
-//! texts share glyphs with others, since every "e" in every label at 16 pixels
-//! has the same pixels. The cache keeps each glyph's pixels, keyed by
+//! [`TextRasterizer`](crate::TextRasterizer) rasterizes text one glyph at a
+//! time. Most texts share glyphs with others, since every "e" in every label at
+//! 16 pixels has the same pixels. The cache keeps each glyph's pixels, keyed by
 //! everything that changes a glyph's pixels: the font, the glyph, its size in
 //! pixels, the font's variation, such as its weight, its horizontal offset
 //! within a pixel, in quarters, and whether it's slanted or thickened to stand

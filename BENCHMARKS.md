@@ -115,8 +115,9 @@ A last mode, `text`, times baking text, at bake scales 1 and 2, on two workloads
 labels from 14 to 24 pixels, like a screen of buttons and tiles, and 20 lines of about 80
 characters at 16 pixels, the nearest thing to a paragraph while text is one line. It times
 **rasterizing** alone, turning every text into pixels on the CPU with no GPU, the median of 100
-passes; and **frames** in which every text is replaced, so the engine bakes all of them again,
-timed as the scenes are: rasterizing, adding each to the atlas and uploading it, then drawing.
+passes; **measuring** alone, as `measure_text` does, the median of 100 passes; and **frames** in
+which every text is replaced, so the engine bakes all of them again, timed as the scenes are:
+rasterizing, adding each to the atlas and uploading it, then drawing.
 There are 500 labels rather than more because the old and new texts must fit in the atlas at
 once: a texture an app releases in its update can't be evicted until the next frame.
 
@@ -278,6 +279,23 @@ uploading it is the larger part.
 
 The text engine makes the web host's wasm larger: 7,497 KB, 2,748 KB gzipped, against 5,357 KB,
 1,958 KB gzipped, before it.
+
+The same, on 23 November 2026, with measuring, once the fonts moved to the app's `Typesetter`
+and the glyph cache stayed in the renderer's `TextRasterizer`. The machine ran slower that day:
+the version before, built and run then, rasterized the labels in 3.38 ms at a scale of 1 and
+5.53 ms at 2, so splitting the two is no slower.
+
+| Workload | Texts | Bake scale | Rasterizing | Measuring | CPU median | CPU p99 | Frame interval median | Frame interval p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Labels | 500 | 1 | 3.05 | 2.28 | 12.08 | 15.21 | 12.08 | 15.21 |
+| Labels | 500 | 2 | 4.88 | 2.49 | 16.96 | 20.64 | 16.96 | 20.64 |
+| Lines | 20 | 1 | 0.62 | 0.50 | 1.29 | 1.40 | 1.30 | 7.34 |
+| Lines | 20 | 2 | 0.97 | 0.47 | 2.57 | 2.73 | 2.57 | 5.69 |
+
+Measuring takes about 5 µs a label and 25 µs a line, half to three quarters of rasterizing, and
+about the same at both scales, since it draws no pixels. Most of it is laying the text out. The
+typesetter keeps each glyph's pixel box once it's measured; before it did, reading every
+glyph's outline each time, measuring the labels took 3.94 ms.
 
 ### Chrome
 

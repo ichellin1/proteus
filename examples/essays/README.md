@@ -25,6 +25,8 @@ starting with the same dagger. While an essay is open, a toolbar at the top sets
 size, alignment, bold and italic, line height and font, as a text editor's does. The toolbar's
 icons are Material Icons, a font whose ligatures turn an icon's name into the icon. A chosen
 button stays in the accent color under the pointer, since `set_style` removes its hover style.
+The essay's back button is as wide as its label, plus room each side: the label is measured
+with `measure_text` before it's drawn.
 
 The essays are set in Lora, a serif loaded from [`fonts/`](./fonts), with its italic for the
 pull quotes. Titles are the built-in Inter at weight 800, and years are at weight 500. Bylines
@@ -47,7 +49,8 @@ Noto Serif Devanagari is from Google Fonts, under the SIL Open Font License. The
 in [`fonts/OFL-NotoSerifDevanagari.txt`](./fonts/OFL-NotoSerifDevanagari.txt).
 
 Not shown yet: a weight a font doesn't have, a character no font has (which is drawn as a box),
-measuring text, and components within a line of text.
+and components within a line of text. Measuring a text whose font is still loading, and a text
+too large for an atlas page, are covered by tests only.
 
 Techniques worth copying are described at the top of each version's source:
 [`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).

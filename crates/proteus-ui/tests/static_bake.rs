@@ -5,8 +5,8 @@
 use glam::{Vec2, Vec3, Vec4};
 
 use proteus_render::{
-    unpack_atlas_page, AtlasConfig, FontAtlas, GpuContext, QuadPipeline, ATLAS_SELECTOR_MAIN,
-    DEFAULT_TRANSITION_ATLAS_SIZE,
+    unpack_atlas_page, AtlasConfig, GpuContext, QuadPipeline, TextRasterizer, Typesetter,
+    ATLAS_SELECTOR_MAIN, DEFAULT_TRANSITION_ATLAS_SIZE,
 };
 use proteus_ui::{
     collect_instances, Baked, BakedComposite, BakedText, Border, ChildOf, CompositeTextureRef,
@@ -147,7 +147,7 @@ fn bake_system_bakes_quad_and_text_composite() {
         AtlasConfig::default(),
         DEFAULT_TRANSITION_ATLAS_SIZE,
     );
-    let mut font_atlas = FontAtlas::with_embedded_font();
+    let mut typesetter = Typesetter::with_embedded_font();
 
     let mut pw = ProteusWorld::new();
     pw.world.insert_resource(GpuContext {
@@ -180,9 +180,9 @@ fn bake_system_bakes_quad_and_text_composite() {
 
     // Bake the child's text as the renderer does, so the component bake
     // includes real glyphs: rasterize, then register in the atlas.
-    let glyphs = font_atlas
-        .rasterize_text("Hi", 16.0, 0.0)
-        .expect("text rasterize should succeed in a fresh font atlas");
+    let glyphs = TextRasterizer::new()
+        .rasterize_text(&mut typesetter, "Hi", 16.0, 0.0)
+        .expect("text rasterize should succeed with the embedded font");
     let text_texture_id = pw
         .world
         .resource_mut::<QuadPipeline>()

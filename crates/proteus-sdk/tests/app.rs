@@ -11,7 +11,8 @@ use proteus_sdk::{
     Action, Border, Code, ComponentSpec, DropShadow, FocusBlocked, FocusEntry, FocusGroup,
     FocusLost, Glow, HandleError, ImageCrop, InputDevices, InputMode, Key, KeyBinding, KeyEvent,
     KeyResult, KeyState, MergeLayout, Modifiers, NamedKey, Proteus, QuadState, ReadingDirection,
-    SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionInteractionConfig,
+    Span, SplitStrategy, StyleOverride, Text, TransitionConfig, TransitionInteractionConfig,
+    WhileLoading,
 };
 use proteus_ui::{FocusState, KeyInput, NavigationRequests};
 
@@ -4202,4 +4203,97 @@ fn a_channel_from_a_child_starts_where_it_is_on_screen() {
         .from
         .position;
     assert_eq!(start, Vec3::new(300.0, 100.0, 0.0));
+}
+
+// ---------------------------------------------------------------------------
+// Measuring text
+// ---------------------------------------------------------------------------
+
+use proteus_test_fonts::{SECOND_FAMILY as LORA, THIRD_FAMILY as CRIMSON};
+
+// With no host, there's no font to measure in until one is loaded. The first
+// font loaded becomes the default, and measures at once, with no frame.
+#[test]
+fn a_font_loaded_measures_at_once_with_no_host() {
+    let mut app = Proteus::new();
+    let label = Text::new("Proteus", 24.0);
+    assert_eq!(app.measure_text(&label), None, "no font yet");
+    assert_eq!(app.load_font(LORA).unwrap(), "Lora");
+    let size = app.measure_text(&label).expect("measured in Lora");
+    assert!(size.x > 24.0 && size.y > 24.0, "{size:?}");
+    assert_eq!(
+        app.measure_text(&label.clone().with_family("Lora")),
+        Some(size),
+        "Lora is the default"
+    );
+}
+
+// A text in a family expected with `Hide` isn't drawn yet, so it measures
+// nothing. With `DefaultFont`, it measures in the default font, as drawn
+// meanwhile. Once its font loads, it measures in it.
+#[test]
+fn a_text_waiting_for_its_font_measures_as_its_drawn() {
+    let mut app = Proteus::new();
+    app.load_font(LORA).unwrap();
+    let in_default = app.measure_text(&Text::new("Proteus", 24.0)).unwrap();
+    let crimson = Text::new("Proteus", 24.0).with_family("Crimson Pro");
+
+    app.expect_font("Crimson Pro", WhileLoading::Hide);
+    assert_eq!(app.measure_text(&crimson), None, "waits for its font");
+
+    app.expect_font("Crimson Pro", WhileLoading::DefaultFont);
+    assert_eq!(
+        app.measure_text(&crimson),
+        Some(in_default),
+        "in the default font meanwhile"
+    );
+
+    app.load_font(CRIMSON).unwrap();
+    let in_crimson = app.measure_text(&crimson).expect("in its own font");
+    assert_ne!(in_crimson, in_default);
+}
+
+// A span in a family still loading makes its whole text wait, as it does
+// when the text is drawn.
+#[test]
+fn a_span_waiting_for_its_font_makes_its_text_wait() {
+    let mut app = Proteus::new();
+    app.load_font(LORA).unwrap();
+    app.expect_font("Crimson Pro", WhileLoading::Hide);
+    let text = Text::rich(
+        [
+            Span::new("In Lora, "),
+            Span::new("in Crimson").with_family("Crimson Pro"),
+        ],
+        16.0,
+    );
+    assert_eq!(app.measure_text(&text), None);
+}
+
+// An empty text, or one only of spaces, is drawn as nothing, so it measures
+// zero.
+#[test]
+fn an_empty_text_measures_zero() {
+    let mut app = Proteus::new();
+    app.load_font(LORA).unwrap();
+    assert_eq!(app.measure_text(&Text::new("", 16.0)), Some(Vec2::ZERO));
+    assert_eq!(app.measure_text(&Text::new("   ", 16.0)), Some(Vec2::ZERO));
+}
+
+// A longer text measures wider, and a wrapped one as wide as its wrap width.
+#[test]
+fn a_text_measures_by_its_content_and_wrap_width() {
+    let mut app = Proteus::new();
+    app.load_font(LORA).unwrap();
+    let short = app.measure_text(&Text::new("Back", 16.0)).unwrap();
+    let long = app
+        .measure_text(&Text::new("Back to essays", 16.0))
+        .unwrap();
+    assert!(long.x > short.x && long.y == short.y, "{short:?} {long:?}");
+    let wrapped =
+        Text::new("A paragraph long enough to wrap onto a few lines", 16.0).with_wrap_width(120.0);
+    let size = app.measure_text(&wrapped).unwrap();
+    // Ink that reaches past the wrap width widens the image, as Lora's does.
+    assert!(size.x >= 120.0 && size.x <= 122.0, "{size:?}");
+    assert!(size.y > 2.0 * short.y, "{size:?}");
 }
