@@ -16,11 +16,12 @@ at most two lines and ends in "…". The opening is spaced at a line height of 1
 after five lines, ending in an ellipsis of its own. The source is clipped after two lines, and
 the titles in it are italic. The second card's ellipsis is bold, in the accent color, with an
 arrow from Material Icons after it. The third card's ellipsis is longer than a line, so it takes
-a line of its own.
+a line of its own. The fourth card's is "…" then a small button, "आगे पढ़ें" ("read more"),
+which opens the essay: a component in the text, shown only while the ellipsis is.
 
 A card opens into its essay (1→1). The essay has a two-line byline split with `\n`, with the
-author in a heavier weight and the year smaller and muted. It has an opening that wraps at the
-column's width, a centered pull quote ending in a superscript dagger, and the source in full,
+author in a heavier weight and the year smaller and muted. It has an opening that starts with a
+tag showing the year, a component in the text's first line, and wraps at the column's width, a centered pull quote ending in a superscript dagger, and the source in full,
 starting with the same dagger. While an essay is open, a toolbar at the top sets its body's
 size, alignment, bold and italic, line height and font, as a text editor's does. The toolbar's
 icons are Material Icons, a font whose ligatures turn an icon's name into the icon. A chosen
@@ -48,9 +49,15 @@ throttle the network in the browser's developer tools.
 Noto Serif Devanagari is from Google Fonts, under the SIL Open Font License. The license text is
 in [`fonts/OFL-NotoSerifDevanagari.txt`](./fonts/OFL-NotoSerifDevanagari.txt).
 
-Not shown yet: a weight a font doesn't have, a character no font has (which is drawn as a box),
-and components within a line of text. Measuring a text whose font is still loading, and a text
-too large for an atlas page, are covered by tests only.
+The tag and the button are components a text holds in its spans, each in a gap of its size that
+wraps as a word does. The text makes each its child and places it in its gap, so the tag moves
+as the toolbar changes the body.
+
+Not shown yet: a weight a font doesn't have, and a character no font has (which is drawn as a
+box). A text too large for an atlas page, a component's gap on the baseline, raised or lowered,
+and one cut off with no ellipsis are covered by tests only. Measuring a text whose font is still
+loading is covered by tests in Rust, and shown in TypeScript, where the button's Hindi label is
+measured once its font arrives.
 
 Techniques worth copying are described at the top of each version's source:
 [`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).

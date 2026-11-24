@@ -447,6 +447,59 @@ A space kept in a line of text for a component, which sits there as a child of t
 component, flowing with the text as it wraps, in Rust and TypeScript; and a component in an
 ellipsis.
 
+- **Decided (2026-11-23): a span can hold a component in place of text,**
+  `Span::component(handle.id(), size)` in Rust and `{ component: handle.id(), width, height }`
+  in TypeScript, named by its id as `children` are. parley keeps the gap, an inline box, in the
+  line, wraps it as a word and aligns it.
+- **Decided (2026-11-23): the gap's size is given in the span,** not taken from the component,
+  so a component that animates or grows on hover doesn't lay its text out and bake it again
+  each frame. The component's anchor places it in its gap: its center at the gap's center by
+  default, its top-left corner at the gap's with an anchor of (0, 0). A component larger than
+  its gap overlaps the text around it.
+- **Decided (2026-11-23): the text makes the component its child, and owns its position.**
+  Proteus adds it as a child of the text's component, as `add_child` does, and sets its
+  position whenever it lays the text out, over any the app gave it. A component named in its
+  own text, or in an ancestor's, is skipped with a warning.
+- **Decided (2026-11-23): components are placed during the tick, in the same frame,** with the
+  fonts in the app, again only when the text, the fonts or the display scale change. The
+  positions are rounded to whole pixels as the bake rounds the image, so a component sits
+  exactly in its gap.
+- **Decided (2026-11-23): a component the text doesn't show isn't drawn:** one whose gap is
+  cut off by the maximum number of lines, and every one in a text that waits for a font with
+  `Hide`. A marker of Proteus's own hides it, so the app's own visibility for it is kept.
+- **Decided (2026-11-23): a span's vertical alignment applies to its gap,** as parley does it:
+  `Baseline` puts the gap's bottom on the baseline, `Middle` centers it on the lowercase
+  letters, and `Super`, `Sub` and `Raise` work as for text. A gap taller than its line makes
+  the line taller.
+- **Decided (2026-11-23): measuring counts the gaps,** and a gap at the end of a line widens
+  the image as ink does, so the measured size stays the baked size.
+- **Decided (2026-11-23): an ellipsis can hold a component,** drawn only while the ellipsis is
+  shown.
+- **Decided (2026-11-23): not done:** a component's position isn't animated when its text
+  changes, and a component no longer in its text stays a child where it was last placed.
+- **Decided (2026-11-23): the essays example shows each case once.** The open essay's body
+  starts with a tag showing the essay's year, centered with `Middle`, which moves with the
+  text as the toolbar changes it. The Hindi card's ellipsis is a pill-shaped button, "आगे
+  पढ़ें", sized with `measure_text`, which turns lighter on hover and opens the essay. Each
+  other vertical alignment on a gap, a gap cut off with no ellipsis, a gap in a text waiting
+  for a font, and a component named in its own text are covered by tests only.
+- **Decided (2026-11-23), while building it: placement also runs in `refresh_cascades`,** so a
+  text the app sets in `update`, after the tick, has its components placed before the frame is
+  drawn. `DeclaredGeometry` moved from `proteus-sdk` to `proteus-ui`, so placement can set where
+  a component rests, and interaction styles return it there.
+- **Decided (2026-11-23), while building it: in TypeScript, the Hindi card's button is made once
+  the fallback font arrives,** since its label can't be measured before: `measureText` gives
+  `undefined` while the font loads, which the example shows.
+- [x] `Span::component` in Rust and the component span in TypeScript, laid out by parley.
+- [x] Inline components placed during the tick, hidden when their gap isn't shown.
+- [x] Tests: each gap's size, wrapping and widening the image, a tall gap; measuring equal to
+  baking with gaps at scales 1 and 2; each component in its gap by both anchors, after a wrap,
+  a realignment and a new display scale; hidden when cut off or waiting, with the app's own
+  visibility kept; an ellipsis component; each vertical alignment; the child rules; the
+  TypeScript span and its bad values.
+- [x] The essays example's tag and pill, in Rust and TypeScript.
+- [x] The content guide's components in text, ARCHITECTURE, and the release notes.
+
 ### Step 10 — Images as raw pixels
 
 An image given as RGBA pixels and their size, rather than as a PNG or JPEG file, so an app that

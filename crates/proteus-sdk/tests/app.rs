@@ -4297,3 +4297,217 @@ fn a_text_measures_by_its_content_and_wrap_width() {
     assert!(size.x >= 120.0 && size.x <= 122.0, "{size:?}");
     assert!(size.y > 2.0 * short.y, "{size:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Components in text
+// ---------------------------------------------------------------------------
+
+// An app with Lora as its only font, so its default, and a 20 × 20 icon.
+fn app_with_icon() -> (Proteus, proteus_sdk::Handle) {
+    let mut app = Proteus::new();
+    app.load_font(LORA).unwrap();
+    let icon = app.component(ComponentSpec::new(QuadState {
+        size: Vec2::new(20.0, 20.0),
+        ..Default::default()
+    }));
+    (app, icon)
+}
+
+// A component, placed by its top-left corner, showing `text`.
+fn label_holding(app: &mut Proteus, text: Text) -> proteus_sdk::Handle {
+    app.component(
+        ComponentSpec::new(QuadState {
+            anchor: Vec2::ZERO,
+            ..Default::default()
+        })
+        .text(text),
+    )
+}
+
+// "Press", `icon`, then "now".
+fn press_icon_now(icon: proteus_sdk::Handle) -> Text {
+    Text::rich(
+        [
+            Span::new("Press "),
+            Span::component(icon.id(), Vec2::new(20.0, 20.0)),
+            Span::new(" now"),
+        ],
+        16.0,
+    )
+}
+
+fn position(app: &Proteus, handle: proteus_sdk::Handle) -> Vec2 {
+    app.get(handle).unwrap().geometry.position.truncate()
+}
+
+// The text makes the component its child, and centers it in its gap: after
+// "Press ", inside the text's box, with the gap's bottom on the baseline.
+#[test]
+fn a_component_in_a_text_becomes_its_child_and_sits_in_its_gap() {
+    let (mut app, icon) = app_with_icon();
+    let text = press_icon_now(icon);
+    let size = app.measure_text(&text).unwrap();
+    let press = app.measure_text(&Text::new("Press", 16.0)).unwrap();
+    let label = label_holding(&mut app, text);
+    app.refresh_cascades();
+
+    assert_eq!(app.get(label).unwrap().children, [icon]);
+    let at = position(&app, icon);
+    // The text's top-left corner is the label's position, and y is up.
+    assert!(
+        at.x - 10.0 > press.x && at.x + 10.0 < size.x,
+        "{at:?} in {size:?}"
+    );
+    assert!(
+        at.y + 10.0 <= 0.0 && at.y - 10.0 >= -size.y,
+        "{at:?} in {size:?}"
+    );
+    assert!(app.get(icon).unwrap().visible);
+}
+
+// The component's position follows the text's anchor and its own: with the
+// text centered on its component, and the icon placed by its top-left corner.
+#[test]
+fn a_component_is_placed_by_both_anchors() {
+    let (mut app, icon) = app_with_icon();
+    let text = press_icon_now(icon);
+    let size = app.measure_text(&text).unwrap();
+    let label = label_holding(&mut app, text);
+    app.refresh_cascades();
+    let by_corner = position(&app, icon);
+
+    let mut centered = app.get(label).unwrap().geometry;
+    centered.anchor = Vec2::splat(0.5);
+    label.set_declared_geometry(&mut app, centered).unwrap();
+    app.refresh_cascades();
+    let shift = position(&app, icon) - by_corner;
+    assert!(
+        (shift - Vec2::new(-size.x / 2.0, size.y / 2.0)).length() < 0.01,
+        "{shift:?}"
+    );
+
+    let mut cornered = app.get(icon).unwrap().geometry;
+    cornered.anchor = Vec2::ZERO;
+    icon.set_declared_geometry(&mut app, cornered).unwrap();
+    app.refresh_cascades();
+    let shift = position(&app, icon) - by_corner - Vec2::new(-size.x / 2.0, size.y / 2.0);
+    assert!(
+        (shift - Vec2::new(-10.0, 10.0)).length() < 0.01,
+        "{shift:?}"
+    );
+}
+
+// A text the app sets after the tick has its component placed by
+// `refresh_cascades`, before the frame is drawn, and moves it when it wraps.
+#[test]
+fn a_component_moves_with_its_text_in_the_same_frame() {
+    let (mut app, icon) = app_with_icon();
+    let label = label_holding(&mut app, press_icon_now(icon));
+    app.tick(0.0);
+    let one_line = position(&app, icon);
+    label
+        .set_text(&mut app, press_icon_now(icon).with_wrap_width(60.0))
+        .unwrap();
+    app.refresh_cascades();
+    let wrapped = position(&app, icon);
+    assert!(
+        wrapped.y < one_line.y - 10.0,
+        "{one_line:?} then {wrapped:?}"
+    );
+}
+
+// A component whose gap is cut off isn't drawn, and comes back when the text
+// shows it again. The app's own visibility for it is kept.
+#[test]
+fn a_component_cut_off_is_hidden_and_shown_again() {
+    let (mut app, icon) = app_with_icon();
+    let text = |lines| {
+        Text::rich(
+            [
+                Span::new("First line\n"),
+                Span::component(icon.id(), Vec2::new(20.0, 20.0)),
+            ],
+            16.0,
+        )
+        .with_max_lines(lines)
+    };
+    let label = label_holding(&mut app, text(1));
+    app.refresh_cascades();
+    assert!(!app.get(icon).unwrap().visible, "cut off");
+    assert!(
+        app.world()
+            .get::<proteus_ui::Visibility>(icon.id())
+            .is_none_or(|v| v.visible),
+        "the app's own visibility is kept"
+    );
+    label.set_text(&mut app, text(2)).unwrap();
+    app.refresh_cascades();
+    assert!(app.get(icon).unwrap().visible, "shown again");
+}
+
+// A component in an ellipsis is drawn only while the ellipsis is shown.
+#[test]
+fn a_component_in_an_ellipsis_shows_with_it() {
+    let (mut app, icon) = app_with_icon();
+    let text = |content: &str| {
+        Text::new(content, 16.0)
+            .with_max_lines(1)
+            .with_ellipsis_spans([
+                Span::new(" more "),
+                Span::component(icon.id(), Vec2::new(20.0, 20.0)),
+            ])
+    };
+    let label = label_holding(&mut app, text("Short"));
+    app.refresh_cascades();
+    assert!(!app.get(icon).unwrap().visible, "the text fits");
+    label.set_text(&mut app, text("Long\nenough")).unwrap();
+    app.refresh_cascades();
+    assert!(app.get(icon).unwrap().visible, "the ellipsis is shown");
+}
+
+// While its text waits for a font, a component isn't drawn either.
+#[test]
+fn a_component_waits_with_its_text() {
+    let (mut app, icon) = app_with_icon();
+    app.expect_font("Crimson Pro", WhileLoading::Hide);
+    label_holding(&mut app, press_icon_now(icon).with_family("Crimson Pro"));
+    app.refresh_cascades();
+    assert!(!app.get(icon).unwrap().visible, "waiting");
+    app.load_font(CRIMSON).unwrap();
+    app.refresh_cascades();
+    assert!(app.get(icon).unwrap().visible, "loaded");
+}
+
+// A text can't hold its own component, which would be its own child. It's
+// left where it is, and the text keeps an empty gap.
+#[test]
+fn a_text_cant_hold_its_own_component() {
+    let (mut app, _) = app_with_icon();
+    let label = app.component(ComponentSpec::new(QuadState::default()));
+    label
+        .set_text(
+            &mut app,
+            Text::rich([Span::component(label.id(), Vec2::splat(10.0))], 16.0),
+        )
+        .unwrap();
+    app.refresh_cascades();
+    assert!(app.get(label).unwrap().children.is_empty());
+    assert!(app.get(label).unwrap().visible);
+}
+
+// A component no longer in its text stays its child, where it was, and is
+// shown as the app left it.
+#[test]
+fn a_component_no_longer_in_its_text_stays_where_it_was() {
+    let (mut app, icon) = app_with_icon();
+    let label = label_holding(&mut app, press_icon_now(icon).with_max_lines(1));
+    app.refresh_cascades();
+    let at = position(&app, icon);
+    label
+        .set_text(&mut app, Text::new("No icon", 16.0))
+        .unwrap();
+    app.refresh_cascades();
+    assert_eq!(app.get(label).unwrap().children, [icon]);
+    assert_eq!(position(&app, icon), at);
+    assert!(app.get(icon).unwrap().visible);
+}

@@ -107,7 +107,7 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **`ResourceConfig` written out in full** no longer compiles in Rust: `glyph_cache_bytes`, the
   glyph cache's budget, is new. Fill in the rest with `..Default::default()`.
 - **`RasterizedGlyphs` written out in full** no longer compiles in Rust: `missing`, the
-  characters no font had, is new.
+  characters no font had, and `components`, where each component a text holds goes, are new.
 - **`TextConfig::default_size_px` is removed:** nothing read it, since every text sets its own
   size.
 - **The built-in font is variable Inter,** in place of a static Inter Bold made from it, at the

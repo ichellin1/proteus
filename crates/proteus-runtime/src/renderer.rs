@@ -775,7 +775,34 @@ mod tests {
             let Some(mut scene) = Scene::with_scale(ProteusConfig::default(), scale) else {
                 return;
             };
-            for (name, text) in &texts {
+            // A component in a line, and one in an ellipsis.
+            let icon = scene.square();
+            let more = scene.square();
+            let with_components = [
+                (
+                    "a component in a line",
+                    Text::rich(
+                        [
+                            Span::new("Press "),
+                            Span::component(icon.id(), Vec2::new(30.0, 22.0))
+                                .with_vertical_align(VerticalAlign::Middle),
+                            Span::new(" now"),
+                        ],
+                        16.0,
+                    ),
+                ),
+                (
+                    "a component in an ellipsis",
+                    Text::new(paragraph, 16.0)
+                        .with_wrap_width(150.0)
+                        .with_max_lines(1)
+                        .with_ellipsis_spans([
+                            Span::new(" more "),
+                            Span::component(more.id(), Vec2::new(12.0, 12.0)),
+                        ]),
+                ),
+            ];
+            for (name, text) in texts.iter().chain(&with_components) {
                 let measured = scene.proteus.measure_text(text);
                 let label = scene
                     .proteus
@@ -786,6 +813,47 @@ mod tests {
                 assert_eq!(measured, baked, "{name}, at a scale of {scale}");
             }
         }
+    }
+
+    // A text's component is placed again at a new display scale, where it
+    // would be in a scene that started at that scale.
+    #[test]
+    fn a_component_in_a_text_is_placed_again_at_a_new_display_scale() {
+        use proteus_ui::Span;
+        let scene_at = |scale: f32| {
+            let mut scene = Scene::with_scale(ProteusConfig::default(), scale)?;
+            scene.proteus.load_font(LORA).unwrap();
+            let icon = scene.square();
+            // A text whose gap rounds to a different place at each scale.
+            let text = Text::rich(
+                [
+                    Span::new("Fit "),
+                    Span::component(icon.id(), Vec2::new(20.0, 20.0)),
+                    Span::new(" to it"),
+                ],
+                15.3,
+            )
+            .with_family("Lora");
+            scene
+                .proteus
+                .component(ComponentSpec::new(QuadState::default()).text(text));
+            scene.frame();
+            Some((scene, icon))
+        };
+        let Some((mut scene, icon)) = scene_at(1.0) else {
+            return;
+        };
+        let at = |scene: &Scene| scene.proteus.get(icon).unwrap().geometry.position;
+        let at_1 = at(&scene);
+        scene.renderer.resize(
+            &mut scene.proteus,
+            Viewport::new(Vec2::new(64.0, 64.0), 2.0),
+        );
+        scene.frame();
+        let (at_2, icon_2) = scene_at(2.0).unwrap();
+        let started_at_2 = at_2.proteus.get(icon_2).unwrap().geometry.position;
+        assert_ne!(at_1, started_at_2, "sanity: the scales round differently");
+        assert_eq!(at(&scene), started_at_2);
     }
 
     // A text measured at one display scale is measured again at a new one,

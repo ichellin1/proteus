@@ -41,7 +41,7 @@
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 use proteus_render::{FontError, QuadPipeline, TextLayout, Typesetter};
-pub use proteus_render::{Span, TextAlign, TextOverflow, VerticalAlign};
+pub use proteus_render::{InlineComponent, Span, TextAlign, TextOverflow, VerticalAlign};
 
 use crate::bake::{bake_scale_to_fit, BakeScale};
 
@@ -284,6 +284,24 @@ impl Text {
     /// `family`.
     pub fn uses_family(&self, family: &str) -> bool {
         self.layout().families().contains(&family)
+    }
+
+    /// Returns the components the text's spans and its ellipsis's spans hold,
+    /// each once, in order. See [`Span::component`].
+    pub fn components(&self) -> Vec<Entity> {
+        let ellipsis = match &self.overflow {
+            TextOverflow::Ellipsis(spans) => &spans[..],
+            TextOverflow::Clip => &[],
+        };
+        let mut components = Vec::new();
+        for span in self.spans.iter().chain(ellipsis) {
+            if let Some(component) = span.component {
+                if !components.contains(&component.entity) {
+                    components.push(component.entity);
+                }
+            }
+        }
+        components
     }
 
     /// Sets the text's color.
@@ -562,6 +580,32 @@ pub fn measure_text(world: &mut World, text: &Text) -> Option<Vec2> {
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     let max = page_side(world);
     let mut fonts = world.get_resource_or_insert_with(Fonts::default);
+    match lay_out_text(&mut fonts, text, bake_scale, max)? {
+        Some(laid_out) => Some(laid_out.size),
+        None => Some(Vec2::ZERO),
+    }
+}
+
+/// A text laid out as it's baked, in logical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LaidOutText {
+    /// The size it's baked at, clipped to an atlas page as the bake clips it.
+    pub size: Vec2,
+    /// Where each component the text shows goes, its gap's position from the
+    /// text's top-left corner, with y down, and its size.
+    pub components: Vec<(Entity, Vec2, Vec2)>,
+}
+
+/// Lays `text` out as it's baked at `bake_scale`, on atlas pages `max` pixels
+/// on a side, with `fonts`: the work of [`measure_text`]. Returns `None` while
+/// the text waits for a font, or with no font at all, and `Some(None)` for a
+/// text that draws nothing.
+pub fn lay_out_text(
+    fonts: &mut Fonts,
+    text: &Text,
+    bake_scale: f32,
+    max: u32,
+) -> Option<Option<LaidOutText>> {
     let layout = text.layout();
     if fonts.text_waits(&layout) {
         return None;
@@ -574,12 +618,19 @@ pub fn measure_text(world: &mut World, text: &Text) -> Option<Vec2> {
         |size| (size.width, size.height),
     );
     let Some(size) = size else {
-        return Some(Vec2::ZERO);
+        return Some(None);
     };
     if !size.missing.is_empty() && fonts.waits_for_fallback() {
         return None;
     }
-    Some(Vec2::new(size.width.min(max) as f32, size.height.min(max) as f32) / scale)
+    Some(Some(LaidOutText {
+        size: Vec2::new(size.width.min(max) as f32, size.height.min(max) as f32) / scale,
+        components: size
+            .components
+            .iter()
+            .map(|c| (c.entity, c.position / scale, c.size / scale))
+            .collect(),
+    }))
 }
 
 /// Returns the side of a main-atlas page in pixels, or `u32::MAX` with no

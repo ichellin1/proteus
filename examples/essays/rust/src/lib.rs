@@ -5,13 +5,16 @@
 //! at most two lines and ends in "…". Its opening is spaced at a line height of
 //! 1.45, stops after five lines, and ends in an ellipsis of the card's own. The
 //! second card's ellipsis is bold, in the accent color, with an arrow after it.
-//! Its source is clipped after two lines, and the titles in it are italic.
+//! The fourth card's is "…" then a small button, "आगे पढ़ें" ("read more"),
+//! which opens the essay. Its source is clipped after two lines, and the titles
+//! in it are italic.
 //!
 //! A card opens into its essay (1→1). The essay's byline is two lines, split
 //! with a `\n`, with the author in a heavier weight and the year smaller and
-//! muted. Its opening wraps at the column's width, and its pull quote is
-//! centered. While an essay is open, a toolbar at the top sets its body's size,
-//! alignment, bold and italic, line height and font, as a text editor's does.
+//! muted. Its opening starts with a tag showing the year, wraps at the column's
+//! width, and its pull quote is centered. While an essay is open, a toolbar at
+//! the top sets its body's size, alignment, bold and italic, line height and
+//! font, as a text editor's does.
 //!
 //! The essays are Mary Wollstonecraft's "A Vindication of the Rights of
 //! Woman" (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis
@@ -78,11 +81,19 @@
 //!     to change.
 //!   - A text can be measured before it's drawn, with `measure_text`. The
 //!     essay's back button is as wide as its label, plus room each side.
+//!   - A span can hold a component, with `Span::component`, in a gap its size
+//!     that wraps as a word does. The text makes the component its child and
+//!     places it in the gap, so the body's tag moves as the toolbar changes the
+//!     text. `VerticalAlign::Middle` centers the tag and the fourth card's button
+//!     on the text's lowercase letters. The button is in an ellipsis, so it's
+//!     shown only while the opening is cut off, and it takes the click, so it
+//!     opens the essay as the card does.
 //!
-//! Not shown here: a weight a font doesn't have, a character no font has (which
-//! is drawn as a box), and components within a line of text. Measuring a text
-//! whose font is still loading, which gives `None`, and a text too large for an
-//! atlas page are covered by tests only.
+//! Not shown here: a weight a font doesn't have, and a character no font has
+//! (which is drawn as a box). Measuring a text whose font is still loading,
+//! which gives `None`, a text too large for an atlas page, a component's gap on
+//! the baseline, raised or lowered, and one cut off with no ellipsis are covered
+//! by tests only.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -100,6 +111,7 @@ const PAPER: Vec4 = rgb(0xf4f1ea);
 const INK: Vec4 = rgb(0x24212b);
 const MUTED: Vec4 = rgb(0x6b6676);
 const ACCENT: Vec4 = rgb(0x7a5fb0);
+const ACCENT_HOVER: Vec4 = rgb(0x8d74c2);
 /// The color of a button, light enough to stand out from the background.
 const BUTTON: Vec4 = rgb(0x4d4a58);
 const BUTTON_HOVER: Vec4 = rgb(0x5f5c6a);
@@ -133,6 +145,9 @@ struct Essay {
     /// An icon from Material Icons after the ellipsis, which puts both in the
     /// accent color.
     more_icon: Option<&'static str>,
+    /// Whether the ellipsis is "…" then a small button labelled `more`, which
+    /// opens the essay. The button is a component in the opening's last line.
+    more_button: bool,
     /// A line from later in the essay.
     quote: &'static str,
     /// Where the text is from, in parts that alternate between plain text and
@@ -173,6 +188,7 @@ const ESSAYS: [Essay; 4] = [
             civilization, which has hitherto taken place in the world, has been very partial.",
         more: "\u{2026}",
         more_icon: None,
+        more_button: false,
         quote: "\u{201c}I do not wish them to have power over men; but over themselves.\u{201d}",
         source: &[
             "From ",
@@ -192,6 +208,7 @@ const ESSAYS: [Essay; 4] = [
             every one of you will take care of that.",
         more: " read more ",
         more_icon: Some("arrow_forward"),
+        more_button: false,
         quote: "\u{201c}In Wildness is the preservation of the World.\u{201d}",
         source: &[
             "From ",
@@ -211,6 +228,7 @@ const ESSAYS: [Essay; 4] = [
             this should not be.",
         more: " \u{2014} continue reading the whole essay inside",
         more_icon: None,
+        more_button: false,
         quote: "\u{201c}Extreme busyness, whether at school or college, kirk or market, is a \
             symptom of deficient vitality.\u{201d}",
         source: &[
@@ -228,8 +246,9 @@ const ESSAYS: [Essay; 4] = [
         // This essay is in Devanagari, which none of the essays' fonts has, so
         // the fallback font, Noto Serif Devanagari, draws every character.
         opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
-        more: " आगे पढ़ें",
+        more: "आगे पढ़ें",
         more_icon: None,
+        more_button: true,
         quote: "\u{201c}हमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u{201d}",
         source: &[
             "From ",
@@ -393,11 +412,21 @@ fn button(position: Vec3, size: Vec2, label: &str) -> ComponentSpec {
 /// Returns how the opening on `essay`'s card ends: in its ellipsis, in the
 /// opening's own style, or, with an icon, in bold in the accent color with the
 /// icon after it.
-fn card_ellipsis(essay: &Essay) -> TextOverflow {
+fn card_ellipsis(app: &mut Proteus, essay: &Essay) -> (TextOverflow, Option<Handle>) {
+    if essay.more_button {
+        // The button is a component in the ellipsis, in a gap its size,
+        // centered on the text's lowercase letters.
+        let (button, size) = more_button(app, essay.more);
+        let ellipsis = vec![
+            Span::new("\u{2026} "),
+            Span::component(button.id(), size).with_vertical_align(VerticalAlign::Middle),
+        ];
+        return (TextOverflow::Ellipsis(ellipsis), Some(button));
+    }
     let Some(icon) = essay.more_icon else {
-        return TextOverflow::Ellipsis(vec![Span::new(essay.more)]);
+        return (TextOverflow::Ellipsis(vec![Span::new(essay.more)]), None);
     };
-    TextOverflow::Ellipsis(vec![
+    let ellipsis = TextOverflow::Ellipsis(vec![
         Span::new(essay.more).bold().with_color(ACCENT),
         // An icon sits high beside text, since the icon font centers it
         // between its ascender and descender. `Middle` centers it on the
@@ -406,13 +435,45 @@ fn card_ellipsis(essay: &Essay) -> TextOverflow {
             .with_family(ICONS)
             .with_color(ACCENT)
             .with_vertical_align(VerticalAlign::Middle),
-    ])
+    ]);
+    (ellipsis, None)
 }
 
-/// Creates a card's texts for `essay`, in reading order.
-fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
+/// Creates the small button that ends a card's opening, labelled `label`, and
+/// returns it with its size. It's as wide as its label, measured before it's
+/// drawn, with room each side.
+fn more_button(app: &mut Proteus, label: &str) -> (Handle, Vec2) {
+    let label = Text::new(label, 12.0).with_color(WHITE);
+    let size = app
+        .measure_text(&label)
+        .expect("the fonts are built in, so none is still loading")
+        + Vec2::new(2.0 * 10.0, 2.0 * 3.0);
+    let button = app.component(
+        ComponentSpec::new(QuadState {
+            size,
+            corner_radius: size.y / 2.0,
+            color: ACCENT,
+            ..Default::default()
+        })
+        .hover(StyleOverride {
+            color: Some(ACCENT_HOVER),
+            ..Default::default()
+        })
+        .pressed(StyleOverride {
+            scale: Some(0.96),
+            ..Default::default()
+        })
+        .text(label),
+    );
+    (button, size)
+}
+
+/// Creates a card's texts for `essay`, in reading order, and the button that
+/// ends its opening, if it has one.
+fn card_texts(app: &mut Proteus, essay: &Essay) -> (Vec<Handle>, Option<Handle>) {
     let left = -CARD_SIZE.x / 2.0 + CARD_PADDING;
     let top = CARD_SIZE.y / 2.0 - CARD_PADDING;
+    let (ellipsis, button) = card_ellipsis(app, essay);
     let specs = [
         // The year is aligned to the end of the column, so it lines up with the
         // card's right edge.
@@ -447,7 +508,7 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_wrap_width(CARD_COLUMN)
                 .with_line_height(1.45)
                 .with_max_lines(5)
-                .with_overflow(card_ellipsis(essay)),
+                .with_overflow(ellipsis),
         ),
         // The source takes at most two lines at the foot of the card, and is
         // clipped with no mark.
@@ -461,7 +522,8 @@ fn card_texts(app: &mut Proteus, essay: &Essay) -> Vec<Handle> {
                 .with_overflow(TextOverflow::Clip),
         ),
     ];
-    specs.into_iter().map(|spec| app.component(spec)).collect()
+    let texts = specs.into_iter().map(|spec| app.component(spec)).collect();
+    (texts, button)
 }
 
 /// The open essay's texts and back button.
@@ -469,6 +531,9 @@ struct EssayView {
     title: Handle,
     byline: Handle,
     body: Handle,
+    /// The tag showing the essay's year at the start of the body, a component
+    /// in the body's first line, so it's the body's child.
+    tag: Handle,
     quote: Handle,
     source: Handle,
     back: Handle,
@@ -534,13 +599,20 @@ struct Ui {
     settings: Cell<Settings>,
     /// Whether Crimson Pro has been chosen. `update` downloads it once it has.
     crimson_wanted: Cell<bool>,
+    /// The size of the open essay's tag, and of its gap in the body.
+    tag_size: Cell<Vec2>,
 }
 
 impl Ui {
-    /// Returns the opening of essay `i`, set as the toolbar's choices say.
+    /// Returns the opening of essay `i`, set as the toolbar's choices say. It
+    /// starts with the tag, which moves with the text as the toolbar changes
+    /// it, centered on the text's lowercase letters.
     fn body(&self, i: usize) -> Text {
         let settings = self.settings.get();
-        let text = Text::new(ESSAYS[i].opening, SIZES[settings.size].1)
+        let tag = Span::component(self.essay.tag.id(), self.tag_size.get())
+            .with_vertical_align(VerticalAlign::Middle);
+        let spans = [tag, Span::new(" "), Span::new(ESSAYS[i].opening)];
+        let text = Text::rich(spans, SIZES[settings.size].1)
             .with_family(FAMILIES[settings.family])
             .with_weight(if settings.bold { 700 } else { 400 })
             .with_color(INK)
@@ -581,6 +653,22 @@ impl Ui {
             14.0,
         );
         let _ = view.byline.set_text(app, byline.with_color(INK).italic());
+        // The tag is as wide as its year, measured before it's drawn, with
+        // room each side.
+        let label = Text::new(essay.year, 12.0)
+            .with_weight(600)
+            .with_color(WHITE);
+        let size = app
+            .measure_text(&label)
+            .expect("the default font is loaded")
+            + Vec2::new(2.0 * 8.0, 2.0 * 3.0);
+        self.tag_size.set(size);
+        let _ = view.tag.set_text(app, label);
+        if let Some(mut geometry) = view.tag.declared_geometry(app) {
+            geometry.size = size;
+            geometry.corner_radius = size.y / 2.0;
+            let _ = view.tag.set_declared_geometry(app, geometry);
+        }
         let _ = view.body.set_text(app, self.body(i));
         let _ = view.quote.set_text(
             app,
@@ -768,8 +856,10 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
     // One card for each essay, with its texts as children.
     let mut cards = Vec::new();
     let mut texts = Vec::new();
+    let mut buttons = Vec::new();
     for (i, essay) in ESSAYS.iter().enumerate() {
-        let card_text = card_texts(app, essay);
+        let (card_text, button) = card_texts(app, essay);
+        buttons.push(button);
         let mut spec = ComponentSpec::new(QuadState {
             position: Vec3::new(
                 (i as f32 - (ESSAYS.len() - 1) as f32 / 2.0) * CARD_SPACING,
@@ -820,11 +910,22 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
         title: hidden_text(app, left, top - 60.0),
         byline: hidden_text(app, left, top - 150.0),
         body: hidden_text(app, left, top - 200.0),
+        // Sized and labelled when an essay opens.
+        tag: app.component(
+            ComponentSpec::new(QuadState {
+                color: ACCENT,
+                ..Default::default()
+            })
+            .non_interactive(),
+        ),
         // The quote sits below the tallest body, which is 20 pixels at a line
         // height of 1.8.
         quote: hidden_text(app, -300.0, -150.0),
         source: hidden_text(app, left, -PANEL_SIZE.y / 2.0 + PANEL_PADDING + 14.0),
     };
+    // The tag is the body's child from the start, so it's hidden with the
+    // body until an essay opens. Once the body holds it, the body places it.
+    let _ = essay.body.add_child(app, essay.tag);
     let mut panel_spec = ComponentSpec::new(QuadState {
         position: Vec3::new(0.0, PANEL_Y, 1.0),
         size: PANEL_SIZE,
@@ -856,12 +957,19 @@ fn build(app: &mut Proteus, width: f32) -> Rc<Ui> {
             family: 0,
         }),
         crimson_wanted: Cell::new(false),
+        tag_size: Cell::new(Vec2::ZERO),
     });
     ui.apply(app, ui.settings.get());
 
     for (i, &card) in ui.cards.iter().enumerate() {
         let on_click = Rc::clone(&ui);
         card.on_click(app, move |app| on_click.open(app, i));
+        // A button in a card's text takes the click, so it opens the essay
+        // too.
+        if let Some(button) = buttons[i] {
+            let on_click = Rc::clone(&ui);
+            button.on_click(app, move |app| on_click.open(app, i));
+        }
         // When the card returns from the essay, its texts come back once the
         // card is whole.
         let on_arrive = Rc::clone(&ui);
@@ -1073,6 +1181,40 @@ mod tests {
         assert_eq!(
             opening(0).overflow,
             TextOverflow::Ellipsis(vec![Span::new("\u{2026}")])
+        );
+    }
+
+    // The open essay's body holds the year tag, which moves with the text as
+    // the toolbar realigns it. The Hindi card's opening ends in a button,
+    // shown only once the essay is cut off, which opens the essay.
+    #[test]
+    fn components_sit_in_the_body_and_an_ellipsis() {
+        let mut app = Proteus::new();
+        let ui = build(&mut app, 1100.0);
+        settle(&mut app);
+        let x = |app: &Proteus| app.get(ui.essay.tag).unwrap().geometry.position.x;
+
+        ui.open(&mut app, 0);
+        settle(&mut app);
+        assert_eq!(app.get(ui.essay.body).unwrap().children, [ui.essay.tag]);
+        assert!(visible(&app, ui.essay.tag), "shown with the body");
+        let at_start = x(&app);
+        ui.change(&mut app, |s| s.align = 2);
+        app.refresh_cascades();
+        assert!(x(&app) > at_start, "moved with the first line's end");
+
+        let opening = ui.card_texts[3][2];
+        let button = app.get(opening).unwrap().children[0];
+        ui.close(&mut app);
+        settle(&mut app);
+        assert!(
+            visible(&app, button),
+            "the opening is cut off, so it's shown"
+        );
+        assert_eq!(
+            app.get(button).unwrap().geometry.size,
+            app.measure_text(&Text::new("आगे पढ़ें", 12.0)).unwrap() + Vec2::new(20.0, 6.0),
+            "as wide as its label, with room each side"
         );
     }
 

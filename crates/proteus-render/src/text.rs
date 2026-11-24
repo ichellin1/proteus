@@ -103,15 +103,16 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
-use glam::Vec4;
+use bevy_ecs::entity::Entity;
+use glam::{Vec2, Vec4};
 
 use crate::glyph_cache::{CachedGlyph, GlyphCache, GlyphKey};
 
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache, SourceCacheOptions};
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontData, FontFamily, FontFamilyName, FontStyle,
-    FontWeight, Layout, LayoutContext, LineHeight, OverflowWrap, PositionedLayoutItem,
-    StyleProperty,
+    FontWeight, InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight, OverflowWrap,
+    PositionedInlineBox, PositionedLayoutItem, StyleProperty,
 };
 use swash::scale::outline::Outline;
 use swash::scale::{Render, ScaleContext, Scaler, Source};
@@ -214,7 +215,24 @@ pub struct Span {
     /// Where the span sits up or down in its line. The default is on the
     /// baseline.
     pub vertical_align: VerticalAlign,
+    /// The component the span holds in place of text, if any. See
+    /// [`Span::component`].
+    pub component: Option<InlineComponent>,
 }
+
+/// A component a [`Span`] holds in place of text, and the size of the gap the
+/// text keeps for it in its line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InlineComponent {
+    /// The component's entity.
+    pub entity: Entity,
+    /// The gap's width and height, in logical pixels.
+    pub size: Vec2,
+}
+
+/// The character that stands for a component in a text's content. parley
+/// keeps a gap for it.
+const OBJECT_REPLACEMENT: &str = "\u{FFFC}";
 
 /// Where a span sits up or down in its line, as CSS's `vertical-align` says. A
 /// span moved up or down makes its line taller if it needs the room, so it
@@ -286,6 +304,23 @@ impl Span {
     pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
         self.vertical_align = align;
         self
+    }
+
+    /// Creates a span that holds the component `entity` in place of text. The
+    /// text keeps a gap `size` logical pixels in its line, which wraps as a
+    /// word does, and the component is placed in it. The span's vertical
+    /// alignment places the gap: on the baseline, its bottom sits on it.
+    pub fn component(entity: Entity, size: Vec2) -> Self {
+        Self {
+            component: Some(InlineComponent { entity, size }),
+            ..Self::default()
+        }
+    }
+
+    /// Returns whether the span draws nothing: it has no text and holds no
+    /// component.
+    fn is_empty(&self) -> bool {
+        self.content.is_empty() && self.component.is_none()
     }
 }
 
@@ -386,7 +421,7 @@ impl<'a> TextLayout<'a> {
 
 /// A text's size in pixels, from [`Typesetter::measure`]. It's the size
 /// [`TextRasterizer::rasterize`] makes the text's image at the same scale.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextSize {
     /// The image's width in pixels.
     pub width: u32,
@@ -394,6 +429,21 @@ pub struct TextSize {
     pub height: u32,
     /// The characters no font had, each once, in the order they first appear.
     pub missing: Vec<char>,
+    /// Where each component the text shows goes in its image. A component
+    /// whose gap is cut off isn't here.
+    pub components: Vec<PlacedComponent>,
+}
+
+/// Where a span's component goes in a text's image.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacedComponent {
+    /// The component's entity.
+    pub entity: Entity,
+    /// The gap's top-left corner, in pixels from the image's top-left corner,
+    /// with y down.
+    pub position: Vec2,
+    /// The gap's size, in pixels.
+    pub size: Vec2,
 }
 
 /// The pixels from one [`TextRasterizer::rasterize`] call, with no atlas
@@ -414,6 +464,9 @@ pub struct RasterizedGlyphs {
     /// The characters no font had, each once, in the order they first appear.
     /// Each is drawn as the font's missing-glyph box.
     pub missing: Vec<char>,
+    /// Where each component the text shows goes in its image, as
+    /// [`TextSize::components`] says.
+    pub components: Vec<PlacedComponent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +594,11 @@ impl<'a> Styled<'a> {
         let mut ranges = Vec::with_capacity(spans.len());
         for span in spans {
             let start = joined.len();
-            joined.push_str(&span.content);
+            if span.component.is_some() {
+                joined.push_str(OBJECT_REPLACEMENT);
+            } else {
+                joined.push_str(&span.content);
+            }
             ranges.push((start..joined.len(), span));
         }
         Self {
@@ -726,6 +783,62 @@ fn place_runs(layout: &Layout<Rgba8>, baseline: f32, line_count: usize) -> Vec<P
         }
     }
     runs
+}
+
+/// Returns parley's vertical alignment for `align`, or `None` on the baseline.
+/// A raise in logical pixels is multiplied by `scale`.
+fn parley_align(align: VerticalAlign, scale: f32) -> Option<parley::VerticalAlign> {
+    match align {
+        VerticalAlign::Baseline => None,
+        VerticalAlign::Middle => Some(parley::VerticalAlign::MIDDLE),
+        VerticalAlign::Super => Some(parley::VerticalAlign::SUPER),
+        VerticalAlign::Sub => Some(parley::VerticalAlign::SUB),
+        VerticalAlign::Raise(px) => Some(parley::VerticalAlign::new(
+            parley::AlignmentBaseline::Baseline,
+            parley::BaselineShift::Length(px * scale),
+        )),
+    }
+}
+
+/// Returns the gaps kept for components in the first `line_count` lines of
+/// `layout`.
+fn gaps(layout: &Layout<Rgba8>, line_count: usize) -> Vec<PositionedInlineBox> {
+    let mut gaps = Vec::new();
+    for line in layout.lines().take(line_count) {
+        for item in line.items() {
+            if let PositionedLayoutItem::InlineBox(gap) = item {
+                gaps.push(gap);
+            }
+        }
+    }
+    gaps
+}
+
+/// Returns each gap's pixels as their left edge from the pen's start and their
+/// width, as [`image_width`] takes a glyph's, so a gap widens the image as ink
+/// does.
+fn gap_extents(gaps: &[PositionedInlineBox]) -> impl Iterator<Item = (i32, u32)> + '_ {
+    gaps.iter().map(|gap| {
+        let left = gap.x.floor();
+        (left as i32, ((gap.x + gap.width).ceil() - left) as u32)
+    })
+}
+
+/// Returns where each gap's component goes in a text's image, which starts
+/// `min_left` pixels from the pen's start, at the top of `lines`' first line.
+fn place_components(
+    gaps: &[PositionedInlineBox],
+    lines: &Lines,
+    min_left: i32,
+) -> Vec<PlacedComponent> {
+    let top = lines.baseline - lines.ascent_px as f32;
+    gaps.iter()
+        .map(|gap| PlacedComponent {
+            entity: Entity::from_bits(gap.id),
+            position: Vec2::new(gap.x - min_left as f32, gap.y - top),
+            size: Vec2::new(gap.width, gap.height),
+        })
+        .collect()
 }
 
 /// Returns where a glyph's pixels start, from its pen position, and how wide
@@ -937,11 +1050,14 @@ impl Typesetter {
                 }
             }
         }
-        let (_, width) = image_width(&glyphs, text.wrap_width, scale)?;
+        let gaps = gaps(&lines.layout, lines.line_count);
+        glyphs.extend(gap_extents(&gaps));
+        let (min_left, width) = image_width(&glyphs, text.wrap_width, scale)?;
         Some(TextSize {
             width,
             height: lines.height,
             missing: missing_chars(&lines.layout, lines.line_count, &lines.content),
+            components: place_components(&gaps, &lines, min_left),
         })
     }
 
@@ -952,7 +1068,7 @@ impl Typesetter {
         let empty = if text.spans.is_empty() {
             text.content.is_empty()
         } else {
-            text.spans.iter().all(|span| span.content.is_empty())
+            text.spans.iter().all(Span::is_empty)
         };
         if empty {
             return None;
@@ -1186,6 +1302,22 @@ impl Typesetter {
         // than running out of the box.
         builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
         for ((range, span), font) in styled.spans.iter().zip(span_fonts) {
+            // A component's gap has no style of its own: parley aligns it by
+            // its own vertical alignment, against the text's style. Its size
+            // is in logical pixels, and parley doesn't scale it.
+            if let Some(component) = span.component {
+                builder.push_inline_box(InlineBox {
+                    id: component.entity.to_bits(),
+                    kind: InlineBoxKind::InFlow,
+                    index: range.start,
+                    width: component.size.x * scale,
+                    height: component.size.y * scale,
+                    baseline: None,
+                    vertical_align: parley_align(span.vertical_align, scale)
+                        .unwrap_or(parley::VerticalAlign::BASELINE),
+                });
+                continue;
+            }
             if let Some((stack, weight)) = font {
                 builder.push(StyleProperty::FontFamily(stack), range.clone());
                 // A span with no weight is drawn at its font's own.
@@ -1206,18 +1338,8 @@ impl Typesetter {
             if let Some(color) = span.color {
                 builder.push(StyleProperty::Brush(rgba8(color)), range.clone());
             }
-            let align = match span.vertical_align {
-                VerticalAlign::Baseline => None,
-                VerticalAlign::Middle => Some(parley::VerticalAlign::MIDDLE),
-                VerticalAlign::Super => Some(parley::VerticalAlign::SUPER),
-                VerticalAlign::Sub => Some(parley::VerticalAlign::SUB),
-                // A length in logical pixels, which parley scales.
-                VerticalAlign::Raise(px) => Some(parley::VerticalAlign::new(
-                    parley::AlignmentBaseline::Baseline,
-                    parley::BaselineShift::Length(px),
-                )),
-            };
-            if let Some(align) = align {
+            // A length in logical pixels, which parley scales in a style.
+            if let Some(align) = parley_align(span.vertical_align, 1.0) {
                 builder.push(StyleProperty::VerticalAlign(align), range.clone());
             }
         }
@@ -1342,7 +1464,12 @@ impl TextRasterizer {
         let lines = typesetter.lines(text, scale)?;
         let runs = place_runs(&lines.layout, lines.baseline, lines.line_count);
         let glyphs = self.rasterize_glyphs(&runs);
-        let boxes: Vec<_> = glyphs.iter().map(|g| (g.left, g.width)).collect();
+        let gaps = gaps(&lines.layout, lines.line_count);
+        let boxes: Vec<_> = glyphs
+            .iter()
+            .map(|g| (g.left, g.width))
+            .chain(gap_extents(&gaps))
+            .collect();
         let (min_left, width) = image_width(&boxes, text.wrap_width, scale)?;
         let height = lines.height as i32;
         let ascent_px = lines.ascent_px;
@@ -1380,6 +1507,7 @@ impl TextRasterizer {
             height: lines.height,
             rgba_pixels: rgba,
             missing,
+            components: place_components(&gaps, &lines, min_left),
         })
     }
 
@@ -1455,6 +1583,7 @@ mod tests {
                 width: g.width,
                 height: g.height,
                 missing: g.missing.clone(),
+                components: g.components.clone(),
             });
             assert_eq!(
                 measured, size,
@@ -2405,5 +2534,179 @@ mod tests {
         assert!(height(&mut fa, VerticalAlign::Raise(10.0)) >= level + 10);
         assert!(height(&mut fa, VerticalAlign::Raise(-10.0)) >= level + 10);
         assert!(height(&mut fa, VerticalAlign::Super) > level);
+    }
+
+    // ---------------------------------------------------------------------
+    // Components in text
+    // ---------------------------------------------------------------------
+
+    // An entity for a span to hold.
+    fn entity() -> Entity {
+        bevy_ecs::world::World::new().spawn_empty().id()
+    }
+
+    // Returns `spans` as a text at 24 pixels.
+    fn rich(spans: &[Span]) -> TextLayout<'_> {
+        let mut text = TextLayout::new("", 24.0);
+        text.spans = spans;
+        text
+    }
+
+    // A component's gap is the size asked for, between the text before it and
+    // the text after it, with its bottom on the baseline by default. Every
+    // rasterize here also checks that measuring places it the same.
+    #[test]
+    fn a_component_keeps_a_gap_its_size_in_the_line() {
+        let mut fa = atlas();
+        let icon = entity();
+        let ab = fa.rasterize(&rich(&[Span::new("AB")]), 1.0).unwrap();
+        let spans = [
+            Span::new("A"),
+            Span::component(icon, Vec2::new(30.0, 10.0)),
+            Span::new("B"),
+        ];
+        let g = fa.rasterize(&rich(&spans), 1.0).unwrap();
+        assert!(
+            g.width >= ab.width + 28 && g.width <= ab.width + 32,
+            "{} with the gap, {} without",
+            g.width,
+            ab.width
+        );
+        let [placed] = g.components[..] else {
+            panic!("one component: {:?}", g.components);
+        };
+        assert_eq!(placed.entity, icon);
+        assert_eq!(placed.size, Vec2::new(30.0, 10.0));
+        assert!(placed.position.x > 5.0 && placed.position.x + 30.0 < g.width as f32);
+        // The gap's bottom is on the baseline, where the "B" sits.
+        let baseline = ab.height as f32 - 6.0;
+        assert!(
+            (placed.position.y + 10.0 - baseline).abs() < 2.0,
+            "{placed:?} in an image {} tall",
+            g.height
+        );
+        assert!(g.missing.is_empty(), "the gap isn't a missing character");
+    }
+
+    // A gap wraps as a word does, onto the next line.
+    #[test]
+    fn a_component_wraps_with_the_text() {
+        let mut fa = atlas();
+        let spans = [
+            Span::new("Words before the gap "),
+            Span::component(entity(), Vec2::new(20.0, 20.0)),
+        ];
+        let mut text = rich(&spans);
+        let one_line = fa.rasterize(&text, 1.0).unwrap().components[0];
+        text.wrap_width = Some(150.0);
+        let wrapped = fa.rasterize(&text, 1.0).unwrap().components[0];
+        assert!(
+            wrapped.position.y > one_line.position.y + 15.0,
+            "{wrapped:?}"
+        );
+        assert!(wrapped.position.x < one_line.position.x, "{wrapped:?}");
+    }
+
+    // A gap at the end of a line widens the image, as ink does, and a text that
+    // is only a gap is the gap's size across.
+    #[test]
+    fn a_component_widens_the_image_at_the_end_of_a_line() {
+        let mut fa = atlas();
+        let hi = fa.rasterize(&rich(&[Span::new("Hi")]), 1.0).unwrap();
+        let spans = [
+            Span::new("Hi"),
+            Span::component(entity(), Vec2::new(50.0, 10.0)),
+        ];
+        let g = fa.rasterize(&rich(&spans), 1.0).unwrap();
+        assert!(g.width >= hi.width + 48, "{} and {}", g.width, hi.width);
+        let alone = [Span::component(entity(), Vec2::new(40.0, 12.0))];
+        let g = fa.rasterize(&rich(&alone), 1.0).unwrap();
+        assert_eq!(g.width, 40);
+    }
+
+    // A gap taller than its line makes the line taller, so it never overlaps
+    // the lines around it.
+    #[test]
+    fn a_tall_component_makes_its_line_taller() {
+        let mut fa = atlas();
+        let line = fa.rasterize(&rich(&[Span::new("Line")]), 1.0).unwrap();
+        let spans = [
+            Span::new("Line"),
+            Span::component(entity(), Vec2::new(20.0, 80.0)),
+        ];
+        let g = fa.rasterize(&rich(&spans), 1.0).unwrap();
+        assert!(g.height >= 80 && g.height > line.height, "{}", g.height);
+        let placed = g.components[0];
+        assert!(placed.position.y >= 0.0, "inside the image: {placed:?}");
+    }
+
+    // Returns how far up `align` moves a 10 × 10 gap from the baseline, in
+    // pixels, at `scale`.
+    fn gap_raised_by(fa: &mut Kit, align: VerticalAlign, scale: f32) -> f32 {
+        let top = |fa: &mut Kit, align| {
+            let spans = [
+                Span::new("x"),
+                Span::component(entity(), Vec2::new(10.0, 10.0)).with_vertical_align(align),
+            ];
+            let g = fa.rasterize(&rich(&spans), scale).unwrap();
+            // From the bottom of the image, so a taller line doesn't move it.
+            g.height as f32 - g.components[0].position.y
+        };
+        top(fa, align) - top(fa, VerticalAlign::Baseline)
+    }
+
+    // A span's vertical alignment moves its gap as it moves text, and a raise
+    // is in logical pixels, so it's twice as many pixels at a scale of 2.
+    #[test]
+    fn a_components_vertical_alignment_moves_its_gap() {
+        let mut fa = atlas();
+        assert!(
+            gap_raised_by(&mut fa, VerticalAlign::Super, 1.0) > 0.0,
+            "super"
+        );
+        assert!(gap_raised_by(&mut fa, VerticalAlign::Sub, 1.0) < 0.0, "sub");
+        assert_ne!(
+            gap_raised_by(&mut fa, VerticalAlign::Middle, 1.0),
+            0.0,
+            "middle"
+        );
+        let raise = |fa: &mut Kit, scale| gap_raised_by(fa, VerticalAlign::Raise(4.0), scale);
+        assert!(
+            (raise(&mut fa, 1.0) - 4.0).abs() < 1.0,
+            "{}",
+            raise(&mut fa, 1.0)
+        );
+        assert!(
+            (raise(&mut fa, 2.0) - 8.0).abs() < 1.0,
+            "{}",
+            raise(&mut fa, 2.0)
+        );
+    }
+
+    // A gap in a line past the maximum isn't placed, and a gap in an ellipsis
+    // is placed only when the ellipsis is shown.
+    #[test]
+    fn a_component_cut_off_or_in_an_unshown_ellipsis_isnt_placed() {
+        let mut fa = atlas();
+        let (inline, in_ellipsis) = (entity(), entity());
+        let spans = [
+            Span::new("One\nTwo "),
+            Span::component(inline, Vec2::new(10.0, 10.0)),
+        ];
+        let ellipsis = [
+            Span::new(" more "),
+            Span::component(in_ellipsis, Vec2::new(12.0, 12.0)),
+        ];
+        let mut text = rich(&spans);
+        text.ellipsis = Some(&ellipsis);
+        let placed = |fa: &mut Kit, text: &TextLayout| -> Vec<Entity> {
+            let g = fa.rasterize(text, 1.0).unwrap();
+            g.components.iter().map(|c| c.entity).collect()
+        };
+        assert_eq!(placed(&mut fa, &text), [inline], "fits: no ellipsis");
+        text.max_lines = Some(1);
+        assert_eq!(placed(&mut fa, &text), [in_ellipsis], "cut: the ellipsis's");
+        text.ellipsis = None;
+        assert_eq!(placed(&mut fa, &text), [], "clipped");
     }
 }

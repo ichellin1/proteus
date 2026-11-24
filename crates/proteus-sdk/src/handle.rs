@@ -19,9 +19,10 @@ use proteus_ui::{
     TransitionInteractionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
-use crate::app::{DeclaredGeometry, KeyResult};
+use crate::app::KeyResult;
 use crate::callback::EventKind;
 use crate::Proteus;
+use proteus_ui::DeclaredGeometry;
 
 // ---------------------------------------------------------------------------
 // HandleError

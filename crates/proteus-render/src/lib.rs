@@ -38,9 +38,9 @@ pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
 #[cfg(feature = "embedded-font")]
 pub use text::EMBEDDED_FONT_BYTES;
 pub use text::{
-    default_ellipsis, font_family_name, FontError, RasterizedGlyphs, Span, TextAlign, TextLayout,
-    TextOverflow, TextRasterizer, TextSize, Typesetter, VerticalAlign, DEFAULT_ELLIPSIS,
-    DEFAULT_GLYPH_CACHE_BYTES,
+    default_ellipsis, font_family_name, FontError, InlineComponent, PlacedComponent,
+    RasterizedGlyphs, Span, TextAlign, TextLayout, TextOverflow, TextRasterizer, TextSize,
+    Typesetter, VerticalAlign, DEFAULT_ELLIPSIS, DEFAULT_GLYPH_CACHE_BYTES,
 };
 pub use texture_registry::{
     AtlasConfig, AtlasRegion, MainAtlasPlacement, MainAtlasUv, TextureId, TextureKind,

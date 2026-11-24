@@ -1,7 +1,6 @@
 //! [`Proteus`], holds an app's components, channels and callbacks.
 
 use bevy_ecs::hierarchy::{ChildOf, Children};
-use bevy_ecs::prelude::Component;
 use glam::Vec2;
 
 use proteus_ui::{
@@ -11,7 +10,7 @@ use proteus_ui::{
     KeyState, NavigatingActions, NavigationRequests, ProteusWorld, QuadState, ReadingDirection,
     TabWraps, ViewportSize, Visibility,
 };
-use proteus_ui::{Action, AppAction, KeyBinding};
+use proteus_ui::{Action, AppAction, DeclaredGeometry, KeyBinding};
 
 use proteus_render::{
     decode_image, resize_to_fit, DecodedImage, GpuContext, QuadPipeline, TextureId,
@@ -21,11 +20,6 @@ use crate::callback::{self, CallbackRegistry};
 use crate::data::{ComponentData, TransitionData};
 use crate::handle::{Handle, TextureHandle, TextureRequest, TransitionChannel};
 use crate::spec::ComponentSpec;
-
-/// A component's declared geometry. It is stored separately from the
-/// component's `QuadState`, which changes during transitions.
-#[derive(Component, Debug, Clone)]
-pub(crate) struct DeclaredGeometry(pub QuadState);
 
 /// An app's components, channels and callbacks.
 ///
