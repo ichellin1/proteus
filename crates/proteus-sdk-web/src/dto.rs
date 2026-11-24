@@ -459,19 +459,102 @@ impl From<&TextDto> for Text {
     }
 }
 
-/// An image as encoded PNG or JPEG bytes. The format is detected from the
-/// data, and decoding happens when the host bakes it.
+/// An image: TypeScript's `ImageSpec`, either a PNG or JPEG file's bytes or
+/// RGBA pixels with their size. Decoding, and checking the pixels' length,
+/// happen when the host bakes it. `ImageFields` is checked to be one or the
+/// other.
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "ImageFields")]
+pub struct ImageDto(ImageFields);
+
+impl TryFrom<ImageFields> for ImageDto {
+    type Error = String;
+
+    fn try_from(fields: ImageFields) -> Result<Self, String> {
+        match (&fields.bytes, &fields.pixels) {
+            (Some(_), Some(_)) => {
+                Err("an ImageSpec has both `bytes` and `pixels`: give it one or the other".into())
+            }
+            (None, None) => Err("an ImageSpec needs `bytes` or `pixels`".into()),
+            (None, Some(_)) if fields.width.is_none() || fields.height.is_none() => {
+                Err("an ImageSpec of `pixels` needs their `width` and `height`".into())
+            }
+            (Some(_), None) if fields.width.is_some() || fields.height.is_some() => {
+                Err("`width` and `height` are for an ImageSpec of `pixels`".into())
+            }
+            _ => Ok(Self(fields)),
+        }
+    }
+}
+
+/// An image's fields, before they're checked.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ImageDto {
-    pub bytes: Vec<u8>,
+pub struct ImageFields {
+    #[serde(default)]
+    pub bytes: Option<Bytes>,
+    #[serde(default)]
+    pub pixels: Option<Bytes>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
     #[serde(default)]
     pub max_side: Option<u32>,
 }
 
+/// Bytes from a `Uint8Array`, copied into the wasm in one go. A `Vec<u8>`
+/// field would read them a byte at a time through JavaScript's iterator,
+/// since `serde-wasm-bindgen` copies a `Uint8Array` at once only for a field
+/// read as bytes. A JSON array, as the tests send, is read too.
+#[derive(Debug)]
+pub struct Bytes(pub Vec<u8>);
+
+impl<'de> Deserialize<'de> for Bytes {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a Uint8Array")
+            }
+
+            fn visit_byte_buf<E>(self, bytes: Vec<u8>) -> Result<Vec<u8>, E> {
+                Ok(bytes)
+            }
+
+            fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Vec<u8>, E> {
+                Ok(bytes.to_vec())
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Vec<u8>, A::Error> {
+                let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(byte) = seq.next_element()? {
+                    bytes.push(byte);
+                }
+                Ok(bytes)
+            }
+        }
+        deserializer.deserialize_byte_buf(Visitor).map(Bytes)
+    }
+}
+
 impl From<&ImageDto> for Image {
-    fn from(d: &ImageDto) -> Self {
-        let mut image = Image::new(d.bytes.clone());
+    fn from(ImageDto(d): &ImageDto) -> Self {
+        let mut image = match (&d.bytes, &d.pixels) {
+            (Some(bytes), _) => Image::new(bytes.0.clone()),
+            (None, Some(pixels)) => Image::from_rgba(
+                d.width.unwrap_or(0),
+                d.height.unwrap_or(0),
+                pixels.0.clone(),
+            ),
+            // Checked when it was read.
+            (None, None) => Image::new(Vec::new()),
+        };
         if let Some(max_side) = d.max_side {
             image = image.with_max_side(max_side);
         }
@@ -1368,6 +1451,34 @@ mod tests {
         assert_eq!(align("null").unwrap(), VerticalAlign::Baseline);
         assert_eq!(align("-3").unwrap(), VerticalAlign::Raise(-3.0));
         assert!(align(r#""top""#).is_err());
+    }
+
+    #[test]
+    fn images_from_a_file_or_from_pixels() {
+        use proteus_ui::ImageSource;
+        let image = |json: &str| serde_json::from_str::<ImageDto>(json).map(|d| Image::from(&d));
+
+        let file = image(r#"{"bytes": [1, 2, 3], "maxSide": 64}"#).unwrap();
+        assert!(matches!(&file.source, ImageSource::File(bytes) if **bytes == [1, 2, 3]));
+        assert_eq!(file.max_side, Some(64));
+
+        let pixels = image(r#"{"pixels": [1, 2, 3, 4], "width": 1, "height": 1}"#).unwrap();
+        assert!(matches!(
+            &pixels.source,
+            ImageSource::Rgba { width: 1, height: 1, pixels } if **pixels == [1, 2, 3, 4]
+        ));
+        // `undefined`, which reads as `null`, is the same as leaving it out.
+        assert!(image(r#"{"bytes": [1], "pixels": null, "width": null}"#).is_ok());
+
+        let error = |json: &str| image(json).unwrap_err().to_string();
+        assert!(error(r#"{"bytes": [1], "pixels": [1, 2, 3, 4]}"#).contains("both"));
+        assert!(error(r#"{"maxSide": 4}"#).contains("needs"));
+        assert!(error(r#"{"pixels": [1, 2, 3, 4], "width": 1}"#).contains("height"));
+        assert!(error(r#"{"bytes": [1], "width": 1, "height": 1}"#).contains("pixels"));
+        assert!(image(r#"{"bytes": 5}"#).is_err());
+        // The pixels' length is checked when the image is baked, as a file is
+        // decoded then.
+        assert!(image(r#"{"pixels": [1, 2], "width": 4, "height": 4}"#).is_ok());
     }
 
     #[test]

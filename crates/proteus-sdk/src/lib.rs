@@ -75,10 +75,10 @@ pub use glam;
 // `proteus-ui` dependency.
 pub use proteus_ui::{
     Action, AppAction, Border, BoundKey, Code, Containment, DropReason, DropShadow, Easing,
-    FocusBlocked, FocusEntry, FocusGroup, Glow, Image, ImageCrop, InlineComponent, InputDevice,
-    InputDevices, InputMode, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyRepeat,
-    KeyState, MergeLayout, Modifiers, NamedKey, Opacity, QuadState, ReadingDirection, Span,
-    SplitStrategy, StyleOverride, Text, TextAlign, TextBox, TextOverflow, TransitionConfig,
+    FocusBlocked, FocusEntry, FocusGroup, Glow, Image, ImageCrop, ImageSource, InlineComponent,
+    InputDevice, InputDevices, InputMode, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap,
+    KeyRepeat, KeyState, MergeLayout, Modifiers, NamedKey, Opacity, QuadState, ReadingDirection,
+    Span, SplitStrategy, StyleOverride, Text, TextAlign, TextBox, TextOverflow, TransitionConfig,
     TransitionDropped, TransitionInteractionConfig, VerticalAlign, Visibility,
 };
 pub use proteus_ui::{FontStatus, WhileLoading};

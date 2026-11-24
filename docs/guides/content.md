@@ -549,7 +549,8 @@ if (size) {
 
 ## Images
 
-An image is a PNG or JPEG file's bytes. It fills the component: an image of a different shape
+An image is a PNG or JPEG file's bytes, or RGBA pixels with their size; see
+[Images from pixels](#images-from-pixels). It fills the component: an image of a different shape
 from the component is stretched to fit, unless it is cropped.
 
 #### Rust
@@ -583,6 +584,68 @@ const photo = app.component({
 - **An image larger than an atlas page**, 2048 pixels by default, is scaled down to fit it, with
   a warning.
 - **A file that can't be decoded** is removed from the component, with a warning.
+
+### Images from pixels
+
+An app that draws its own pixels, such as on a browser canvas or in code, gives them as they
+are, rather than encoding a PNG for Proteus to decode again. The pixels are RGBA, 4 bytes each,
+row by row from the top, with straight alpha, in sRGB: what decoding a file gives, and what a
+canvas's `getImageData` returns.
+
+#### Rust
+
+```rust
+# use proteus_sdk::{ComponentSpec, Image, Proteus, QuadState};
+# let mut app = Proteus::new();
+// A 64 × 64 gradient, from black at the left to purple at the right.
+let (width, height) = (64u32, 64u32);
+let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+for _y in 0..height {
+    for x in 0..width {
+        let t = (x * 255 / (width - 1)) as u8;
+        pixels.extend([t / 2, 0, t, 255]);
+    }
+}
+let swatch = app.component(
+    ComponentSpec::new(QuadState::default()).image(Image::from_rgba(width, height, pixels)),
+);
+```
+
+#### TypeScript
+
+A canvas's `ImageData.data`, a `Uint8ClampedArray`, is passed as it is:
+
+```ts
+const canvas = document.createElement("canvas");
+canvas.width = canvas.height = 64;
+const ctx = canvas.getContext("2d")!;
+const gradient = ctx.createLinearGradient(0, 0, 64, 0);
+gradient.addColorStop(0, "#000000");
+gradient.addColorStop(1, "#7a00ff");
+ctx.fillStyle = gradient;
+ctx.fillRect(0, 0, 64, 64);
+const { data, width, height } = ctx.getImageData(0, 0, 64, 64);
+const swatch = app.component({
+  geometry: app.get(card)!.geometry,
+  image: { pixels: data, width, height },
+});
+```
+
+- **Everything after decoding is the same:** `max_side`, scaling down to fit an atlas page,
+  cropping, and waiting until the component is visible with `resources.lazy_load`.
+- **Pixels of the wrong size,** anything but `width × height × 4` bytes, or a width or height of
+  0, are removed from the component, with a warning, as a file that can't be decoded is.
+- **The pixels are copied once,** out of the canvas and into the app's memory. What they save is
+  the encode and the decode.
+- **They stay on the component once baked,** as a file's bytes do, but they aren't compressed: a
+  256 × 256 image keeps 256 KB. `max_side` shrinks what's baked, not what's kept, so make pixels
+  no larger than they're drawn, and replace or remove images the app no longer shows.
+- **For one image on many components,** add the pixels once with `bake_texture`, `bakeTexture` in
+  TypeScript, which returns a texture handle each component can show with `set_texture`. It needs
+  the host running, and the texture must be given to a component in the frame it's made.
+
+The [gallery example](../../examples/gallery) shows a placeholder made from pixels on each tile
+until its photo arrives: computed in Rust, and drawn on a canvas in TypeScript.
 
 ### Cropping
 

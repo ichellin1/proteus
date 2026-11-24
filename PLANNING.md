@@ -568,13 +568,39 @@ and premultiplying on upload.
 - **Decided (2026-11-18): it isn't zero-copy.** The pixels are copied out of the canvas and into
   the wasm's memory; what it saves is the encode and the decode. Uploading an `ImageBitmap` to
   the GPU directly is a candidate.
-- [ ] `Image::from_rgba`, `Handle::set_image` taking either form, and TypeScript's `ImageSpec`.
-- [ ] Tests: pixels baked the same as the same image decoded from a PNG, `max_side` and an
+- **Decided (2026-11-24), after the user's review: `Image::from_rgba` is still worth adding,
+  beside `bake_texture`,** which already takes pixels but needs a GPU when it's called, skips
+  lazy loading, `image_max_side` and waiting in a `.bake()` component, and must be given to a
+  component in the same frame. `bake_texture` stays the path for one texture shared by many
+  components.
+- **Decided (2026-11-24): `Image`'s `bytes` field becomes `source`,** an `ImageSource` that is a
+  file's bytes or the pixels with their size. Code that reads `image.bytes` or writes an `Image`
+  out in full no longer compiles, with an upgrade note; `Image::new` and `with_max_side` are
+  unchanged.
+- **Decided (2026-11-24): `bakeTexture` takes a `Uint8ClampedArray` too,** so the two pixel
+  paths take the same arrays. The SDK views one as bytes, without copying it, before the wasm
+  copies it in.
+- **Decided (2026-11-24): an image's bytes and pixels cross into the wasm in one copy,** read as
+  bytes, which fixes B-43: a `Vec<u8>` field read a `Uint8Array` a byte at a time through
+  JavaScript's iterator.
+- **Decided (2026-11-24): the pixels stay on the component after baking, as a file's bytes
+  do,** so images behave the same whatever their source. The docs give the cost: a 256 × 256
+  image keeps 256 KB. Dropping them once baked is a candidate.
+- **Decided (2026-11-24): the gallery example's tiles show a placeholder the app makes until
+  their photos arrive,** a soft gradient in the card's colors: computed in Rust, drawn on a
+  canvas in TypeScript and passed as its `ImageData`. The photos keep using textures. `max_side`
+  on pixels, pixels larger than a page and each wrong size are covered by tests only.
+- **Decided (2026-11-24), while building it: the first grid is shown at once,** since tiles were
+  made only once every photo had arrived, so a placeholder would never have shown. Each photo
+  replaces its tile's placeholder as it arrives. A grid the large view splits into still waits
+  for all its photos, so the split shows them; a failed download there keeps the placeholder.
+- [x] `Image::from_rgba`, `Handle::set_image` taking either form, and TypeScript's `ImageSpec`.
+- [x] Tests: pixels baked the same as the same image decoded from a PNG, `max_side` and an
   image larger than an atlas page, each wrong length and a zero size, and the TypeScript
   fields and their bad values.
-- [ ] The gallery example shows a tile from raw pixels the app makes itself: drawn on a canvas
-  in TypeScript, computed in Rust.
-- [ ] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
+- [x] The gallery example's placeholder tiles from raw pixels the app makes itself: drawn on a
+  canvas in TypeScript, computed in Rust.
+- [x] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
   baking, and the release notes.
 
 ### Step 12 — The demo's Text panel

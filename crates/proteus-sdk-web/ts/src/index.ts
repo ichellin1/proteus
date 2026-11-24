@@ -357,7 +357,7 @@ export class Handle {
    * {@link ImageSpec}.
    */
   setImage(image: ImageSpec): void {
-    this.app.wasmApp.setImage(this.wasmHandle, image);
+    this.app.wasmApp.setImage(this.wasmHandle, wasmImage(image));
   }
 
   /**
@@ -944,7 +944,8 @@ export class ProteusApp {
 
   /** Creates a component from `spec` and returns its handle. */
   component(spec: ComponentSpec): Handle {
-    return new Handle(this, this.wasmApp.component(spec));
+    const image = spec.image && wasmImage(spec.image);
+    return new Handle(this, this.wasmApp.component(image ? { ...spec, image } : spec));
   }
 
   /**
@@ -1006,8 +1007,10 @@ export class ProteusApp {
 
   /**
    * Adds RGBA pixels to the atlas and returns a handle to them. `rgba` holds
-   * `width * height * 4` bytes. For PNG or JPEG data, use
-   * {@link ProteusApp.loadTexture}.
+   * `width * height * 4` bytes, such as a canvas's `ImageData.data`. For PNG
+   * or JPEG data, use {@link ProteusApp.loadTexture}. To show pixels on one
+   * component, an {@link ImagePixelsSpec} is simpler: it needs no texture
+   * handle, and it waits for the host.
    *
    * Show the texture on a component in the same frame: from the next frame
    * on, a texture that no component uses may be evicted to make room. If the
@@ -1016,12 +1019,12 @@ export class ProteusApp {
   bakeTexture(
     width: number,
     height: number,
-    rgba: Uint8Array,
+    rgba: Uint8Array | Uint8ClampedArray,
     request?: TextureRequest,
   ): TextureHandle {
     return new TextureHandle(
       this,
-      this.wasmApp.bakeTexture(width, height, rgba, request ?? null),
+      this.wasmApp.bakeTexture(width, height, asBytes(rgba), request ?? null),
     );
   }
 
@@ -1358,4 +1361,17 @@ export class ProteusApp {
       stopped = true;
     };
   }
+}
+
+/**
+ * Returns `bytes` as a `Uint8Array` over the same memory, without copying them, since the wasm
+ * reads a `Uint8Array` in one copy and a canvas gives a `Uint8ClampedArray`.
+ */
+function asBytes(bytes: Uint8Array | Uint8ClampedArray): Uint8Array {
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+/** Returns `image` with its pixels, if it has any, as a `Uint8Array`. See `asBytes`. */
+function wasmImage(image: ImageSpec): ImageSpec {
+  return image.pixels ? { ...image, pixels: asBytes(image.pixels) } : image;
 }

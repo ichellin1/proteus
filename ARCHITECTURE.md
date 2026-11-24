@@ -274,9 +274,10 @@ Proteus bakes three kinds of thing:
   and placed by the anchor, is its line box, or, with `TextBox`, trimmed to the first line's cap
   height or x-height and the last line's baseline, from the fonts that draw it. The image isn't
   trimmed: `BakedText::text_box` says where the box is in it, and the text quad's anchor moves
-  to put the box where the component's anchor says. Images are decoded with the `image` crate.
-  Both go into the main atlas. With `resources.lazy_load`, a component's text or image waits
-  until it is visible.
+  to put the box where the component's anchor says. Images are decoded with the `image` crate,
+  or, given as RGBA pixels with `Image::from_rgba`, used as they are once their length is
+  checked. Both go into the main atlas. With `resources.lazy_load`, a component's text or image
+  waits until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the
   component becomes a plain quad showing the image. It waits until every text and image in it
