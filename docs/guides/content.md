@@ -106,6 +106,62 @@ with a warning suggesting more lines, a wider wrap width or a shorter ellipsis.
 
 The [essays example](../../examples/essays) shows each of these once, in both languages.
 
+### Centering a label
+
+A text's box is its line box by default: from the top of its first line to the bottom of its
+last, with the room the font reserves above and below its letters for accents and descenders.
+That room isn't the same above and below, so a label centered in a button by its line box can
+sit off center. Noto Serif Devanagari, for one, reserves far more below its letters than above:
+
+| Font, at 12 pixels | Room above the baseline | Room below | x-height | Cap height |
+|---|---:|---:|---:|---:|
+| Inter | 11.6 | 2.9 | 6.6 | 8.7 |
+| Noto Serif Devanagari | 11.2 | 7.5 | 7.5 | 8.6 |
+
+A text can set where its box's edges are instead, as CSS's `text-box-edge` does:
+
+- **`TextBox::Line`, the default,** is the line box, with any line spacing.
+- **`TextBox::CapHeight`** runs from the first line's cap height, the top of its capitals, to
+  the last line's baseline. It centers capitals, title case and digits, as most buttons are.
+- **`TextBox::XHeight`** runs from the first line's x-height, the top of its lowercase letters,
+  to the last line's baseline. It centers lowercase text, and Devanagari, whose letters hang
+  from a headline at its x-height.
+
+#### Rust
+
+```rust
+# use proteus_sdk::glam::Vec2;
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text, TextBox};
+# let mut app = Proteus::new();
+let label = Text::new("Save changes", 14.0).with_box(TextBox::CapHeight);
+app.component(
+    ComponentSpec::new(QuadState {
+        size: Vec2::new(140.0, 36.0),
+        ..Default::default()
+    })
+    .text(label),
+);
+```
+
+#### TypeScript
+
+```ts
+app.component({
+  geometry: { ...app.get(card)!.geometry, size: { width: 140, height: 36 } },
+  text: { content: "Save changes", sizePx: 14, box: "capHeight" },
+});
+```
+
+- **Only the box changes, not the image.** Ink outside the box, such as descenders, accents and
+  Devanagari's vowel marks, still draws, outside it, so leave room for it in a button's padding.
+- **The heights are the fonts' that draw the first line,** the tallest of them, so text drawn in
+  a fallback font is boxed by that font's measurements, not its own family's.
+- **Everything that uses a text's size uses its box:** `measure_text`, `baked_text_size`, the
+  anchor that places the text, and the gaps for components in it.
+
+The [essays example](../../examples/essays) trims its back button's and year tag's boxes to the
+cap height, and its Hindi button's to the x-height.
+
 ### Fonts
 
 An app loads a font from its file's bytes, and texts name its family to be drawn in it. There's

@@ -39,7 +39,7 @@ pub use static_texture::{decode_image, resize_to_fit, DecodedImage};
 pub use text::EMBEDDED_FONT_BYTES;
 pub use text::{
     default_ellipsis, font_family_name, FontError, InlineComponent, PlacedComponent,
-    RasterizedGlyphs, Span, TextAlign, TextLayout, TextOverflow, TextRasterizer, TextSize,
+    RasterizedGlyphs, Span, TextAlign, TextBox, TextLayout, TextOverflow, TextRasterizer, TextSize,
     Typesetter, VerticalAlign, DEFAULT_ELLIPSIS, DEFAULT_GLYPH_CACHE_BYTES,
 };
 pub use texture_registry::{

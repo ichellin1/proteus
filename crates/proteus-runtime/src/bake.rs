@@ -171,6 +171,7 @@ fn bake_text(
             uv_scale: [0.0, 0.0],
             page: 0,
             pixel_size: [0.0, 0.0],
+            text_box: None,
         });
         return;
     };
@@ -218,6 +219,12 @@ fn bake_text(
             page: uv.page,
             // The size it's drawn at, in logical pixels.
             pixel_size: [glyphs.width as f32 / scale, glyphs.height as f32 / scale],
+            text_box: proteus_ui::baked_box(
+                glyphs.height,
+                glyphs.box_top,
+                glyphs.box_height,
+                scale,
+            ),
         },
         TextTextureRef(texture_id),
     ));

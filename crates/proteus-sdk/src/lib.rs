@@ -78,7 +78,7 @@ pub use proteus_ui::{
     FocusBlocked, FocusEntry, FocusGroup, Glow, Image, ImageCrop, InlineComponent, InputDevice,
     InputDevices, InputMode, InteractionStateKind, Key, KeyBinding, KeyEvent, KeyMap, KeyRepeat,
     KeyState, MergeLayout, Modifiers, NamedKey, Opacity, QuadState, ReadingDirection, Span,
-    SplitStrategy, StyleOverride, Text, TextAlign, TextOverflow, TransitionConfig,
+    SplitStrategy, StyleOverride, Text, TextAlign, TextBox, TextOverflow, TransitionConfig,
     TransitionDropped, TransitionInteractionConfig, VerticalAlign, Visibility,
 };
 pub use proteus_ui::{FontStatus, WhileLoading};

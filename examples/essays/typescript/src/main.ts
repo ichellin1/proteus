@@ -90,11 +90,18 @@
  *     fourth card's button on the text's lowercase letters. The button is in an
  *     ellipsis, so it's shown only while the opening is cut off, and it takes
  *     the click, so it opens the essay as the card does.
+ *   - A text's box can be trimmed to its letters, so a button centers them
+ *     rather than its line box, which has room for descenders below them. The
+ *     back button and the year tag use `box: "capHeight"`, since their labels
+ *     are capitals and digits. The Hindi button uses `"xHeight"`: Devanagari's
+ *     letters hang from a headline at the font's x-height, and the vowel marks
+ *     above it draw outside the box, into the button's padding.
  *
  * Not shown here: a weight a font doesn't have, and a character no font has
  * (which is drawn as a box). A text too large for an atlas page, a component's
- * gap on the baseline, raised or lowered, and one cut off with no ellipsis are
- * covered by the Rust tests only.
+ * gap on the baseline, raised or lowered, one cut off with no ellipsis, and a
+ * trimmed box around several lines or a line in several fonts are covered by
+ * the Rust tests only.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
@@ -345,9 +352,12 @@ function textAt(x: number, y: number, text: TextSpec, visible = true): Component
   };
 }
 
-/** Returns the text on a button. */
+/**
+ * Returns the text on a button. Its box runs from the cap height to the baseline, so the button
+ * centers its letters rather than its line box, which has room for descenders below them.
+ */
 function buttonLabel(label: string): TextSpec {
-  return { content: label, sizePx: 14, color: WHITE };
+  return { content: label, sizePx: 14, color: WHITE, box: "capHeight" };
 }
 
 /** Creates a small button showing `label`, which turns lighter on hover. */
@@ -414,12 +424,15 @@ function cardEllipsis(essay: Essay): string | SpanSpec[] {
  * its size. It's as wide as its label, measured before it's drawn, with room each side.
  */
 function moreButton(app: ProteusApp, label: string): { button: Handle; width: number; height: number } {
-  const text: TextSpec = { content: label, sizePx: 12, color: WHITE };
+  // Devanagari has no capitals. Its letters hang from a headline at Noto Serif Devanagari's
+  // x-height, so a box from the x-height to the baseline centers them. The vowel marks above the
+  // headline draw outside the box, into the padding.
+  const text: TextSpec = { content: label, sizePx: 12, color: WHITE, box: "xHeight" };
   // `undefined` while a font the label needs is loading.
   const size = app.measureText(text);
   if (!size) throw new Error("measure the button once its font has loaded");
   const width = size.width + 2 * 10;
-  const height = size.height + 2 * 3;
+  const height = size.height + 2 * 8;
   const button = app.component({
     geometry: box(0, 0, 0, width, height, ACCENT, height / 2),
     hover: { color: ACCENT_HOVER },
@@ -621,11 +634,12 @@ function main(app: ProteusApp, canvasWidth: number): void {
       color: INK,
       italic: true,
     });
-    // The tag is as wide as its year, measured before it's drawn, with room each side.
-    const label: TextSpec = { content: essay.year, sizePx: 12, weight: 600, color: WHITE };
+    // The tag is as wide as its year, measured before it's drawn, with room each side. The year
+    // is digits, as tall as capitals, so its box runs from the cap height to the baseline.
+    const label: TextSpec = { content: essay.year, sizePx: 12, weight: 600, color: WHITE, box: "capHeight" };
     const size = app.measureText(label);
     if (!size) throw new Error("the default font is loaded");
-    tagSize = { width: size.width + 2 * 8, height: size.height + 2 * 3 };
+    tagSize = { width: size.width + 2 * 8, height: size.height + 2 * 4 };
     tag.setText(label);
     tag.setDeclaredGeometry({ ...tag.declaredGeometry()!, size: tagSize, cornerRadius: tagSize.height / 2 });
     body.setText(bodyText(i));

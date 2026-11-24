@@ -19,7 +19,7 @@ use proteus_sdk::{
     TransitionDropped,
 };
 use proteus_ui::{
-    Border, DropShadow, Glow, Image, InlineComponent, Span, Text, TextAlign, TextOverflow,
+    Border, DropShadow, Glow, Image, InlineComponent, Span, Text, TextAlign, TextBox, TextOverflow,
     VerticalAlign,
 };
 
@@ -261,6 +261,18 @@ pub struct TextFields {
     pub weight: Option<u16>,
     #[serde(default)]
     pub italic: bool,
+    #[serde(default, rename = "box")]
+    pub text_box: Option<TextBoxDto>,
+}
+
+/// Where a text's box's edges are, given as `"line"`, `"xHeight"` or
+/// `"capHeight"`.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextBoxDto {
+    Line,
+    XHeight,
+    CapHeight,
 }
 
 /// A text's alignment, given as `"start"`, `"center"` or `"end"`.
@@ -417,6 +429,11 @@ impl From<&TextDto> for Text {
         text.family = d.family.clone();
         text.weight = d.weight;
         text.italic = d.italic;
+        text.text_box = match d.text_box {
+            None | Some(TextBoxDto::Line) => TextBox::Line,
+            Some(TextBoxDto::XHeight) => TextBox::XHeight,
+            Some(TextBoxDto::CapHeight) => TextBox::CapHeight,
+        };
         text.line_height = d.line_height;
         text.max_lines = d.max_lines;
         if let Some(align) = d.align {
@@ -1351,6 +1368,20 @@ mod tests {
         assert_eq!(align("null").unwrap(), VerticalAlign::Baseline);
         assert_eq!(align("-3").unwrap(), VerticalAlign::Raise(-3.0));
         assert!(align(r#""top""#).is_err());
+    }
+
+    #[test]
+    fn text_with_a_box() {
+        let text_box = |value: &str| {
+            let json = format!(r#"{{"content": "Save", "sizePx": 14, "box": {value}}}"#);
+            serde_json::from_str::<TextDto>(&json).map(|d| Text::from(&d).text_box)
+        };
+        assert_eq!(text_box(r#""line""#).unwrap(), TextBox::Line);
+        assert_eq!(text_box(r#""xHeight""#).unwrap(), TextBox::XHeight);
+        assert_eq!(text_box(r#""capHeight""#).unwrap(), TextBox::CapHeight);
+        assert_eq!(text_box("null").unwrap(), TextBox::Line);
+        assert!(text_box(r#""cap""#).is_err());
+        assert!(text_box("true").is_err());
     }
 
     #[test]

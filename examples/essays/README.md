@@ -49,13 +49,19 @@ throttle the network in the browser's developer tools.
 Noto Serif Devanagari is from Google Fonts, under the SIL Open Font License. The license text is
 in [`fonts/OFL-NotoSerifDevanagari.txt`](./fonts/OFL-NotoSerifDevanagari.txt).
 
+The back button, the tag and the button center their labels by the letters, not by the line
+box, which has room for descenders: the back button and the tag trim their text's box to the
+cap height and the baseline, and the Hindi button to the x-height, where Devanagari's headline
+is.
+
 The tag and the button are components a text holds in its spans, each in a gap of its size that
 wraps as a word does. The text makes each its child and places it in its gap, so the tag moves
 as the toolbar changes the body.
 
 Not shown yet: a weight a font doesn't have, and a character no font has (which is drawn as a
 box). A text too large for an atlas page, a component's gap on the baseline, raised or lowered,
-and one cut off with no ellipsis are covered by tests only. Measuring a text whose font is still
+one cut off with no ellipsis, and a trimmed box around several lines or a line in several fonts
+are covered by tests only. Measuring a text whose font is still
 loading is covered by tests in Rust, and shown in TypeScript, where the button's Hindi label is
 measured once its font arrives.
 

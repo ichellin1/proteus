@@ -4035,6 +4035,7 @@ mod tests {
                 uv_scale: [1.0, 1.0],
                 page: 0,
                 pixel_size: [180.0, 24.0],
+                text_box: None,
             });
         settle(&mut demo);
         let button = demo.gallery.fetch_button;

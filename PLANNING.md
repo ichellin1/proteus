@@ -319,7 +319,7 @@ them has.
 The comments this release added, rewritten to read well: about 1,100 lines in the crates and
 the examples since v0.3.0, and the essays example's README. Many drop their verbs, chain clauses
 with colons and semicolons, or stack asides, so they're hard to read. The guides are left to
-step 12, which rewrites them under the same rules.
+step 13, which rewrites them under the same rules.
 
 - **Decided (2026-11-19): the rules come first,** so the later steps follow them too. A short
   part of CONTRIBUTING's "Writing comments and docs" says what makes a comment read well, each
@@ -500,7 +500,56 @@ ellipsis.
 - [x] The essays example's tag and pill, in Rust and TypeScript.
 - [x] The content guide's components in text, ARCHITECTURE, and the release notes.
 
-### Step 10 — Images as raw pixels
+### Step 10 — Text box edges
+
+Where a text's box's top and bottom edges are, as CSS's `text-box-edge` says, so a label can be
+centered by its letters rather than by its line box. Added after step 9's review: the Hindi
+button's label sits about 2.5 pixels high, since Noto Serif Devanagari reserves 7.5 pixels below
+the baseline at 12 pixels, against Inter's 2.9.
+
+- **Decided (2026-11-24), after the user's review: three kinds of box,**
+  `Text::with_box(TextBox::CapHeight)` in Rust and `box: "line" | "xHeight" | "capHeight"` in
+  TypeScript. `Line`, the default, is today's box, from the first line's top to the last line's
+  bottom, including line spacing, so nothing changes. `XHeight` runs from the first line's
+  x-height to the last line's baseline, for lowercase text, and `CapHeight` from its cap height,
+  for capitals, title case and digits. `Line` is kept as the name: the default box's edges are
+  the line's, and with a line height they aren't the font's ascent and descent, so a metric name
+  such as `Ascent` would be wrong. The docs point to CSS's `text-box-edge`.
+- **Decided (2026-11-24): the box is placed, and the image isn't trimmed.** The image keeps the
+  line box, and only where it's drawn shifts, so the box sits where the anchor says. Ink outside
+  the box, such as descenders, accents and Devanagari's vowel marks, still draws, outside it.
+- **Decided (2026-11-24): the heights come from the fonts that draw the first line,** the
+  tallest of them, not the text's own family, so fallback text is centered by its own font's
+  measurements, and a line mixing fonts is never cut short.
+- **Decided (2026-11-24): the edges are rounded to whole pixels at the display's scale,** as the
+  image is, so glyphs stay on whole pixels and measuring stays exact.
+- **Decided (2026-11-24): everything that uses a text's size uses its box:** `measure_text`,
+  `baked_text_size`, and step 9's component gaps, placed relative to it. A wrap width still sets
+  its width, and a span's vertical alignment still moves the span within its line.
+- **Decided (2026-11-24): the essays example shows each kind once.** The back button and the
+  year tag use `CapHeight`, the Hindi button `XHeight`, which is checked against the drawn
+  pixels, and every other text `Line`. A multi-line box and a line mixing fonts are covered by
+  tests only.
+- **Decided (2026-11-24), while building it: the Hindi button keeps `XHeight`.** Drawn at a
+  scale of 2, Noto Serif Devanagari's headline is the densest row of ink, at exactly its
+  x-height, so an `XHeight` box runs from the headline to the baseline. Weighed by all its ink,
+  the label looks closer to centered with `CapHeight`, but only because the vowel marks above
+  the headline pull the weight up. A test checks the headline sits on the box's top.
+- **Decided (2026-11-24), while building it: "a label's ink centered within a pixel" became a
+  test that the box hugs its letters:** capitals' ink from the box's top to its bottom, and
+  lowercase letters' likewise, within a pixel at scales 1 and 2. The ink's weighted middle isn't
+  where a reader sees the middle, as the Hindi label shows.
+- [x] `TextBox` on `Text` in Rust and `box` on `TextSpec` in TypeScript.
+- [x] The box's edges worked out by the typesetter, and the box placed by the anchor when the
+  text is drawn, measured, and holds components.
+- [x] Tests: each kind's size, measured and baked, at scales 1 and 2; a label's ink centered
+  within a pixel of its component's center in each font; a multi-line box ending at the last
+  baseline; a mixed line using its tallest font; fallback text using the drawing font; `Line`
+  drawing as today; component gaps relative to the box; the TypeScript field and its bad values.
+- [x] The essays example's buttons and tag, in Rust and TypeScript.
+- [x] The content guide's centering text, ARCHITECTURE, and the release notes.
+
+### Step 11 — Images as raw pixels
 
 An image given as RGBA pixels and their size, rather than as a PNG or JPEG file, so an app that
 draws its own pixels, such as on a browser canvas, skips encoding a file for Proteus to decode
@@ -528,12 +577,12 @@ and premultiplying on upload.
 - [ ] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
   baking, and the release notes.
 
-### Step 11 — The demo's Text panel
+### Step 12 — The demo's Text panel
 
 The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
-number of lines, fonts and weights, fallback, mixed styles and inline boxes.
+number of lines, fonts and weights, fallback, mixed styles, inline boxes and text box edges.
 
-### Step 12 — Docs
+### Step 13 — Docs
 
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.

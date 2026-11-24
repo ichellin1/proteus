@@ -88,12 +88,20 @@
 //!     on the text's lowercase letters. The button is in an ellipsis, so it's
 //!     shown only while the opening is cut off, and it takes the click, so it
 //!     opens the essay as the card does.
+//!   - A text's box can be trimmed to its letters, so a button centers them
+//!     rather than its line box, which has room for descenders below them. The
+//!     back button and the year tag use `TextBox::CapHeight`, since their
+//!     labels are capitals and digits. The Hindi button uses
+//!     `TextBox::XHeight`: Devanagari's letters hang from a headline at the
+//!     font's x-height, and the vowel marks above it draw outside the box, into
+//!     the button's padding.
 //!
 //! Not shown here: a weight a font doesn't have, and a character no font has
 //! (which is drawn as a box). Measuring a text whose font is still loading,
 //! which gives `None`, a text too large for an atlas page, a component's gap on
-//! the baseline, raised or lowered, and one cut off with no ellipsis are covered
-//! by tests only.
+//! the baseline, raised or lowered, one cut off with no ellipsis, and a trimmed
+//! box around several lines or a line in several fonts are covered by tests
+//! only.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -102,7 +110,7 @@ use proteus_runtime::{App, FetchId, Frame, ProteusConfig};
 use proteus_sdk::glam::{Vec2, Vec3, Vec4};
 use proteus_sdk::{
     ComponentSpec, Easing, Handle, InputDevices, InteractionStateKind, Proteus, QuadState, Span,
-    StyleOverride, Text, TextAlign, TextOverflow, TransitionChannel, TransitionConfig,
+    StyleOverride, Text, TextAlign, TextBox, TextOverflow, TransitionChannel, TransitionConfig,
     VerticalAlign, WhileLoading,
 };
 
@@ -384,9 +392,13 @@ fn text_at(x: f32, y: f32, text: Text) -> ComponentSpec {
     .text(text)
 }
 
-/// Returns the text on a button.
+/// Returns the text on a button. Its box runs from the cap height to the
+/// baseline, so the button centers its letters rather than its line box, which
+/// has room for descenders below them.
 fn button_label(label: &str) -> Text {
-    Text::new(label, 14.0).with_color(WHITE)
+    Text::new(label, 14.0)
+        .with_color(WHITE)
+        .with_box(TextBox::CapHeight)
 }
 
 /// Creates a small button showing `label`, which turns lighter on hover.
@@ -443,11 +455,17 @@ fn card_ellipsis(app: &mut Proteus, essay: &Essay) -> (TextOverflow, Option<Hand
 /// returns it with its size. It's as wide as its label, measured before it's
 /// drawn, with room each side.
 fn more_button(app: &mut Proteus, label: &str) -> (Handle, Vec2) {
-    let label = Text::new(label, 12.0).with_color(WHITE);
+    // Devanagari has no capitals. Its letters hang from a headline at Noto
+    // Serif Devanagari's x-height, so a box from the x-height to the baseline
+    // centers them. The vowel marks above the headline draw outside the box,
+    // into the padding.
+    let label = Text::new(label, 12.0)
+        .with_color(WHITE)
+        .with_box(TextBox::XHeight);
     let size = app
         .measure_text(&label)
         .expect("the fonts are built in, so none is still loading")
-        + Vec2::new(2.0 * 10.0, 2.0 * 3.0);
+        + Vec2::new(2.0 * 10.0, 2.0 * 8.0);
     let button = app.component(
         ComponentSpec::new(QuadState {
             size,
@@ -654,14 +672,16 @@ impl Ui {
         );
         let _ = view.byline.set_text(app, byline.with_color(INK).italic());
         // The tag is as wide as its year, measured before it's drawn, with
-        // room each side.
+        // room each side. The year is digits, as tall as capitals, so its box
+        // runs from the cap height to the baseline.
         let label = Text::new(essay.year, 12.0)
             .with_weight(600)
-            .with_color(WHITE);
+            .with_color(WHITE)
+            .with_box(TextBox::CapHeight);
         let size = app
             .measure_text(&label)
             .expect("the default font is loaded")
-            + Vec2::new(2.0 * 8.0, 2.0 * 3.0);
+            + Vec2::new(2.0 * 8.0, 2.0 * 4.0);
         self.tag_size.set(size);
         let _ = view.tag.set_text(app, label);
         if let Some(mut geometry) = view.tag.declared_geometry(app) {
@@ -1213,7 +1233,9 @@ mod tests {
         );
         assert_eq!(
             app.get(button).unwrap().geometry.size,
-            app.measure_text(&Text::new("आगे पढ़ें", 12.0)).unwrap() + Vec2::new(20.0, 6.0),
+            app.measure_text(&Text::new("आगे पढ़ें", 12.0).with_box(TextBox::XHeight))
+                .unwrap()
+                + Vec2::new(20.0, 16.0),
             "as wide as its label, with room each side"
         );
     }

@@ -292,6 +292,16 @@ export interface TextOptions {
    */
   italic?: boolean;
   /**
+   * Where the text's box's top and bottom edges are, as CSS's `text-box-edge` says. The box is
+   * what's measured, and placed on the component by its anchor. `"line"`, the default, is the
+   * line box, with the room the font reserves above and below its letters, and any line
+   * spacing. `"capHeight"` runs from the first line's cap height to the last line's baseline,
+   * and centers capitals, title case and digits, such as a button's label. `"xHeight"` runs
+   * from the x-height instead, and centers lowercase text. Ink outside the box, such as
+   * descenders and accents, still draws.
+   */
+  box?: "line" | "xHeight" | "capHeight";
+  /**
    * How text with more lines than `maxLines` ends. `{ ellipsis: "…" }`, the default, ends it
    * with an ellipsis, which can be any text, such as `" more"`, or spans. `"clip"` cuts it off.
    * An ellipsis wraps as words do, and the text keeps as much of itself as fits with the

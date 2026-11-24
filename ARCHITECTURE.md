@@ -270,9 +270,13 @@ Proteus bakes three kinds of thing:
   loads. A span can hold a component in place of text: parley keeps a gap its size, an inline
   box, and the tick's `inline_components` stage lays the text out with the typesetter, makes the
   component the text's child and places it in the gap, rounded as the bake rounds the image, or
-  hides it with `HiddenByText` if the text doesn't show the gap. Images are decoded with the
-  `image` crate. Both go into the main atlas. With `resources.lazy_load`, a component's text or
-  image waits until it is visible.
+  hides it with `HiddenByText` if the text doesn't show the gap. A text's box, what's measured
+  and placed by the anchor, is its line box, or, with `TextBox`, trimmed to the first line's cap
+  height or x-height and the last line's baseline, from the fonts that draw it. The image isn't
+  trimmed: `BakedText::text_box` says where the box is in it, and the text quad's anchor moves
+  to put the box where the component's anchor says. Images are decoded with the `image` crate.
+  Both go into the main atlas. With `resources.lazy_load`, a component's text or image waits
+  until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the
   component becomes a plain quad showing the image. It waits until every text and image in it

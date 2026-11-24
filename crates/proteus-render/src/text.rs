@@ -166,6 +166,26 @@ pub enum TextAlign {
     End,
 }
 
+/// Where a text's box's top and bottom edges are, as CSS's `text-box-edge`
+/// says. The box is what's measured and placed by the anchor, so a label in
+/// a button is centered by it. The text's image is the same whatever the box:
+/// ink outside the box, such as descenders and accents, still draws, outside
+/// it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextBox {
+    /// The line box: from the first line's top to the last line's bottom,
+    /// with the room the font reserves above and below its letters, and any
+    /// line spacing.
+    #[default]
+    Line,
+    /// From the first line's x-height, the top of its lowercase letters, to
+    /// the last line's baseline. It centers lowercase text.
+    XHeight,
+    /// From the first line's cap height, the top of its capitals, to the last
+    /// line's baseline. It centers capitals, title case and digits.
+    CapHeight,
+}
+
 /// How a text with more lines than its maximum ends.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextOverflow {
@@ -362,6 +382,8 @@ pub struct TextLayout<'a> {
     pub weight: Option<u16>,
     /// Whether the text is italic.
     pub italic: bool,
+    /// Where the text's box's top and bottom edges are.
+    pub text_box: TextBox,
 }
 
 impl<'a> TextLayout<'a> {
@@ -383,6 +405,7 @@ impl<'a> TextLayout<'a> {
             family: None,
             weight: None,
             italic: false,
+            text_box: TextBox::Line,
         }
     }
 
@@ -423,10 +446,15 @@ impl<'a> TextLayout<'a> {
 /// [`TextRasterizer::rasterize`] makes the text's image at the same scale.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextSize {
-    /// The image's width in pixels.
+    /// The image's width in pixels, which is also its box's.
     pub width: u32,
     /// The image's height in pixels.
     pub height: u32,
+    /// How far the text's box starts below the image's top, in pixels. See
+    /// [`TextBox`].
+    pub box_top: u32,
+    /// The text's box's height, in pixels.
+    pub box_height: u32,
     /// The characters no font had, each once, in the order they first appear.
     pub missing: Vec<char>,
     /// Where each component the text shows goes in its image. A component
@@ -456,6 +484,11 @@ pub struct RasterizedGlyphs {
     pub width: u32,
     /// Height of the rasterized text image in pixels.
     pub height: u32,
+    /// How far the text's box starts below the image's top, in pixels, as
+    /// [`TextSize::box_top`] says.
+    pub box_top: u32,
+    /// The text's box's height, in pixels.
+    pub box_height: u32,
     /// RGBA pixels, `width * height * 4` bytes, not premultiplied. A text with
     /// no colored span is white, with each pixel's glyph coverage in alpha. A
     /// text with one is in its spans' colors, with the coverage multiplied by
@@ -667,6 +700,10 @@ struct Lines {
     ascent_px: i32,
     /// The image's height in pixels.
     height: u32,
+    /// How far the box starts below the image's top, in pixels.
+    box_top: u32,
+    /// The box's height, in pixels.
+    box_height: u32,
 }
 
 /// The glyphs of one run, a part of a line in one font, size and style,
@@ -783,6 +820,40 @@ fn place_runs(layout: &Layout<Rgba8>, baseline: f32, line_count: usize) -> Vec<P
         }
     }
     runs
+}
+
+/// Returns how far `text_box`'s top edge is above the first line's baseline,
+/// in pixels: the tallest x-height or cap height of the fonts that draw the
+/// first line, at their sizes. Returns `None` for [`TextBox::Line`], and for a
+/// first line with no text in it, whose box is the line box.
+fn first_line_height(layout: &Layout<Rgba8>, text_box: TextBox) -> Option<f32> {
+    if text_box == TextBox::Line {
+        return None;
+    }
+    let mut tallest: Option<f32> = None;
+    for item in layout.lines().next()?.items() {
+        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+            continue;
+        };
+        let run = glyph_run.run();
+        let font = run.font();
+        let Some(font_ref) = swash::FontRef::from_index(font.data.as_ref(), font.index as usize)
+        else {
+            continue;
+        };
+        let coords: Vec<i16> = run
+            .normalized_coords()
+            .iter()
+            .map(|c| c.to_bits())
+            .collect();
+        let metrics = font_ref.metrics(&coords).scale(run.font_size());
+        let height = match text_box {
+            TextBox::XHeight => metrics.x_height,
+            _ => metrics.cap_height,
+        };
+        tallest = Some(tallest.map_or(height, |t| t.max(height)));
+    }
+    tallest
 }
 
 /// Returns parley's vertical alignment for `align`, or `None` on the baseline.
@@ -1056,6 +1127,8 @@ impl Typesetter {
         Some(TextSize {
             width,
             height: lines.height,
+            box_top: lines.box_top,
+            box_height: lines.box_height,
             missing: missing_chars(&lines.layout, lines.line_count, &lines.content),
             components: place_components(&gaps, &lines, min_left),
         })
@@ -1100,6 +1173,16 @@ impl Typesetter {
         if height <= 0 {
             return None;
         }
+        // A box to the x-height or cap height ends at the last line's
+        // baseline, which is rounded to a whole pixel as glyphs are placed.
+        let (box_top, box_height) = match first_line_height(&layout, text.text_box) {
+            Some(above) => {
+                let top = (ascent_px - (above.round() as i32)).max(0);
+                let bottom = ascent_px + (last.baseline - first.baseline).round() as i32;
+                (top as u32, (bottom - top).clamp(0, height) as u32)
+            }
+            None => (0, height as u32),
+        };
         Some(Lines {
             layout,
             line_count,
@@ -1107,6 +1190,8 @@ impl Typesetter {
             baseline: first.baseline,
             ascent_px,
             height: height as u32,
+            box_top,
+            box_height,
         })
     }
 
@@ -1505,6 +1590,8 @@ impl TextRasterizer {
         Some(RasterizedGlyphs {
             width,
             height: lines.height,
+            box_top: lines.box_top,
+            box_height: lines.box_height,
             rgba_pixels: rgba,
             missing,
             components: place_components(&gaps, &lines, min_left),
@@ -1582,6 +1669,8 @@ mod tests {
             let size = glyphs.as_ref().map(|g| TextSize {
                 width: g.width,
                 height: g.height,
+                box_top: g.box_top,
+                box_height: g.box_height,
                 missing: g.missing.clone(),
                 components: g.components.clone(),
             });
@@ -2708,5 +2797,126 @@ mod tests {
         assert_eq!(placed(&mut fa, &text), [in_ellipsis], "cut: the ellipsis's");
         text.ellipsis = None;
         assert_eq!(placed(&mut fa, &text), [], "clipped");
+    }
+
+    // ---------------------------------------------------------------------
+    // Text box edges
+    // ---------------------------------------------------------------------
+
+    // Returns `content` at `size_px` with `text_box`, rasterized at `scale`.
+    fn boxed(
+        fa: &mut Kit,
+        content: &str,
+        size_px: f32,
+        text_box: TextBox,
+        scale: f32,
+    ) -> RasterizedGlyphs {
+        let mut text = TextLayout::new(content, size_px);
+        text.text_box = text_box;
+        fa.rasterize(&text, scale).unwrap()
+    }
+
+    // Returns the first and last rows with ink, and the row with the most.
+    fn ink_rows(g: &RasterizedGlyphs) -> (u32, u32, u32) {
+        let row = |y: u32| -> u32 {
+            (0..g.width)
+                .map(|x| g.rgba_pixels[((y * g.width + x) * 4 + 3) as usize] as u32)
+                .sum()
+        };
+        let inked: Vec<u32> = (0..g.height).filter(|&y| row(y) > 0).collect();
+        let densest = (0..g.height).max_by_key(|&y| row(y)).unwrap();
+        (inked[0], *inked.last().unwrap(), densest)
+    }
+
+    // The line box is the whole image, as before.
+    #[test]
+    fn a_line_box_is_the_whole_image() {
+        let mut fa = atlas();
+        for scale in [1.0, 2.0] {
+            let g = boxed(&mut fa, "Hxp", 24.0, TextBox::Line, scale);
+            assert_eq!((g.box_top, g.box_height), (0, g.height));
+        }
+    }
+
+    // A box to the cap height hugs the capitals, and one to the x-height the
+    // lowercase letters: from their tops to the baseline, at every scale. The
+    // image is the same whatever the box.
+    #[test]
+    fn a_trimmed_box_hugs_its_letters() {
+        let mut fa = atlas();
+        for scale in [1.0, 2.0] {
+            let line = boxed(&mut fa, "HH", 24.0, TextBox::Line, scale);
+            for (content, text_box) in [("HH", TextBox::CapHeight), ("xx", TextBox::XHeight)] {
+                let g = boxed(&mut fa, content, 24.0, text_box, scale);
+                let (top, bottom, _) = ink_rows(&g);
+                assert!(
+                    top.abs_diff(g.box_top) <= 1,
+                    "{content} at {scale}: ink from {top}, box from {}",
+                    g.box_top
+                );
+                assert!(
+                    (bottom + 1).abs_diff(g.box_top + g.box_height) <= 1,
+                    "{content} at {scale}: ink to {bottom}, box to {}",
+                    g.box_top + g.box_height
+                );
+                assert_eq!(g.height, line.height, "the image isn't trimmed");
+            }
+        }
+    }
+
+    // A box around several lines ends at the last line's baseline.
+    #[test]
+    fn a_trimmed_box_ends_at_the_last_lines_baseline() {
+        let mut fa = atlas();
+        let one = boxed(&mut fa, "HH", 24.0, TextBox::CapHeight, 1.0);
+        let two = boxed(&mut fa, "HH\nHH", 24.0, TextBox::CapHeight, 1.0);
+        let lines = boxed(&mut fa, "HH\nHH", 24.0, TextBox::Line, 1.0).height
+            - boxed(&mut fa, "HH", 24.0, TextBox::Line, 1.0).height;
+        assert_eq!(two.box_top, one.box_top);
+        assert!(
+            (two.box_height).abs_diff(one.box_height + lines) <= 1,
+            "{} for two lines, {} for one, lines {lines} apart",
+            two.box_height,
+            one.box_height
+        );
+    }
+
+    // A line in several sizes takes the tallest one's cap height, so its
+    // letters are never cut short.
+    #[test]
+    fn a_mixed_line_uses_its_tallest_height() {
+        let mut fa = atlas();
+        let big = boxed(&mut fa, "B", 30.0, TextBox::CapHeight, 1.0);
+        let spans = [
+            Span::new("a").with_size(12.0),
+            Span::new("B").with_size(30.0),
+        ];
+        let mut mixed = TextLayout::new("", 16.0);
+        mixed.spans = &spans;
+        mixed.text_box = TextBox::CapHeight;
+        let g = fa.rasterize(&mixed, 1.0).unwrap();
+        assert_eq!(g.box_height, big.box_height);
+    }
+
+    // Text drawn in a fallback font is boxed by that font's measurements, not
+    // its own family's. Noto Serif Devanagari's x-height is its headline, the
+    // bar its letters hang from, which is the densest row of ink.
+    #[test]
+    fn fallback_text_is_boxed_by_the_font_that_draws_it() {
+        let mut fa = atlas();
+        fa.load_font(DEVANAGARI).unwrap();
+        fa.set_fallbacks(&["Noto Serif Devanagari".to_owned()]);
+        let hindi = boxed(&mut fa, "आगे पढ़ें", 12.0, TextBox::XHeight, 2.0);
+        let latin = boxed(&mut fa, "xx", 12.0, TextBox::XHeight, 2.0);
+        assert!(
+            hindi.box_height > latin.box_height,
+            "Noto's x-height is taller than Inter's"
+        );
+        let (_, _, headline) = ink_rows(&hindi);
+        assert!(
+            headline.abs_diff(hindi.box_top) <= 1,
+            "headline at {headline}, box from {}",
+            hindi.box_top
+        );
     }
 }

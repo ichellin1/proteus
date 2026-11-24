@@ -721,7 +721,7 @@ mod tests {
     // each display scale: for each kind of text a layout can make.
     #[test]
     fn a_text_measures_the_size_its_baked_at() {
-        use proteus_ui::{Span, TextAlign, VerticalAlign};
+        use proteus_ui::{Span, TextAlign, TextBox, VerticalAlign};
         let paragraph = "A paragraph long enough to wrap onto a few lines, and then some more";
         let texts = [
             ("plain", Text::new("Proteus", 16.0)),
@@ -759,6 +759,14 @@ mod tests {
                     ],
                     16.0,
                 ),
+            ),
+            (
+                "a box to the cap height",
+                Text::new("Save changes", 14.0).with_box(TextBox::CapHeight),
+            ),
+            (
+                "a box to the x-height, around two lines",
+                Text::new("two\nlines", 14.0).with_box(TextBox::XHeight),
             ),
             (
                 "a colored span",

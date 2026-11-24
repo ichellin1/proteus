@@ -503,6 +503,7 @@ fn opacity_and_the_texts_alpha_apply_to_colored_and_plain_text_alike() {
                 uv_scale: [0.1, 0.1],
                 page: 0,
                 pixel_size: [37.0, 19.0],
+                text_box: None,
             },
             TextTextureRef(TextureId::default()),
         ));
@@ -1154,6 +1155,7 @@ fn set_text_and_set_image_replace_the_content_and_its_bake() {
             uv_scale: [0.1, 0.1],
             page: 0,
             pixel_size: [30.0, 16.0],
+            text_box: None,
         },
         TextTextureRef(TextureId::default()),
         BakedImage::new([0.0, 0.0], [0.1, 0.1], 0, [4.0, 4.0]),
@@ -4510,4 +4512,28 @@ fn a_component_no_longer_in_its_text_stays_where_it_was() {
     assert_eq!(app.get(label).unwrap().children, [icon]);
     assert_eq!(position(&app, icon), at);
     assert!(app.get(icon).unwrap().visible);
+}
+
+// A component's gap is placed from the top of its text's box: with the box
+// trimmed to the cap height, the component sits as much higher as the box
+// starts below the image's top.
+#[test]
+fn a_component_is_placed_from_its_texts_box() {
+    let (mut app, icon) = app_with_icon();
+    let label = label_holding(&mut app, press_icon_now(icon));
+    app.refresh_cascades();
+    let in_line_box = position(&app, icon);
+    label
+        .set_text(
+            &mut app,
+            press_icon_now(icon).with_box(proteus_sdk::TextBox::CapHeight),
+        )
+        .unwrap();
+    app.refresh_cascades();
+
+    let text = press_icon_now(icon).with_box(proteus_sdk::TextBox::CapHeight);
+    let mut typesetter = proteus_render::Typesetter::new(LORA).unwrap();
+    let box_top = typesetter.measure(&text.layout(), 1.0).unwrap().box_top as f32;
+    assert!(box_top > 0.0);
+    assert_eq!(position(&app, icon) - in_line_box, Vec2::new(0.0, box_top));
 }

@@ -319,6 +319,14 @@ pub(crate) fn push_entity_instances(
         text_qs.color = text_color;
         // Size the text quad to the text, not to the whole entity.
         text_qs.size = b.pixel_size.into();
+        // A box trimmed to the text's letters is placed by the anchor, rather
+        // than the whole image: the image's anchor moves to the point that
+        // puts the box there. Rotation and scale still pivot on the same point.
+        if let Some([top, height]) = b.text_box {
+            if b.pixel_size[1] > 0.0 {
+                text_qs.anchor.y = (top + qs.anchor.y * height) / b.pixel_size[1];
+            }
+        }
         // No corner radius: a round button's radius is larger than the text
         // quad, and would clip most of the text away.
         text_qs.corner_radius = 0.0;

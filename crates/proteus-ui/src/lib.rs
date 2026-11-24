@@ -90,9 +90,9 @@ pub use navigation::{
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{
-    fit_to_page, lay_out_text, measure_text, page_side, BakedColor, BakedText, ClearGlyphCache,
-    FontStatus, Fonts, InlineComponent, LaidOutText, MissingGlyphs, Span, Text, TextAlign,
-    TextOverflow, VerticalAlign, WaitsForFont, WhileLoading,
+    baked_box, fit_to_page, lay_out_text, measure_text, page_side, BakedColor, BakedText,
+    ClearGlyphCache, FontStatus, Fonts, InlineComponent, LaidOutText, MissingGlyphs, Span, Text,
+    TextAlign, TextBox, TextOverflow, VerticalAlign, WaitsForFont, WhileLoading,
 };
 pub use texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 pub use topology::{
