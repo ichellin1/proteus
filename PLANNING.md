@@ -652,6 +652,33 @@ number of lines, fonts and weights, fallback, mixed styles, inline boxes and tex
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.
 
+- **Decided (2026-11-24): the text section becomes a Text guide of its own,** in the order a
+  reader needs it: what a text is, lines, fonts, fallback, styles within a text, components in
+  text, centering a label, measuring, changing text and its cost, and its limits. The content
+  guide becomes "Images and video".
+- **Decided (2026-11-24), after the user's review: only this release's guide prose is rewritten
+  under step 6's rules,** by Sonnet given only the rules: the Text guide, the content guide's
+  images part, and the configuration guide's text section. The older guides are left as they
+  are. Snippets don't change.
+- **Decided (2026-11-24): stale text elsewhere is fixed:** the components guide's "a line of
+  text", the tricks how-to's "an app has one font", the configuration guide's row saying large
+  text is clipped, the examples index's essays and gallery rows, and the root README's list of
+  examples, which leaves out browse and essays.
+- **Decided (2026-11-24): ARCHITECTURE gets a text section,** in short paragraphs, in place of
+  the one long bullet under baking, its crates table is brought up to date, and its known
+  limits are checked against the code.
+- **Decided (2026-11-24): the release notes open with a short "What's new in 0.4"** before the
+  upgrade notes, which are checked again against the code.
+- **Decided (2026-11-24): `checks/text-engines` is deleted,** as its design note said it would be
+  when v0.4.0 ships, and the note is marked as shipped. ROADMAP's "Where things stand" is
+  updated at release, as before.
+- [x] The Text guide, and the content guide as "Images and video", with every link updated.
+- [ ] This release's guide prose rewritten, each batch reviewed.
+- [x] The configuration guide, ARCHITECTURE, and the stale text elsewhere.
+- [x] The release notes' summary, and the upgrade notes checked.
+- [x] `checks/text-engines` deleted, and the design note marked as shipped.
+- [x] `check-snippets`, the doc tests, `check-docs`, a link check and `check-comments` pass.
+
 ## Standing decisions
 
 - **Non-interactive and disabled components ignore all input** (2026-09-28), not just the

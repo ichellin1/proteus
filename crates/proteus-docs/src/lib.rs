@@ -32,6 +32,7 @@ pages! {
     guides_splits_and_merges => "guides/splits-and-merges.md",
     guides_interaction => "guides/interaction.md",
     guides_keyboard_and_focus => "guides/keyboard-and-focus.md",
+    guides_text => "guides/text.md",
     guides_content => "guides/content.md",
     guides_configuration => "guides/configuration.md",
     guides_hosts => "guides/hosts.md",

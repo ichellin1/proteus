@@ -29,8 +29,8 @@ proteus-render                                            the pipeline, the shad
 
 | Crate | What it holds |
 |---|---|
-| `proteus-render` | The instanced pipeline, its shader (in named parts under `shaders/quad/`), the texture atlases and their registry, text rasterizing and image decoding. Knows nothing about components. |
-| `proteus-ui` | The component model on `bevy_ecs`: geometry, the hierarchy, transitions in all three shapes, input and hit testing, the keyboard, focus and its navigation, interaction styles, component baking, and turning the world into instances to draw. |
+| `proteus-render` | The instanced pipeline, its shader (in named parts under `shaders/quad/`), the texture atlases and their registry, text layout and measuring (`Typesetter`) and rasterizing (`TextRasterizer`), and image decoding. Knows nothing about components. |
+| `proteus-ui` | The component model on `bevy_ecs`: geometry, the hierarchy, transitions in all three shapes, input and hit testing, the keyboard, focus and its navigation, interaction styles, component baking, the app's fonts, measuring text, placing components in text, and turning the world into instances to draw. |
 | `proteus-sdk` | The API an app uses: `Proteus`, which holds the app's components, and the handles it returns. It draws nothing itself. |
 | `proteus-gpu` | Creates a wgpu device, queue and configured surface from a platform's surface, the same way on every platform. |
 | `proteus-runtime` | The contract between an app and a host: `App`, `Frame`, `HostServices` and `ProteusConfig`, and the `Engine` and `Renderer` that run a frame. |
@@ -41,7 +41,8 @@ proteus-render                                            the pipeline, the shad
 These are published. The rest of the workspace isn't: `proteus-demo`, the reference demo,
 written once as an `App`; `proteus-shell-native` and `proteus-shell-web`, which hand the demo
 to a host; the examples under `examples/`; the benchmarks under `benches/`; apps for checking
-rendering by eye under `checks/`; and `proteus-docs`, which tests the guides' code and links.
+rendering by eye under `checks/`; `proteus-docs`, which tests the guides' code and links; and
+`proteus-test-fonts`, the fonts the crates' text tests draw in.
 
 ## Components
 
@@ -247,37 +248,11 @@ alpha, which keeps bilinear filtering right at antialiased edges.
 To bake is to render something into an atlas region, once, so it can be drawn as a texture.
 Proteus bakes three kinds of thing:
 
-- **Text and images**, by `Renderer::render` before collecting instances. Text is laid out and
-  shaped with parley, which applies the font's kerning and places each glyph to a quarter of a
-  pixel, and its glyphs are rasterized on the CPU with swash, each text to one image, white with
-  the glyphs' coverage in alpha, so it can take any color as it's drawn. A text with a span that
-  sets a color is baked in its spans' colors instead, and drawn tinted only by its alpha.
-  `BakedColor` keeps the color it was baked with, and a change to it bakes the text again. The
-  work is split in two. The app's `Fonts` resource holds the `Typesetter`, which has the fonts
-  and lays text out, so `Proteus::measure_text` gives a text's size in the fonts it's drawn in,
-  before it's drawn. The renderer holds the `TextRasterizer`, which draws each text from its
-  layout and keeps a glyph cache: each glyph's pixels after they're rasterized, dropping those
-  used longest ago past `resources.glyph_cache_bytes`, so the glyphs texts share are rasterized
-  once. Measuring and rasterizing size a text's image with one function, from the lines' heights
-  and each glyph's pixel box, which measuring works out from the glyph's outline without drawing
-  it, so the two agree. Text is in the default font, Inter with the `embedded-font` feature or
-  the config's own, which the renderer sets when it starts, before the app's `setup`, or in a
-  family the app has loaded with `Proteus::load_font`, which adds it at once. A text whose
-  family is expected but not loaded waits, or is drawn in the default font and baked again once
-  it loads, as the app chose. A span's family counts as the text's. A character the text's
-  family lacks is looked for in the app's fallback fonts, in order, then the default font; one
-  none has is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font
-  loads. A span can hold a component in place of text: parley keeps a gap its size, an inline
-  box, and the tick's `inline_components` stage lays the text out with the typesetter, makes the
-  component the text's child and places it in the gap, rounded as the bake rounds the image, or
-  hides it with `HiddenByText` if the text doesn't show the gap. A text's box, what's measured
-  and placed by the anchor, is its line box, or, with `TextBox`, trimmed to the first line's cap
-  height or x-height and the last line's baseline, from the fonts that draw it. The image isn't
-  trimmed: `BakedText::text_box` says where the box is in it, and the text quad's anchor moves
-  to put the box where the component's anchor says. Images are decoded with the `image` crate,
-  or, given as RGBA pixels with `Image::from_rgba`, used as they are once their length is
-  checked. Both go into the main atlas. With `resources.lazy_load`, a component's text or image
-  waits until it is visible.
+- **Text and images**, by `Renderer::render` before collecting instances. Each text is drawn
+  into one image; see [Text](#text). Images are decoded with the `image` crate, or, given as RGBA
+  pixels with `Image::from_rgba`, used as they are once their length is checked. Both go into
+  the main atlas. With `resources.lazy_load`, a component's text or image waits until it is
+  visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the
   component becomes a plain quad showing the image. It waits until every text and image in it
@@ -302,6 +277,50 @@ When the scale changes, the renderer removes every `BakedText`, so text bakes ag
 one; a baked component keeps its scale, since baking destroyed what it was drawn from. The
 [configuration guide](./docs/guides/configuration.md#sharpness-on-high-density-displays)
 explains the cap and its costs.
+
+### Text
+
+Text is laid out and shaped with parley, which applies the font's kerning and places each glyph
+to a quarter of a pixel. Its glyphs are rasterized on the CPU with swash, each text into one
+image.
+
+**The work is split in two.** The app's `Fonts` resource holds the `Typesetter`, which has the
+fonts and lays text out. The renderer holds the `TextRasterizer`, which draws a text's glyphs
+into its image and keeps a glyph cache: each glyph's pixels after they're rasterized, so the
+glyphs texts share are rasterized once, dropping those used longest ago past
+`resources.glyph_cache_bytes`. Because the fonts are in the app, `Proteus::measure_text` gives a
+text's size before it's drawn, and the tick places components in text in the same frame.
+
+**Measuring is exact.** Measuring and rasterizing size a text's image with one function, from
+the lines' heights and each glyph's pixel box. Measuring works out a glyph's pixel box from its
+outline, rounded out as swash rounds it, without drawing it, and keeps it once worked out.
+
+**Colors.** A text is baked white, with the glyphs' coverage in alpha, so it takes any color as
+it's drawn, and changing its color costs nothing. A text with a span that sets a color is baked
+in its spans' colors instead, and drawn tinted only by its alpha. `BakedColor` keeps the color it
+was baked with, and a change to it bakes the text again.
+
+**Fonts.** Text is in the default font, Inter with the `embedded-font` feature or the config's
+own, which the renderer sets when it starts, before the app's `setup`. A text can name a family
+the app has loaded with `Proteus::load_font`, which adds the font at once. A text whose family is
+expected but not loaded waits, or is drawn in the default font and baked again once the family
+loads, as the app chose. A span's family counts as the text's. A character the text's family
+lacks is looked for in the app's fallback fonts, in order, then in the default font. One that
+none has is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font
+loads.
+
+**The text's box.** A text's box is what's measured and placed by its component's anchor. It's
+the line box, or, with `TextBox`, the first line's cap height or x-height to the last line's
+baseline, from the fonts that draw the first line. The image isn't trimmed:
+`BakedText::text_box` says where the box is in it, and the text quad's anchor moves to put the
+box where the component's anchor says.
+
+**Components in text.** A span can hold a component in place of text. parley keeps a gap the
+span's size, an inline box, in the line. The tick's `inline_components` stage, which
+`refresh_cascades` runs again after `update`, lays the text out with the typesetter, makes the
+component the text's child, and places it in its gap, rounded as the bake rounds the image. A
+component whose gap the text doesn't show gets `HiddenByText`, which hides it without changing
+the visibility the app set.
 
 ## Transitions
 
@@ -552,6 +571,8 @@ These are known shortcomings, each planned to be addressed in a future release:
   width of its own.
 - Changing the color of a text with a colored span bakes it again, since its image is drawn with
   one tint. A plain text's color, and any text's alpha, change at no cost.
+- Color emoji isn't drawn: glyphs are drawn from their outlines, in one color or the text's
+  spans' colors.
 - One video at a time.
 - No text input: no text field, cursor or selection, and no input methods for composing text.
   A key's text arrives in its event, for an app to use itself.

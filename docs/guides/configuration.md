@@ -98,7 +98,7 @@ are removed to make room.
 
 | Rust | TypeScript | Default | What it sets |
 |---|---|---|---|
-| `memory.main_atlas.page_size` | `memory.mainAtlas.pageSize` | 2048 | The width and height of each page, in pixels. No texture can be larger: larger text is clipped, a larger image is scaled down, and a larger baked component is drawn unbaked, each with a warning. |
+| `memory.main_atlas.page_size` | `memory.mainAtlas.pageSize` | 2048 | The width and height of each page, in pixels. No texture can be larger: larger text is drawn at a lower resolution on a high-density display if that makes it fit, and otherwise clipped; a larger image is scaled down; and a larger baked component is drawn unbaked, each with a warning. |
 | `memory.main_atlas.page_count` | `memory.mainAtlas.pageCount` | 4 | The number of pages. |
 | `memory.transition_atlas_size` | `memory.transitionAtlasSize` | 2048 | The size of the atlas that holds images of components during splits and merges. |
 | `memory.max_instances` | `memory.maxInstances` | 4096 | The most components drawn in one frame. Any beyond it aren't drawn. |
@@ -124,9 +124,9 @@ are removed to make room.
 
 ### Text
 
-An app's default font draws every text that names no family. It's Inter, built into Proteus,
-unless the app gives its own. Other fonts are loaded while the app runs; see
-[Fonts](./content.md#fonts).
+An app's default font draws every text that names no family. The default is Inter, built into
+Proteus, unless the app gives its own. Other fonts are loaded while the app runs; see
+[Fonts](./text.md#fonts).
 
 | Rust | TypeScript | Default | What it sets |
 |---|---|---|---|
@@ -163,15 +163,15 @@ await mount("canvas", {
 });
 ```
 
-`FontSource::from_bytes` checks the font, so a file that isn't one, such as a failed download,
+`FontSource::from_bytes` checks the font. A file that isn't a font, such as a failed download,
 is an error the app handles. In TypeScript, `mount` throws.
 
 #### Leaving the built-in font out
 
-Inter adds 877 KB to an app. One that gives its own default font can leave it out.
+Inter adds 877 KB to an app. An app that gives its own default font can leave it out.
 
-- **In Rust,** it's the `embedded-font` feature, on by default in `proteus-runtime` and in the
-  hosts. Turn it off on each that the app depends on:
+- **In Rust,** the `embedded-font` feature builds Inter in. It's on by default in
+  `proteus-runtime` and in the hosts. Turn it off on each that the app depends on:
 
   ```toml
   [dependencies]
@@ -179,26 +179,26 @@ Inter adds 877 KB to an app. One that gives its own default font can leave it ou
   proteus-host-winit = { version = "0.4", default-features = false }
   ```
 
-  Without it, text draws nothing, with a warning, until the app sets `text.default_font` or
-  loads a font, the first of which becomes the default.
-- **In TypeScript,** it isn't in the package's wasm. `mount` fetches it from the package's
-  `fonts/` folder, only when the config sets no `text.font`. Bundlers such as Vite copy it into
-  the app's output; an app served another way serves the file too, or sets `text.font`.
+  Without the feature, text draws nothing, with a warning, until the app sets
+  `text.default_font` or loads a font. The first font the app sets or loads becomes the default.
+- **In TypeScript,** Inter isn't in the package's wasm. `mount` fetches it from the package's
+  `fonts/` folder, only when the config sets no `text.font`. Bundlers such as Vite copy the font
+  into the app's output. An app served another way serves the file too, or sets `text.font`.
 
 ### The glyph cache
 
-Proteus keeps each glyph's pixels after it draws them, so the letters texts share are drawn
-once: every "e" in every label of one size and font. That makes preparing text two to three
-times faster. The cache has a budget, and past it drops the glyphs used longest ago, drawing
-them again if they're needed.
+Proteus keeps each glyph's pixels after it draws them. Texts that share a letter, such as every
+"e" in every label of one size and font, then draw it once. That makes preparing text two to
+three times faster. The cache has a budget. Past the budget, it drops the glyphs used longest
+ago, and draws them again if they're needed.
 
 | Rust | TypeScript | Default | What it sets |
 |---|---|---|---|
-| `resources.glyph_cache_bytes` | `resources.glyphCacheBytes` | 4 MiB | The most bytes of glyphs the cache keeps: about 5,000 at 48 pixels, or 25,000 at 16. `0` keeps none. |
+| `resources.glyph_cache_bytes` | `resources.glyphCacheBytes` | 4 MiB | The most bytes of glyphs the cache keeps, which is about 5,000 glyphs at 48 pixels, or 25,000 at 16. `0` keeps none. |
 
-The cache is emptied when the display's scale changes, since glyphs are kept by their size in
-pixels. An app can empty it to free its memory, such as when it's hidden. Text already on
-screen isn't affected: its pixels are in the atlas, not the cache.
+The cache is emptied when the display's scale changes, since it keeps glyphs by their size in
+pixels. An app can empty the cache to free memory, such as when the app is hidden. Text already
+on screen isn't affected, because its pixels are in the atlas, not the cache.
 
 #### Rust
 

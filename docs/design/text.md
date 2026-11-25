@@ -1,9 +1,9 @@
 # Choosing a text engine
 
-**Status:** decided in step 1 of v0.4.0, as recommended: parley, rasterized with swash, with a
-glyph cache that evicts the least recently used glyphs; variable Inter as the embedded font; and
-inline boxes in v0.4.0. See PLANNING. The comparison harness is `checks/text-engines`, a
-workspace of its own, deleted when v0.4.0 ships.
+**Status:** shipped in v0.4.0, as recommended: parley, rasterized with swash, with a glyph cache
+that evicts the least recently used glyphs; variable Inter as the embedded font; and inline
+boxes. The comparison harness, `checks/text-engines`, a workspace of its own, was deleted once
+the engine was in place; its code is in the history before v0.4.0's release.
 
 Proteus draws text with `fontdue`, one character at a time, into one image per text: one line,
 in one font. v0.4.0 needs text that wraps, aligns, mixes weights and styles, and falls back to

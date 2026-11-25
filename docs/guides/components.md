@@ -68,8 +68,8 @@ Only the geometry is required. Everything else is optional:
 | Rust method | TypeScript field | What it does |
 |---|---|---|
 | `ComponentSpec::new(geometry)` | `geometry` | Where the component is and how it's shaped; see [Geometry](#geometry). |
-| `text` | `text` | A line of text drawn on the component. |
-| `image` | `image` | A PNG or JPEG image, drawn as the component's fill. |
+| `text` | `text` | Text drawn on the component, in one line or several; see [Text](./text.md). |
+| `image` | `image` | An image, from a PNG or JPEG file or from pixels, drawn as the component's fill. |
 | `border` | `border` | A border inside the component's edge. |
 | `glow` | `glow` | A soft halo around the component. |
 | `drop_shadow` | `dropShadow` | A shadow behind the component. If it also has a glow, the shadow is drawn. |
