@@ -24,6 +24,8 @@ web-time = "1"
 # For the tests in src/lib.rs, which inspect ECS components directly
 # (`BakedImage`, `ActiveTransition`, `Virtual`, `VideoCrossfade` and so on)
 # beyond what `Proteus::get`'s `ComponentData` exposes.
-proteus-render = { workspace = true }
+# `embedded-font` for Inter, the default font a host gives, so tests can
+# measure the panels' text.
+proteus-render = { workspace = true, features = ["embedded-font"] }
 proteus-ui = { workspace = true }
 bevy_ecs = { workspace = true }

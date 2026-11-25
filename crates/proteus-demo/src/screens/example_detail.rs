@@ -1,12 +1,36 @@
 //! `ExampleDetail` — reached from `screens::home`'s grid. One shared panel
 //! entity, holding one of 6 categories' content at a time: Effects, Text,
 //! Transformations (static labelled rows demonstrating
-//! `DropShadow`/`Glow`/`Border`/`Opacity`, `Text` styling, and
+//! `DropShadow`/`Glow`/`Border`/`Opacity`, text, and
 //! rotation/scale/continuous animation), Layout (coming in v0.6.0, which
 //! `layout_message` says), Keyboard & Focus (a virtual keyboard whose
 //! keycaps flash as their keys are pressed, which the arrows and Tab move
 //! round — see `screens::keyboard` — and what the keys do below it),
 //! and About (what Proteus is, for a visitor).
+//!
+//! ## The Text panel
+//!
+//! Two columns of rows, each a label and its examples. Styles on the left:
+//! font size, color, letter spacing, weight and italic (Inter's slanted, and
+//! Lora's own italic face), families (Inter and Lora), and fallback (Hindi
+//! that Inter lacks, drawn by Noto Serif Devanagari). Paragraphs and
+//! components on the right: wrapping and alignment, line height and a
+//! maximum number of lines ending in an ellipsis, mixed styles in one text, a
+//! key cap and a small spinning square in a line of text, and text box edges
+//! (the same Hindi button centered by its line box, then by its x-height).
+//! The fonts are the demo's assets, cut down to the characters shown. Their
+//! folder says how to cut them again when the panel's text changes.
+//!
+//! ## The About panel
+//!
+//! Narrower than the others, for lines a reader takes in easily: five
+//! paragraphs in near-black, each a wrapped text, with the key words in bold
+//! violet. The brand's mark stands in the first line before "Proteus", as
+//! tall as a capital: a component in the text, showing the splash's first
+//! logo frame.
+//!
+//! Every panel is laid out by measuring its texts before they're drawn, so
+//! its rows are in place in its first frame.
 //!
 //! ## Standalone content, not `ChildOf` the panel
 //!
@@ -19,7 +43,10 @@
 
 use glam::{Vec2, Vec3, Vec4};
 
-use proteus_sdk::{Border, ComponentSpec, DropShadow, Glow, Handle, Proteus, QuadState, Text};
+use proteus_sdk::{
+    Border, ComponentSpec, DropShadow, Glow, Handle, Proteus, QuadState, Span, Text, TextAlign,
+    TextBox, VerticalAlign,
+};
 
 use super::keyboard::{self, Keyboard};
 
@@ -33,13 +60,36 @@ pub const CATEGORY_TITLES: [&str; 6] = [
     "Keyboard & Focus",
     "About",
 ];
+/// The Text category, whose small square spins in a line of text.
+pub const TEXT: usize = 1;
 /// The Transformations category, whose box animates continuously.
 pub const TRANSFORMS: usize = 2;
+
+/// The Text panel's serif family, loaded from the demo's assets.
+pub const LORA: &str = "Lora";
+/// The fallback family for the Text panel's Hindi, loaded from the demo's
+/// assets.
+pub const DEVANAGARI: &str = "Noto Serif Devanagari";
+
+/// The Text panel's only text in Lora. The font is cut down to its letters,
+/// so a test checks they're all in it.
+pub(crate) const IN_LORA: &str = "Lora";
+/// The Text panel's only text in Lora's italic, also cut down to its letters.
+pub(crate) const IN_LORA_ITALIC: &str = "Aa";
+/// The Hindi in the Fallback row, "namaste", drawn in Noto Serif Devanagari,
+/// which is cut down to the panel's Hindi.
+pub(crate) const HINDI_GREETING: &str = "\u{928}\u{92e}\u{938}\u{94d}\u{924}\u{947}";
+/// The Hindi button's label, "read more".
+pub(crate) const HINDI_BUTTON: &str = "\u{906}\u{917}\u{947} \u{92a}\u{922}\u{93c}\u{947}\u{902}";
 /// The Keyboard & Focus category, with its virtual keyboard.
 pub const KEYS: usize = 4;
 
 pub(crate) const PANEL_PADDING_PX: f32 = 24.0;
 const HEADING_PANEL_GAP_PX: f32 = 20.0;
+/// The size of a panel's heading, and its height: Inter's line box at 28
+/// pixels. A test checks it against the heading as it's measured.
+const HEADING_SIZE_PX: f32 = 28.0;
+const HEADING_HEIGHT_PX: f32 = 35.0;
 /// Local Z for all row content — above the panel's own 0.5 so it renders on
 /// top of the panel; headings use 0.51 for the same reason.
 pub(crate) const CONTENT_Z: f32 = 0.51;
@@ -75,15 +125,14 @@ const TOP_CLEARANCE_PX: f32 = 110.0;
 /// Fixed content height per category, in `CATEGORY_TITLES`' order.
 const CONTENT_HEIGHT: [f32; 6] = [
     3.0 * 90.0 + 64.0 + 18.0 + 18.0, // Effects = 370.0
-    2.0 * 90.0 + 56.0,               // Text = 236.0
+    TEXT_CONTENT_HEIGHT,             // Text
     2.0 * 120.0 + 64.0 + 2.0 * 20.0, // Transforms = 344.0
     100.0,                           // Layout: one line
     keyboard::SIZE.y + KEYS_GAP_PX + KEYS_LINES.len() as f32 * LINE_HEIGHT_PX, // Keyboard & Focus
-    ABOUT_LINES.len() as f32 * LINE_HEIGHT_PX, // About
+    ABOUT_CONTENT_HEIGHT,            // About
 ];
 
-/// The height of a line of 16 px text in the Keyboard & Focus and About
-/// panels.
+/// The height of a line of 16 px text in the Keyboard & Focus panel.
 const LINE_HEIGHT_PX: f32 = 28.0;
 /// The space between the keyboard and the lines below it.
 const KEYS_GAP_PX: f32 = 24.0;
@@ -93,13 +142,6 @@ const KEYS_LINES: [&str; 4] = [
     "Caps Lock switches the keys to their shifted values.",
     "Escape or Backspace goes back.",
 ];
-const ABOUT_LINES: [&str; 5] = [
-    "Proteus is a rendering framework where UI components are metamorphic.",
-    "They don't navigate to new screens: they transform into them.",
-    "A button can become a list, and a list item can become a video player.",
-    "It draws with the GPU, natively on macOS, Windows and Linux, and in browsers.",
-    "Apps are written in Rust or TypeScript.",
-];
 
 struct EffectsContent {
     row_labels: [Handle; 4],
@@ -107,9 +149,27 @@ struct EffectsContent {
     opacity_item_labels: [Handle; 5],
 }
 
+/// The Text panel's content height: its taller column, the right, with room
+/// to spare.
+const TEXT_CONTENT_HEIGHT: f32 = 320.0;
+/// The widest the Text panel gets, wider than the other panels' 1000 pixels,
+/// for its two columns.
+const TEXT_PANEL_MAX_WIDTH: f32 = 1100.0;
+
+/// A row of the Text panel: its label, and its examples from left to right.
+struct TextRow {
+    label: Handle,
+    /// Each example, with its size when it's a component with a size of its
+    /// own rather than a text, whose size is measured.
+    items: Vec<(Handle, Option<Vec2>)>,
+}
+
 struct TextContent {
-    row_labels: [Handle; 3],
-    row_items: [Vec<Handle>; 3],
+    /// The rows of the left column, styles, then of the right, paragraphs
+    /// and components.
+    columns: [Vec<TextRow>; 2],
+    /// The small square that spins in a line of text.
+    square: Handle,
 }
 
 struct TransformsContent {
@@ -127,8 +187,117 @@ pub struct KeysContent {
     lines: [Handle; 4],
 }
 
+/// The About category: what Proteus is, for a visitor.
+pub const ABOUT: usize = 5;
+
+/// The About panel's width: narrower than the other panels, for lines a
+/// reader takes in easily.
+const ABOUT_PANEL_WIDTH: f32 = 620.0;
+/// The About panel's content height: its paragraphs, with room to spare.
+const ABOUT_CONTENT_HEIGHT: f32 = 520.0;
+/// The space between the About panel's paragraphs.
+const ABOUT_PARAGRAPH_GAP: f32 = 14.0;
+/// The About panel's text size, and its wrap width: the panel's width inside
+/// its padding and the rows' indent.
+const ABOUT_TEXT_SIZE: f32 = 17.0;
+const ABOUT_WRAP_WIDTH: f32 = ABOUT_PANEL_WIDTH - 2.0 * (PANEL_PADDING_PX + 10.0);
+/// The About panel's text color, a near-black, #111.
+const NEAR_BLACK: Vec4 = Vec4::new(17.0 / 255.0, 17.0 / 255.0, 17.0 / 255.0, 1.0);
+/// The logo mark's size in the About panel's first line: the text's cap
+/// height tall, and as wide as the mark's 208 × 288 shape allows.
+const MARK_SIZE: Vec2 = Vec2::new(12.4 * 208.0 / 288.0, 12.4);
+
 struct AboutContent {
-    lines: [Handle; 5],
+    paragraphs: Vec<Handle>,
+    /// The logo mark, in the first paragraph's first line, before "Proteus".
+    mark: Handle,
+}
+
+/// Creates the About panel's paragraphs: near-black text with its key words in
+/// bold violet, and the logo mark before the name.
+fn about_content(app: &mut Proteus) -> AboutContent {
+    let mark = app.component(
+        ComponentSpec::new(QuadState {
+            position: Vec3::new(0.0, 0.0, 0.001),
+            size: MARK_SIZE,
+            ..Default::default()
+        })
+        .non_interactive(),
+    );
+    let key = |words: &str| Span::new(words).bold().with_color(violet());
+    let plain = Span::new;
+    let em = |words: &str| Span::new(words).italic();
+    let paragraphs = [
+        vec![
+            // The mark stands on the baseline, as tall as a capital, so it
+            // reads as part of the name.
+            Span::component(mark.id(), MARK_SIZE),
+            plain(" "),
+            key("Proteus"),
+            plain(" is a rendering framework built around one idea: "),
+            key("UI components are metamorphic."),
+            plain(" They don't navigate to new screens or swap for other components: they "),
+            em("transform"),
+            plain(" into them."),
+        ],
+        vec![
+            plain("A "),
+            key("button"),
+            plain(" can become a "),
+            key("list"),
+            plain(", and the list can collapse back into the button. A list item can become a "),
+            key("video player"),
+            plain(". The component never disappears; it "),
+            em("shapeshifts"),
+            plain(
+                ", and every moment of the change is drawn, so you see one object changing \
+                 rather than one screen replacing another.",
+            ),
+        ],
+        vec![
+            plain("One component can become one other, "),
+            key("split"),
+            plain(" into many, or "),
+            key("merge"),
+            plain(" many into one, each a continuous transition."),
+        ],
+        vec![
+            plain("It draws with the "),
+            key("GPU"),
+            plain(
+                ", in one draw call however many components there are, and outperforms CSS \
+                 transitions in our benchmarks in Chrome and Safari. It runs ",
+            ),
+            key("natively"),
+            plain(" on macOS, Windows and Linux, and "),
+            key("in browsers"),
+            plain("."),
+        ],
+        vec![
+            plain("Apps are written in "),
+            key("Rust"),
+            plain(" or "),
+            key("TypeScript"),
+            plain(
+                ", with text shaped and laid out properly: kerning, fallback fonts, mixed \
+                 styles and components within a line, as the Text panel shows.",
+            ),
+        ],
+    ];
+    let paragraphs = paragraphs
+        .into_iter()
+        .map(|spans| {
+            sample(
+                app,
+                Text::rich(spans, ABOUT_TEXT_SIZE)
+                    .with_color(NEAR_BLACK)
+                    .with_weight(400)
+                    .with_wrap_width(ABOUT_WRAP_WIDTH)
+                    .with_line_height(1.5),
+            )
+        })
+        .collect();
+    AboutContent { paragraphs, mark }
 }
 
 pub struct ExampleDetail {
@@ -149,6 +318,13 @@ pub struct ExampleDetail {
 }
 
 impl ExampleDetail {
+    /// Shows the logo mark's `texture` on the About panel's mark, in its
+    /// first line. The texture is the splash's first logo frame, which is the
+    /// brand's mark, and is never evicted, so it can be given at any time.
+    pub fn set_about_mark(&self, app: &mut Proteus, texture: proteus_sdk::TextureHandle) {
+        let _ = self.about.mark.set_texture(app, texture);
+    }
+
     /// Every entity belonging to category `idx` (0–5) — used to reveal them
     /// together once their merge transition completes, and to hide them
     /// together on the way out. See the module doc for why this is a plain
@@ -163,9 +339,11 @@ impl ExampleDetail {
                 handles.extend(self.effects.row_boxes.iter().flatten().copied());
                 handles.extend(self.effects.opacity_item_labels);
             }
-            1 => {
-                handles.extend(self.text.row_labels);
-                handles.extend(self.text.row_items.iter().flatten().copied());
+            TEXT => {
+                for row in self.text.columns.iter().flatten() {
+                    handles.push(row.label);
+                    handles.extend(row.items.iter().map(|(item, _)| *item));
+                }
             }
             2 => {
                 handles.extend(self.transforms.row_labels);
@@ -177,7 +355,7 @@ impl ExampleDetail {
                 handles.push(self.keys.keyboard.board);
                 handles.extend(self.keys.lines);
             }
-            5 => handles.extend(self.about.lines),
+            ABOUT => handles.extend(&self.about.paragraphs),
             _ => {}
         }
         handles
@@ -191,7 +369,7 @@ fn heading(app: &mut Proteus, text: &str) -> Handle {
             color: Vec4::new(1.0, 1.0, 1.0, 0.0),
             ..Default::default()
         })
-        .text(Text::new(text, 28.0).with_color(violet()))
+        .text(Text::new(text, HEADING_SIZE_PX).with_color(violet()))
         // Decorative, not a click target — see
         // `ComponentSpec::non_interactive`'s doc.
         .non_interactive(),
@@ -224,6 +402,237 @@ fn effect_box(app: &mut Proteus, size: f32) -> Handle {
         .non_interactive(),
     )
 }
+
+/// The Text panel's dark grey, for its examples.
+const TEXT_GREY: Vec4 = Vec4::new(0.16, 0.16, 0.17, 1.0);
+/// A muted grey, for the smaller words and the captions.
+const MUTED_GREY: Vec4 = Vec4::new(0.42, 0.42, 0.45, 1.0);
+
+/// A component that only shows `text`, at the panel's content depth.
+fn sample(app: &mut Proteus, text: Text) -> Handle {
+    app.component(
+        ComponentSpec::new(QuadState {
+            position: Vec3::new(0.0, 0.0, CONTENT_Z),
+            color: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            ..Default::default()
+        })
+        .text(text)
+        .non_interactive(),
+    )
+}
+
+/// Creates the Text panel's rows: one for each of the text features, in two
+/// columns. See `layout_text` for where they go.
+fn text_content(app: &mut Proteus) -> TextContent {
+    let row = |app: &mut Proteus, label: &str, items: Vec<Text>| TextRow {
+        label: row_label(app, label, 16.0),
+        items: items
+            .into_iter()
+            .map(|text| (sample(app, text), None))
+            .collect(),
+    };
+    let grey = |content: &str, size: f32| Text::new(content, size).with_color(TEXT_GREY);
+
+    // --- Styles, on the left ---
+    let font_size = row(
+        app,
+        "Font Size",
+        [14.0, 20.0, 28.0, 40.0]
+            .map(|size| grey("Text", size))
+            .to_vec(),
+    );
+    let color = row(
+        app,
+        "Color",
+        [TEXT_GREY, Vec4::ONE, ACCENT]
+            .map(|c| Text::new("Text", 20.0).with_color(c))
+            .to_vec(),
+    );
+    let spacing = row(
+        app,
+        "Letter Spacing",
+        [0.0, 4.0, 10.0]
+            .map(|s| grey("Text", 20.0).with_letter_spacing(s))
+            .to_vec(),
+    );
+    // Inter is variable, so any weight from 100 to 900 is drawn. Its italic
+    // isn't loaded, so it's slanted; Lora's italic is a face of its own.
+    let mut weights: Vec<Text> = [300, 500, 700, 900]
+        .map(|w| grey("Aa", 20.0).with_weight(w))
+        .to_vec();
+    weights.push(grey("Aa", 20.0).with_weight(500).italic());
+    weights.push(grey(IN_LORA_ITALIC, 20.0).with_family(LORA).italic());
+    let weight = row(app, "Weight & Italic", weights);
+    let families = row(
+        app,
+        "Families",
+        vec![
+            grey("Inter", 20.0).with_weight(500),
+            grey(IN_LORA, 20.0).with_family(LORA).with_weight(500),
+        ],
+    );
+    // Inter has no Hindi, so Noto Serif Devanagari, the fallback, draws it.
+    let fallback = row(
+        app,
+        "Fallback",
+        vec![grey(&format!("Hello, {HINDI_GREETING}"), 20.0)],
+    );
+
+    // --- Paragraphs and components, on the right ---
+    const PARAGRAPH: &str = "Lines wrap at a width, and align within it.";
+    let paragraph = |align| {
+        grey(PARAGRAPH, 15.0)
+            .with_wrap_width(106.0)
+            .with_align(align)
+    };
+    let wrap = row(
+        app,
+        "Wrap & Align",
+        vec![
+            paragraph(TextAlign::Start),
+            paragraph(TextAlign::Center),
+            paragraph(TextAlign::End),
+        ],
+    );
+    let lines = row(
+        app,
+        "Lines",
+        vec![
+            grey(PARAGRAPH, 15.0)
+                .with_wrap_width(138.0)
+                .with_line_height(1.6),
+            grey(
+                "A paragraph longer than its two lines ends in an ellipsis of its own.",
+                15.0,
+            )
+            .with_wrap_width(172.0)
+            .with_max_lines(2)
+            .with_ellipsis(" \u{2026} more"),
+        ],
+    );
+    let mixed = row(
+        app,
+        "Mixed Styles",
+        vec![Text::rich(
+            [
+                Span::new("Bold").bold(),
+                Span::new(", "),
+                Span::new("italic").italic(),
+                Span::new(", "),
+                Span::new("colored").with_color(ACCENT).bold(),
+                Span::new(" and "),
+                Span::new("small").with_size(13.0).with_color(MUTED_GREY),
+                Span::new(", with a mark"),
+                Span::new("1").with_vertical_align(VerticalAlign::Super),
+            ],
+            18.0,
+        )
+        .with_color(TEXT_GREY)
+        .with_weight(400)],
+    );
+
+    // A key cap and a small spinning square, each a component in a gap in the
+    // line. The square's gap is wide enough for its corners as it turns and
+    // grows, so they never touch the words beside it.
+    let key = app.component(
+        ComponentSpec::new(QuadState {
+            position: Vec3::new(0.0, 0.0, 0.001),
+            size: KEY_SIZE,
+            color: Vec4::ONE,
+            corner_radius: 5.0,
+            ..Default::default()
+        })
+        .border(Border::new(1.5, violet()))
+        .text(
+            Text::new("K", 14.0)
+                .with_color(violet())
+                .with_box(TextBox::CapHeight),
+        )
+        .non_interactive(),
+    );
+    let square = app.component(
+        ComponentSpec::new(QuadState {
+            position: Vec3::new(0.0, 0.0, 0.001),
+            size: Vec2::splat(SQUARE_SIDE),
+            color: ACCENT,
+            corner_radius: 3.0,
+            ..Default::default()
+        })
+        .non_interactive(),
+    );
+    let components = row(
+        app,
+        "Components",
+        vec![Text::rich(
+            [
+                Span::new("Press "),
+                Span::component(key.id(), KEY_SIZE + Vec2::new(4.0, 2.0))
+                    .with_vertical_align(VerticalAlign::Middle),
+                Span::new(" to continue, or watch "),
+                Span::component(square.id(), Vec2::splat(SQUARE_GAP))
+                    .with_vertical_align(VerticalAlign::Middle),
+                Span::new(" spin."),
+            ],
+            18.0,
+        )
+        .with_color(TEXT_GREY)
+        .with_weight(400)],
+    );
+
+    // The same Hindi button twice: its label centered by its line box, which
+    // has room below for vowel marks the label doesn't use, then by its
+    // x-height, where Devanagari's headline is.
+    let label = |text_box| {
+        Text::new(HINDI_BUTTON, 15.0)
+            .with_color(Vec4::ONE)
+            .with_box(text_box)
+    };
+    let pill_size = app
+        .measure_text(&label(TextBox::XHeight))
+        .unwrap_or(Vec2::new(60.0, 8.0))
+        + Vec2::new(2.0 * 12.0, 2.0 * 9.0);
+    let pill = |app: &mut Proteus, text_box| {
+        app.component(
+            ComponentSpec::new(QuadState {
+                position: Vec3::new(0.0, 0.0, CONTENT_Z),
+                size: pill_size,
+                color: violet(),
+                corner_radius: pill_size.y / 2.0,
+                ..Default::default()
+            })
+            .text(label(text_box))
+            .non_interactive(),
+        )
+    };
+    let caption = |app: &mut Proteus, content: &str| {
+        sample(app, Text::new(content, 14.0).with_color(MUTED_GREY))
+    };
+    let text_box = TextRow {
+        label: row_label(app, "Text Box", 16.0),
+        items: vec![
+            (pill(app, TextBox::Line), Some(pill_size)),
+            (caption(app, "line box"), None),
+            (pill(app, TextBox::XHeight), Some(pill_size)),
+            (caption(app, "x-height"), None),
+        ],
+    };
+
+    TextContent {
+        columns: [
+            vec![font_size, color, spacing, weight, families, fallback],
+            vec![wrap, lines, mixed, components, text_box],
+        ],
+        square,
+    }
+}
+
+/// The key cap's size, in the Text panel's line of text.
+const KEY_SIZE: Vec2 = Vec2::new(22.0, 22.0);
+/// The spinning square's side.
+const SQUARE_SIDE: f32 = 16.0;
+/// The side of the spinning square's gap: its diagonal, √2 times its side, at
+/// the largest it breathes to, 1.2 times, with a pixel to spare.
+const SQUARE_GAP: f32 = SQUARE_SIDE * std::f32::consts::SQRT_2 * 1.2 + 1.0;
 
 pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     let panel = app.component(
@@ -390,45 +799,7 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     };
 
     // --- Text (category 1) ---
-    const SAMPLE: &str = "Sample Text";
-    let text_grey = Vec4::new(0.16, 0.16, 0.17, 1.0);
-    let sample = |app: &mut Proteus, text: Text| -> Handle {
-        app.component(
-            ComponentSpec::new(QuadState {
-                position: Vec3::new(0.0, 0.0, CONTENT_Z),
-                color: Vec4::new(1.0, 1.0, 1.0, 0.0),
-                ..Default::default()
-            })
-            .text(text)
-            .non_interactive(),
-        )
-    };
-    let font_size_label = row_label(app, "Font Size", 16.0);
-    let font_size_items: Vec<Handle> = [14.0, 20.0, 28.0, 40.0]
-        .into_iter()
-        .map(|size| sample(app, Text::new(SAMPLE, size).with_color(text_grey)))
-        .collect();
-    let color_label = row_label(app, "Color", 16.0);
-    let color_items: Vec<Handle> = [text_grey, Vec4::ONE, ACCENT]
-        .into_iter()
-        .map(|color| sample(app, Text::new(SAMPLE, 20.0).with_color(color)))
-        .collect();
-    let letter_spacing_label = row_label(app, "Letter Spacing", 16.0);
-    let letter_spacing_items: Vec<Handle> = [0.0, 4.0, 10.0]
-        .into_iter()
-        .map(|spacing| {
-            sample(
-                app,
-                Text::new(SAMPLE, 20.0)
-                    .with_color(text_grey)
-                    .with_letter_spacing(spacing),
-            )
-        })
-        .collect();
-    let text = TextContent {
-        row_labels: [font_size_label, color_label, letter_spacing_label],
-        row_items: [font_size_items, color_items, letter_spacing_items],
-    };
+    let text = text_content(app);
 
     // --- Transformations (category 2) ---
     let transform_box = |app: &mut Proteus, rotation: f32, scale: f32| -> Handle {
@@ -481,9 +852,7 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
     };
 
     // --- About (category 5) ---
-    let about = AboutContent {
-        lines: ABOUT_LINES.map(|line| row_label(app, line, 16.0)),
-    };
+    let about = about_content(app);
 
     ExampleDetail {
         panel,
@@ -506,11 +875,22 @@ pub fn spawn(app: &mut Proteus) -> ExampleDetail {
 /// value, `advance_theme` immediately overwrites it with the real one"
 /// convention `screens::home`'s buttons already use.
 pub fn panel_target(idx: usize, viewport_size: Vec2) -> QuadState {
-    let width = (viewport_size.x * 0.85).min(1000.0);
+    let width = match idx {
+        TEXT => (viewport_size.x * 0.9).min(TEXT_PANEL_MAX_WIDTH),
+        ABOUT => (viewport_size.x * 0.85).min(ABOUT_PANEL_WIDTH),
+        _ => (viewport_size.x * 0.85).min(1000.0),
+    };
     let max_height = (viewport_size.y - 2.0 * TOP_CLEARANCE_PX).max(0.0);
     let height = (CONTENT_HEIGHT[idx] + 2.0 * PANEL_PADDING_PX).min(max_height);
+    // The panel and its heading above it are centered together in the space
+    // between the nav buttons' bottom edge and the window's bottom, so the
+    // heading is clear of the buttons. The space's middle is half the
+    // buttons' reach below the window's middle, and the panel sits lower
+    // than that by half the heading and its gap.
+    let nav_reach = super::nav::MARGIN_PX + super::nav::ICON_SIZE_PX;
+    let y = -nav_reach / 2.0 - (HEADING_HEIGHT_PX + HEADING_PANEL_GAP_PX) / 2.0;
     QuadState {
-        position: Vec3::new(0.0, 0.0, 0.5),
+        position: Vec3::new(0.0, y, 0.5),
         size: Vec2::new(width, height),
         rotation: 0.0,
         scale: 1.0,
@@ -522,24 +902,18 @@ pub fn panel_target(idx: usize, viewport_size: Vec2) -> QuadState {
 
 /// Positions category `idx`'s heading and every row/item — all in absolute
 /// world coordinates derived from `panel`'s (fixed, already-settled) target
-/// rect. Safe to call every tick: idempotent once every baked size involved
-/// has stabilized (mirrors `screens::splash::recenter`'s "wait on baking"
-/// pattern) — rows silently keep their previous position for a frame or two
-/// if a label hasn't baked yet.
+/// rect. Each text is measured before it's drawn, so every row is in place in
+/// the panel's first frame. Safe to call every tick: it's idempotent.
 pub fn layout_content(app: &mut Proteus, detail: &ExampleDetail, idx: usize, panel: &QuadState) {
     let heading = detail.headings[idx];
-    if let Some(size) = heading.baked_text_size(app) {
-        let x = panel.position.x - panel.size.x / 2.0 + PANEL_PADDING_PX + size.x / 2.0;
-        let y = panel.position.y + panel.size.y / 2.0 + HEADING_PANEL_GAP_PX + size.y / 2.0;
-        if let Some(mut qs) = app.world_mut().get_mut::<QuadState>(heading.id()) {
-            qs.position.x = x;
-            qs.position.y = y;
-        }
-    }
+    let size = measure(app, heading);
+    let x = panel.position.x - panel.size.x / 2.0 + PANEL_PADDING_PX + size.x / 2.0;
+    let y = panel.position.y + panel.size.y / 2.0 + HEADING_PANEL_GAP_PX + size.y / 2.0;
+    place(app, heading, x, y);
 
     match idx {
         0 => layout_effects(app, detail, panel),
-        1 => layout_text(app, detail, panel),
+        TEXT => layout_text(app, detail, panel),
         2 => layout_transforms(app, detail, panel),
         3 => place(
             app,
@@ -548,7 +922,7 @@ pub fn layout_content(app: &mut Proteus, detail: &ExampleDetail, idx: usize, pan
             panel.position.y,
         ),
         KEYS => layout_keys(app, detail, panel),
-        5 => layout_about(app, detail, panel),
+        ABOUT => layout_about(app, detail, panel),
         _ => {}
     }
 }
@@ -560,8 +934,17 @@ fn place(app: &mut Proteus, handle: Handle, world_x: f32, world_y: f32) {
     }
 }
 
-fn label_width(app: &Proteus, handle: Handle) -> f32 {
-    handle.baked_text_size(app).map(|s| s.x).unwrap_or(0.0)
+/// Returns the size of `handle`'s text, measured before it's drawn, or zero
+/// for a component with no text.
+fn measure(app: &mut Proteus, handle: Handle) -> Vec2 {
+    let Some(text) = app.world().get::<Text>(handle.id()).cloned() else {
+        return Vec2::ZERO;
+    };
+    app.measure_text(&text).unwrap_or(Vec2::ZERO)
+}
+
+fn label_width(app: &mut Proteus, handle: Handle) -> f32 {
+    measure(app, handle).x
 }
 
 fn layout_effects(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
@@ -600,30 +983,46 @@ fn layout_effects(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) 
     }
 }
 
+/// Positions the Text panel's two columns of rows. In each column, the
+/// examples start after its widest label, and each row is as tall as its
+/// tallest example, with a gap below it. The right column starts at the
+/// panel's middle.
 fn layout_text(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
     const ROW_INDENT_EXTRA: f32 = 10.0;
-    const ROW_GAP_Y: f32 = 90.0;
-    const LABEL_ITEM_GAP: f32 = 24.0;
-    const ITEM_GAP: f32 = 30.0;
-    const ROW_HEIGHT: f32 = 56.0;
+    const ROW_GAP_Y: f32 = 22.0;
+    const LABEL_ITEM_GAP: f32 = 20.0;
+    const ITEM_GAP: f32 = 16.0;
 
-    let left_x = panel.position.x - panel.size.x / 2.0 + PANEL_PADDING_PX;
-    let row_left_x = left_x + ROW_INDENT_EXTRA;
-    let panel_top_y = panel.position.y + panel.size.y / 2.0;
-    let top_y = panel_top_y - PANEL_PADDING_PX - ROW_HEIGHT / 2.0;
-    let row_y = [top_y, top_y - ROW_GAP_Y, top_y - 2.0 * ROW_GAP_Y];
+    let panel_left = panel.position.x - panel.size.x / 2.0 + PANEL_PADDING_PX;
+    let column_left = [
+        panel_left + ROW_INDENT_EXTRA,
+        panel.position.x + ROW_INDENT_EXTRA,
+    ];
+    let top_y = panel.position.y + panel.size.y / 2.0 - PANEL_PADDING_PX;
 
-    let items_start_x = row_left_x + label_width(app, detail.text.row_labels[2]) + LABEL_ITEM_GAP;
-
-    for (row, &y) in row_y.iter().enumerate() {
-        let label = detail.text.row_labels[row];
-        let lw = label_width(app, label);
-        place(app, label, row_left_x + lw / 2.0, y);
-        let mut running_x = items_start_x;
-        for &item in &detail.text.row_items[row] {
-            let iw = label_width(app, item);
-            place(app, item, running_x + iw / 2.0, y);
-            running_x += iw + ITEM_GAP;
+    for (rows, left) in detail.text.columns.iter().zip(column_left) {
+        let label_width = rows
+            .iter()
+            .map(|row| measure(app, row.label).x)
+            .fold(0.0, f32::max);
+        let items_left = left + label_width + LABEL_ITEM_GAP;
+        let mut y = top_y;
+        for row in rows {
+            let sizes: Vec<Vec2> = row
+                .items
+                .iter()
+                .map(|&(item, size)| size.unwrap_or_else(|| measure(app, item)))
+                .collect();
+            let label = measure(app, row.label);
+            let height = sizes.iter().map(|s| s.y).fold(label.y, f32::max);
+            let middle = y - height / 2.0;
+            place(app, row.label, left + label.x / 2.0, middle);
+            let mut x = items_left;
+            for (&(item, _), size) in row.items.iter().zip(&sizes) {
+                place(app, item, x + size.x / 2.0, middle);
+                x += size.x + ITEM_GAP;
+            }
+            y -= height + ROW_GAP_Y;
         }
     }
 }
@@ -677,20 +1076,17 @@ fn layout_keys(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
     }
 }
 
-/// Positions the About panel's lines, aligned left, as the other panels'
-/// rows are.
+/// Positions the About panel's paragraphs, aligned left as the other
+/// panels' rows are, one below another with a gap between them. Each is
+/// measured, so the next starts below the last line of the one before.
 fn layout_about(app: &mut Proteus, detail: &ExampleDetail, panel: &QuadState) {
     const ROW_INDENT_EXTRA: f32 = 10.0;
     let left_x = panel.position.x - panel.size.x / 2.0 + PANEL_PADDING_PX + ROW_INDENT_EXTRA;
-    let top_y = panel.position.y + panel.size.y / 2.0 - PANEL_PADDING_PX;
-    for (i, &line) in detail.about.lines.iter().enumerate() {
-        let w = label_width(app, line);
-        place(
-            app,
-            line,
-            left_x + w / 2.0,
-            top_y - (i as f32 + 0.5) * LINE_HEIGHT_PX,
-        );
+    let mut top_y = panel.position.y + panel.size.y / 2.0 - PANEL_PADDING_PX;
+    for &paragraph in &detail.about.paragraphs {
+        let size = measure(app, paragraph);
+        place(app, paragraph, left_x + size.x / 2.0, top_y - size.y / 2.0);
+        top_y -= size.y + ABOUT_PARAGRAPH_GAP;
     }
 }
 
@@ -711,13 +1107,28 @@ pub(crate) fn hsv_to_rgb(hue_deg: f32) -> Vec3 {
     }
 }
 
-/// Drives the Transformations screen's "Continuous Animation" box:
-/// full rotation every 4s, breathing scale 0.8×–1.2× (sine, 2s period),
-/// full hue cycle every 5s. `elapsed` accumulates only while this screen is
-/// active — the caller (`Demo::advance_example_animation`) is responsible
-/// for pausing (not resetting) it otherwise, so the animation resumes from
-/// wherever it left off rather than restarting.
-pub fn advance_continuous_animation(app: &mut Proteus, detail: &ExampleDetail, elapsed: f32) {
+/// Drives the panel `idx`'s spinning box: the Transformations screen's
+/// "Continuous Animation" box, or the Text screen's small square in its line
+/// of text. Each turns fully every 4s, breathes in scale 0.8×–1.2× (sine, 2s
+/// period), and cycles fully through the hues every 5s. `elapsed` accumulates
+/// only while that screen is active — the caller
+/// (`Demo::advance_example_animation`) is responsible for pausing (not
+/// resetting) it otherwise, so the animation resumes from wherever it left
+/// off rather than restarting.
+///
+/// Only the box's rotation, scale and color change. The text that holds the
+/// square owns its position, so its text isn't laid out or baked again as it
+/// turns.
+pub fn advance_continuous_animation(
+    app: &mut Proteus,
+    detail: &ExampleDetail,
+    idx: usize,
+    elapsed: f32,
+) {
+    let spinning = match idx {
+        TEXT => detail.text.square,
+        _ => detail.transforms_continuous_box,
+    };
     const ROTATION_PERIOD_SECS: f32 = 4.0;
     const SCALE_PERIOD_SECS: f32 = 2.0;
     const HUE_PERIOD_SECS: f32 = 5.0;
@@ -732,10 +1143,7 @@ pub fn advance_continuous_animation(app: &mut Proteus, detail: &ExampleDetail, e
     let hue = (elapsed / HUE_PERIOD_SECS) * 360.0;
     let rgb = hsv_to_rgb(hue);
 
-    if let Some(mut qs) = app
-        .world_mut()
-        .get_mut::<QuadState>(detail.transforms_continuous_box.id())
-    {
+    if let Some(mut qs) = app.world_mut().get_mut::<QuadState>(spinning.id()) {
         qs.rotation = rotation;
         qs.scale = scale;
         qs.color = Vec4::new(rgb.x, rgb.y, rgb.z, 1.0);
