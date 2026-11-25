@@ -14,6 +14,7 @@
 //! transition_tick      advance transitions and interpolate geometry
 //! transition_complete  finish transitions that have reached the end
 //! group_complete       finish splits and merges whose pieces have all arrived
+//! inline_components    place each component held in a text in its gap
 //! visibility           work out each entity's visibility from its ancestors'
 //! opacity              work out each entity's opacity from its ancestors'
 //! cascade_flush        apply those results before baking reads them
@@ -30,6 +31,7 @@ use crate::channel::{self, channel_dispatch_system, register_channel_hooks};
 use crate::devices::{AppDevices, InputMode, NavigatingActions};
 use crate::focus::focus_validity_system;
 use crate::hierarchy::{opacity_system, visibility_system};
+use crate::inline::inline_components_system;
 use crate::input::{
     hit_test_system, FocusState, HoveredEntity, InteractionEvents, KeyPressedEntity, PointerInput,
     PressedEntity,
@@ -83,6 +85,9 @@ pub enum ProteusSet {
     TransitionComplete,
     /// Finalize group transitions when all virtual entities complete.
     GroupTransitionComplete,
+    /// Place each component held in a text in its gap; see
+    /// [`crate::inline`].
+    InlineComponents,
     /// Cascade `Visibility` changes down the hierarchy.
     Visibility,
     /// Compute effective opacity down the hierarchy.
@@ -258,6 +263,7 @@ pub fn build_schedule() -> Schedule {
             ProteusSet::TransitionTick,
             ProteusSet::TransitionComplete,
             ProteusSet::GroupTransitionComplete,
+            ProteusSet::InlineComponents,
             ProteusSet::Visibility,
             ProteusSet::Opacity,
             ProteusSet::CascadeFlush,
@@ -318,13 +324,26 @@ pub fn build_schedule() -> Schedule {
     schedule
         .add_systems(group_transition_complete_system.in_set(ProteusSet::GroupTransitionComplete));
 
+    // Before visibility, which hides the components a text doesn't show.
+    schedule.add_systems(inline_components_system.in_set(ProteusSet::InlineComponents));
+
     schedule
 }
 
-/// Builds the schedule [`ProteusWorld::refresh_cascades`] runs: only the
-/// visibility and opacity systems, and applying their results.
+/// Builds the schedule [`ProteusWorld::refresh_cascades`] runs: placing the
+/// components held in texts, so a text the app set after the tick has them in
+/// place this frame, then the visibility and opacity systems, and applying
+/// their results.
 fn build_cascade_schedule() -> Schedule {
     let mut schedule = Schedule::default();
-    schedule.add_systems((visibility_system, opacity_system, ApplyDeferred).chain());
+    schedule.add_systems(
+        (
+            inline_components_system,
+            visibility_system,
+            opacity_system,
+            ApplyDeferred,
+        )
+            .chain(),
+    );
     schedule
 }

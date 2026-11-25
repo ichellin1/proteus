@@ -77,6 +77,17 @@ impl Default for QuadState {
 }
 
 // ---------------------------------------------------------------------------
+// DeclaredGeometry — where a component rests
+// ---------------------------------------------------------------------------
+
+/// A component's declared geometry, where it rests. It's kept apart from its
+/// [`QuadState`], which changes during transitions. `proteus-sdk` sets it, and
+/// so does a text that holds the component in a line; see
+/// [`crate::inline`].
+#[derive(Component, Debug, Clone)]
+pub struct DeclaredGeometry(pub QuadState);
+
+// ---------------------------------------------------------------------------
 // Lifecycle — the component state machine
 // ---------------------------------------------------------------------------
 

@@ -121,6 +121,44 @@ fn no_visibility_defaults_to_visible() {
     );
 }
 
+// A text whose box is trimmed to its letters is drawn so the box, not the
+// whole image, is placed by the entity's anchor: the text quad's anchor moves
+// to the point of the image that's the box's. A whole-image box keeps it.
+#[test]
+fn a_trimmed_text_box_is_placed_by_the_anchor() {
+    let baked = |text_box| BakedText {
+        uv_offset: [0.0, 0.0],
+        uv_scale: [0.1, 0.1],
+        page: 0,
+        pixel_size: [60.0, 20.0],
+        text_box,
+    };
+    let text_anchor = |text_box, anchor: Vec2| {
+        let mut world = World::new();
+        let mut button = sky_blue_button();
+        button.anchor = anchor;
+        world.spawn((button, baked(text_box), Text::new("Save", 14.0)));
+        collect_instances(&mut world)[1].anchor
+    };
+    // A box 10 pixels tall, 4 below the image's top: its middle is 9 down.
+    let trimmed = Some([4.0, 10.0]);
+    assert_f32_slice_approx(
+        &text_anchor(trimmed, Vec2::splat(0.5)),
+        &[0.5, 0.45],
+        "centered",
+    );
+    assert_f32_slice_approx(
+        &text_anchor(trimmed, Vec2::ZERO),
+        &[0.0, 0.2],
+        "by the box's top",
+    );
+    assert_f32_slice_approx(
+        &text_anchor(None, Vec2::splat(0.5)),
+        &[0.5, 0.5],
+        "a whole image",
+    );
+}
+
 // A text entity produces two instances: a solid-color background layer
 // (WHITE_PIXEL_UV) and a text overlay layer (BakedText UV).
 #[test]
@@ -130,6 +168,7 @@ fn text_entity_produces_two_instances() {
         uv_scale: [0.05, 0.01],
         page: 0,
         pixel_size: [60.0, 24.0],
+        text_box: None,
     };
 
     let mut world = World::new();
@@ -183,6 +222,7 @@ fn text_color_applied_to_overlay() {
         uv_scale: [0.1, 0.02],
         page: 0,
         pixel_size: [60.0, 24.0],
+        text_box: None,
     };
 
     let mut world = World::new();
@@ -276,6 +316,7 @@ fn shadow_not_on_text_overlay() {
         uv_scale: [0.05, 0.01],
         page: 0,
         pixel_size: [60.0, 24.0],
+        text_box: None,
     };
 
     let mut world = World::new();
@@ -742,6 +783,7 @@ fn border_not_on_text_overlay() {
         uv_scale: [0.05, 0.01],
         page: 0,
         pixel_size: [60.0, 24.0],
+        text_box: None,
     };
 
     let mut world = World::new();
@@ -877,6 +919,7 @@ fn baked_texture_not_on_text_overlay() {
         uv_scale: [0.05, 0.01],
         page: 0,
         pixel_size: [60.0, 24.0],
+        text_box: None,
     };
 
     let mut world = World::new();
@@ -988,6 +1031,7 @@ fn baked_image_coexists_with_text_overlay() {
         uv_scale: [0.05, 0.01],
         page: 0,
         pixel_size: [60.0, 24.0],
+        text_box: None,
     };
 
     let mut world = World::new();

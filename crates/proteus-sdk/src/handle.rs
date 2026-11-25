@@ -19,9 +19,10 @@ use proteus_ui::{
     TransitionInteractionConfig, TransitionRequest, VideoCrossfade, VideoPlayer, Visibility,
 };
 
-use crate::app::{DeclaredGeometry, KeyResult};
+use crate::app::KeyResult;
 use crate::callback::EventKind;
 use crate::Proteus;
+use proteus_ui::DeclaredGeometry;
 
 // ---------------------------------------------------------------------------
 // HandleError
@@ -476,12 +477,14 @@ impl Handle {
     /// text hasn't been baked yet or the component has none.
     ///
     /// The host bakes text the next time it renders a frame. Use this for
-    /// layout that depends on the text's real width.
+    /// layout that depends on the text's real width, or measure the text
+    /// sooner with [`Proteus::measure_text`], which gives the same size. It's
+    /// the size of the text's box; see `Text::text_box`.
     pub fn baked_text_size(&self, app: &Proteus) -> Option<Vec2> {
         app.world
             .world
             .get::<BakedText>(self.0)
-            .map(|b| Vec2::from(b.pixel_size))
+            .map(BakedText::box_size)
     }
 
     /// The size in pixels of this component's baked image, or `None` if the

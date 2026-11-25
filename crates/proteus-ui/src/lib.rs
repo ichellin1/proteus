@@ -30,6 +30,7 @@ pub mod effects;
 pub mod focus;
 pub mod hierarchy;
 pub mod image;
+pub mod inline;
 pub mod input;
 mod instance_cache;
 pub mod interaction;
@@ -56,8 +57,8 @@ pub use channel::{
 };
 pub use collect::{collect_instances, quad_state_to_instance, BakedTexture};
 pub use component::{
-    Disabled, Lifecycle, QuadState, TransitionInteractionConfig, TransitionRequest, Virtual,
-    Visibility,
+    DeclaredGeometry, Disabled, Lifecycle, QuadState, TransitionInteractionConfig,
+    TransitionRequest, Virtual, Visibility,
 };
 pub use devices::{
     AcceptsDevices, AppDevices, InputDevice, InputDevices, InputMode, NavigatingActions,
@@ -69,6 +70,7 @@ pub use hierarchy::{
     EffectiveOpacity, EffectiveVisibility, Opacity,
 };
 pub use image::{BakedImage, Image, ImageCrop};
+pub use inline::{inline_components_system, HiddenByText, InlineLayout};
 pub use input::{
     quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, KeyPressedEntity,
     PointerInput, PressedEntity,
@@ -88,9 +90,9 @@ pub use navigation::{
 pub use schedule::{flush_commands_system, CommandQueue, ProteusSet, ProteusWorld};
 pub use spawn_order::SpawnOrder;
 pub use text::{
-    fit_to_page, measure_text, page_side, BakedColor, BakedText, ClearGlyphCache, FontStatus,
-    Fonts, MissingGlyphs, Span, Text, TextAlign, TextOverflow, VerticalAlign, WaitsForFont,
-    WhileLoading,
+    baked_box, fit_to_page, lay_out_text, measure_text, page_side, BakedColor, BakedText,
+    ClearGlyphCache, FontStatus, Fonts, InlineComponent, LaidOutText, MissingGlyphs, Span, Text,
+    TextAlign, TextBox, TextOverflow, VerticalAlign, WaitsForFont, WhileLoading,
 };
 pub use texture_ref::{CompositeTextureRef, ImageTextureRef, TextTextureRef};
 pub use topology::{

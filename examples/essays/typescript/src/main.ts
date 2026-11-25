@@ -7,13 +7,16 @@
  * most two lines and ends in "…". Its opening is spaced at a line height of
  * 1.45, stops after five lines, and ends in an ellipsis of the card's own. The
  * second card's ellipsis is bold, in the accent color, with an arrow after it.
- * Its source is clipped after two lines, and the titles in it are italic.
+ * The fourth card's is "…" then a small button, "आगे पढ़ें" ("read more"),
+ * which opens the essay. Its source is clipped after two lines, and the titles
+ * in it are italic.
  *
  * A card opens into its essay (1→1). The essay's byline is two lines, split
  * with a `\n`, with the author in a heavier weight and the year smaller and
- * muted. Its opening wraps at the column's width, and its pull quote is
- * centered. While an essay is open, a toolbar at the top sets its body's size,
- * alignment, bold and italic, line height and font, as a text editor's does.
+ * muted. Its opening starts with a tag showing the year, wraps at the column's
+ * width, and its pull quote is centered. While an essay is open, a toolbar at
+ * the top sets its body's size, alignment, bold and italic, line height and
+ * font, as a text editor's does.
  *
  * The essays are Mary Wollstonecraft's "A Vindication of the Rights of Woman"
  * (1792), Henry David Thoreau's "Walking" (1862) and Robert Louis Stevenson's
@@ -77,22 +80,39 @@
  *     bakes it again. A plain text's color, and any text's alpha, cost nothing
  *     to change.
  *   - A text can be measured before it's drawn, with `measureText`. The
- *     essay's back button is as wide as its label, plus room each side.
+ *     essay's back button is as wide as its label, plus room each side. The
+ *     fourth card's button is in Hindi, so it's measured once the fallback
+ *     font arrives: before, `measureText` gives `undefined`.
+ *   - A span can hold a component, as `{ component, width, height }`, in a gap
+ *     its size that wraps as a word does. The text makes the component its
+ *     child and places it in the gap, so the body's tag moves as the toolbar
+ *     changes the text. `verticalAlign: "middle"` centers the tag and the
+ *     fourth card's button on the text's lowercase letters. The button is in an
+ *     ellipsis, so it's shown only while the opening is cut off, and it takes
+ *     the click, so it opens the essay as the card does.
+ *   - A text's box can be trimmed to its letters, so a button centers them
+ *     rather than its line box, which has room for descenders below them. The
+ *     back button and the year tag use `box: "capHeight"`, since their labels
+ *     are capitals and digits. The Hindi button uses `"xHeight"`: Devanagari's
+ *     letters hang from a headline at the font's x-height, and the vowel marks
+ *     above it draw outside the box, into the button's padding.
  *
- * Not shown here: a weight a font doesn't have, a character no font has (which
- * is drawn as a box), and components within a line of text. Measuring a text
- * whose font is still loading, which gives `undefined`, and a text too large
- * for an atlas page are covered by the Rust tests only.
+ * Not shown here: a weight a font doesn't have, and a character no font has
+ * (which is drawn as a box). A text too large for an atlas page, a component's
+ * gap on the baseline, raised or lowered, one cut off with no ellipsis, and a
+ * trimmed box around several lines or a line in several fonts are covered by
+ * the Rust tests only.
  */
 
 import { colorFrom, mount } from "proteus-sdk";
-import type { Color, ComponentSpec, Geometry, Handle, ProteusApp, SpanSpec, TextSpec } from "proteus-sdk";
+import type { Color, ComponentSpec, Geometry, Handle, ProteusApp, SpanSpec, TextSpanSpec, TextSpec } from "proteus-sdk";
 
 const BACKGROUND = colorFrom("#1d1b26");
 const PAPER = colorFrom("#f4f1ea");
 const INK = colorFrom("#24212b");
 const MUTED = colorFrom("#6b6676");
 const ACCENT = colorFrom("#7a5fb0");
+const ACCENT_HOVER = colorFrom("#8d74c2");
 /** The color of a button, light enough to stand out from the background. */
 const BUTTON = colorFrom("#4d4a58");
 const BUTTON_HOVER = colorFrom("#5f5c6a");
@@ -112,6 +132,11 @@ interface Essay {
   more: string;
   /** An icon from Material Icons after the ellipsis, which puts both in the accent color. */
   moreIcon?: string;
+  /**
+   * Whether the ellipsis is "…" then a small button labelled `more`, which opens the essay. The
+   * button is a component in the opening's last line.
+   */
+  moreButton?: boolean;
   /** A line from later in the essay. */
   quote: string;
   /**
@@ -122,7 +147,7 @@ interface Essay {
 }
 
 /** The mark that ties a pull quote to its source, a dagger, raised as a footnote mark is. */
-const FOOTNOTE_MARK: SpanSpec = { content: "\u2020", verticalAlign: "super" };
+const FOOTNOTE_MARK: TextSpanSpec = { content: "\u2020", verticalAlign: "super" };
 
 /** Returns an essay's source as spans, with its titles in italic. */
 function sourceSpans(essay: Essay): SpanSpec[] {
@@ -192,7 +217,8 @@ const ESSAYS: Essay[] = [
     // This essay is in Devanagari, which none of the essays' fonts has, so the
     // fallback font, Noto Serif Devanagari, draws every character.
     opening: "आज बड़े ही आनंद का दिन है कि इस छोटे से नगर बलिया में हम इतने मनुष्यों को बड़े उत्साह से एक स्थान पर देखते हैं। इस अभागे आलसी देश में जो कुछ हो जाय वही बहुत कुछ है। बनारस ऐसे ऐसे बड़े नगरों में जब कुछ नहीं होता तो यह हम क्यों न कहैंगे कि बलिया में जो कुछ हमने देखा वह बहुत ही प्रशंसा के योग्य है।",
-    more: " आगे पढ़ें",
+    more: "आगे पढ़ें",
+    moreButton: true,
     quote: "\u201cहमारे हिंदुस्तानी लोग तो रेल की गाड़ी हैं।\u201d",
     source: [
       "From ",
@@ -326,9 +352,12 @@ function textAt(x: number, y: number, text: TextSpec, visible = true): Component
   };
 }
 
-/** Returns the text on a button. */
+/**
+ * Returns the text on a button. Its box runs from the cap height to the baseline, so the button
+ * centers its letters rather than its line box, which has room for descenders below them.
+ */
 function buttonLabel(label: string): TextSpec {
-  return { content: label, sizePx: 14, color: WHITE };
+  return { content: label, sizePx: 14, color: WHITE, box: "capHeight" };
 }
 
 /** Creates a small button showing `label`, which turns lighter on hover. */
@@ -380,7 +409,7 @@ function select(buttons: Handle[], chosen: number): void {
  */
 function cardEllipsis(essay: Essay): string | SpanSpec[] {
   if (essay.moreIcon === undefined) {
-    return essay.more;
+    return essay.moreButton ? "…" : essay.more;
   }
   return [
     { content: essay.more, weight: 700, color: ACCENT },
@@ -390,7 +419,47 @@ function cardEllipsis(essay: Essay): string | SpanSpec[] {
   ];
 }
 
-/** Creates a card's texts for `essay`, in reading order. */
+/**
+ * Creates the small button that ends a card's opening, labelled `label`, and returns it with
+ * its size. It's as wide as its label, measured before it's drawn, with room each side.
+ */
+function moreButton(app: ProteusApp, label: string): { button: Handle; width: number; height: number } {
+  // Devanagari has no capitals. Its letters hang from a headline at Noto Serif Devanagari's
+  // x-height, so a box from the x-height to the baseline centers them. The vowel marks above the
+  // headline draw outside the box, into the padding.
+  const text: TextSpec = { content: label, sizePx: 12, color: WHITE, box: "xHeight" };
+  // `undefined` while a font the label needs is loading.
+  const size = app.measureText(text);
+  if (!size) throw new Error("measure the button once its font has loaded");
+  const width = size.width + 2 * 10;
+  const height = size.height + 2 * 8;
+  const button = app.component({
+    geometry: box(0, 0, 0, width, height, ACCENT, height / 2),
+    hover: { color: ACCENT_HOVER },
+    pressed: { scale: 0.96 },
+    text,
+  });
+  return { button, width, height };
+}
+
+/** Returns a card's opening, ending in `ellipsis` when it runs past five lines. */
+function openingText(essay: Essay, ellipsis: string | SpanSpec[]): TextSpec {
+  return {
+    content: essay.opening,
+    family: LORA,
+    sizePx: 15,
+    color: INK,
+    wrapWidth: CARD_COLUMN,
+    lineHeight: 1.45,
+    maxLines: 5,
+    overflow: { ellipsis },
+  };
+}
+
+/**
+ * Creates a card's texts for `essay`, in reading order. A card whose ellipsis is a button
+ * starts with "…", and gets its button later; see `main`.
+ */
 function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
   const left = -CARD_WIDTH / 2 + CARD_PADDING;
   const top = CARD_HEIGHT / 2 - CARD_PADDING;
@@ -401,16 +470,7 @@ function cardTexts(app: ProteusApp, essay: Essay): Handle[] {
     textAt(left, top - 24, { content: essay.title, sizePx: 22, weight: 800, color: INK, wrapWidth: CARD_COLUMN, maxLines: 2 }),
     // The opening takes at most five lines and ends in the card's own ellipsis. It sits below
     // two lines of title in any of the scripts, and Hindi's is the tallest.
-    textAt(left, top - 104, {
-      content: essay.opening,
-      family: LORA,
-      sizePx: 15,
-      color: INK,
-      wrapWidth: CARD_COLUMN,
-      lineHeight: 1.45,
-      maxLines: 5,
-      overflow: { ellipsis: cardEllipsis(essay) },
-    }),
+    textAt(left, top - 104, openingText(essay, cardEllipsis(essay))),
     // The source takes at most two lines at the foot of the card, and is clipped with no mark.
     textAt(left, -CARD_HEIGHT / 2 + CARD_PADDING + 30, {
       spans: sourceSpans(essay),
@@ -434,9 +494,8 @@ function main(app: ProteusApp, canvasWidth: number): void {
   // None of the other fonts has Hindi. A character a text's font lacks is looked for in the
   // fallback font, then in the default font. Texts wait for the fallback font, as they do for
   // Lora.
-  app.loadFont(fontFile("NotoSerifDevanagari-Variable.ttf"), { family: DEVANAGARI }).catch((e: unknown) =>
-    console.warn(e),
-  );
+  const devanagari = app.loadFont(fontFile("NotoSerifDevanagari-Variable.ttf"), { family: DEVANAGARI });
+  devanagari.catch((e: unknown) => console.warn(e));
   app.setFallbackFonts([DEVANAGARI]);
   // Crimson Pro isn't downloaded until it's first chosen, and the promise is settled then.
   // Until then, texts in it are drawn in the default font, and they're drawn in Crimson Pro
@@ -501,6 +560,11 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const left = -PANEL_WIDTH / 2 + PANEL_PADDING;
   const top = PANEL_HEIGHT / 2 - PANEL_PADDING;
   const hiddenText = (x: number, y: number) => app.component(textAt(x, y, { content: "", sizePx: 16 }, false));
+  // The tag showing the essay's year at the start of the body, sized and labelled when an essay
+  // opens. It's the body's child from the start, so it's hidden with the body until then. Once
+  // the body holds it, in its first line, the body places it.
+  const tag = app.component({ geometry: box(0, 0, 0, 1, 1, ACCENT), nonInteractive: true });
+  let tagSize = { width: 0, height: 0 };
   // The back button fits its label, with room each side. The label is measured before it's
   // drawn, in the default font, which is never still loading.
   const backLabel = "← All essays";
@@ -511,6 +575,7 @@ function main(app: ProteusApp, canvasWidth: number): void {
   const title = hiddenText(left, top - 60);
   const byline = hiddenText(left, top - 150);
   const body = hiddenText(left, top - 200);
+  body.addChild(tag);
   // The quote sits below the tallest body, which is 20 pixels at a line height of 1.8.
   const quote = hiddenText(-300, -150);
   const source = hiddenText(left, -PANEL_HEIGHT / 2 + PANEL_PADDING + 14);
@@ -529,10 +594,18 @@ function main(app: ProteusApp, canvasWidth: number): void {
 
   const setVisible = (handles: Handle[], visible: boolean) => handles.forEach((h) => h.setVisible(visible));
 
-  /** Returns the opening of essay `i`, set as the toolbar's choices say. */
+  /**
+   * Returns the opening of essay `i`, set as the toolbar's choices say. It starts with the tag,
+   * which moves with the text as the toolbar changes it, centered on the text's lowercase
+   * letters.
+   */
   function bodyText(i: number): TextSpec {
     return {
-      content: ESSAYS[i].opening,
+      spans: [
+        { component: tag.id(), ...tagSize, verticalAlign: "middle" },
+        { content: " " },
+        { content: ESSAYS[i].opening },
+      ],
       family: FAMILIES[settings.family],
       sizePx: SIZES[settings.size][1],
       weight: settings.bold ? 700 : 400,
@@ -561,6 +634,14 @@ function main(app: ProteusApp, canvasWidth: number): void {
       color: INK,
       italic: true,
     });
+    // The tag is as wide as its year, measured before it's drawn, with room each side. The year
+    // is digits, as tall as capitals, so its box runs from the cap height to the baseline.
+    const label: TextSpec = { content: essay.year, sizePx: 12, weight: 600, color: WHITE, box: "capHeight" };
+    const size = app.measureText(label);
+    if (!size) throw new Error("the default font is loaded");
+    tagSize = { width: size.width + 2 * 8, height: size.height + 2 * 4 };
+    tag.setText(label);
+    tag.setDeclaredGeometry({ ...tag.declaredGeometry()!, size: tagSize, cornerRadius: tagSize.height / 2 });
     body.setText(bodyText(i));
     quote.setText({
       spans: [{ content: essay.quote }, { ...FOOTNOTE_MARK, sizePx: 14 }],
@@ -603,6 +684,22 @@ function main(app: ProteusApp, canvasWidth: number): void {
     if (open !== undefined) body.setText(bodyText(open));
   }
   apply();
+
+  // A card whose ellipsis is a button gets it once the fallback font arrives, since the label is
+  // in Hindi and can't be measured before. Until then, the card's Hindi text waits for the font
+  // too. The button takes the click, so it opens the essay as the card does.
+  ESSAYS.forEach((essay, i) => {
+    if (!essay.moreButton) return;
+    devanagari
+      .then(() => {
+        const { button, width, height } = moreButton(app, essay.more);
+        button.onClick(() => openEssay(i));
+        cardContents[i][2].setText(
+          openingText(essay, [{ content: "… " }, { component: button.id(), width, height, verticalAlign: "middle" }]),
+        );
+      })
+      .catch((e: unknown) => console.warn(e));
+  });
 
   cards.forEach((card, i) => {
     card.onClick(() => openEssay(i));

@@ -211,6 +211,7 @@ fn bake_system_bakes_quad_and_text_composite() {
             uv_scale: uv.uv_scale,
             page: uv.page,
             pixel_size: [glyphs.width as f32, glyphs.height as f32],
+            text_box: None,
         },
         TextTextureRef(text_texture_id),
     ));
@@ -349,6 +350,7 @@ fn a_bake_waits_for_its_text_and_draws_its_own_text_once() {
         uv_scale: [0.01, 0.01],
         page: 0,
         pixel_size: [30.0, 16.0],
+        text_box: None,
     };
     pw.world.entity_mut(parent).insert(baked_text.clone());
     pw.update(0.0);

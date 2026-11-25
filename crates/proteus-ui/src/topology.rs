@@ -1407,6 +1407,7 @@ mod tests {
                     uv_scale: [0.2, 0.2],
                     page: 0,
                     pixel_size: [50.0, 20.0],
+                    text_box: None,
                 },
                 Text::new("child", 16.0),
                 ChildOf(root),

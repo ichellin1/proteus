@@ -319,7 +319,7 @@ them has.
 The comments this release added, rewritten to read well: about 1,100 lines in the crates and
 the examples since v0.3.0, and the essays example's README. Many drop their verbs, chain clauses
 with colons and semicolons, or stack asides, so they're hard to read. The guides are left to
-step 12, which rewrites them under the same rules.
+step 13, which rewrites them under the same rules.
 
 - **Decided (2026-11-19): the rules come first,** so the later steps follow them too. A short
   part of CONTRIBUTING's "Writing comments and docs" says what makes a comment read well, each
@@ -447,7 +447,109 @@ A space kept in a line of text for a component, which sits there as a child of t
 component, flowing with the text as it wraps, in Rust and TypeScript; and a component in an
 ellipsis.
 
-### Step 10 — Images as raw pixels
+- **Decided (2026-11-23): a span can hold a component in place of text,**
+  `Span::component(handle.id(), size)` in Rust and `{ component: handle.id(), width, height }`
+  in TypeScript, named by its id as `children` are. parley keeps the gap, an inline box, in the
+  line, wraps it as a word and aligns it.
+- **Decided (2026-11-23): the gap's size is given in the span,** not taken from the component,
+  so a component that animates or grows on hover doesn't lay its text out and bake it again
+  each frame. The component's anchor places it in its gap: its center at the gap's center by
+  default, its top-left corner at the gap's with an anchor of (0, 0). A component larger than
+  its gap overlaps the text around it.
+- **Decided (2026-11-23): the text makes the component its child, and owns its position.**
+  Proteus adds it as a child of the text's component, as `add_child` does, and sets its
+  position whenever it lays the text out, over any the app gave it. A component named in its
+  own text, or in an ancestor's, is skipped with a warning.
+- **Decided (2026-11-23): components are placed during the tick, in the same frame,** with the
+  fonts in the app, again only when the text, the fonts or the display scale change. The
+  positions are rounded to whole pixels as the bake rounds the image, so a component sits
+  exactly in its gap.
+- **Decided (2026-11-23): a component the text doesn't show isn't drawn:** one whose gap is
+  cut off by the maximum number of lines, and every one in a text that waits for a font with
+  `Hide`. A marker of Proteus's own hides it, so the app's own visibility for it is kept.
+- **Decided (2026-11-23): a span's vertical alignment applies to its gap,** as parley does it:
+  `Baseline` puts the gap's bottom on the baseline, `Middle` centers it on the lowercase
+  letters, and `Super`, `Sub` and `Raise` work as for text. A gap taller than its line makes
+  the line taller.
+- **Decided (2026-11-23): measuring counts the gaps,** and a gap at the end of a line widens
+  the image as ink does, so the measured size stays the baked size.
+- **Decided (2026-11-23): an ellipsis can hold a component,** drawn only while the ellipsis is
+  shown.
+- **Decided (2026-11-23): not done:** a component's position isn't animated when its text
+  changes, and a component no longer in its text stays a child where it was last placed.
+- **Decided (2026-11-23): the essays example shows each case once.** The open essay's body
+  starts with a tag showing the essay's year, centered with `Middle`, which moves with the
+  text as the toolbar changes it. The Hindi card's ellipsis is a pill-shaped button, "आगे
+  पढ़ें", sized with `measure_text`, which turns lighter on hover and opens the essay. Each
+  other vertical alignment on a gap, a gap cut off with no ellipsis, a gap in a text waiting
+  for a font, and a component named in its own text are covered by tests only.
+- **Decided (2026-11-23), while building it: placement also runs in `refresh_cascades`,** so a
+  text the app sets in `update`, after the tick, has its components placed before the frame is
+  drawn. `DeclaredGeometry` moved from `proteus-sdk` to `proteus-ui`, so placement can set where
+  a component rests, and interaction styles return it there.
+- **Decided (2026-11-23), while building it: in TypeScript, the Hindi card's button is made once
+  the fallback font arrives,** since its label can't be measured before: `measureText` gives
+  `undefined` while the font loads, which the example shows.
+- [x] `Span::component` in Rust and the component span in TypeScript, laid out by parley.
+- [x] Inline components placed during the tick, hidden when their gap isn't shown.
+- [x] Tests: each gap's size, wrapping and widening the image, a tall gap; measuring equal to
+  baking with gaps at scales 1 and 2; each component in its gap by both anchors, after a wrap,
+  a realignment and a new display scale; hidden when cut off or waiting, with the app's own
+  visibility kept; an ellipsis component; each vertical alignment; the child rules; the
+  TypeScript span and its bad values.
+- [x] The essays example's tag and pill, in Rust and TypeScript.
+- [x] The content guide's components in text, ARCHITECTURE, and the release notes.
+
+### Step 10 — Text box edges
+
+Where a text's box's top and bottom edges are, as CSS's `text-box-edge` says, so a label can be
+centered by its letters rather than by its line box. Added after step 9's review: the Hindi
+button's label sits about 2.5 pixels high, since Noto Serif Devanagari reserves 7.5 pixels below
+the baseline at 12 pixels, against Inter's 2.9.
+
+- **Decided (2026-11-24), after the user's review: three kinds of box,**
+  `Text::with_box(TextBox::CapHeight)` in Rust and `box: "line" | "xHeight" | "capHeight"` in
+  TypeScript. `Line`, the default, is today's box, from the first line's top to the last line's
+  bottom, including line spacing, so nothing changes. `XHeight` runs from the first line's
+  x-height to the last line's baseline, for lowercase text, and `CapHeight` from its cap height,
+  for capitals, title case and digits. `Line` is kept as the name: the default box's edges are
+  the line's, and with a line height they aren't the font's ascent and descent, so a metric name
+  such as `Ascent` would be wrong. The docs point to CSS's `text-box-edge`.
+- **Decided (2026-11-24): the box is placed, and the image isn't trimmed.** The image keeps the
+  line box, and only where it's drawn shifts, so the box sits where the anchor says. Ink outside
+  the box, such as descenders, accents and Devanagari's vowel marks, still draws, outside it.
+- **Decided (2026-11-24): the heights come from the fonts that draw the first line,** the
+  tallest of them, not the text's own family, so fallback text is centered by its own font's
+  measurements, and a line mixing fonts is never cut short.
+- **Decided (2026-11-24): the edges are rounded to whole pixels at the display's scale,** as the
+  image is, so glyphs stay on whole pixels and measuring stays exact.
+- **Decided (2026-11-24): everything that uses a text's size uses its box:** `measure_text`,
+  `baked_text_size`, and step 9's component gaps, placed relative to it. A wrap width still sets
+  its width, and a span's vertical alignment still moves the span within its line.
+- **Decided (2026-11-24): the essays example shows each kind once.** The back button and the
+  year tag use `CapHeight`, the Hindi button `XHeight`, which is checked against the drawn
+  pixels, and every other text `Line`. A multi-line box and a line mixing fonts are covered by
+  tests only.
+- **Decided (2026-11-24), while building it: the Hindi button keeps `XHeight`.** Drawn at a
+  scale of 2, Noto Serif Devanagari's headline is the densest row of ink, at exactly its
+  x-height, so an `XHeight` box runs from the headline to the baseline. Weighed by all its ink,
+  the label looks closer to centered with `CapHeight`, but only because the vowel marks above
+  the headline pull the weight up. A test checks the headline sits on the box's top.
+- **Decided (2026-11-24), while building it: "a label's ink centered within a pixel" became a
+  test that the box hugs its letters:** capitals' ink from the box's top to its bottom, and
+  lowercase letters' likewise, within a pixel at scales 1 and 2. The ink's weighted middle isn't
+  where a reader sees the middle, as the Hindi label shows.
+- [x] `TextBox` on `Text` in Rust and `box` on `TextSpec` in TypeScript.
+- [x] The box's edges worked out by the typesetter, and the box placed by the anchor when the
+  text is drawn, measured, and holds components.
+- [x] Tests: each kind's size, measured and baked, at scales 1 and 2; a label's ink centered
+  within a pixel of its component's center in each font; a multi-line box ending at the last
+  baseline; a mixed line using its tallest font; fallback text using the drawing font; `Line`
+  drawing as today; component gaps relative to the box; the TypeScript field and its bad values.
+- [x] The essays example's buttons and tag, in Rust and TypeScript.
+- [x] The content guide's centering text, ARCHITECTURE, and the release notes.
+
+### Step 11 — Images as raw pixels
 
 An image given as RGBA pixels and their size, rather than as a PNG or JPEG file, so an app that
 draws its own pixels, such as on a browser canvas, skips encoding a file for Proteus to decode
@@ -475,12 +577,12 @@ and premultiplying on upload.
 - [ ] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
   baking, and the release notes.
 
-### Step 11 — The demo's Text panel
+### Step 12 — The demo's Text panel
 
 The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
-number of lines, fonts and weights, fallback, mixed styles and inline boxes.
+number of lines, fonts and weights, fallback, mixed styles, inline boxes and text box edges.
 
-### Step 12 — Docs
+### Step 13 — Docs
 
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.

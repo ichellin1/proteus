@@ -527,6 +527,7 @@ mod tests {
                             uv_scale: [0.05, 0.02],
                             page: 0,
                             pixel_size: [20.0, 14.0],
+                            text_box: None,
                         },
                     ));
                 } else {

@@ -41,7 +41,7 @@
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3, Vec4};
 use proteus_render::{FontError, QuadPipeline, TextLayout, Typesetter};
-pub use proteus_render::{Span, TextAlign, TextOverflow, VerticalAlign};
+pub use proteus_render::{InlineComponent, Span, TextAlign, TextBox, TextOverflow, VerticalAlign};
 
 use crate::bake::{bake_scale_to_fit, BakeScale};
 
@@ -145,6 +145,11 @@ pub struct Text {
     /// Whether the text is italic. It uses the family's italic face, or is
     /// slanted if the family has none. The default is false.
     pub italic: bool,
+    /// Where the text's box's top and bottom edges are: the box that's
+    /// measured, and placed on the entity by its anchor. The default,
+    /// [`TextBox::Line`], is the line box. [`TextBox::CapHeight`] or
+    /// [`TextBox::XHeight`] centers a label in a button by its letters.
+    pub text_box: TextBox,
 }
 
 impl Text {
@@ -164,6 +169,7 @@ impl Text {
             family: None,
             weight: None,
             italic: false,
+            text_box: TextBox::Line,
         }
     }
 
@@ -242,6 +248,18 @@ impl Text {
         self
     }
 
+    /// Sets where the text's box's top and bottom edges are, as CSS's
+    /// `text-box-edge` says. A button's label centered by its letters:
+    ///
+    /// ```
+    /// # use proteus_ui::{Text, TextBox};
+    /// let label = Text::new("Save", 14.0).with_box(TextBox::CapHeight);
+    /// ```
+    pub fn with_box(mut self, text_box: TextBox) -> Self {
+        self.text_box = text_box;
+        self
+    }
+
     /// Returns how the renderer lays this text out.
     pub fn layout(&self) -> TextLayout<'_> {
         TextLayout {
@@ -261,6 +279,7 @@ impl Text {
             family: self.family.as_deref(),
             weight: self.weight,
             italic: self.italic,
+            text_box: self.text_box,
         }
     }
 
@@ -284,6 +303,24 @@ impl Text {
     /// `family`.
     pub fn uses_family(&self, family: &str) -> bool {
         self.layout().families().contains(&family)
+    }
+
+    /// Returns the components the text's spans and its ellipsis's spans hold,
+    /// each once, in order. See [`Span::component`].
+    pub fn components(&self) -> Vec<Entity> {
+        let ellipsis = match &self.overflow {
+            TextOverflow::Ellipsis(spans) => &spans[..],
+            TextOverflow::Clip => &[],
+        };
+        let mut components = Vec::new();
+        for span in self.spans.iter().chain(ellipsis) {
+            if let Some(component) = span.component {
+                if !components.contains(&component.entity) {
+                    components.push(component.entity);
+                }
+            }
+        }
+        components
     }
 
     /// Sets the text's color.
@@ -333,6 +370,31 @@ pub struct BakedText {
     pub page: u32,
     /// The text's size in pixels, which is the size it is drawn at.
     pub pixel_size: [f32; 2],
+    /// Where the text's box is in its image, its top and its height in
+    /// logical pixels, or `None` when the box is the whole image. The image is
+    /// drawn so the box is placed by the entity's anchor. See [`Text::text_box`].
+    pub text_box: Option<[f32; 2]>,
+}
+
+impl BakedText {
+    /// Returns the size of the text's box, in logical pixels: what
+    /// [`measure_text`] gives. It's the image's size unless the text's box is
+    /// trimmed to its letters; see [`Text::text_box`].
+    pub fn box_size(&self) -> Vec2 {
+        let height = self.text_box.map_or(self.pixel_size[1], |b| b[1]);
+        Vec2::new(self.pixel_size[0], height)
+    }
+}
+
+/// Returns where a text's box is in its image, as [`BakedText::text_box`]
+/// keeps it, in logical pixels at `scale`, for an image `height` pixels tall
+/// whose box starts `box_top` pixels down and is `box_height` tall. A box
+/// past an image clipped to `height` is clipped with it. Baking and measuring
+/// both use it, so they agree.
+pub fn baked_box(height: u32, box_top: u32, box_height: u32, scale: f32) -> Option<[f32; 2]> {
+    let box_height = box_height.min(height.saturating_sub(box_top));
+    (box_top != 0 || box_height != height)
+        .then(|| [box_top as f32 / scale, box_height as f32 / scale])
 }
 
 /// The color a text with a colored span was baked with, added beside its
@@ -562,6 +624,33 @@ pub fn measure_text(world: &mut World, text: &Text) -> Option<Vec2> {
     let bake_scale = world.get_resource::<BakeScale>().map_or(1.0, |s| s.0);
     let max = page_side(world);
     let mut fonts = world.get_resource_or_insert_with(Fonts::default);
+    match lay_out_text(&mut fonts, text, bake_scale, max)? {
+        Some(laid_out) => Some(laid_out.size),
+        None => Some(Vec2::ZERO),
+    }
+}
+
+/// A text laid out as it's baked, in logical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LaidOutText {
+    /// The size of its box, as it's baked, clipped to an atlas page as the
+    /// bake clips it. See [`BakedText::box_size`].
+    pub size: Vec2,
+    /// Where each component the text shows goes, its gap's position from the
+    /// top-left corner of the text's box, with y down, and its size.
+    pub components: Vec<(Entity, Vec2, Vec2)>,
+}
+
+/// Lays `text` out as it's baked at `bake_scale`, on atlas pages `max` pixels
+/// on a side, with `fonts`: the work of [`measure_text`]. Returns `None` while
+/// the text waits for a font, or with no font at all, and `Some(None)` for a
+/// text that draws nothing.
+pub fn lay_out_text(
+    fonts: &mut Fonts,
+    text: &Text,
+    bake_scale: f32,
+    max: u32,
+) -> Option<Option<LaidOutText>> {
     let layout = text.layout();
     if fonts.text_waits(&layout) {
         return None;
@@ -574,12 +663,26 @@ pub fn measure_text(world: &mut World, text: &Text) -> Option<Vec2> {
         |size| (size.width, size.height),
     );
     let Some(size) = size else {
-        return Some(Vec2::ZERO);
+        return Some(None);
     };
     if !size.missing.is_empty() && fonts.waits_for_fallback() {
         return None;
     }
-    Some(Vec2::new(size.width.min(max) as f32, size.height.min(max) as f32) / scale)
+    // The box, in the image clipped to a page as the bake clips it.
+    let height = size.height.min(max);
+    let (box_top, box_height) = baked_box(height, size.box_top, size.box_height, scale)
+        .map_or((0.0, height as f32 / scale), |b| (b[0], b[1]));
+    Some(Some(LaidOutText {
+        size: Vec2::new(size.width.min(max) as f32 / scale, box_height),
+        components: size
+            .components
+            .iter()
+            .map(|c| {
+                let position = c.position / scale - Vec2::new(0.0, box_top);
+                (c.entity, position, c.size / scale)
+            })
+            .collect(),
+    }))
 }
 
 /// Returns the side of a main-atlas page in pixels, or `u32::MAX` with no
@@ -721,6 +824,7 @@ mod tests {
             uv_scale: [0.3, 0.05],
             page: 1,
             pixel_size: [60.0, 24.0],
+            text_box: None,
         };
         let mut world = World::new();
         let e = world.spawn(baked.clone()).id();
@@ -741,6 +845,7 @@ mod tests {
                     uv_scale: [0.1, 0.02],
                     page: 0,
                     pixel_size: [40.0, 16.0],
+                    text_box: None,
                 },
             ))
             .id();

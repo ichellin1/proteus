@@ -216,7 +216,8 @@ fn set_computed<C: Component<Mutability = bevy_ecs::component::Mutable> + Partia
 
 /// Cascades [`crate::Visibility`] down the hierarchy into
 /// [`EffectiveVisibility`]: a hidden parent hides its whole subtree, whatever
-/// each descendant's own visibility.
+/// each descendant's own visibility. A component its text doesn't show,
+/// marked [`HiddenByText`](crate::HiddenByText), is hidden too.
 ///
 /// Walks down from each top-level entity through `Children`, so an entity with
 /// no parent or children gets an `EffectiveVisibility` equal to its own.
@@ -224,7 +225,7 @@ pub fn visibility_system(
     mut commands: Commands,
     roots: Query<(Entity, Option<&crate::component::Visibility>), Without<ChildOf>>,
     children_q: Query<&Children>,
-    vis_q: Query<Option<&crate::component::Visibility>>,
+    vis_q: VisibilityQuery,
     mut computed: Query<&mut EffectiveVisibility>,
 ) {
     fn cascade(
@@ -232,15 +233,13 @@ pub fn visibility_system(
         parent_effective: bool,
         commands: &mut Commands,
         children_q: &Query<&Children>,
-        vis_q: &Query<Option<&crate::component::Visibility>>,
+        vis_q: &VisibilityQuery,
         computed: &mut Query<&mut EffectiveVisibility>,
     ) {
-        let own_visible = vis_q
-            .get(entity)
-            .ok()
-            .flatten()
-            .map(|v| v.visible)
-            .unwrap_or(true);
+        let own_visible = match vis_q.get(entity) {
+            Ok((vis, hidden_by_text)) => vis.is_none_or(|v| v.visible) && !hidden_by_text,
+            Err(_) => true,
+        };
         let effective = parent_effective && own_visible;
         set_computed(entity, EffectiveVisibility(effective), computed, commands);
         if let Ok(children) = children_q.get(entity) {
@@ -272,6 +271,16 @@ pub fn visibility_system(
         }
     }
 }
+
+/// An entity's own visibility, and whether its text hides it.
+type VisibilityQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Option<&'static crate::component::Visibility>,
+        Has<crate::inline::HiddenByText>,
+    ),
+>;
 
 /// Cascades [`Opacity`] down the hierarchy into [`EffectiveOpacity`],
 /// multiplying down the chain of parents: a parent at `0.5` with a child at

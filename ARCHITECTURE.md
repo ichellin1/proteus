@@ -92,7 +92,8 @@ A host calls `Engine::frame` once per frame:
 ```text
 Proteus::tick(dt)          run the schedule below, then the app's callbacks
 App::update(frame, dt)     the app reacts to this frame's events
-Proteus::refresh_cascades  recompute visibility and opacity after update's changes
+Proteus::refresh_cascades  place components in text, and recompute visibility and opacity,
+                           after update's changes
 Renderer::render(target)   bake pending text and images, collect instances, draw
 ```
 
@@ -112,6 +113,7 @@ transition_setup     start requested transitions, splits and merges
 transition_tick      advance transitions and interpolate geometry
 transition_complete  finish transitions that reached the end
 group_complete       finish splits and merges whose pieces have all arrived
+inline_components    place each component a text holds in its gap
 visibility, opacity  combine each entity's values with its parents'
 bake                 bake components marked for baking
 ```
@@ -123,7 +125,8 @@ the order they were registered.
 **When changes take effect.** A transition requested during a tick or in `update`, by
 `animate_to`, a channel or a split, starts on the next tick: requests are recorded and picked
 up by the setup stages. Visibility and opacity changes made in `update` are drawn the same
-frame, which is why the engine recomputes them after `update`.
+frame, which is why the engine recomputes them after `update`. So is a text set in `update`
+that holds components: `refresh_cascades` places them first.
 
 ## Rendering
 
@@ -264,8 +267,16 @@ Proteus bakes three kinds of thing:
   it loads, as the app chose. A span's family counts as the text's. A character the text's
   family lacks is looked for in the app's fallback fonts, in order, then the default font; one
   none has is drawn as a box, and the text is marked `MissingGlyphs`, to bake again when a font
-  loads. Images are decoded with the `image` crate. Both go into the main atlas. With
-  `resources.lazy_load`, a component's text or image waits until it is visible.
+  loads. A span can hold a component in place of text: parley keeps a gap its size, an inline
+  box, and the tick's `inline_components` stage lays the text out with the typesetter, makes the
+  component the text's child and places it in the gap, rounded as the bake rounds the image, or
+  hides it with `HiddenByText` if the text doesn't show the gap. A text's box, what's measured
+  and placed by the anchor, is its line box, or, with `TextBox`, trimmed to the first line's cap
+  height or x-height and the last line's baseline, from the fonts that draw it. The image isn't
+  trimmed: `BakedText::text_box` says where the box is in it, and the text quad's anchor moves
+  to put the box where the component's anchor says. Images are decoded with the `image` crate.
+  Both go into the main atlas. With `resources.lazy_load`, a component's text or image waits
+  until it is visible.
 - **A component marked with `ComponentSpec::bake`**, by `bake_system` during the tick. It and
   its descendants are drawn into a main-atlas region; then the children are destroyed and the
   component becomes a plain quad showing the image. It waits until every text and image in it

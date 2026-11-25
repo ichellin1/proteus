@@ -106,6 +106,62 @@ with a warning suggesting more lines, a wider wrap width or a shorter ellipsis.
 
 The [essays example](../../examples/essays) shows each of these once, in both languages.
 
+### Centering a label
+
+A text's box is its line box by default: from the top of its first line to the bottom of its
+last, with the room the font reserves above and below its letters for accents and descenders.
+That room isn't the same above and below, so a label centered in a button by its line box can
+sit off center. Noto Serif Devanagari, for one, reserves far more below its letters than above:
+
+| Font, at 12 pixels | Room above the baseline | Room below | x-height | Cap height |
+|---|---:|---:|---:|---:|
+| Inter | 11.6 | 2.9 | 6.6 | 8.7 |
+| Noto Serif Devanagari | 11.2 | 7.5 | 7.5 | 8.6 |
+
+A text can set where its box's edges are instead, as CSS's `text-box-edge` does:
+
+- **`TextBox::Line`, the default,** is the line box, with any line spacing.
+- **`TextBox::CapHeight`** runs from the first line's cap height, the top of its capitals, to
+  the last line's baseline. It centers capitals, title case and digits, as most buttons are.
+- **`TextBox::XHeight`** runs from the first line's x-height, the top of its lowercase letters,
+  to the last line's baseline. It centers lowercase text, and Devanagari, whose letters hang
+  from a headline at its x-height.
+
+#### Rust
+
+```rust
+# use proteus_sdk::glam::Vec2;
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Text, TextBox};
+# let mut app = Proteus::new();
+let label = Text::new("Save changes", 14.0).with_box(TextBox::CapHeight);
+app.component(
+    ComponentSpec::new(QuadState {
+        size: Vec2::new(140.0, 36.0),
+        ..Default::default()
+    })
+    .text(label),
+);
+```
+
+#### TypeScript
+
+```ts
+app.component({
+  geometry: { ...app.get(card)!.geometry, size: { width: 140, height: 36 } },
+  text: { content: "Save changes", sizePx: 14, box: "capHeight" },
+});
+```
+
+- **Only the box changes, not the image.** Ink outside the box, such as descenders, accents and
+  Devanagari's vowel marks, still draws, outside it, so leave room for it in a button's padding.
+- **The heights are the fonts' that draw the first line,** the tallest of them, so text drawn in
+  a fallback font is boxed by that font's measurements, not its own family's.
+- **Everything that uses a text's size uses its box:** `measure_text`, `baked_text_size`, the
+  anchor that places the text, and the gaps for components in it.
+
+The [essays example](../../examples/essays) trims its back button's and year tag's boxes to the
+cap height, and its Hindi button's to the x-height.
+
 ### Fonts
 
 An app loads a font from its file's bytes, and texts name its family to be drawn in it. There's
@@ -335,6 +391,82 @@ paragraph, in each frame the color changes. To animate a text's color, give it n
 The [essays example](../../examples/essays) sets a byline's weight, size and color, a source's
 titles in italic, a superscript footnote mark after each pull quote, and a card's ellipsis in
 bold in the accent color, with an icon from an icon font centered on the text.
+
+### Components in text
+
+A span can hold a component in place of text, such as an icon, a tag or a button within a
+sentence. The text keeps a gap for it in its line, the size the span gives, and the gap wraps,
+aligns and ends in an ellipsis as a word does. The component is placed in its gap.
+
+#### Rust
+
+```rust
+# use proteus_sdk::glam::{Vec2, Vec4};
+# use proteus_sdk::{ComponentSpec, Proteus, QuadState, Span, Text, VerticalAlign};
+# let mut app = Proteus::new();
+// A key cap: a small rounded component with its own text.
+let key = app.component(
+    ComponentSpec::new(QuadState {
+        size: Vec2::new(24.0, 22.0),
+        corner_radius: 5.0,
+        color: Vec4::new(0.3, 0.29, 0.35, 1.0),
+        ..Default::default()
+    })
+    .text(Text::new("K", 13.0)),
+);
+let hint = app.component(ComponentSpec::new(QuadState::default()).text(Text::rich(
+    [
+        Span::new("Press "),
+        Span::component(key.id(), Vec2::new(24.0, 22.0))
+            .with_vertical_align(VerticalAlign::Middle),
+        Span::new(" to keep going"),
+    ],
+    16.0,
+)));
+```
+
+#### TypeScript
+
+```ts
+const key = app.component({
+  geometry: { ...app.get(card)!.geometry, size: { width: 24, height: 22 }, cornerRadius: 5 },
+  text: { content: "K", sizePx: 13 },
+});
+const hint = app.component({
+  geometry: app.get(card)!.geometry,
+  text: {
+    spans: [
+      { content: "Press " },
+      { component: key.id(), width: 24, height: 22, verticalAlign: "middle" },
+      { content: " to keep going" },
+    ],
+    sizePx: 16,
+  },
+});
+```
+
+- **The text makes the component its child,** and owns its position. The component's anchor
+  sits at the same point of its gap: its center at the gap's center by default, and its
+  top-left corner at the gap's with an anchor of (0, 0). The position is set again whenever the
+  text changes, and overrides one the app gives it.
+- **The gap's size is the span's, not the component's,** so a component that grows on hover, or
+  animates its size, doesn't move the text around it. A component larger than its gap overlaps
+  the text around it.
+- **Vertical alignment places the gap.** By default its bottom sits on the baseline, as an image
+  does on a web page. `Middle` centers it on the text's lowercase letters, which suits an icon
+  or a chip, and `Super`, `Sub` and `Raise` move it as they move text. A gap taller than its line
+  makes the line taller.
+- **A component the text doesn't show isn't drawn:** one whose gap is cut off by the maximum
+  number of lines, one in an ellipsis that isn't shown, and every one in a text that waits for a
+  font. It's drawn again once the text shows it, and the visibility the app set on it is kept.
+- **It's placed in the same frame as the text changes,** before the text is drawn, since the app
+  has the fonts. `measure_text` counts each gap, and a gap at the end of a line widens the text.
+- **It's an ordinary component.** It takes clicks and hover styles, so a button in a text works
+  as a button. A component the text no longer holds stays its child, where it was last placed.
+
+The [essays example](../../examples/essays) starts each open essay's body with a tag showing
+its year, which moves as the toolbar changes the text, and ends the Hindi card's opening in a
+small button in its ellipsis.
 
 ### Changing text
 

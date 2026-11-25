@@ -164,12 +164,20 @@ export type TextSpec = TextOptions &
   );
 
 /**
+ * A part of a text: some text with a style of its own, such as a bold word, or a component in
+ * a line of text.
+ */
+export type SpanSpec = TextSpanSpec | ComponentSpanSpec;
+
+/**
  * A part of a text with a style of its own, such as a bold word. Anything a span doesn't set
  * comes from its text.
  */
-export interface SpanSpec {
+export interface TextSpanSpec {
   /** The span's text. A `\n` starts a new line. */
   content: string;
+  /** Only a {@link ComponentSpanSpec} has a component. */
+  component?: undefined;
   /** The font family, such as `"Lora"`. Omit it for the text's family. */
   family?: string;
   /** The weight, from 100 to 900, where 400 is regular and 700 is bold. Omit it for the text's. */
@@ -192,6 +200,47 @@ export interface SpanSpec {
    * if it needs the room.
    */
   verticalAlign?: "baseline" | "middle" | "super" | "sub" | number;
+}
+
+/**
+ * A component in a line of text, in place of text. The text keeps a gap `width` × `height`
+ * pixels in its line, which wraps as a word does, and the component is placed in it.
+ *
+ * Proteus makes the component a child of the text's component, and owns its position: the
+ * component's anchor sits at the same point of its gap, so by default its center is at the
+ * gap's center. A component larger than its gap overlaps the text around it. One whose gap the
+ * text doesn't show, cut off by `maxLines` or in an ellipsis that isn't shown, isn't drawn,
+ * nor while the text waits for a font.
+ *
+ * @example
+ * ```ts
+ * const key = app.component({ geometry: app.get(card)!.geometry });
+ * const hint: TextSpec = {
+ *   sizePx: 16,
+ *   spans: [
+ *     { content: "Press " },
+ *     { component: key.id(), width: 24, height: 24, verticalAlign: "middle" },
+ *     { content: " to continue" },
+ *   ],
+ * };
+ * ```
+ */
+export interface ComponentSpanSpec {
+  /** The component's id, from {@link Handle.id}. */
+  component: number;
+  /** The gap's width, in pixels. */
+  width: number;
+  /** The gap's height, in pixels. */
+  height: number;
+  /**
+   * Where the gap sits up or down in its line, as for a {@link TextSpanSpec}. `"baseline"`,
+   * the default, puts the gap's bottom on the baseline, as a web page does with an image.
+   * `"middle"` centers it on the middle of the text's lowercase letters, which suits an icon or
+   * a chip. A gap taller than its line makes the line taller.
+   */
+  verticalAlign?: "baseline" | "middle" | "super" | "sub" | number;
+  /** Only a {@link TextSpanSpec} has content. */
+  content?: undefined;
 }
 
 /** The settings of a {@link TextSpec}, whether its text is `content` or `spans`. */
@@ -242,6 +291,16 @@ export interface TextOptions {
    * has none.
    */
   italic?: boolean;
+  /**
+   * Where the text's box's top and bottom edges are, as CSS's `text-box-edge` says. The box is
+   * what's measured, and placed on the component by its anchor. `"line"`, the default, is the
+   * line box, with the room the font reserves above and below its letters, and any line
+   * spacing. `"capHeight"` runs from the first line's cap height to the last line's baseline,
+   * and centers capitals, title case and digits, such as a button's label. `"xHeight"` runs
+   * from the x-height instead, and centers lowercase text. Ink outside the box, such as
+   * descenders and accents, still draws.
+   */
+  box?: "line" | "xHeight" | "capHeight";
   /**
    * How text with more lines than `maxLines` ends. `{ ellipsis: "…" }`, the default, ends it
    * with an ellipsis, which can be any text, such as `" more"`, or spans. `"clip"` cuts it off.

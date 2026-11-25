@@ -19,7 +19,8 @@ use proteus_sdk::{
     TransitionDropped,
 };
 use proteus_ui::{
-    Border, DropShadow, Glow, Image, Span, Text, TextAlign, TextOverflow, VerticalAlign,
+    Border, DropShadow, Glow, Image, InlineComponent, Span, Text, TextAlign, TextBox, TextOverflow,
+    VerticalAlign,
 };
 
 /// Reads a field given as `undefined` or `null` as its default, as if it had
@@ -260,6 +261,18 @@ pub struct TextFields {
     pub weight: Option<u16>,
     #[serde(default)]
     pub italic: bool,
+    #[serde(default, rename = "box")]
+    pub text_box: Option<TextBoxDto>,
+}
+
+/// Where a text's box's edges are, given as `"line"`, `"xHeight"` or
+/// `"capHeight"`.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextBoxDto {
+    Line,
+    XHeight,
+    CapHeight,
 }
 
 /// A text's alignment, given as `"start"`, `"center"` or `"end"`.
@@ -288,11 +301,44 @@ pub enum EllipsisDto {
     Spans(Vec<SpanDto>),
 }
 
-/// A span: TypeScript's `SpanSpec`.
+/// A span: TypeScript's `SpanSpec`, either text with a style of its own or a
+/// component. `SpanFields` is checked to be one or the other.
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "SpanFields")]
+pub struct SpanDto(SpanFields);
+
+impl TryFrom<SpanFields> for SpanDto {
+    type Error = String;
+
+    fn try_from(fields: SpanFields) -> Result<Self, String> {
+        match (&fields.content, fields.component) {
+            (Some(_), Some(_)) => {
+                Err("a span has both `content` and a `component`: give it one or the other".into())
+            }
+            (None, None) => Err("a span needs `content` or a `component`".into()),
+            (None, Some(id)) => {
+                if fields.width.is_none() || fields.height.is_none() {
+                    return Err("a component span needs its `width` and `height`".into());
+                }
+                if bevy_ecs::entity::Entity::try_from_bits(id as u64).is_none() {
+                    return Err(format!("{id} isn't a component's id, from `Handle.id()`"));
+                }
+                Ok(Self(fields))
+            }
+            (Some(_), None) if fields.width.is_some() || fields.height.is_some() => {
+                Err("`width` and `height` are for a component span".into())
+            }
+            (Some(_), None) => Ok(Self(fields)),
+        }
+    }
+}
+
+/// A span's fields, before they're checked.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SpanDto {
-    pub content: String,
+pub struct SpanFields {
+    #[serde(default)]
+    pub content: Option<String>,
     #[serde(default)]
     pub family: Option<String>,
     #[serde(default)]
@@ -305,6 +351,13 @@ pub struct SpanDto {
     pub color: Option<ColorDto>,
     #[serde(default)]
     pub vertical_align: Option<VerticalAlignDto>,
+    /// A component's id, from `Handle.id()`.
+    #[serde(default)]
+    pub component: Option<f64>,
+    #[serde(default)]
+    pub width: Option<f32>,
+    #[serde(default)]
+    pub height: Option<f32>,
 }
 
 /// A span's vertical alignment, given as `"baseline"`, `"middle"`, `"super"`
@@ -327,8 +380,13 @@ pub enum VerticalAlignKeyword {
 
 impl From<&SpanDto> for Span {
     fn from(d: &SpanDto) -> Self {
+        let d = &d.0;
         Self {
-            content: d.content.clone(),
+            content: d.content.clone().unwrap_or_default(),
+            component: d.component.map(|id| InlineComponent {
+                entity: bevy_ecs::entity::Entity::from_bits(id as u64),
+                size: glam::Vec2::new(d.width.unwrap_or(0.0), d.height.unwrap_or(0.0)),
+            }),
             family: d.family.clone(),
             weight: d.weight,
             italic: d.italic,
@@ -371,6 +429,11 @@ impl From<&TextDto> for Text {
         text.family = d.family.clone();
         text.weight = d.weight;
         text.italic = d.italic;
+        text.text_box = match d.text_box {
+            None | Some(TextBoxDto::Line) => TextBox::Line,
+            Some(TextBoxDto::XHeight) => TextBox::XHeight,
+            Some(TextBoxDto::CapHeight) => TextBox::CapHeight,
+        };
         text.line_height = d.line_height;
         text.max_lines = d.max_lines;
         if let Some(align) = d.align {
@@ -1305,6 +1368,79 @@ mod tests {
         assert_eq!(align("null").unwrap(), VerticalAlign::Baseline);
         assert_eq!(align("-3").unwrap(), VerticalAlign::Raise(-3.0));
         assert!(align(r#""top""#).is_err());
+    }
+
+    #[test]
+    fn text_with_a_box() {
+        let text_box = |value: &str| {
+            let json = format!(r#"{{"content": "Save", "sizePx": 14, "box": {value}}}"#);
+            serde_json::from_str::<TextDto>(&json).map(|d| Text::from(&d).text_box)
+        };
+        assert_eq!(text_box(r#""line""#).unwrap(), TextBox::Line);
+        assert_eq!(text_box(r#""xHeight""#).unwrap(), TextBox::XHeight);
+        assert_eq!(text_box(r#""capHeight""#).unwrap(), TextBox::CapHeight);
+        assert_eq!(text_box("null").unwrap(), TextBox::Line);
+        assert!(text_box(r#""cap""#).is_err());
+        assert!(text_box("true").is_err());
+    }
+
+    #[test]
+    fn text_with_a_component_span() {
+        let text = |json: &str| serde_json::from_str::<TextDto>(json).map(|d| Text::from(&d));
+        let icon = bevy_ecs::world::World::new().spawn_empty().id();
+        let id = icon.to_bits();
+        let json = format!(
+            r#"{{"spans": [{{"content": "Press "}},
+                {{"component": {id}, "width": 20, "height": 16, "verticalAlign": "middle"}}],
+                "sizePx": 16, "maxLines": 1,
+                "overflow": {{"ellipsis": [{{"component": {id}, "width": 8, "height": 8}}]}}}}"#
+        );
+        assert_eq!(
+            text(&json).unwrap(),
+            Text::rich(
+                [
+                    Span::new("Press "),
+                    Span::component(icon, glam::Vec2::new(20.0, 16.0))
+                        .with_vertical_align(VerticalAlign::Middle),
+                ],
+                16.0
+            )
+            .with_max_lines(1)
+            .with_ellipsis_spans([Span::component(icon, glam::Vec2::splat(8.0))])
+        );
+
+        let span = |fields: &str| text(&format!(r#"{{"spans": [{{{fields}}}], "sizePx": 16}}"#));
+        assert!(
+            span(&format!(
+                r#""content": "a", "component": {id}, "width": 1, "height": 1"#
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("both"),
+            "content and a component"
+        );
+        assert!(
+            span(&format!(r#""component": {id}, "width": 1"#))
+                .unwrap_err()
+                .to_string()
+                .contains("height"),
+            "no height"
+        );
+        assert!(
+            span(r#""content": "a", "width": 1, "height": 1"#)
+                .unwrap_err()
+                .to_string()
+                .contains("component span"),
+            "a size on text"
+        );
+        assert!(
+            span(r#""component": 0, "width": 1, "height": 1"#)
+                .unwrap_err()
+                .to_string()
+                .contains("id"),
+            "not an id"
+        );
+        assert!(span(r#""component": "icon", "width": 1, "height": 1"#).is_err());
     }
 
     #[test]

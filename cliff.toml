@@ -107,7 +107,10 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **`ResourceConfig` written out in full** no longer compiles in Rust: `glyph_cache_bytes`, the
   glyph cache's budget, is new. Fill in the rest with `..Default::default()`.
 - **`RasterizedGlyphs` written out in full** no longer compiles in Rust: `missing`, the
-  characters no font had, is new.
+  characters no font had, `components`, where each component a text holds goes, and `box_top`
+  and `box_height`, where the text's box is, are new.
+- **`BakedText` written out in full** no longer compiles in Rust: `text_box`, where the text's
+  box is in its image, is new. `None` is the whole image, as before.
 - **`TextConfig::default_size_px` is removed:** nothing read it, since every text sets its own
   size.
 - **The built-in font is variable Inter,** in place of a static Inter Bold made from it, at the
@@ -117,8 +120,9 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   such as Vite copy it into the app's output; an app served another way must serve it too, or
   set `text.font`. The wasm is about 190 KB smaller, gzipped, without it.
 - **`Text` written out in full** no longer compiles in Rust: `spans`, `wrap_width`, `align`,
-  `line_height`, `max_lines`, `overflow`, `family`, `weight` and `italic` are new. Make it with
-  `Text::new` and its `with_` methods, or fill in the rest with `..Text::new(content, size)`.
+  `line_height`, `max_lines`, `overflow`, `family`, `weight`, `italic` and `text_box` are new.
+  Make it with `Text::new` and its `with_` methods, or fill in the rest with
+  `..Text::new(content, size)`.
 - **TypeScript's `TextSpec` is a type with two forms,** one with `content` and one with
   `spans`, rather than an interface, so an interface that extends it no longer compiles. Its
   shared settings are `TextOptions`.
