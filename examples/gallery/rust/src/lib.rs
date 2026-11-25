@@ -10,9 +10,14 @@
 //!     Each pushes an `Event` onto a shared queue, and [`App::update`] acts
 //!     on the queue each frame, with the whole app at hand.
 //!   - Download with `fetch_async` and collect the results from
-//!     `poll_fetches` in `update`. A grid's photos are all decoded and given
-//!     to their tiles in the frame the last one arrives: a texture must be
-//!     given to a component in the frame it's loaded.
+//!     `poll_fetches` in `update`. The first grid is shown at once, and each
+//!     photo is decoded and given to its tile in the frame it arrives: a
+//!     texture must be given to a component in the frame it's loaded. A grid
+//!     the large view splits into waits for all its photos, so the split
+//!     shows them.
+//!   - Until its photo arrives, or if its download fails, a tile shows a
+//!     placeholder made from pixels the app computes, with `Image::from_rgba`,
+//!     rather than from a file. One image is shared by every tile.
 //!   - Create a component that a transition will reveal hidden, with
 //!     `visible(false)`. `update` runs before the frame is drawn, and a
 //!     transition starts on the next frame, so a visible one would be drawn
@@ -43,8 +48,8 @@ use std::sync::Arc;
 use proteus_runtime::{App, FetchId, Frame, ProteusConfig};
 use proteus_sdk::glam::{Vec2, Vec3, Vec4};
 use proteus_sdk::{
-    ComponentSpec, Easing, Handle, ImageCrop, Proteus, QuadState, SplitStrategy, StyleOverride,
-    Text, TextureHandle, TextureRequest, TransitionConfig,
+    ComponentSpec, Easing, Handle, Image, ImageCrop, Proteus, QuadState, SplitStrategy,
+    StyleOverride, Text, TextureHandle, TextureRequest, TransitionConfig,
 };
 
 const COLS: usize = 4;
@@ -174,6 +179,11 @@ struct GridDownload {
     /// download failed.
     files: Vec<Option<Arc<[u8]>>>,
     remaining: usize,
+    /// Whether the grid is on screen already, its tiles showing the
+    /// placeholder until each photo arrives, as when the app starts. A grid
+    /// the large view splits into is made once all its photos have arrived,
+    /// so the split shows them.
+    shown: bool,
 }
 
 /// A photo open in the large view.
@@ -194,7 +204,8 @@ struct Open {
 }
 
 enum Screen {
-    /// The first grid's photos are downloading.
+    /// Before the app starts, and for a moment as one screen gives way to the
+    /// next.
     Starting,
     Grid(Vec<Tile>),
     Open(Open),
@@ -245,6 +256,8 @@ pub struct Gallery {
     next_photo: usize,
     /// The large view being split into a grid, until the split ends.
     splitting: Option<Handle>,
+    /// What a tile shows until its photo arrives, or if its download fails.
+    placeholder: Image,
 }
 
 impl Default for Gallery {
@@ -256,8 +269,30 @@ impl Default for Gallery {
             download: None,
             next_photo: 0,
             splitting: None,
+            placeholder: placeholder(),
         }
     }
+}
+
+/// The side of the placeholder's pixels. Few are needed, since it's a soft
+/// gradient that the tile stretches.
+const PLACEHOLDER_SIDE: u32 = 32;
+
+/// Returns the image a tile shows until its photo arrives: a soft diagonal
+/// gradient from the card's color toward the accent. Its pixels are computed,
+/// not decoded from a file: RGBA, 4 bytes each, row by row from the top.
+fn placeholder() -> Image {
+    let n = PLACEHOLDER_SIDE;
+    let mut pixels = Vec::with_capacity((n * n * 4) as usize);
+    for y in 0..n {
+        for x in 0..n {
+            let t = (x + y) as f32 / (2 * (n - 1)) as f32;
+            let color = CARD.lerp(ACCENT, 0.15 + 0.3 * t);
+            let byte = |c: f32| (c * 255.0).round() as u8;
+            pixels.extend([byte(color.x), byte(color.y), byte(color.z), 255]);
+        }
+    }
+    Image::from_rgba(n, n, pixels)
 }
 
 /// The engine settings both entry points use.
@@ -284,7 +319,11 @@ impl App for Gallery {
             .non_interactive()
             .text(Text::new("Gallery", 26.0).with_color(TEXT)),
         );
-        self.download_grid(f);
+        // The first grid is shown at once, with placeholders, and each photo
+        // replaces its tile's placeholder as it arrives.
+        let photos = self.download_grid(f, true);
+        let tiles = self.make_tiles(f, photos, true);
+        self.screen = Screen::Grid(tiles);
     }
 
     fn update(&mut self, f: &mut Frame, dt: f32) {
@@ -331,8 +370,9 @@ impl Gallery {
         });
     }
 
-    /// Starts downloading the next grid's photos.
-    fn download_grid(&mut self, f: &mut Frame) {
+    /// Starts downloading the next grid's photos, and returns them. `shown`
+    /// says whether the grid is on screen already; see [`GridDownload::shown`].
+    fn download_grid(&mut self, f: &mut Frame, shown: bool) -> Vec<Photo> {
         let photos: Vec<Photo> = (0..COLS * ROWS)
             .map(|i| PHOTOS[(self.next_photo + i) % PHOTOS.len()])
             .collect();
@@ -348,9 +388,54 @@ impl Gallery {
         self.download = Some(GridDownload {
             files: vec![None; photos.len()],
             remaining: photos.len(),
-            photos,
+            photos: photos.clone(),
             fetches,
+            shown,
         });
+        photos
+    }
+
+    /// Creates a grid's tiles for `photos`, each showing the placeholder until
+    /// its photo is given to it. A grid the large view splits into starts
+    /// hidden, since the split reveals its targets when it ends.
+    fn make_tiles(&self, f: &mut Frame, photos: Vec<Photo>, visible: bool) -> Vec<Tile> {
+        let width = COLS as f32 * TILE + (COLS - 1) as f32 * GAP;
+        let height = ROWS as f32 * TILE + (ROWS - 1) as f32 * GAP;
+        let left = (self.size.x - width) / 2.0;
+        let top = TITLE_HEIGHT + (self.size.y - TITLE_HEIGHT - height) / 2.0;
+        let mut tiles = Vec::new();
+        for (i, photo) in photos.into_iter().enumerate() {
+            let x = left + (i % COLS) as f32 * (TILE + GAP) + TILE / 2.0;
+            let y = top + (i / COLS) as f32 * (TILE + GAP) + TILE / 2.0;
+            let handle = f.proteus.component(
+                ComponentSpec::new(self.place(x, y, Vec2::splat(TILE)))
+                    .hover(StyleOverride {
+                        scale: Some(1.06),
+                        ..Default::default()
+                    })
+                    .image(self.placeholder.clone())
+                    .visible(visible),
+            );
+            self.on_click(f.proteus, handle, Event::TileClicked(handle));
+            tiles.push(Tile {
+                handle,
+                texture: None,
+                photo,
+            });
+        }
+        tiles
+    }
+
+    /// Gives `tile` its photo, from its downloaded `file`, cropped to the
+    /// square tile. A photo whose download failed leaves the placeholder.
+    fn show_photo(f: &mut Frame, tile: &mut Tile, file: Option<Arc<[u8]>>) {
+        let texture =
+            file.and_then(|file| f.proteus.load_texture(&file, TextureRequest::default()));
+        if let Some(texture) = texture {
+            let _ = tile.handle.set_texture(f.proteus, texture);
+            let _ = tile.handle.crop_image(f.proteus, ImageCrop::CenteredSquare);
+        }
+        tile.texture = texture;
     }
 
     /// Handles a finished download: a grid photo, or the open photo's sharp
@@ -358,8 +443,19 @@ impl Gallery {
     fn fetched(&mut self, f: &mut Frame, id: FetchId, file: Option<Arc<[u8]>>) {
         if let Some(download) = &mut self.download {
             if let Some(&i) = download.fetches.get(&id) {
-                download.files[i] = file;
                 download.remaining -= 1;
+                if download.shown {
+                    // Shown at once, while the grid is on screen. A grid left
+                    // for the large view no longer needs its photos.
+                    if download.remaining == 0 {
+                        self.download = None;
+                    }
+                    if let Screen::Grid(tiles) = &mut self.screen {
+                        Self::show_photo(f, &mut tiles[i], file);
+                    }
+                    return;
+                }
+                download.files[i] = file;
                 if download.remaining == 0 {
                     let download = self.download.take().expect("checked above");
                     self.grid_downloaded(f, download);
@@ -381,37 +477,9 @@ impl Gallery {
     /// once the loader has played through once; see [`Self::advance_loader`].
     fn grid_downloaded(&mut self, f: &mut Frame, download: GridDownload) {
         let leaving = matches!(self.screen, Screen::Leaving(_));
-        let width = COLS as f32 * TILE + (COLS - 1) as f32 * GAP;
-        let height = ROWS as f32 * TILE + (ROWS - 1) as f32 * GAP;
-        let left = (self.size.x - width) / 2.0;
-        let top = TITLE_HEIGHT + (self.size.y - TITLE_HEIGHT - height) / 2.0;
-
-        let mut tiles = Vec::new();
-        for (i, (photo, file)) in download.photos.into_iter().zip(download.files).enumerate() {
-            let x = left + (i % COLS) as f32 * (TILE + GAP) + TILE / 2.0;
-            let y = top + (i / COLS) as f32 * (TILE + GAP) + TILE / 2.0;
-            let handle = f.proteus.component(
-                ComponentSpec::new(self.place(x, y, Vec2::splat(TILE)))
-                    .hover(StyleOverride {
-                        scale: Some(1.06),
-                        ..Default::default()
-                    })
-                    // A split reveals its targets when it ends.
-                    .visible(!leaving),
-            );
-            // A photo whose download failed leaves its tile a plain card.
-            let texture =
-                file.and_then(|file| f.proteus.load_texture(&file, TextureRequest::default()));
-            if let Some(texture) = texture {
-                let _ = handle.set_texture(f.proteus, texture);
-                let _ = handle.crop_image(f.proteus, ImageCrop::CenteredSquare);
-            }
-            self.on_click(f.proteus, handle, Event::TileClicked(handle));
-            tiles.push(Tile {
-                handle,
-                texture,
-                photo,
-            });
+        let mut tiles = self.make_tiles(f, download.photos, !leaving);
+        for (tile, file) in tiles.iter_mut().zip(download.files) {
+            Self::show_photo(f, tile, file);
         }
 
         match &mut self.screen {
@@ -528,8 +596,14 @@ impl Gallery {
             // The transition reveals it.
             .visible(false),
         );
-        if let Some(texture) = tile.texture {
-            let _ = view.set_texture(f.proteus, texture);
+        // A photo that hasn't arrived, or failed, opens as the placeholder.
+        match tile.texture {
+            Some(texture) => {
+                let _ = view.set_texture(f.proteus, texture);
+            }
+            None => {
+                let _ = view.set_image(f.proteus, self.placeholder.clone());
+            }
         }
         self.on_transition_done(f.proteus, view);
         let channel = f.proteus.transition_channel(Some(view));
@@ -660,7 +734,7 @@ impl Gallery {
             loader,
             tiles: None,
         });
-        self.download_grid(f);
+        self.download_grid(f, false);
     }
 }
 

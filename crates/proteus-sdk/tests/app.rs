@@ -1177,10 +1177,10 @@ fn set_text_and_set_image_replace_the_content_and_its_bake() {
     handle
         .set_image(&mut app, Image::new(vec![1u8; 4]))
         .unwrap();
-    assert_eq!(
-        &*app.world().get::<Image>(handle.id()).unwrap().bytes,
-        &[1u8; 4]
-    );
+    assert!(matches!(
+        &app.world().get::<Image>(handle.id()).unwrap().source,
+        proteus_ui::ImageSource::File(bytes) if **bytes == [1u8; 4]
+    ));
     assert!(app.world().get::<BakedImage>(handle.id()).is_none());
     assert!(app.world().get::<ImageTextureRef>(handle.id()).is_none());
 }
@@ -4536,4 +4536,47 @@ fn a_component_is_placed_from_its_texts_box() {
     let box_top = typesetter.measure(&text.layout(), 1.0).unwrap().box_top as f32;
     assert!(box_top > 0.0);
     assert_eq!(position(&app, icon) - in_line_box, Vec2::new(0.0, box_top));
+}
+
+// ---------------------------------------------------------------------------
+// Images as pixels
+// ---------------------------------------------------------------------------
+
+// `set_image` with pixels replaces an image from a file, and the other way
+// round: the new image is set, and the old one's bake is released.
+#[test]
+fn set_image_swaps_between_a_file_and_pixels() {
+    use proteus_ui::{BakedImage, Image, ImageSource};
+    let mut app = Proteus::new();
+    let handle = app.component(
+        ComponentSpec::new(QuadState::default()).image(Image::from_rgba(1, 1, vec![9u8; 4])),
+    );
+    let source = |app: &Proteus| {
+        app.world()
+            .get::<Image>(handle.id())
+            .unwrap()
+            .source
+            .clone()
+    };
+    assert!(matches!(
+        source(&app),
+        ImageSource::Rgba { width: 1, height: 1, pixels } if *pixels == [9u8; 4]
+    ));
+
+    app.world_mut()
+        .entity_mut(handle.id())
+        .insert(BakedImage::new([0.0, 0.0], [0.1, 0.1], 0, [1.0, 1.0]));
+    handle
+        .set_image(&mut app, Image::new(vec![1u8; 4]))
+        .unwrap();
+    assert!(matches!(source(&app), ImageSource::File(bytes) if *bytes == [1u8; 4]));
+    assert!(
+        app.world().get::<BakedImage>(handle.id()).is_none(),
+        "baked again"
+    );
+
+    handle
+        .set_image(&mut app, Image::from_rgba(2, 1, vec![3u8; 8]))
+        .unwrap();
+    assert!(matches!(source(&app), ImageSource::Rgba { width: 2, .. }));
 }

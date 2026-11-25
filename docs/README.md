@@ -25,7 +25,9 @@ Build a button that transforms into a panel, step by step:
   hover, pressed, focused and disabled styles.
 - [Keyboard and focus](./guides/keyboard-and-focus.md): actions and the key map, handling keys,
   moving focus and focus groups, and the input devices an app accepts.
-- [Text, images and video](./guides/content.md): what a component shows, and how to change it.
+- [Text](./guides/text.md): lines that wrap and align, fonts and fallback, styles and
+  components within a line, centering a label, and measuring text before it's drawn.
+- [Images and video](./guides/content.md): what else a component shows, and how to change it.
 - [Configuration](./guides/configuration.md): GPU memory, the background color, the font, how
   images load, and how keys repeat.
 - [Hosts and platforms](./guides/hosts.md): what runs an app, loading assets, the size of the

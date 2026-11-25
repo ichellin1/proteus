@@ -5,15 +5,15 @@
 //! `proteus_ui::bake_system`, which runs in the ECS schedule because it walks
 //! the component's children.
 
-use std::sync::Arc;
-
 use bevy_ecs::prelude::{Entity, Without};
 use bevy_ecs::world::World;
 
-use proteus_render::{decode_image, resize_to_fit, QuadPipeline, TextRasterizer, TextureId};
+use proteus_render::{
+    decode_image, resize_to_fit, DecodedImage, QuadPipeline, TextRasterizer, TextureId,
+};
 use proteus_sdk::TextureHandle;
 use proteus_ui::{
-    BakeScale, BakedColor, BakedImage, BakedText, EffectiveVisibility, Fonts, Image,
+    BakeScale, BakedColor, BakedImage, BakedText, EffectiveVisibility, Fonts, Image, ImageSource,
     ImageTextureRef, MissingGlyphs, Text, TextTextureRef, Visibility, WaitsForFont,
 };
 
@@ -230,22 +230,60 @@ fn bake_text(
     ));
 }
 
+/// Returns an image's pixels: a file decoded, or pixels given as pixels, once
+/// they're checked to be `width × height × 4` bytes and not empty.
+///
+/// # Errors
+///
+/// Why the image can't be drawn: a file that can't be decoded, or pixels of
+/// the wrong length or a size of 0.
+fn image_pixels(source: &ImageSource) -> Result<DecodedImage, String> {
+    match source {
+        ImageSource::File(bytes) => decode_image(bytes).map_err(|e| e.to_string()),
+        ImageSource::Rgba {
+            width,
+            height,
+            pixels,
+        } => {
+            if *width == 0 || *height == 0 {
+                return Err(format!(
+                    "its pixels are {width}x{height}, and an image needs a width and a height"
+                ));
+            }
+            let needed = *width as u64 * *height as u64 * 4;
+            if pixels.len() as u64 != needed {
+                return Err(format!(
+                    "its pixels are {} bytes, but {width}x{height} pixels of 4 bytes each are \
+                     {needed}",
+                    pixels.len(),
+                ));
+            }
+            Ok(DecodedImage {
+                width: *width,
+                height: *height,
+                rgba_pixels: pixels.to_vec(),
+            })
+        }
+    }
+}
+
 /// Decodes and uploads the image of every entity that has `Image` but no
 /// `BakedImage` yet. With `lazy_load`, a hidden entity is skipped until it is
 /// visible.
 ///
-/// An image is scaled down to its own [`Image::max_side`], or else to
-/// `default_max_side`; with neither, it keeps its full size. An image still
-/// larger than an atlas page is then scaled down to fit it, with a warning.
-/// An image that can't be decoded is removed from its entity, with a warning,
-/// so it isn't tried again every frame.
+/// An image given as pixels is used as it is, with no decoding. An image is
+/// scaled down to its own [`Image::max_side`], or else to `default_max_side`;
+/// with neither, it keeps its full size. An image still larger than an atlas
+/// page is then scaled down to fit it, with a warning. An image that can't be
+/// decoded, or pixels of the wrong length or a size of 0, are removed from
+/// their entity, with a warning, so they aren't tried again every frame.
 pub(crate) fn bake_pending_images(
     world: &mut World,
     queue: &wgpu::Queue,
     default_max_side: Option<u32>,
     lazy_load: bool,
 ) {
-    let pending: Vec<(Entity, Arc<[u8]>, Option<u32>)> = {
+    let pending: Vec<(Entity, ImageSource, Option<u32>)> = {
         let mut query = world.query_filtered::<(
             Entity,
             &Image,
@@ -255,12 +293,12 @@ pub(crate) fn bake_pending_images(
         query
             .iter(world)
             .filter(|(_, _, vis, eff_vis)| !lazy_load || is_visible(*vis, *eff_vis))
-            .map(|(e, img, _, _)| (e, img.bytes.clone(), img.max_side))
+            .map(|(e, img, _, _)| (e, img.source.clone(), img.max_side))
             .collect()
     };
 
-    for (entity, bytes, max_side) in pending {
-        let mut decoded = match decode_image(&bytes) {
+    for (entity, source, max_side) in pending {
+        let mut decoded = match image_pixels(&source) {
             Ok(decoded) => decoded,
             Err(e) => {
                 log::warn!("bake_pending_images: entity {entity:?}: {e}; the image is removed");
@@ -573,6 +611,90 @@ mod tests {
             "with no texture"
         );
         assert!(world.get::<Image>(broken).is_none(), "removed");
+    }
+
+    // A small image with a different color in each pixel, as its pixels and
+    // as a PNG of the same pixels.
+    fn pattern(width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba([(x * 40) as u8, (y * 60) as u8, 200, 255 - (x + y) as u8])
+        });
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        (image.into_raw(), png)
+    }
+
+    // Pixels given as pixels are the pixels a PNG of them decodes to, so they
+    // bake the same.
+    #[test]
+    fn pixels_are_used_as_a_decoded_file_would_be() {
+        let (pixels, png) = pattern(5, 3);
+        let from_pixels = image_pixels(&ImageSource::Rgba {
+            width: 5,
+            height: 3,
+            pixels: pixels.into(),
+        })
+        .unwrap();
+        let from_file = image_pixels(&ImageSource::File(png.into())).unwrap();
+        assert_eq!(
+            (
+                from_pixels.width,
+                from_pixels.height,
+                from_pixels.rgba_pixels
+            ),
+            (from_file.width, from_file.height, from_file.rgba_pixels)
+        );
+    }
+
+    // Pixels of the wrong length, or a size of 0, can't be drawn.
+    #[test]
+    fn pixels_of_the_wrong_size_are_an_error() {
+        let rgba = |width, height, len: usize| {
+            image_pixels(&ImageSource::Rgba {
+                width,
+                height,
+                pixels: vec![0u8; len].into(),
+            })
+        };
+        assert!(rgba(2, 2, 16).is_ok());
+        assert!(rgba(2, 2, 15).err().unwrap().contains("15 bytes"));
+        assert!(rgba(2, 2, 17).is_err(), "too many");
+        assert!(rgba(2, 2, 12).is_err(), "three bytes a pixel");
+        assert!(rgba(0, 2, 0).err().unwrap().contains("0x2"));
+        assert!(rgba(2, 0, 0).is_err());
+    }
+
+    // Pixels are baked as a file is: scaled down to `max_side`, and to fit an
+    // atlas page, and pixels of the wrong size are removed with their image,
+    // so they aren't tried again.
+    #[test]
+    fn pixels_bake_as_a_file_does() {
+        let Some((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("proteus-runtime: no GPU adapter available — skipping");
+            return;
+        };
+        let mut world = world_with_small_atlas(&device, &queue);
+        let (pixels, png) = pattern(40, 20);
+        let from_pixels = world.spawn(Image::from_rgba(40, 20, pixels)).id();
+        let from_file = world.spawn(Image::new(png)).id();
+        let capped = world
+            .spawn(Image::from_rgba(40, 20, pattern(40, 20).0).with_max_side(10))
+            .id();
+        let wide = world
+            .spawn(Image::from_rgba(512, 128, vec![255u8; 512 * 128 * 4]))
+            .id();
+        let short = world.spawn(Image::from_rgba(4, 4, vec![0u8; 60])).id();
+        bake_pending_images(&mut world, &queue, None, false);
+
+        let size = |e| world.get::<BakedImage>(e).map(|b| b.pixel_size);
+        assert_eq!(size(from_pixels), Some([40.0, 20.0]));
+        assert_eq!(size(from_pixels), size(from_file));
+        assert_eq!(size(capped), Some([10.0, 5.0]), "max_side");
+        assert_eq!(size(wide), Some([256.0, 64.0]), "fit to the page");
+        assert_eq!(size(short), None);
+        assert!(world.get::<Image>(short).is_none(), "removed");
     }
 
     #[test]

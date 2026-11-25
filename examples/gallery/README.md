@@ -4,6 +4,13 @@ A grid of photos downloaded from picsum.photos. Clicking a photo transforms its 
 large view of it (1→1, with a transition channel). Going back splits the large view into a new
 grid of photos (1→N, with `split_to`).
 
+The first grid appears at once. Until each tile's photo arrives, or if its download fails, the
+tile shows a soft gradient the app makes itself, given as pixels rather than as an image file:
+computed in Rust with `Image::from_rgba`, and drawn on a canvas in TypeScript, whose `ImageData`
+is passed as it is. To see the placeholders, throttle or block picsum.photos in the browser's
+developer tools. Pixels larger than an atlas page, `max_side` on pixels, and pixels of the
+wrong size are covered by tests only.
+
 Techniques worth copying are described at the top of each version's source:
 [`rust/src/lib.rs`](./rust/src/lib.rs) and [`typescript/src/main.ts`](./typescript/src/main.ts).
 They include giving the large view its image before it opens, and crossfading from a small image

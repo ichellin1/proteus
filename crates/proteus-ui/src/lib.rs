@@ -69,7 +69,7 @@ pub use hierarchy::{
     opacity_system, resolve_world_position, resolve_world_position_query, visibility_system,
     EffectiveOpacity, EffectiveVisibility, Opacity,
 };
-pub use image::{BakedImage, Image, ImageCrop};
+pub use image::{BakedImage, Image, ImageCrop, ImageSource};
 pub use inline::{inline_components_system, HiddenByText, InlineLayout};
 pub use input::{
     quad_contains, FocusState, HoveredEntity, Interactable, InteractionEvents, KeyPressedEntity,

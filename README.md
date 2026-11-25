@@ -30,8 +30,8 @@ Performance-minded, it draws with the GPU and significantly outperforms CSS tran
   TypeScript.
 - API reference: [Rust](https://ichellin1.github.io/proteus/api/rust/proteus_sdk/) and
   [TypeScript](https://ichellin1.github.io/proteus/api/ts/).
-- [Examples](./examples/README.md): a photo gallery, a menu, an onboarding flow and video, in
-  both languages.
+- [Examples](./examples/README.md): a reading app, a TV-style browse screen, a photo gallery, a
+  menu, an onboarding flow and video, in both languages.
 - [The reference demo](https://ichellin1.github.io/proteus/), running in your browser.
 - [Architecture](./ARCHITECTURE.md): how Proteus is built, and why.
 - [Benchmarks](./BENCHMARKS.md): how fast it draws, against CSS, Canvas 2D and hand-written

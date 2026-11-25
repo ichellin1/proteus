@@ -568,13 +568,39 @@ and premultiplying on upload.
 - **Decided (2026-11-18): it isn't zero-copy.** The pixels are copied out of the canvas and into
   the wasm's memory; what it saves is the encode and the decode. Uploading an `ImageBitmap` to
   the GPU directly is a candidate.
-- [ ] `Image::from_rgba`, `Handle::set_image` taking either form, and TypeScript's `ImageSpec`.
-- [ ] Tests: pixels baked the same as the same image decoded from a PNG, `max_side` and an
+- **Decided (2026-11-24), after the user's review: `Image::from_rgba` is still worth adding,
+  beside `bake_texture`,** which already takes pixels but needs a GPU when it's called, skips
+  lazy loading, `image_max_side` and waiting in a `.bake()` component, and must be given to a
+  component in the same frame. `bake_texture` stays the path for one texture shared by many
+  components.
+- **Decided (2026-11-24): `Image`'s `bytes` field becomes `source`,** an `ImageSource` that is a
+  file's bytes or the pixels with their size. Code that reads `image.bytes` or writes an `Image`
+  out in full no longer compiles, with an upgrade note; `Image::new` and `with_max_side` are
+  unchanged.
+- **Decided (2026-11-24): `bakeTexture` takes a `Uint8ClampedArray` too,** so the two pixel
+  paths take the same arrays. The SDK views one as bytes, without copying it, before the wasm
+  copies it in.
+- **Decided (2026-11-24): an image's bytes and pixels cross into the wasm in one copy,** read as
+  bytes, which fixes B-43: a `Vec<u8>` field read a `Uint8Array` a byte at a time through
+  JavaScript's iterator.
+- **Decided (2026-11-24): the pixels stay on the component after baking, as a file's bytes
+  do,** so images behave the same whatever their source. The docs give the cost: a 256 × 256
+  image keeps 256 KB. Dropping them once baked is a candidate.
+- **Decided (2026-11-24): the gallery example's tiles show a placeholder the app makes until
+  their photos arrive,** a soft gradient in the card's colors: computed in Rust, drawn on a
+  canvas in TypeScript and passed as its `ImageData`. The photos keep using textures. `max_side`
+  on pixels, pixels larger than a page and each wrong size are covered by tests only.
+- **Decided (2026-11-24), while building it: the first grid is shown at once,** since tiles were
+  made only once every photo had arrived, so a placeholder would never have shown. Each photo
+  replaces its tile's placeholder as it arrives. A grid the large view splits into still waits
+  for all its photos, so the split shows them; a failed download there keeps the placeholder.
+- [x] `Image::from_rgba`, `Handle::set_image` taking either form, and TypeScript's `ImageSpec`.
+- [x] Tests: pixels baked the same as the same image decoded from a PNG, `max_side` and an
   image larger than an atlas page, each wrong length and a zero size, and the TypeScript
   fields and their bad values.
-- [ ] The gallery example shows a tile from raw pixels the app makes itself: drawn on a canvas
-  in TypeScript, computed in Rust.
-- [ ] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
+- [x] The gallery example's placeholder tiles from raw pixels the app makes itself: drawn on a
+  canvas in TypeScript, computed in Rust.
+- [x] The content guide's images section, a canvas recipe for TypeScript, ARCHITECTURE's image
   baking, and the release notes.
 
 ### Step 12 — The demo's Text panel
@@ -582,10 +608,76 @@ and premultiplying on upload.
 The demo's Text panel shows each new feature: wrapped and aligned text, line height, a maximum
 number of lines, fonts and weights, fallback, mixed styles, inline boxes and text box edges.
 
+- **Decided (2026-11-24): the panel has two columns of rows,** a label and its examples, since
+  nine rows don't fit one column in an 800-pixel window. Styles on the left: font size, color,
+  weight and italic, families, and fallback. Paragraphs and components on the right: wrap and
+  align, line height and a maximum number of lines, mixed styles, a component in a line, and
+  text box edges. Letter spacing stays if it fits.
+- **Decided (2026-11-24): the fonts are demo assets, subset to the characters the panel
+  shows:** Lora, its italic and Noto Serif Devanagari, about 1.2 MB as they are, cut with
+  fontTools to tens of KB, in the demo's assets under `fonts/` with their licenses and a README
+  giving the command. They load in `setup`, so no text waits for a font.
+- **Decided (2026-11-24): every panel is laid out by measuring,** with `measure_text` rather
+  than `baked_text_size`, so rows are in place in the panel's first frame.
+- **Decided (2026-11-24), after the user's review: the component row also has a small spinning
+  square,** the Transformations box in miniature, turning, breathing and cycling its colors in
+  a gap sized for its turn, so its corners never touch the words. The text owns its position and
+  the animation its rotation, scale and color, so the text isn't laid out or baked again as it
+  turns. Both boxes share one animation, each running only while its panel is open. Nothing
+  else in the panel moves or takes input.
+- **Decided (2026-11-24): an ellipsis of spans, a component in an ellipsis, waiting for a font
+  and images from pixels are left to the examples.**
+- **Decided (2026-11-24), after the user's review: the right column's text is 2 pixels larger,**
+  and the Text panel up to 1100 pixels wide, against the other panels' 1000, with room for it.
+- **Decided (2026-11-24), after the user's review: the About panel is rewritten,** as five
+  paragraphs from the README's and VISION's wording, in near-black #111 with the key words in
+  bold violet, in a panel 620 pixels wide and as tall as its copy. The brand's mark stands in
+  the first line before "Proteus", a component in the text as tall as a capital, showing the
+  splash's first logo frame, which is the same image and is never evicted.
+- **Decided (2026-11-24), after the user's review: Lora and its italic are cut to exactly the
+  letters the panel draws in them,** "Lora" and "Aa", as Noto Serif Devanagari already was to
+  its Hindi: about 30 KB in all, against 1.2 MB. A letter a cut font lacks would be drawn in
+  Inter rather than as a box, so a test checks each font has every letter of the panel's text
+  in it, which is named in constants.
+- [x] The fonts, subset, with their licenses and the command.
+- [x] The panel's two columns, and every panel laid out by measuring.
+- [x] The spinning square in the component row.
+- [x] Tests: the panel's content includes every row; every row of every panel inside its panel
+  at 1280 × 800 in the first frame; the fonts listed as assets; the content fitting the panel;
+  the square turning while its position and the text's bake stay the same.
+- [x] The demo's module docs, as it has no README, and the fonts' README.
+
 ### Step 13 — Docs
 
 A Text guide, from the content guide's text section; the configuration guide's text settings;
 ARCHITECTURE's text, baking, crates and known limits; and the release notes.
+
+- **Decided (2026-11-24): the text section becomes a Text guide of its own,** in the order a
+  reader needs it: what a text is, lines, fonts, fallback, styles within a text, components in
+  text, centering a label, measuring, changing text and its cost, and its limits. The content
+  guide becomes "Images and video".
+- **Decided (2026-11-24), after the user's review: only this release's guide prose is rewritten
+  under step 6's rules,** by Sonnet given only the rules: the Text guide, the content guide's
+  images part, and the configuration guide's text section. The older guides are left as they
+  are. Snippets don't change.
+- **Decided (2026-11-24): stale text elsewhere is fixed:** the components guide's "a line of
+  text", the tricks how-to's "an app has one font", the configuration guide's row saying large
+  text is clipped, the examples index's essays and gallery rows, and the root README's list of
+  examples, which leaves out browse and essays.
+- **Decided (2026-11-24): ARCHITECTURE gets a text section,** in short paragraphs, in place of
+  the one long bullet under baking, its crates table is brought up to date, and its known
+  limits are checked against the code.
+- **Decided (2026-11-24): the release notes open with a short "What's new in 0.4"** before the
+  upgrade notes, which are checked again against the code.
+- **Decided (2026-11-24): `checks/text-engines` is deleted,** as its design note said it would be
+  when v0.4.0 ships, and the note is marked as shipped. ROADMAP's "Where things stand" is
+  updated at release, as before.
+- [x] The Text guide, and the content guide as "Images and video", with every link updated.
+- [ ] This release's guide prose rewritten, each batch reviewed.
+- [x] The configuration guide, ARCHITECTURE, and the stale text elsewhere.
+- [x] The release notes' summary, and the upgrade notes checked.
+- [x] `checks/text-engines` deleted, and the design note marked as shipped.
+- [x] `check-snippets`, the doc tests, `check-docs`, a link check and `check-comments` pass.
 
 ## Standing decisions
 

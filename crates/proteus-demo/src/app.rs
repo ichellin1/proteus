@@ -236,6 +236,7 @@ impl DemoApp {
         image_assets()
             .iter()
             .map(|(key, _)| key.to_string())
+            .chain(FONT_ASSETS.iter().map(|key| key.to_string()))
             .chain(logo_frame_keys(false))
             .chain(logo_frame_keys(true))
             .collect()
@@ -251,6 +252,8 @@ impl Default for DemoApp {
 
 impl App for DemoApp {
     fn setup(&mut self, f: &mut Frame) {
+        // Before the demo makes its texts, so none of them waits for a font.
+        load_fonts(f);
         let mut demo = Demo::new(f.proteus);
         self.advance_viewport(&mut demo, f);
         load_assets(&mut demo, f);
@@ -310,6 +313,31 @@ fn logo_frame_keys(dark: bool) -> impl Iterator<Item = String> {
     (1..=LOGO_FRAME_COUNT).map(move |n| format!("logo/frame-{n:02}{suffix}.png"))
 }
 
+/// The Text panel's fonts, besides the built-in Inter, cut down to the
+/// characters the panel shows. Their folder says how to cut them again when
+/// the panel's text changes.
+const FONT_ASSETS: [&str; 3] = [
+    "fonts/Lora-Variable.ttf",
+    "fonts/Lora-Italic-Variable.ttf",
+    "fonts/NotoSerifDevanagari-Variable.ttf",
+];
+
+/// Loads the Text panel's fonts, and makes Noto Serif Devanagari the fallback
+/// for the Hindi the panel shows. A font that's missing leaves its texts in
+/// the default font.
+fn load_fonts(f: &mut Frame) {
+    for key in FONT_ASSETS {
+        let Some(bytes) = f.load_asset(key) else {
+            continue;
+        };
+        if let Err(e) = f.proteus.load_font(bytes) {
+            log::warn!("the demo's font {key}: {e}");
+        }
+    }
+    f.proteus
+        .set_fallback_fonts([crate::screens::example_detail::DEVANAGARI]);
+}
+
 fn load_assets(demo: &mut Demo, f: &mut Frame) {
     for (key, set) in image_assets() {
         // A missing asset leaves that part of the demo blank.
@@ -362,6 +390,21 @@ mod tests {
 
     // The web shell downloads `asset_keys()` before the demo starts, so a key
     // `setup` loads but the list leaves out would silently not load there.
+    #[test]
+    fn the_fonts_are_assets_of_the_families_the_text_panel_names() {
+        use crate::screens::example_detail::{DEVANAGARI, LORA};
+        let mut proteus = Proteus::new();
+        let families: Vec<String> = FONT_ASSETS
+            .iter()
+            .map(|key| {
+                let path = format!("{}/assets/images/{key}", env!("CARGO_MANIFEST_DIR"));
+                let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+                proteus.load_font(bytes).unwrap()
+            })
+            .collect();
+        assert_eq!(families, [LORA, LORA, DEVANAGARI]);
+    }
+
     #[test]
     fn asset_keys_lists_every_asset_setup_loads() {
         let mut proteus = Proteus::new();

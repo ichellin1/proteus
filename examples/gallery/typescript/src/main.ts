@@ -6,10 +6,15 @@
  * hero into a fresh grid with `Handle.splitTo`.
  *
  * Techniques worth copying:
- *   - Fetch each batch of images concurrently (`Promise.all`), not with one
- *     `await` per loop iteration. Sequential fetches are slower, and leave
- *     each new tile fully visible in its final spot before the transition
- *     that should reveal it runs.
+ *   - Show the first grid at once, each tile a placeholder until its photo
+ *     arrives. The placeholder is a gradient drawn on a canvas and given as
+ *     its `ImageData`, `{ pixels, width, height }`, rather than encoded as a
+ *     file for Proteus to decode again. One image is shared by every tile,
+ *     and a failed download keeps it.
+ *   - Fetch a grid the large view splits into concurrently (`Promise.all`),
+ *     not with one `await` per loop iteration. Sequential fetches are slower,
+ *     and leave each new tile fully visible in its final spot before the
+ *     transition that should reveal it runs.
  *   - Give the hero an image *before* the tile → hero transition starts.
  *     A hero spawned blank shows an empty box that grows, and the image
  *     pops in only when the hi-res fetch lands. `setTexture` works on a
@@ -49,6 +54,7 @@ import type {
   Geometry,
   Color,
   Handle,
+  ImageSpec,
   TextureHandle,
 } from "proteus-sdk";
 
@@ -95,6 +101,8 @@ const PHOTOS: Photo[] = [
 type Screen = "grid" | "detail";
 
 let app: ProteusApp;
+/** What a tile shows until its photo arrives, or if its download fails. Made in `main`. */
+let placeholder: ImageSpec;
 let vw = 0;
 let vh = 0;
 
@@ -247,50 +255,82 @@ interface GridSlot {
    * UVs, never the texture, so one texture can back both the cropped tile
    * and the uncropped hero.
    */
-  full: TextureHandle;
+  full: TextureHandle | null;
   photo: Photo;
+}
+
+/** The side of the placeholder's pixels. Few are needed, since it's a soft gradient the tile stretches. */
+const PLACEHOLDER_SIDE = 32;
+
+/**
+ * Returns the image a tile shows until its photo arrives: a soft diagonal gradient from the
+ * card's color toward the accent, drawn on a canvas. Its `ImageData` is given as it is, as
+ * pixels, rather than encoded as a file for Proteus to decode again.
+ */
+function makePlaceholder(): ImageSpec {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = PLACEHOLDER_SIDE;
+  const ctx = canvas.getContext("2d")!;
+  const gradient = ctx.createLinearGradient(0, 0, PLACEHOLDER_SIDE, PLACEHOLDER_SIDE);
+  gradient.addColorStop(0, "#ede9f4");
+  gradient.addColorStop(1, "#cbbfe0");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, PLACEHOLDER_SIDE, PLACEHOLDER_SIDE);
+  const { data, width, height } = ctx.getImageData(0, 0, PLACEHOLDER_SIDE, PLACEHOLDER_SIDE);
+  return { pixels: data, width, height };
 }
 
 interface DownloadedPhoto {
   photo: Photo;
-  bytes: Uint8Array;
+  /** The photo's file, or `null` if its download failed. */
+  bytes: Uint8Array | null;
+}
+
+/** Downloads one of a grid's photos, at twice the tile's size, for high-density displays. */
+async function downloadPhoto(photo: Photo): Promise<DownloadedPhoto> {
+  const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
+  try {
+    return { photo, bytes: await fetchImageBytes(photoUrl(photo.id, w, h)) };
+  } catch (e: unknown) {
+    console.warn(e);
+    return { photo, bytes: null };
+  }
 }
 
 /** Downloads a grid's photos, all at once. */
 async function downloadGrid(offset: number): Promise<DownloadedPhoto[]> {
-  return Promise.all(
-    pickPhotos(COLS * ROWS, offset).map(async (photo) => {
-      const [w, h] = fetchDimensions(photo.width, photo.height, TILE * 2);
-      return { photo, bytes: await fetchImageBytes(photoUrl(photo.id, w, h)) };
-    }),
-  );
+  return Promise.all(pickPhotos(COLS * ROWS, offset).map(downloadPhoto));
 }
 
 /**
- * Builds the grid from downloaded photos. Each photo is loaded as a texture
- * here, and given to its tile at once: a texture must be given to a component
- * in the frame it's loaded.
+ * Creates a grid's tiles for `photos`, each showing the placeholder until its photo is given to
+ * it with `showPhoto`.
  */
-function buildGrid(downloaded: DownloadedPhoto[]): GridSlot[] {
+function buildGrid(photos: Photo[]): GridSlot[] {
   const startX = (vw - (COLS * TILE + (COLS - 1) * GAP)) / 2;
   const startY = TITLE_H + (vh - TITLE_H - (ROWS * TILE + (ROWS - 1) * GAP)) / 2;
 
-  return downloaded.map(({ photo, bytes }, i) => {
+  return photos.map((photo, i) => {
     const col = i % COLS;
     const row = Math.floor(i / COLS);
     const cx = startX + col * (TILE + GAP) + TILE / 2;
     const cy = startY + row * (TILE + GAP) + TILE / 2;
-
-    const full = app.loadTexture(bytes);
-    if (!full) {
-      throw new Error(`could not decode photo ${photo.id}`);
-    }
-    const handle = app.component({ geometry: geom(cx, cy, TILE, TILE), hover: { scale: 1.06 } });
-    handle.setTexture(full);
-    handle.cropImage({ kind: "centeredSquare" });
-
-    return { handle, full, photo };
+    const handle = app.component({ geometry: geom(cx, cy, TILE, TILE), hover: { scale: 1.06 }, image: placeholder });
+    return { handle, full: null, photo };
   });
+}
+
+/**
+ * Gives `slot` its photo, from its downloaded file, cropped to the square tile. The photo is
+ * loaded as a texture here, and given to its tile at once: a texture must be given to a
+ * component in the frame it's loaded. A photo whose download failed leaves the placeholder.
+ */
+function showPhoto(slot: GridSlot, bytes: Uint8Array | null) {
+  const full = bytes && app.loadTexture(bytes);
+  if (!full) return;
+  slot.handle.setTexture(full);
+  slot.handle.cropImage({ kind: "centeredSquare" });
+  slot.full = full;
 }
 
 function wireGridTiles(slots: GridSlot[]) {
@@ -337,14 +377,19 @@ async function showDetail(slot: GridSlot) {
  */
 async function enterDetail(
   photo: Photo,
-  lowRes: TextureHandle,
+  lowRes: TextureHandle | null,
   startTransition: (hero: Handle) => void,
 ) {
   const box = fitBox(photo.width, photo.height, vw * 0.7, vh - TITLE_H - 140);
   const heroHandle = app.component({
     geometry: geom(vw / 2, TITLE_H + (vh - TITLE_H) / 2, box.w, box.h, CARD_COLOR, 16),
   });
-  heroHandle.setTexture(lowRes);
+  // A photo that hasn't arrived, or failed, opens as the placeholder.
+  if (lowRes) {
+    heroHandle.setTexture(lowRes);
+  } else {
+    heroHandle.setImage(placeholder);
+  }
   startTransition(heroHandle);
 
   hero = heroHandle;
@@ -412,7 +457,8 @@ async function backToGrid() {
   ]);
   removeLoader();
   if (screen !== "grid") return;
-  const slots = buildGrid(downloaded);
+  const slots = buildGrid(downloaded.map((d) => d.photo));
+  slots.forEach((slot, i) => showPhoto(slot, downloaded[i].bytes));
   wireGridTiles(slots);
 
   heroSource.splitTo(
@@ -551,7 +597,18 @@ async function main(proteusApp: ProteusApp) {
     text: { content: "Gallery", sizePx: 26, color: TEXT_COLOR },
   });
 
-  wireGridTiles(buildGrid(await downloadGrid(0)));
+  // The first grid is shown at once, with placeholders, and each photo replaces its tile's
+  // placeholder as it arrives. A grid the large view splits into waits for all its photos, so
+  // the split shows them; see `backToGrid`.
+  placeholder = makePlaceholder();
+  const slots = buildGrid(pickPhotos(COLS * ROWS, 0));
+  wireGridTiles(slots);
+  for (const slot of slots) {
+    void downloadPhoto(slot.photo).then(({ bytes }) => {
+      // A tile clicked before its photo arrived has left the grid.
+      if (gridSlots.includes(slot)) showPhoto(slot, bytes);
+    });
+  }
 
   console.log("[example] ready");
 }

@@ -1,7 +1,7 @@
 # Load an image
 
 This page shows an image in a square tile, cropped to fit, from a file that comes with the app
-and from a URL. For what images can do, see [Text, images and video](../guides/content.md#images).
+and from a URL. For what images can do, see [Images and video](../guides/content.md#images).
 
 Both ways load the image as a **texture**, which is decoded and on the GPU as soon as the call
 returns, so it can be cropped at once. An image given with `image` in the spec, or `set_image`,

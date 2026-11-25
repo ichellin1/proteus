@@ -324,9 +324,52 @@ export interface TextOptions {
  * it the next time it renders a frame. An image larger than an atlas page
  * (2048 pixels by default) is scaled down to fit it, with a warning.
  */
-export interface ImageSpec {
+/**
+ * An image to draw on a component: a PNG or JPEG file's bytes, or RGBA pixels with their size.
+ */
+export type ImageSpec = ImageFileSpec | ImagePixelsSpec;
+
+/** An image from a PNG or JPEG file's bytes. The format is detected from the data. */
+export interface ImageFileSpec {
   /** The PNG or JPEG file's bytes. */
   bytes: Uint8Array;
+  /** Only an {@link ImagePixelsSpec} has pixels. */
+  pixels?: undefined;
+  /** Scale the image down so its longer side is at most this many pixels. Omit to keep its full size. */
+  maxSide?: number;
+}
+
+/**
+ * An image from RGBA pixels, as a canvas's `getImageData` returns them, so an app that draws its
+ * own pixels skips encoding a file for Proteus to decode again. The pixels are copied into the
+ * wasm once.
+ *
+ * The image keeps its pixels once it's baked, as a file's bytes are kept: a 256 × 256 image keeps
+ * 256 KB.
+ *
+ * @example
+ * ```ts
+ * const canvas = new OffscreenCanvas(64, 64);
+ * const ctx = canvas.getContext("2d")!;
+ * ctx.fillStyle = "#7a5fb0";
+ * ctx.fillRect(0, 0, 64, 64);
+ * const { data, width, height } = ctx.getImageData(0, 0, 64, 64);
+ * app.component({ geometry: app.get(card)!.geometry, image: { pixels: data, width, height } });
+ * ```
+ */
+export interface ImagePixelsSpec {
+  /**
+   * `width × height × 4` bytes, row by row from the top: red, green, blue and alpha, with
+   * straight alpha, in sRGB. A canvas's `ImageData.data` is passed as it is. Pixels of any other
+   * length, or a width or height of 0, are dropped with a warning when the image is baked.
+   */
+  pixels: Uint8Array | Uint8ClampedArray;
+  /** The image's width in pixels. */
+  width: number;
+  /** The image's height in pixels. */
+  height: number;
+  /** Only an {@link ImageFileSpec} has bytes. */
+  bytes?: undefined;
   /** Scale the image down so its longer side is at most this many pixels. Omit to keep its full size. */
   maxSide?: number;
 }

@@ -6,9 +6,10 @@ platform can draw, Proteus can show. These are some ways to use that.
 
 ## Text in any font, drawn by the browser
 
-An app has one font; see [Configuration](../guides/configuration.md#text). In a browser, text
-in any CSS font, with any style, can be drawn on a 2D canvas, and its pixels shown on a
-component:
+Proteus draws text in the fonts an app loads; see [Text](../guides/text.md). In a browser, text
+can also be drawn on a 2D canvas, in any font the browser has, including the system's, and with
+anything a canvas can do, such as color emoji, a gradient fill or an outline. Its pixels are
+then shown on a component:
 
 #### TypeScript
 
@@ -29,7 +30,7 @@ context.textBaseline = "middle";
 context.fillText("Welcome back", 16, 40);
 
 const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-const texture = app.bakeTexture(canvas.width, canvas.height, new Uint8Array(pixels.data.buffer));
+const texture = app.bakeTexture(canvas.width, canvas.height, pixels.data);
 card.setTexture(texture);
 ```
 

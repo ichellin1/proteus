@@ -1,11 +1,12 @@
-//! Images: a PNG or JPEG drawn on an entity. They work like [`crate::text`],
-//! with decoding in place of rasterizing:
+//! Images: a PNG or JPEG, or RGBA pixels, drawn on an entity. They work like
+//! [`crate::text`], with decoding in place of rasterizing:
 //!
 //! ```text
-//! Image { bytes }                declared on an entity
+//! Image { source }               declared on an entity
 //!         │  the renderer finds Image without BakedImage
 //!         ▼
-//! decode_image                   the image, as RGBA pixels
+//! decode_image                   the image, as RGBA pixels; pixels given as
+//!                                pixels are used as they are
 //!         │  added to the main atlas
 //!         ▼
 //! BakedImage + ImageTextureRef   where the image is in the atlas
@@ -34,17 +35,20 @@ use std::sync::Arc;
 // Image component
 // ---------------------------------------------------------------------------
 
-/// A PNG or JPEG image to draw on an entity.
+/// An image to draw on an entity, from a PNG or JPEG file or from RGBA pixels.
 ///
 /// The renderer decodes it into the main atlas and adds a [`BakedImage`].
-/// Changing `bytes` afterwards has no effect until the `BakedImage` is
-/// removed; `proteus-sdk`'s `Handle::set_image` does both. An image larger than an atlas page is scaled down to fit it; see
-/// the [module docs](self).
+/// Changing `source` afterwards has no effect until the `BakedImage` is
+/// removed; `proteus-sdk`'s `Handle::set_image` does both. An image larger
+/// than an atlas page is scaled down to fit it; see the [module docs](self).
+///
+/// The image stays on the entity once it's baked, whatever its source. A
+/// file's bytes are compressed, but pixels aren't: a 256 × 256 image given as
+/// pixels keeps 256 KB.
 #[derive(Component, Clone, Debug)]
 pub struct Image {
-    /// The PNG or JPEG file's bytes. The format is detected from the data.
-    /// Shared rather than copied.
-    pub bytes: Arc<[u8]>,
+    /// The image's file or pixels.
+    pub source: ImageSource,
     /// Scale the image down so its longer side is at most this many pixels.
     /// `None` uses the configured default. Set per image, since a small grid
     /// tile and a full-screen view of the same photo need very different
@@ -52,12 +56,54 @@ pub struct Image {
     pub max_side: Option<u32>,
 }
 
+/// Where an [`Image`]'s pixels come from. Both are shared rather than copied.
+#[derive(Clone, Debug)]
+pub enum ImageSource {
+    /// A PNG or JPEG file's bytes. The format is detected from the data.
+    File(Arc<[u8]>),
+    /// RGBA pixels, 4 bytes each, row by row from the top: straight alpha, in
+    /// sRGB, as decoding a file gives them and as a browser canvas's
+    /// `getImageData` returns them.
+    Rgba {
+        /// The image's width in pixels.
+        width: u32,
+        /// The image's height in pixels.
+        height: u32,
+        /// `width × height × 4` bytes. Pixels of any other length, or a width
+        /// or height of 0, are dropped with a warning when the image is baked,
+        /// as a broken file is.
+        pixels: Arc<[u8]>,
+    },
+}
+
 impl Image {
     /// Creates an image from its file's bytes, such as a `Vec<u8>` or a
     /// `&[u8]`. See [`Image::with_max_side`] to limit its size.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
         Self {
-            bytes: bytes.into(),
+            source: ImageSource::File(bytes.into()),
+            max_side: None,
+        }
+    }
+
+    /// Creates an image from RGBA pixels, `width × height × 4` bytes, row by
+    /// row from the top, with straight alpha, in sRGB. An app that draws its
+    /// own pixels gives them as they are, rather than encoding a file for
+    /// Proteus to decode again. See [`ImageSource::Rgba`].
+    ///
+    /// ```
+    /// # use proteus_ui::Image;
+    /// // A 2 × 1 image: a red pixel, then a half-transparent blue one.
+    /// let pixels = vec![255, 0, 0, 255, 0, 0, 255, 128];
+    /// let image = Image::from_rgba(2, 1, pixels);
+    /// ```
+    pub fn from_rgba(width: u32, height: u32, pixels: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            source: ImageSource::Rgba {
+                width,
+                height,
+                pixels: pixels.into(),
+            },
             max_side: None,
         }
     }
@@ -210,16 +256,40 @@ mod tests {
     use super::*;
     use bevy_ecs::world::World;
 
+    // Returns the bytes of an image made from a file.
+    fn file(img: &Image) -> &[u8] {
+        match &img.source {
+            ImageSource::File(bytes) => bytes,
+            ImageSource::Rgba { .. } => panic!("an image from pixels"),
+        }
+    }
+
     #[test]
     fn image_component_stores_bytes_from_vec() {
         let img = Image::new(vec![1u8, 2, 3, 4]);
-        assert_eq!(&*img.bytes, &[1, 2, 3, 4]);
+        assert_eq!(file(&img), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn an_image_from_pixels_keeps_them_and_their_size() {
+        let img = Image::from_rgba(2, 1, vec![255u8, 0, 0, 255, 0, 0, 255, 128]).with_max_side(64);
+        let ImageSource::Rgba {
+            width,
+            height,
+            pixels,
+        } = &img.source
+        else {
+            panic!("an image from a file");
+        };
+        assert_eq!((*width, *height), (2, 1));
+        assert_eq!(&**pixels, &[255, 0, 0, 255, 0, 0, 255, 128]);
+        assert_eq!(img.max_side, Some(64));
     }
 
     #[test]
     fn image_component_stores_bytes_from_slice() {
         let img = Image::new([5u8, 6, 7].as_slice());
-        assert_eq!(&*img.bytes, &[5, 6, 7]);
+        assert_eq!(file(&img), &[5, 6, 7]);
     }
 
     #[test]
@@ -227,7 +297,7 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn(Image::new(vec![9u8, 8, 7])).id();
         let img = world.get::<Image>(e).unwrap();
-        assert_eq!(&*img.bytes, &[9, 8, 7]);
+        assert_eq!(file(img), &[9, 8, 7]);
     }
 
     #[test]

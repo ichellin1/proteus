@@ -96,6 +96,26 @@ Most apps need no changes: the API apps use is the same in both SDKs.
   focused style at once.
 {% endif %}
 {%- if version == "v0.4.0" %}
+### What's new in 0.4
+
+Text, rebuilt on a new engine.
+
+- **Text that wraps:** lines break at a width, align within it, and stop at a number of lines,
+  ending in an ellipsis of the app's choosing or clipped. A line height spaces them.
+- **Shaped text:** the font's kerning is applied and glyphs are placed to a quarter of a pixel,
+  and a glyph cache draws each glyph once.
+- **Fonts:** fonts loaded from their files, at once or once downloaded, any weight a variable
+  font has, italic, and fallback fonts for characters a font lacks. The built-in Inter is
+  variable, and can be left out.
+- **Styles within a text:** spans with their own weight, italic, size, color, family and
+  vertical alignment.
+- **Components in text:** a component in a line of text, which moves with it as it wraps, or in
+  its ellipsis.
+- **Measuring text** before it's drawn, at exactly the size it's drawn at.
+- **Labels centered by their letters:** a text's box can run from its cap height or x-height to
+  its baseline.
+- **Images from pixels,** such as a canvas's `ImageData`, as well as from PNG and JPEG files.
+
 ### Upgrading from 0.3
 
 - **Text is shaped:** the font's kerning is applied, and glyphs are placed to a quarter of a
@@ -126,12 +146,20 @@ Most apps need no changes: the API apps use is the same in both SDKs.
 - **TypeScript's `TextSpec` is a type with two forms,** one with `content` and one with
   `spans`, rather than an interface, so an interface that extends it no longer compiles. Its
   shared settings are `TextOptions`.
+- **`Image`'s `bytes` field is now `source`,** an `ImageSource` that is a file's bytes or, new,
+  RGBA pixels with their size. Code that reads `image.bytes` or writes an `Image` out in full no
+  longer compiles in Rust: match `ImageSource::File(bytes)` instead. `Image::new` and
+  `with_max_side` are unchanged.
+- **TypeScript's `ImageSpec` is a type with two forms,** `{ bytes }` and
+  `{ pixels, width, height }`, rather than an interface, so an interface that extends it no
+  longer compiles.
 - **`proteus-render`'s `FontAtlas` is split in two:** `Typesetter` has the fonts, lays text out
   and measures it, and `TextRasterizer` draws it and keeps the glyph cache. `rasterize` and
   `rasterize_text` are on `TextRasterizer`, and take the `Typesetter`. The app's `Fonts`
   resource holds the typesetter, so `load_font` adds a font at once, rather than the renderer
   adding it before it next draws. `Fonts::load` replaces `Fonts::loaded`, `take_loaded`
-  replaces `take_pending`, and `take_fallbacks_changed` replaces `take_fallbacks`.
+  replaces `take_pending`, `take_fallbacks_changed` replaces `take_fallbacks`, and
+  `first_warning` is private.
 {% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 

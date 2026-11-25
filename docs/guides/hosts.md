@@ -66,7 +66,7 @@ else.
 An app's files, such as images and fonts, are **assets**, each named by a key such as
 `"photos/beach.jpg"`. `Frame::load_asset` returns an asset's bytes at once, and
 `Frame::load_texture` loads an image asset as a texture; see
-[Text, images and video](./content.md).
+[Images and video](./content.md).
 
 The two hosts find assets differently:
 
@@ -138,7 +138,7 @@ the native host fetches fails after a timeout, so a server that never answers do
 up.
 
 A TypeScript app uses the browser's own `fetch`, as in
-[Text, images and video](./content.md#images).
+[Images and video](./content.md#images).
 
 ### Your own services
 

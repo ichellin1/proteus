@@ -517,6 +517,9 @@ pub struct Demo {
     /// function's doc for why: pause, don't reset, so it resumes rather
     /// than restarting).
     transforms_anim_elapsed: f32,
+    /// Elapsed time driving the Text panel's spinning square, which runs only
+    /// while that panel is active, as `transforms_anim_elapsed` does.
+    text_anim_elapsed: f32,
     /// `loading.logo`'s own frame-sweep position — separate from Splash's
     /// `logo_frame_index`/`logo_frame_elapsed` since it loops forever
     /// (Splash's plays once) and needs to restart at frame 0 on every fresh
@@ -807,6 +810,7 @@ impl Demo {
             video_settled_elapsed: 0.0,
             pending_tile_reset: None,
             transforms_anim_elapsed: 0.0,
+            text_anim_elapsed: 0.0,
             loading_logo_frame_index: 0,
             loading_logo_frame_elapsed: 0.0,
             gallery_fetch_elapsed: 0.0,
@@ -1100,6 +1104,7 @@ impl Demo {
         self.logo_frame_elapsed = 0.0;
         if let Some(&first) = self.logo_frames.first() {
             let _ = self.splash.button.set_texture(proteus, first);
+            self.example_detail.set_about_mark(proteus, first);
         }
     }
 
@@ -2402,19 +2407,25 @@ impl Demo {
         }
     }
 
-    /// Drives `example_detail`'s "Continuous Animation" box while
-    /// `ExampleDetail(2)` is active — paused (not reset) otherwise, so it
-    /// resumes from wherever it left off rather than restarting each time.
+    /// Drives `example_detail`'s spinning boxes: the Transformations panel's
+    /// "Continuous Animation" box while `ExampleDetail(TRANSFORMS)` is active,
+    /// and the Text panel's small square while `ExampleDetail(TEXT)` is. Each
+    /// is paused (not reset) otherwise, so it resumes from wherever it left
+    /// off rather than restarting each time.
     fn advance_example_animation(&mut self, proteus: &mut Proteus, dt: f32) {
-        if self.state != AppState::ExampleDetail(example_detail::TRANSFORMS) {
-            return;
-        }
-        self.transforms_anim_elapsed += dt;
-        example_detail::advance_continuous_animation(
-            proteus,
-            &self.example_detail,
-            self.transforms_anim_elapsed,
-        );
+        let elapsed = match self.state {
+            AppState::ExampleDetail(example_detail::TRANSFORMS) => {
+                &mut self.transforms_anim_elapsed
+            }
+            AppState::ExampleDetail(example_detail::TEXT) => &mut self.text_anim_elapsed,
+            _ => return,
+        };
+        *elapsed += dt;
+        let (idx, elapsed) = match self.state {
+            AppState::ExampleDetail(idx) => (idx, *elapsed),
+            _ => return,
+        };
+        example_detail::advance_continuous_animation(proteus, &self.example_detail, idx, elapsed);
     }
 
     /// Drains this tick's pending gallery fetch request, if any — see
@@ -4905,6 +4916,214 @@ mod tests {
         for &tile in &demo.home.tiles {
             assert!(demo.app.get(tile).unwrap().visible);
         }
+    }
+
+    /// A harness with fonts, as a host gives it: Inter as the default, and
+    /// the Text panel's fonts from the demo's assets. Without fonts, every
+    /// text measures as nothing.
+    fn harness_with_fonts() -> Harness {
+        let mut app = Proteus::new();
+        app.load_font(proteus_render::EMBEDDED_FONT_BYTES).unwrap();
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/images/fonts/");
+        for file in [
+            "Lora-Variable.ttf",
+            "Lora-Italic-Variable.ttf",
+            "NotoSerifDevanagari-Variable.ttf",
+        ] {
+            app.load_font(std::fs::read(format!("{dir}{file}")).unwrap())
+                .unwrap();
+        }
+        app.set_fallback_fonts([example_detail::DEVANAGARI]);
+        let demo = Demo::new(&mut app);
+        Harness { app, demo }
+    }
+
+    /// `demo`, past the splash, with panel `idx` open and its content shown.
+    fn open_panel(mut demo: Harness, idx: usize) -> Harness {
+        let mut t = 0.0;
+        while t < past_splash_secs() {
+            demo.tick(0.05);
+            t += 0.05;
+        }
+        demo.start_home_to_detail(idx);
+        demo.tick(1.0);
+        demo.tick(0.016);
+        demo
+    }
+
+    /// The rectangle `handle` covers, as its center and size, in world space:
+    /// its text's measured size, or its own size if it has no text.
+    fn covers(demo: &mut Harness, handle: Handle) -> (Vec2, Vec2) {
+        let data = demo.app.get(handle).unwrap();
+        let center = data.geometry.position.truncate();
+        let text = demo.app.world().get::<Text>(handle.id()).cloned();
+        let size = match text {
+            Some(text) => demo.app.measure_text(&text).unwrap(),
+            None => data.geometry.size,
+        };
+        (center, size)
+    }
+
+    // Every row of every panel sits inside its panel, at 1280 × 800, in the
+    // panel's first frame: each text is measured before it's drawn, so no row
+    // waits a frame for its text to be baked. The headings sit above.
+    #[test]
+    fn every_panels_rows_sit_inside_it_in_its_first_frame() {
+        for idx in 0..example_detail::CATEGORY_TITLES.len() {
+            let mut demo = open_panel(harness_with_fonts(), idx);
+            let panel = demo.app.get(demo.example_detail.panel).unwrap().geometry;
+            let (min, max) = (
+                panel.position.truncate() - panel.size / 2.0,
+                panel.position.truncate() + panel.size / 2.0,
+            );
+            let handles = demo.example_detail.content_handles(idx);
+            for &handle in &handles[1..] {
+                let (center, size) = covers(&mut demo, handle);
+                let (low, high) = (center - size / 2.0, center + size / 2.0);
+                assert!(
+                    low.cmpge(min).all() && high.cmple(max).all(),
+                    "panel {idx}: {low:?} to {high:?} isn't inside {min:?} to {max:?}"
+                );
+            }
+            let first = demo.app.get(handles[1]).unwrap().geometry.position;
+            demo.tick(0.016);
+            assert_eq!(
+                demo.app.get(handles[1]).unwrap().geometry.position,
+                first,
+                "panel {idx}: in place from the first frame"
+            );
+        }
+    }
+
+    // The demo's fonts are cut down to the letters the Text panel draws in
+    // them, so each must have every one of them. A letter one lacks wouldn't
+    // be drawn as a box, but quietly in Inter.
+    #[test]
+    fn the_cut_fonts_have_every_letter_the_text_panel_draws_in_them() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/images/fonts/");
+        for (file, text) in [
+            ("Lora-Variable.ttf", example_detail::IN_LORA),
+            ("Lora-Italic-Variable.ttf", example_detail::IN_LORA_ITALIC),
+            (
+                "NotoSerifDevanagari-Variable.ttf",
+                example_detail::HINDI_GREETING,
+            ),
+            (
+                "NotoSerifDevanagari-Variable.ttf",
+                example_detail::HINDI_BUTTON,
+            ),
+        ] {
+            let font = std::fs::read(format!("{dir}{file}")).unwrap();
+            // The cut font alone, so no other font can stand in for it.
+            let mut typesetter = proteus_render::Typesetter::new(&font).unwrap();
+            let size = typesetter
+                .measure(&proteus_render::TextLayout::new(text, 20.0), 1.0)
+                .unwrap();
+            assert!(size.missing.is_empty(), "{file} lacks {:?}", size.missing);
+        }
+    }
+
+    // Each panel and its heading are centered together between the nav
+    // buttons' bottom edge and the window's bottom, so the heading isn't
+    // crowded by the buttons.
+    #[test]
+    fn each_panel_and_its_heading_are_centered_below_the_nav_buttons() {
+        for idx in 0..example_detail::CATEGORY_TITLES.len() {
+            let mut demo = open_panel(harness_with_fonts(), idx);
+            let panel = demo.app.get(demo.example_detail.panel).unwrap().geometry;
+            let heading = demo.example_detail.headings[idx];
+            let (center, size) = covers(&mut demo, heading);
+            let top = center.y + size.y / 2.0;
+            let bottom = panel.position.y - panel.size.y / 2.0;
+            // At 1280 × 800, the buttons reach 76 pixels down from the top,
+            // y = 324, and the window's bottom is at y = -400.
+            let (nav_bottom, window_bottom) = (400.0 - 76.0, -400.0);
+            assert!(
+                (top - nav_bottom + (bottom - window_bottom)).abs() < 0.5
+                    && top < nav_bottom
+                    && bottom > window_bottom,
+                "panel {idx}: from {top} down to {bottom}"
+            );
+        }
+    }
+
+    // The About panel's logo mark sits in its first paragraph's first line,
+    // as the paragraph's child, standing on the baseline before "Proteus".
+    #[test]
+    fn the_about_panels_mark_sits_before_the_name() {
+        let mut demo = open_panel(harness_with_fonts(), example_detail::ABOUT);
+        let handles = demo.example_detail.content_handles(example_detail::ABOUT);
+        let first = handles[1];
+        let children = demo.app.get(first).unwrap().children;
+        let [mark] = children[..] else {
+            panic!("the first paragraph holds the mark: {children:?}");
+        };
+        let (_, text_size) = covers(&mut demo, first);
+        let at = demo.app.get(mark).unwrap().geometry;
+        assert!(demo.app.get(mark).unwrap().visible);
+        // A child is placed from its parent's anchor, the paragraph's center,
+        // so the paragraph's top-left corner is at half its size, y up. The
+        // mark starts the first line.
+        let (left, top) = (-text_size.x / 2.0, text_size.y / 2.0);
+        assert!(
+            (at.position.x - at.size.x / 2.0 - left).abs() < 1.0,
+            "{at:?}"
+        );
+        let below_top = top - (at.position.y + at.size.y / 2.0);
+        assert!(below_top > 0.0 && below_top < 17.0 * 1.5, "{at:?}");
+    }
+
+    // The Text panel shows every row, and the key cap and the spinning square
+    // sit in their line of text, as its children.
+    #[test]
+    fn the_text_panel_shows_every_row_and_its_components() {
+        let demo = open_panel(harness_with_fonts(), example_detail::TEXT);
+        let handles = demo.example_detail.content_handles(example_detail::TEXT);
+        assert!(handles.len() > 30, "{} handles", handles.len());
+        for &handle in &handles {
+            assert!(demo.app.get(handle).unwrap().visible);
+        }
+        let holding: Vec<_> = handles
+            .iter()
+            .filter(|&&h| !demo.app.get(h).unwrap().children.is_empty())
+            .collect();
+        let [line] = holding[..] else {
+            panic!("one line of text holds components");
+        };
+        let children = demo.app.get(*line).unwrap().children;
+        assert_eq!(children.len(), 2, "the key cap and the square");
+        for child in children {
+            assert!(demo.app.get(child).unwrap().visible);
+        }
+    }
+
+    // The square spins while the Text panel is open: its rotation, scale and
+    // color change, but not its position, and the text that holds it isn't
+    // changed, so it isn't laid out or baked again.
+    #[test]
+    fn the_square_spins_in_its_line_without_changing_its_text() {
+        let mut demo = open_panel(harness_with_fonts(), example_detail::TEXT);
+        let handles = demo.example_detail.content_handles(example_detail::TEXT);
+        let line = *handles
+            .iter()
+            .find(|&&h| !demo.app.get(h).unwrap().children.is_empty())
+            .unwrap();
+        let square = demo.app.get(line).unwrap().children[1];
+        let text_changed = |demo: &Harness| {
+            demo.app
+                .world()
+                .entity(line.id())
+                .get_change_ticks::<Text>()
+                .unwrap()
+                .changed
+        };
+        let before = (demo.app.get(square).unwrap().geometry, text_changed(&demo));
+        demo.tick(0.5);
+        let after = (demo.app.get(square).unwrap().geometry, text_changed(&demo));
+        assert_ne!(before.0.rotation, after.0.rotation, "it turns");
+        assert_ne!(before.0.color, after.0.color, "its color cycles");
+        assert_eq!(before.0.position, after.0.position, "it stays in its gap");
+        assert_eq!(before.1, after.1, "its text isn't changed");
     }
 
     fn advance_to_home() -> Harness {
